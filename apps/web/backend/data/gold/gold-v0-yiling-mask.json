@@ -1,0 +1,75 @@
+{
+  "id": "gold-v0-synthetic-carton",
+  "title": "Synthetic carton review fixture",
+  "task_id": "synthetic-task-0001",
+  "fields": [
+    {
+      "field": "brand mark",
+      "expected_status": "一致",
+      "doubt_bucket": null,
+      "note": "auto-exported — please human-verify"
+    },
+    {
+      "field": "product name",
+      "expected_status": "一致",
+      "doubt_bucket": null,
+      "note": "auto-exported — please human-verify"
+    },
+    {
+      "field": "secondary name",
+      "expected_status": "一致",
+      "doubt_bucket": null,
+      "note": "auto-exported — please human-verify"
+    },
+    {
+      "field": "declared quantity",
+      "expected_status": "一致",
+      "doubt_bucket": null,
+      "note": "auto-exported — please human-verify"
+    },
+    {
+      "field": "barcode",
+      "expected_status": "一致",
+      "doubt_bucket": null,
+      "note": "auto-exported — please human-verify"
+    },
+    {
+      "field": "ingredient panel A",
+      "expected_status": "一致",
+      "doubt_bucket": null,
+      "note": "auto-exported — please human-verify"
+    },
+    {
+      "field": "ingredient panel B",
+      "expected_status": "一致",
+      "doubt_bucket": null,
+      "note": "auto-exported — please human-verify"
+    },
+    {
+      "field": "copy block",
+      "expected_status": "一致",
+      "doubt_bucket": null,
+      "note": "auto-exported — please human-verify"
+    },
+    {
+      "field": "directions and warnings",
+      "expected_status": "一致",
+      "doubt_bucket": null,
+      "note": "auto-exported — please human-verify"
+    },
+    {
+      "field": "manufacturing information",
+      "expected_status": "一致",
+      "doubt_bucket": null,
+      "note": "auto-exported — please human-verify"
+    },
+    {
+      "field": "qr marker",
+      "expected_status": "一致",
+      "doubt_bucket": null,
+      "note": "auto-exported — please human-verify"
+    }
+  ],
+  "engine_version": "tvt-lite-1.4",
+  "note": "Synthetic fixture only; replace every expected value before a real evaluation"
+}

@@ -1,0 +1,49 @@
+# AI 包装稿 → 3D/PPT 快速流水线
+
+这是面向重复包装结构的本地批处理流程。首版模板支持 47.5 × 47.5 × 177.5 mm 方形花盒，目标是在 AI 稿结构不变时，自动完成：
+
+1. AI/PDF 兼容性和页面尺寸预检；
+2. 非 PDF 兼容 AI 自动调用 Illustrator 标准化；
+3. 印刷层与完整图层分别高速栅格化；
+4. 六面纹理切片；
+5. 多产品并行调用 Blender 后台建模、渲染并导出 .blend / .glb；
+6. GLB 尺寸自动复核；
+7. 每个产品单独生成 2 页白底 PPT，并输出逐页质检图。
+
+## 运行
+
+    # 本目录尚未对网页接线；仅本地 CLI。PPT 依赖本机 Node，不要提交 node_modules。
+    python3 pipeline.py examples/jobs_26H17.json --workers 2 --force
+
+首次运行加 --force；同一源文件、模板和流程版本未变化时，去掉 --force 会直接复用缓存。
+
+## 输入边界
+
+- PDF 兼容 AI 直接走高速通道，不启动 Illustrator。
+- 原生 AI 或非 PDF 兼容 AI 自动通过 Illustrator 导出完整稿和印刷层 PDF，再进入相同建模流程。
+- Illustrator 冷启动和复杂转曲稿解析可能较慢，建议保持应用常驻并批量处理异常稿；兜底 Worker 默认 7 分钟硬超时。
+- 相同刀模只需新增任务记录即可并行处理。
+- 新刀模需要先新增模板并标定面板坐标；不能把旧模板硬套到不同结构。
+- Blender MCP 只保留给交互调试。稳定生产通过独立 Blender 后台进程并行执行，避免界面串行和上下文开销。
+
+## Illustrator 兜底验证
+
+强制让一份正常 AI 走 Illustrator 通道，用于安装或升级后的烟雾测试：
+
+    python3 pipeline.py examples/jobs_illustrator_smoke.json \
+      --workers 1 --force-illustrator --no-ppt
+
+生产任务不应使用 --force-illustrator；流水线会根据文件头自动分流。
+
+## 输出
+
+每个产品目录包含：
+
+- .blend：可编辑 Blender 文件；
+- .glb：可旋转查看的通用 3D 文件；
+- 正面/右侧面和背面/左侧面白底渲染图；
+- 独立 .pptx；
+- qa/：PPT 逐页渲染、蒙太奇、布局检查和来源记录；
+- pipeline_result.json：本产品产物和尺寸验证结果。
+
+批次根目录的 pipeline_report.json 记录总耗时、缓存命中和 10 分钟 SLA 是否达成。

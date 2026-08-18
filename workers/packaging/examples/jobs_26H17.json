@@ -1,0 +1,28 @@
+{
+  "pipeline_name": "达肤妍男士系列自动包装任务",
+  "output_root": "./output/pipeline_26H17",
+  "workers": 2,
+  "blender_executable": "blender",
+  "illustrator": {
+    "enabled": true,
+    "application": "/Applications/Adobe Illustrator 2026/Adobe Illustrator.app",
+    "timeout_seconds": 420
+  },
+  "generate_ppt": true,
+  "products": [
+    {
+      "code": "26H17A",
+      "slug": "mens_toner",
+      "display_name": "达肤妍男士精华水",
+      "source_ai": "./fixtures/26H17A.ai",
+      "template": "../templates/flower_box_47_5x47_5x177_5.json"
+    },
+    {
+      "code": "26H17B",
+      "slug": "mens_lotion",
+      "display_name": "达肤妍男士精华乳",
+      "source_ai": "./fixtures/26H17B.ai",
+      "template": "../templates/flower_box_47_5x47_5x177_5.json"
+    }
+  ]
+}

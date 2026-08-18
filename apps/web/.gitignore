@@ -1,0 +1,9 @@
+.venv/
+.env.baidu
+__pycache__/
+data/uploads/*
+data/tasks/*
+!.gitkeep
+.env.secrets
+.env
+*.pem
