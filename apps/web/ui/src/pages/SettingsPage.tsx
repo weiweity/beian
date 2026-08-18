@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Alert, App, Button, Card, Input, Space, Switch, Typography } from "antd";
 import { api, type ProbeResult, type SettingFieldView, type SettingsView } from "../api";
 
-export function SettingsPage() {
+export function SettingsPage({ canWrite = true }: { canWrite?: boolean }) {
   const { message } = App.useApp();
   const [view, setView] = useState<SettingsView | null>(null);
   const [draft, setDraft] = useState<Record<string, string>>({});
@@ -42,7 +42,7 @@ export function SettingsPage() {
   }
 
   async function save() {
-    if (!view) return;
+    if (!view || !canWrite) return;
     const values: Record<string, string> = {};
     for (const g of view.groups) {
       for (const f of g.fields) {
@@ -103,6 +103,9 @@ export function SettingsPage() {
         换人用时在这里填。密钥只存在这台电脑，界面不会回显。不要改代码、不要提交到 git。
       </Typography.Paragraph>
       {error ? <Alert type="error" showIcon message={error} style={{ marginBottom: 16 }} /> : null}
+      {!canWrite ? (
+        <Alert type="info" showIcon message="只读。改配置需要审核员或管理员。" style={{ marginBottom: 16 }} />
+      ) : null}
       {restart ? (
         <Alert
           type="warning"
@@ -145,13 +148,19 @@ export function SettingsPage() {
         <Card key={g.title} title={g.title} size="small" style={{ marginBottom: 16 }}>
           <Space direction="vertical" size={16} style={{ width: "100%" }}>
             {g.fields.map((f) => (
-              <FieldRow key={f.key} field={f} value={draft[f.key] ?? ""} onChange={(v) => setField(f.key, v)} />
+              <FieldRow
+                key={f.key}
+                field={f}
+                value={draft[f.key] ?? ""}
+                onChange={(v) => setField(f.key, v)}
+                disabled={!canWrite}
+              />
             ))}
           </Space>
         </Card>
       ))}
 
-      <Button type="primary" onClick={() => void save()} loading={saving}>
+      <Button type="primary" onClick={() => void save()} loading={saving} disabled={!canWrite}>
         保存到本机
       </Button>
     </section>
@@ -162,10 +171,12 @@ function FieldRow({
   field,
   value,
   onChange,
+  disabled,
 }: {
   field: SettingFieldView;
   value: string;
   onChange: (v: string) => void;
+  disabled?: boolean;
 }) {
   return (
     <div>
@@ -175,16 +186,26 @@ function FieldRow({
       ) : null}
       <div style={{ marginTop: 6 }}>
         {field.kind === "toggle" ? (
-          <Switch checked={value === "true"} onChange={(on) => onChange(on ? "true" : "false")} />
+          <Switch
+            checked={value === "true"}
+            onChange={(on) => onChange(on ? "true" : "false")}
+            disabled={disabled}
+          />
         ) : field.kind === "secret" ? (
           <Input.Password
             value={value}
             onChange={(e) => onChange(e.target.value)}
             autoComplete="new-password"
             placeholder={field.set ? `已填 ${field.last4}，留空不改` : "未填"}
+            disabled={disabled}
           />
         ) : (
-          <Input value={value} onChange={(e) => onChange(e.target.value)} placeholder={field.help} />
+          <Input
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder={field.help}
+            disabled={disabled}
+          />
         )}
       </div>
       <Typography.Paragraph type="secondary" style={{ margin: "4px 0 0", fontSize: 13 }}>

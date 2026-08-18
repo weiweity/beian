@@ -239,11 +239,9 @@ app.post("/api/tasks/:tid/complete", async (c) => {
   task.conclusion = conclusion;
   task.complete_kind = issues.length ? "rework" : "signed";
   saveTask(task);
-  try {
-    await notifyTaskComplete(task, s.display_name);
-  } catch (err) {
+  void notifyTaskComplete(task, s.display_name).catch((err) => {
     console.warn("feishu notify failed:", err instanceof Error ? err.message : err);
-  }
+  });
   return c.json(task);
 });
 
@@ -295,7 +293,7 @@ app.get("/api/settings", (c) => {
 });
 
 app.post("/api/settings", async (c) => {
-  need(c, "read");
+  need(c, "create");
   const body = (await c.req.json().catch(() => ({}))) as { values?: Record<string, string> } & Record<
     string,
     string

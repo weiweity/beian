@@ -58,7 +58,31 @@ function saveSessions(): void {
 
 type User = { name?: string; role?: string; open_id?: string; note?: string };
 
+function ensureUsersFile(): void {
+  const p = usersPath();
+  if (existsSync(p)) return;
+  mkdirSync(DATA_DIR, { recursive: true });
+  writeFileSync(
+    p,
+    JSON.stringify(
+      {
+        users: [
+          {
+            name: "管理员",
+            role: "admin",
+            note: "本机首次启动自动创建。请改名并填写 open_id。",
+          },
+        ],
+      },
+      null,
+      2,
+    ) + "\n",
+    { mode: 0o600 },
+  );
+}
+
 function users(): User[] {
+  ensureUsersFile();
   const p = usersPath();
   if (!existsSync(p)) return [];
   try {

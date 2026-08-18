@@ -97,7 +97,7 @@ export function App() {
         </div>
       </header>
       <Layout.Content className="content">
-        {view === "settings" ? <SettingsPage /> : null}
+        {view === "settings" ? <SettingsPage canWrite={Boolean(me?.perms.includes("create"))} /> : null}
         {view !== "settings" && desk === "mockup" ? <MockupPage /> : null}
         {view !== "settings" && desk === "review" && view === "tasks" ? (
           <TasksPage
