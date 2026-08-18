@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>备案审核工作台</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpolygon fill='%23000' points='16,2 2,30 30,30'/%3E%3C/svg%3E" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400..600&family=Geist+Mono:wght@400..600&display=swap" rel="stylesheet" referrerpolicy="no-referrer" />
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <div class="app" id="appRoot">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true"></div>
+        <div class="brand-text">
+          <div class="brand-name">备案审核</div>
+          <div class="brand-sub">Supply QA</div>
+        </div>
+        <button id="btnSidebarToggle" class="btn-icon sidebar-toggle" title="折叠侧栏">«</button>
+      </div>
+      <nav class="side-nav">
+        <button class="nav-item active" data-view="home" title="任务">任务</button>
+        <button class="nav-item" data-view="new" title="新建">新建</button>
+        <button class="nav-item" data-view="presets" title="样本库">样本库</button>
+        <button class="nav-item" data-view="audit" title="审计">审计</button>
+      </nav>
+      <div class="side-foot">
+        <div id="userBox" class="user-box">
+          <div id="userLabel" class="user-label">未登录</div>
+          <div class="user-actions">
+            <input id="loginName" type="text" placeholder="显示名" maxlength="40" />
+            <button id="btnLogin" class="btn primary small">进入</button>
+            <button id="btnLogout" class="btn small hidden">退出</button>
+          </div>
+        </div>
+        <div class="density-row">
+          <span class="density-label">字号</span>
+          <button class="chip density-chip" data-density="std">标准</button>
+          <button class="chip density-chip on" data-density="large">大字</button>
+        </div>
+        <div id="baiduStatus" class="status-pill">引擎检测中…</div>
+        <div id="feishuStatus" class="status-pill">飞书…</div>
+        <button id="btnFeishuTest" class="btn ghost-dark small">测试飞书</button>
+        <button id="btnBackup" class="btn ghost-dark small hidden" title="admin：备份任务 JSON">备份任务</button>
+        <div class="side-hint">角色：管理员/审核员/只读 · AI 仅标疑点 · 人终审</div>
+      </div>
+    </aside>
+
+    <div class="main">
+      <section id="view-home" class="view">
+        <header class="page-head">
+          <div>
+            <p class="eyebrow">Workbench</p>
+            <h1>任务</h1>
+            <p class="lead">包装核对 · 跨规格 · 报告摘要 · 左图右表人审</p>
+          </div>
+          <div class="head-actions">
+            <button id="btnRefresh" class="btn">刷新</button>
+            <button class="btn primary" data-view="new">新建任务</button>
+          </div>
+        </header>
+        <div id="taskList" class="task-grid"></div>
+      </section>
+
+      <section id="view-new" class="view hidden">
+        <header class="page-head">
+          <div>
+            <p class="eyebrow">Create</p>
+            <h1>新建任务</h1>
+            <p class="lead">选择类型并上传文件</p>
+          </div>
+        </header>
+        <div class="wizard">
+          <div class="wizard-steps" id="wizardSteps">
+            <span class="wstep on" data-s="1">1 类型</span>
+            <span class="wstep" data-s="2">2 文件</span>
+            <span class="wstep" data-s="3">3 确认</span>
+          </div>
+          <div class="wizard-body">
+            <div id="wiz-1" class="wiz-panel">
+              <div class="type-grid">
+                <button class="type-card selected" data-type="excel_pdf">
+                  <div class="type-title">Excel ↔ 包装 PDF</div>
+                  <div class="type-desc">确认单字段 vs 包装 OCR 定位</div>
+                </button>
+                <button class="type-card" data-type="pdf_internal">
+                  <div class="type-title">双页文案对比</div>
+                  <div class="type-desc">单双页 PDF 或两文件 · 独立验收</div>
+                </button>
+                <button class="type-card" data-type="report_summary">
+                  <div class="type-title">检测报告 → Word</div>
+                  <div class="type-desc">结论页摘抄 · 功效摘要 docx</div>
+                </button>
+                <button class="type-card" data-type="cross_spec">
+                  <div class="type-title">跨规格对齐</div>
+                  <div class="type-desc">双 PDF · 净含量/条码可不同</div>
+                </button>
+              </div>
+              <div class="wiz-actions">
+                <button class="btn primary" id="wizNext1">下一步</button>
+              </div>
+            </div>
+            <div id="wiz-2" class="wiz-panel hidden">
+              <label class="field-label">任务名称
+                <input id="uploadTitle" type="text" placeholder="例如：海葡萄精华水功效摘要" />
+              </label>
+              <label class="field-label">最多识别页数（包装 OCR；报告任务忽略）
+                <select id="uploadMaxPages">
+                  <option>1</option>
+                  <option selected>2</option>
+                  <option>3</option>
+                </select>
+              </label>
+              <div id="dropZones" class="drop-zones"></div>
+              <div class="wiz-actions">
+                <button class="btn" id="wizBack2">上一步</button>
+                <button class="btn primary" id="wizNext2">下一步</button>
+              </div>
+            </div>
+            <div id="wiz-3" class="wiz-panel hidden">
+              <div class="confirm-box" id="confirmBox"></div>
+              <div class="wiz-actions">
+                <button class="btn" id="wizBack3">上一步</button>
+                <button class="btn primary" id="btnSubmitUpload">开始处理</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="view-audit" class="view hidden">
+        <header class="page-head">
+          <div>
+            <p class="eyebrow">Audit</p>
+            <h1>审计日志</h1>
+            <p class="lead">登录 · 建任务 · 决策 · 终审 · 导出 · 飞书</p>
+          </div>
+          <div class="head-actions">
+            <button id="btnAuditRefresh" class="btn">刷新</button>
+          </div>
+        </header>
+        <div id="auditList" class="audit-list"></div>
+      </section>
+
+      <section id="view-presets" class="view hidden">
+        <header class="page-head">
+          <div>
+            <p class="eyebrow">Samples</p>
+            <h1>样本库</h1>
+            <p class="lead">来自 <span class="mono">01-案例评测</span></p>
+          </div>
+        </header>
+        <label class="field-label inline">包装 OCR 页数
+          <select id="maxPages">
+            <option>1</option>
+            <option selected>2</option>
+            <option>3</option>
+          </select>
+        </label>
+        <div id="presetList" class="task-grid"></div>
+      </section>
+
+      <section id="view-review" class="view review-view hidden">
+        <header class="review-bar">
+          <button id="btnBack" class="btn ghost">← 返回</button>
+          <button id="btnCollapseSidebar" class="btn ghost" title="折叠侧栏">侧栏</button>
+          <span id="rvBadge" class="badge">—</span>
+          <strong id="rvTitle" class="rv-title">—</strong>
+          <span id="rvMetrics" class="metrics"></span>
+          <div class="spacer"></div>
+          <div class="view-mode" id="viewModeBar">
+            <button class="chip mode-chip on" data-mode="single">单图</button>
+            <button class="chip mode-chip" data-mode="compare">双图对比</button>
+          </div>
+          <button id="btnDocx" class="btn hidden" title="下载 Word">下载 Word</button>
+          <button id="btnBaiduDiff" class="btn hidden" title="百度比对报告">百度比对</button>
+          <button id="btnBaiduSdk" class="btn hidden" title="百度比对 SDK 全屏">比对 SDK</button>
+          <button id="btnGraphicsDiff" class="btn hidden" title="A/B 像素 diff（P3）">图形 diff</button>
+          <button id="btnTextSummary" class="btn hidden" title="AI/规则归纳文字对比结论">AI 归纳</button>
+          <details class="more-tools" id="moreTools">
+            <summary class="btn ghost" title="可选辅助，非主审路径">更多工具</summary>
+            <div class="more-tools-menu">
+              <button id="btnAiReview" class="btn" title="L2：对疑点做语义建议（约30–60秒），不自动过审；主审仍靠左图+确认单">AI 语义建议</button>
+              <button id="btnTypoCheck" class="btn" title="L3：裁块二次 OCR 再判漏字（约30–60秒）；脚注漏印通常用不到">脚注/漏字再检</button>
+              <p class="muted more-tools-hint">主路径：点字段 → 看图 → 确认/标问题。这两项可选，不替代人审。</p>
+            </div>
+          </details>
+          <button id="btnReport" class="btn" title="HTML 报告">导出 HTML</button>
+          <button id="btnReportPdf" class="btn" title="PDF 报告">导出 PDF</button>
+          <button id="btnArchiveFeishu" class="btn" title="PDF + 飞书归档通知">飞书归档</button>
+          <button id="btnComplete" class="btn primary">完成终审</button>
+          <button id="btnDeleteTask" class="btn danger" title="删除本任务及上传文件">删除任务</button>
+        </header>
+        <div class="main-grid">
+          <section class="pane-left">
+            <div class="toolbar">
+              <div id="pageTabs" class="page-tabs"></div>
+              <div class="toolbar-right zoom-bar">
+                <button id="btnZoomOut" class="btn small" title="缩小">−</button>
+                <span id="zoomLabel" class="zoom-label">适应</span>
+                <button id="btnZoomIn" class="btn small" title="放大">+</button>
+                <button id="btnZoomReset" class="btn small">适应</button>
+                <button id="btnSyncPan" class="btn small" title="同步双图平移缩放">同步</button>
+                <button id="btnFullscreen" class="btn small">全屏</button>
+                <span id="highlightInfo" class="muted">点右侧字段：Excel 原文 ↔ 包装定位</span>
+              </div>
+            </div>
+            <div class="canvas-wrap" id="canvasWrap">
+              <!-- Excel↔PDF：左包装图 · 右确认单原文（非 A/B 双稿） -->
+              <div class="viewer-surface" id="viewerSingle">
+                <div class="single-with-detail" id="singleWithDetail">
+                  <div id="osdSingle" class="osd-host"></div>
+                  <aside id="excelDetailHost" class="excel-detail-host hidden" aria-label="Excel 确认项"></aside>
+                </div>
+              </div>
+              <!-- 双 PDF：正错/跨规格 A|B；或 花盒|确认单|膜袋 三栏 -->
+              <div class="compare-split hidden" id="viewerCompare">
+                <div class="compare-pane" id="comparePaneA">
+                  <div class="compare-label" id="compareLabelA">A</div>
+                  <div id="osdA" class="osd-host"></div>
+                </div>
+                <aside
+                  id="excelDetailHostMid"
+                  class="excel-detail-host excel-mid hidden"
+                  aria-label="Excel 确认项（双面中间栏）"
+                ></aside>
+                <div class="compare-pane" id="comparePaneB">
+                  <div class="compare-label" id="compareLabelB">B</div>
+                  <div id="osdB" class="osd-host"></div>
+                </div>
+              </div>
+              <!-- PDF 文字对比工作台：无图，字差 + AI 归纳 -->
+              <div id="textComparePane" class="text-compare-pane hidden" aria-label="文字对比"></div>
+              <div id="summaryPane" class="summary-pane hidden"></div>
+            </div>
+          </section>
+          <section class="pane-right" id="paneRight">
+            <div class="filters" id="filters"></div>
+            <div class="list" id="hitList"></div>
+            <div class="footer-note" id="reviewFooterNote">
+              AI 仅标疑点。疑点/缺失须逐条处理。禁止一键全部通过。
+            </div>
+          </section>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <!-- 百度比对 SDK 全屏层 -->
+  <div id="sdkModal" class="sdk-modal hidden">
+    <div class="sdk-head">
+      <strong>百度文档比对 SDK</strong>
+      <button id="btnCloseSdk" class="btn">关闭</button>
+    </div>
+    <iframe id="sdkFrame" class="sdk-frame" title="百度文档比对"></iframe>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+  <div id="loading" class="loading hidden">
+    <div class="box">
+      <div class="spinner"></div>
+      <div id="loadingText">处理中…</div>
+      <div class="progress-track"><div class="progress-bar" id="progressBar"></div></div>
+    </div>
+  </div>
+
+  <script src="/static/osd/openseadragon.min.js"></script>
+  <script src="/static/viewer_osd.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

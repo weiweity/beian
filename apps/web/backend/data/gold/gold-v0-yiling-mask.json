@@ -1,0 +1,75 @@
+{
+  "id": "gold-v0-译龄精华面膜",
+  "title": "上传任务",
+  "task_id": "c7a545a40404",
+  "fields": [
+    {
+      "field": "logo标识",
+      "expected_status": "一致",
+      "doubt_bucket": null,
+      "note": "auto-exported — please human-verify"
+    },
+    {
+      "field": "中文品名",
+      "expected_status": "一致",
+      "doubt_bucket": null,
+      "note": "auto-exported — please human-verify"
+    },
+    {
+      "field": "英文品名",
+      "expected_status": "一致",
+      "doubt_bucket": null,
+      "note": "auto-exported — please human-verify"
+    },
+    {
+      "field": "净含量",
+      "expected_status": "一致",
+      "doubt_bucket": null,
+      "note": "auto-exported — please human-verify"
+    },
+    {
+      "field": "条形码",
+      "expected_status": "一致",
+      "doubt_bucket": null,
+      "note": "auto-exported — please human-verify"
+    },
+    {
+      "field": "化妆品成分表 · 步骤01.精华液：",
+      "expected_status": "一致",
+      "doubt_bucket": null,
+      "note": "auto-exported — please human-verify"
+    },
+    {
+      "field": "化妆品成分表 · 步骤02.面膜：",
+      "expected_status": "一致",
+      "doubt_bucket": null,
+      "note": "auto-exported — please human-verify"
+    },
+    {
+      "field": "文案",
+      "expected_status": "一致",
+      "doubt_bucket": null,
+      "note": "auto-exported — please human-verify"
+    },
+    {
+      "field": "使用方法、使用顺序\n及注意事项",
+      "expected_status": "一致",
+      "doubt_bucket": null,
+      "note": "auto-exported — please human-verify"
+    },
+    {
+      "field": "生产信息及其他",
+      "expected_status": "一致",
+      "doubt_bucket": null,
+      "note": "auto-exported — please human-verify"
+    },
+    {
+      "field": "二维码",
+      "expected_status": "一致",
+      "doubt_bucket": null,
+      "note": "auto-exported — please human-verify"
+    }
+  ],
+  "engine_version": "tvt-lite-1.4",
+  "note": "v0 gold from task c7a545a40404; human should refine"
+}

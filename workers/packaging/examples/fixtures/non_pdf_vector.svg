@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="2833.5pt" height="1507.67pt" viewBox="0 0 2833.5 1507.67">
+  <rect width="2833.5" height="1507.67" fill="#eef2f4"/>
+  <rect x="403" y="690" width="537" height="503" fill="#72777d"/>
+  <rect x="940" y="690" width="535" height="503" fill="#a9afb4"/>
+  <rect x="1475" y="690" width="535" height="503" fill="#d1d5d8"/>
+  <rect x="2010" y="690" width="530" height="503" fill="#8f969c"/>
+  <text x="1540" y="850" font-family="Arial" font-size="48" fill="#222222">ILLUSTRATOR FALLBACK</text>
+  <text x="1540" y="930" font-family="Arial" font-size="34" fill="#222222">NON-PDF VECTOR TEST</text>
+</svg>

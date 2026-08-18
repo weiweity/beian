@@ -1,0 +1,21 @@
+{
+  "pipeline_name": "Illustrator兜底通道验证",
+  "output_root": "./output/pipeline_illustrator_smoke",
+  "workers": 1,
+  "blender_executable": "blender",
+  "illustrator": {
+    "enabled": true,
+    "application": "/Applications/Adobe Illustrator 2026/Adobe Illustrator.app",
+    "timeout_seconds": 420
+  },
+  "generate_ppt": false,
+  "products": [
+    {
+      "code": "26H17A-AI",
+      "slug": "mens_toner_illustrator",
+      "display_name": "达肤妍男士精华水 Illustrator验证",
+      "source_ai": "./fixtures/non_pdf_vector.svg",
+      "template": "../templates/flower_box_illustrator_smoke.json"
+    }
+  ]
+}
