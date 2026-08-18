@@ -69,8 +69,8 @@ def submit_parse_task(
 ) -> dict[str, Any]:
     """提交解析任务，返回 {ok, task_id, error, raw}。"""
     cfg = load_baidu_env()
-    ak = cfg.get("BAIDU_OCR_API_KEY") or ""
-    sk = cfg.get("BAIDU_OCR_SECRET_KEY") or ""
+    ak = cfg.get("BAIDU_OCR_API_KEY") or cfg.get("BAIDU_API_KEY") or ""
+    sk = cfg.get("BAIDU_OCR_SECRET_KEY") or cfg.get("BAIDU_SECRET_KEY") or ""
     if not ak or not sk:
         return {"ok": False, "error": "missing BAIDU_OCR AK/SK"}
 
@@ -119,8 +119,8 @@ def submit_parse_task(
 def query_parse_task(task_id: str) -> dict[str, Any]:
     """轮询一次，返回 {ok, status, markdown_url, parse_result_url, task_error, raw}。"""
     cfg = load_baidu_env()
-    ak = cfg.get("BAIDU_OCR_API_KEY") or ""
-    sk = cfg.get("BAIDU_OCR_SECRET_KEY") or ""
+    ak = cfg.get("BAIDU_OCR_API_KEY") or cfg.get("BAIDU_API_KEY") or ""
+    sk = cfg.get("BAIDU_OCR_SECRET_KEY") or cfg.get("BAIDU_SECRET_KEY") or ""
     token = get_access_token(ak, sk)
     url = f"{QUERY_URL}?access_token={urllib.parse.quote(token)}"
     data = {"task_id": task_id}
@@ -567,7 +567,10 @@ def ping_paddle_vl() -> dict[str, Any]:
     """健康检查：仅看配置与是否启用，不强制花额度。"""
     cfg = load_baidu_env()
     enabled = paddle_vl_enabled()
-    has_ak = bool(cfg.get("BAIDU_OCR_API_KEY") and cfg.get("BAIDU_OCR_SECRET_KEY"))
+    has_ak = bool(
+        (cfg.get("BAIDU_OCR_API_KEY") or cfg.get("BAIDU_API_KEY"))
+        and (cfg.get("BAIDU_OCR_SECRET_KEY") or cfg.get("BAIDU_SECRET_KEY"))
+    )
     return {
         "enabled": enabled,
         "configured": has_ak,

@@ -41,6 +41,8 @@ def load_baidu_env(env_path: Path | None = None) -> dict[str, str]:
     for k in (
         "BAIDU_OCR_API_KEY",
         "BAIDU_OCR_SECRET_KEY",
+        "BAIDU_API_KEY",
+        "BAIDU_SECRET_KEY",
         "BAIDU_OCR_APP_ID",
         "BAIDU_OCR_API",
         "BAIDU_PADDLE_VL",
@@ -50,6 +52,12 @@ def load_baidu_env(env_path: Path | None = None) -> dict[str, str]:
         if os.environ.get(k):
             data[k] = os.environ[k]
     return data
+
+
+def _ak_sk(cfg: dict[str, str]) -> tuple[str, str]:
+    ak = cfg.get("BAIDU_OCR_API_KEY") or cfg.get("BAIDU_API_KEY") or ""
+    sk = cfg.get("BAIDU_OCR_SECRET_KEY") or cfg.get("BAIDU_SECRET_KEY") or ""
+    return ak, sk
 
 
 def get_access_token(api_key: str, secret_key: str, force: bool = False) -> str:
@@ -95,8 +103,7 @@ def ocr_image_bytes(
     各 word 会打 paragraph_id / para_source=baidu。
     """
     cfg = load_baidu_env()
-    ak = cfg.get("BAIDU_OCR_API_KEY") or ""
-    sk = cfg.get("BAIDU_OCR_SECRET_KEY") or ""
+    ak, sk = _ak_sk(cfg)
     # 要坐标必须用 accurate / general
     default_api = "accurate" if with_location else "accurate_basic"
     api_name = api or cfg.get("BAIDU_OCR_API") or default_api
@@ -266,8 +273,7 @@ def qrcode_image_bytes(png_or_jpg: bytes) -> tuple[list[dict], dict]:
     文档：https://ai.baidu.com/ai-doc/OCR/qk3h7y5o7
     """
     cfg = load_baidu_env()
-    ak = cfg.get("BAIDU_OCR_API_KEY") or ""
-    sk = cfg.get("BAIDU_OCR_SECRET_KEY") or ""
+    ak, sk = _ak_sk(cfg)
     if not ak or not sk:
         raise RuntimeError("未配置百度 OCR：backend/.env.baidu")
     token = get_access_token(ak, sk)
@@ -344,8 +350,7 @@ def qrcode_image_bytes(png_or_jpg: bytes) -> tuple[list[dict], dict]:
 
 def ping_baidu() -> dict:
     cfg = load_baidu_env()
-    ak = cfg.get("BAIDU_OCR_API_KEY") or ""
-    sk = cfg.get("BAIDU_OCR_SECRET_KEY") or ""
+    ak, sk = _ak_sk(cfg)
     if not ak or not sk:
         return {"ok": False, "error": "missing AK/SK"}
     token = get_access_token(ak, sk, force=True)

@@ -1,0 +1,152 @@
+.shell {
+  min-height: 100vh;
+  background: var(--bg);
+}
+
+.topbar {
+  height: 56px;
+  padding: 0 16px;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  background: #fff;
+  border-bottom: 1px solid var(--line);
+}
+
+.topbar-logo {
+  height: 32px;
+  width: auto;
+  display: block;
+}
+
+.topbar-tabs {
+  display: flex;
+  gap: 4px;
+  flex: 1;
+}
+
+.topbar-tab {
+  height: 40px;
+  padding: 0 16px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 8px;
+}
+
+.topbar-tab.is-on {
+  color: var(--accent);
+  background: var(--accent-soft);
+  font-weight: 600;
+}
+
+.topbar-who {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.topbar-settings.is-on {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.settings {
+  max-width: 720px;
+}
+
+.content {
+  padding: 24px 32px 48px;
+}
+
+.login-wrap {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  background: var(--bg);
+}
+
+.login-card {
+  width: min(420px, calc(100vw - 32px));
+}
+
+.login-logo {
+  height: 32px;
+  margin-bottom: 16px;
+}
+
+.review-desk {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: 16px;
+  align-items: start;
+  min-height: calc(100vh - 140px);
+}
+
+.canvas {
+  position: relative;
+  min-height: 480px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.canvas img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.pin {
+  position: absolute;
+  width: 24px;
+  height: 24px;
+  margin: -12px 0 0 -12px;
+  border: 0;
+  border-radius: 9999px;
+  background: var(--pin);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 24px;
+  text-align: center;
+  padding: 0;
+}
+
+.pin.is-on {
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.notes {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 16px;
+}
+
+.hit-card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px;
+  margin-bottom: 10px;
+}
+
+.hit-card.is-on {
+  background: var(--accent-soft);
+  border-color: #d3adf7;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-size: 15px;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 1099px) {
+  .review-desk {
+    grid-template-columns: 1fr;
+  }
+}

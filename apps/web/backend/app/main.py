@@ -2,8 +2,8 @@
 备案审核工作台 · API M2.1
 - 预置样本 + 任意上传
 - 百度 accurate 含位置 → 图上高亮
-- 显示名登录 + 全局审计
-- 飞书个人推送（lark-cli）
+- Session-only 身份（禁止 X-Actor 提权）
+- 飞书个人推送（lark-cli，不是登录）
 - 人终审
 """
 from __future__ import annotations
@@ -12,18 +12,20 @@ import json
 import os
 import re
 import shutil
+import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from app import audit_log, auth, backup, baidu_docdiff, config, feishu_push, minimax
+from app import audit_log, auth, backup, baidu_docdiff, config, feishu_oauth, feishu_push, minimax
 from app import layout_zones, pack_profile, text_verify, vlm_layer
 from app.baidu_ocr import ocr_image_bytes, ping_baidu, qrcode_image_bytes
 from app.claims_rules import build_claims_report
@@ -32,18 +34,47 @@ from app.fields import compare_fields, locate_text_in_ocr, parse_excel_fields
 from app.pdf_render import render_pdf_pages
 from app.report_pdf import build_report_pdf
 from app.report_summary import run_report_summary_job
+
+APP_VERSION = "0.8.0"
 ROOT = Path(__file__).resolve().parents[1]
-DATA = ROOT / "data"
-TASKS = DATA / "tasks"
-UPLOADS = DATA / "uploads"
-SAMPLES = Path(os.environ.get("WB_SAMPLES_DIR", "")).expanduser() if os.environ.get("WB_SAMPLES_DIR") else Path()
-FRONTEND = ROOT.parent / "frontend"
+TID_RE = re.compile(r"^[0-9a-f]{12}$")
+PAGE_NAME_RE = re.compile(r"^page_\d{2}\.png$")
+DATA: Path
+TASKS: Path
+UPLOADS: Path
+SAMPLES: Path
+FRONTEND: Path
+UI_DIST: Path
+MAX_UPLOAD_MB: int
 
-TASKS.mkdir(parents=True, exist_ok=True)
-UPLOADS.mkdir(parents=True, exist_ok=True)
 
-# 转曲大稿常见 50～150MB；可用环境变量 WB_MAX_UPLOAD_MB 覆盖
-MAX_UPLOAD_MB = int(os.environ.get("WB_MAX_UPLOAD_MB", "200"))
+def init_paths(data_dir: Path | None = None) -> Path:
+    """解析数据目录。测试可传入临时目录。"""
+    global DATA, TASKS, UPLOADS, SAMPLES, FRONTEND, UI_DIST, MAX_UPLOAD_MB
+    raw = data_dir or os.environ.get("WB_DATA_DIR") or config.get("WB_DATA_DIR") or str(ROOT / "data")
+    DATA = Path(str(raw)).expanduser().resolve()
+    if config.public_mode() and DATA == (ROOT / "data").resolve():
+        raise RuntimeError("WB_PUBLIC=1 时必须设置 WB_DATA_DIR，且不能落在 git 工作树内")
+    if config.public_mode() and not config.truthy("AUTH_REQUIRE_KNOWN", True):
+        raise RuntimeError("WB_PUBLIC=1 时 AUTH_REQUIRE_KNOWN 必须为 true")
+    TASKS = DATA / "tasks"
+    UPLOADS = DATA / "uploads"
+    TASKS.mkdir(parents=True, exist_ok=True)
+    UPLOADS.mkdir(parents=True, exist_ok=True)
+    samples = os.environ.get("WB_SAMPLES_DIR") or config.get("WB_SAMPLES_DIR")
+    SAMPLES = Path(samples).expanduser() if samples else Path()
+    FRONTEND = ROOT.parent / "frontend"
+    UI_DIST = ROOT.parent / "ui" / "dist"
+    try:
+        MAX_UPLOAD_MB = int(os.environ.get("WB_MAX_UPLOAD_MB") or config.get("WB_MAX_UPLOAD_MB") or "200")
+    except ValueError:
+        MAX_UPLOAD_MB = 200
+    auth.load_sessions(DATA)
+    auth.ensure_users_file(DATA)
+    return DATA
+
+
+init_paths()
 
 PRESETS = {
     "cleanse-excel-pdf": {
@@ -106,24 +137,61 @@ PRESETS = {
     },
 }
 
-app = FastAPI(title="备案审核工作台", version="0.7.0")
+app = FastAPI(title="备案审核工作台", version=APP_VERSION)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=config.cors_origins(),
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
-auth.load_sessions(DATA)
-auth.ensure_users_file(DATA)
+
+class _SessionCookieMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        if not request.headers.get("authorization"):
+            tok = request.cookies.get("wb_session")
+            if tok:
+                request.scope["headers"] = list(request.scope.get("headers") or [])
+                request.scope["headers"].append(
+                    (b"authorization", f"Bearer {tok}".encode("ascii"))
+                )
+        return await call_next(request)
+
+
+app.add_middleware(_SessionCookieMiddleware)
+
+COOKIE_NAME = "wb_session"
+
+
+def _set_session_cookie(resp: Response, token: str) -> None:
+    resp.set_cookie(
+        COOKIE_NAME,
+        token,
+        httponly=True,
+        samesite="lax",
+        secure=feishu_oauth.cookie_secure(),
+        max_age=auth.SESSION_TTL_SEC,
+        path="/",
+    )
+
+
+def _clear_session_cookie(resp: Response) -> None:
+    resp.delete_cookie(COOKIE_NAME, path="/")
 
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def assert_tid(tid: str) -> str:
+    if not TID_RE.fullmatch(tid or ""):
+        raise HTTPException(400, "无效任务 id")
+    return tid
+
+
 def task_path(tid: str) -> Path:
-    return TASKS / f"{tid}.json"
+    return TASKS / f"{assert_tid(tid)}.json"
 
 
 def load_task(tid: str) -> dict[str, Any]:
@@ -134,49 +202,59 @@ def load_task(tid: str) -> dict[str, Any]:
 
 
 def save_task(task: dict[str, Any]) -> None:
-    task_path(task["id"]).write_text(
-        json.dumps(task, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    tid = assert_tid(str(task["id"]))
+    p = task_path(tid)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=f".{tid}.", suffix=".json", dir=str(p.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(task, ensure_ascii=False, indent=2))
+        os.replace(tmp, p)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
-def resolve_actor(
-    authorization: str | None = None,
-    x_actor: str | None = None,
-    body_actor: str | None = None,
-) -> str:
-    """
-    解析操作人。注意：这是普通函数，不是 FastAPI Depends。
-    默认值必须是 None，不能是 Header()，否则手动调用时会把 Header 对象传进 auth。
-    """
-    # 防御：误传 Header 对象
-    if authorization is not None and not isinstance(authorization, str):
-        authorization = None
-    if x_actor is not None and not isinstance(x_actor, str):
-        x_actor = None
-    ctx = auth.session_context(
-        authorization, DATA, body_actor=body_actor, x_actor=x_actor
-    )
-    return str(ctx["name"])
+def safe_upload_file(tid: str, *parts: str) -> Path:
+    """uploads/{tid}/... 必须仍在该任务目录内。"""
+    root = (UPLOADS / assert_tid(tid)).resolve()
+    candidate = root.joinpath(*parts).resolve()
+    if candidate != root and root not in candidate.parents:
+        raise HTTPException(400, "非法路径")
+    return candidate
+
+
+def page_file(tid: str, name: str, side: str | None = None) -> Path:
+    if not PAGE_NAME_RE.fullmatch(name or ""):
+        raise HTTPException(400, "非法页图名")
+    if side is not None:
+        if side not in {"a", "b"}:
+            raise HTTPException(400, "非法页图面")
+        return safe_upload_file(tid, "pages", side, name)
+    return safe_upload_file(tid, "pages", name)
+
+
+def clamp_max_pages(raw: int) -> int:
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        n = 2
+    return max(1, min(n, 4))
 
 
 def resolve_ctx(
     authorization: str | None = None,
-    x_actor: str | None = None,
-    body_actor: str | None = None,
     *,
     perm: str | None = None,
 ) -> dict:
     if authorization is not None and not isinstance(authorization, str):
         authorization = None
-    if x_actor is not None and not isinstance(x_actor, str):
-        x_actor = None
     if perm:
-        return auth.require_perm(
-            authorization, DATA, perm, body_actor=body_actor, x_actor=x_actor
-        )
-    return auth.session_context(
-        authorization, DATA, body_actor=body_actor, x_actor=x_actor
-    )
+        return auth.require_perm(authorization, DATA, perm)
+    return auth.session_context(authorization, DATA)
 
 
 def _enrich_hits_with_ocr_boxes(
@@ -1400,20 +1478,21 @@ def login(body: LoginBody):
         DATA,
         action="login",
         actor=sess["display_name"],
-        detail={
-            "token_prefix": sess["token"][:8],
-            "role": sess.get("role"),
-        },
+        detail={"role": sess.get("role")},
     )
     return sess
 
 
 @app.post("/api/auth/logout")
-def logout(authorization: str | None = Header(default=None)):
+def logout(
+    response: Response,
+    authorization: str | None = Header(default=None),
+):
     s = auth.get_session(authorization)
     actor = s["display_name"] if s else "匿名"
     auth.logout(authorization, DATA)
     audit_log.append(DATA, action="logout", actor=actor)
+    _clear_session_cookie(response)
     return {"ok": True}
 
 
@@ -1433,48 +1512,109 @@ def me(authorization: str | None = Header(default=None)):
 
 
 @app.get("/api/auth/users")
-def auth_users():
-    """可登录显示名与角色（不含密钥）"""
-    return {"users": auth.list_users(DATA), "require_known": config.truthy("AUTH_REQUIRE_KNOWN", False)}
+def auth_users(authorization: str | None = Header(default=None)):
+    """仅管理员可看用户表，避免枚举冒充。"""
+    auth.require_perm(authorization, DATA, "manage_users")
+    return {
+        "users": auth.list_users(DATA),
+        "require_known": True,
+        "display_login": auth.display_login_allowed(),
+    }
+
+
+@app.get("/api/auth/methods")
+def auth_methods():
+    return {
+        "feishu": feishu_oauth.oauth_ready(),
+        "display_login": auth.display_login_allowed(),
+        "login_url": "/api/auth/feishu/login",
+        "public_base": feishu_oauth.public_base(),
+    }
+
+
+@app.get("/api/auth/feishu/login")
+def feishu_login():
+    if not feishu_oauth.app_id():
+        raise HTTPException(500, "未配置 FEISHU_APP_ID")
+    if not feishu_oauth.app_secret():
+        raise HTTPException(503, "未配置 FEISHU_APP_SECRET（只放本机环境变量，不要提交）")
+    return RedirectResponse(feishu_oauth.authorize_url(), status_code=302)
+
+
+@app.get("/api/auth/feishu/callback")
+def feishu_callback(code: str = "", state: str = "", error: str = ""):
+    if error:
+        return HTMLResponse(
+            f"<p>飞书拒绝授权：{error}</p><p><a href='/api/auth/feishu/login'>重试</a></p>",
+            status_code=400,
+        )
+    if not feishu_oauth.consume_state(state):
+        return HTMLResponse(
+            "<p>登录已过期或 state 无效。</p><p><a href='/api/auth/feishu/login'>重新用飞书进入</a></p>",
+            status_code=400,
+        )
+    try:
+        ident = feishu_oauth.exchange_code(code)
+        sess = auth.session_from_feishu(ident["open_id"], ident["name"], DATA)
+    except HTTPException as e:
+        return HTMLResponse(
+            "<p>未登录看不到任务和文件。</p>"
+            f"<p>{e.detail}</p>"
+            "<p><a href='/api/auth/feishu/login'>换一个飞书号</a></p>",
+            status_code=e.status_code,
+        )
+    except Exception as e:
+        return HTMLResponse(
+            f"<p>飞书登录失败：{e}</p><p><a href='/api/auth/feishu/login'>重试</a></p>",
+            status_code=400,
+        )
+    audit_log.append(
+        DATA,
+        action="login_feishu",
+        actor=sess["display_name"],
+        detail={"source": "feishu", "role": sess.get("role")},
+    )
+    dest = feishu_oauth.public_base().rstrip("/") + "/"
+    resp = RedirectResponse(dest, status_code=302)
+    _set_session_cookie(resp, sess["token"])
+    return resp
 
 # ── Health / audit ────────────────────────────────────
 
 
 @app.get("/api/health")
 def health():
+    return {"ok": True, "version": APP_VERSION}
+
+
+@app.get("/api/health/detail")
+def health_detail(authorization: str | None = Header(default=None)):
+    auth.require_perm(authorization, DATA, "manage_users")
     from app.baidu_paddle_vl import ping_paddle_vl
 
+    baidu = ping_baidu()
+    baidu.pop("token_prefix", None)
     return {
         "ok": True,
-        "version": "0.8.0",
-        "baidu": ping_baidu(),
+        "version": APP_VERSION,
+        "data_dir": str(DATA),
+        "baidu": {k: v for k, v in baidu.items() if k != "token_prefix"},
         "paddle_vl": ping_paddle_vl(),
         "minimax": minimax.status(),
-        "feishu": feishu_push.push_status(),
+        "feishu": {**feishu_push.push_status(), **feishu_oauth.status()},
         "tvt_lite": {
             "engine_version": text_verify.ENGINE_VERSION,
             "features": text_verify.ENGINE_FEATURES,
         },
-        "features": {
-            "baidu_textdiff": True,
-            "baidu_qrcode": True,
-            "local_cross_spec_fallback": True,
-            "roles": True,
-            "backup": True,
-            "report_pdf": True,
-            "feishu_archive": True,
-            "osd_navigator": True,
-            "tvt_lite": True,
-            "graphics_diff": True,
-            "claims_rules": True,
-            "paddle_ocr_vl": True,
-        },
+        "display_login": auth.display_login_allowed(),
+        "public": config.public_mode(),
     }
 
 
 @app.get("/api/engine/tvt")
-def engine_tvt_meta():
+def engine_tvt_meta(authorization: str | None = Header(default=None)):
     """前端用来判断旧任务是否需要重建"""
+    auth.require_perm(authorization, DATA, "read")
     return {
         "engine_version": text_verify.ENGINE_VERSION,
         "features": text_verify.ENGINE_FEATURES,
@@ -1483,8 +1623,9 @@ def engine_tvt_meta():
 
 
 @app.get("/api/eval/gold")
-def list_gold_cases():
+def list_gold_cases(authorization: str | None = Header(default=None)):
     """列出金标集案例"""
+    auth.require_perm(authorization, DATA, "read")
     from app import eval_gold
 
     cases = eval_gold.load_gold_cases()
@@ -1598,8 +1739,9 @@ def task_graphics_diff(
 
 
 @app.get("/api/tasks/{tid}/graphics-diff.png")
-def task_graphics_diff_png(tid: str):
-    p = UPLOADS / tid / "graphics_diff_ab.png"
+def task_graphics_diff_png(tid: str, authorization: str | None = Header(default=None)):
+    auth.require_perm(authorization, DATA, "read")
+    p = safe_upload_file(tid, "graphics_diff_ab.png")
     if not p.exists():
         raise HTTPException(404, "请先 POST /graphics-diff")
     return FileResponse(p, media_type="image/png")
@@ -1638,16 +1780,19 @@ def ops_download_backup(name: str, authorization: str | None = Header(default=No
 
 
 @app.get("/api/audit")
-def get_audit(limit: int = 80, task_id: str | None = None):
+def get_audit(
+    limit: int = 80,
+    task_id: str | None = None,
+    authorization: str | None = Header(default=None),
+):
+    auth.require_perm(authorization, DATA, "read")
     return audit_log.list_entries(DATA, limit=min(limit, 500), task_id=task_id)
 
 
 @app.post("/api/feishu/test")
-def feishu_test(
-    authorization: str | None = Header(default=None),
-    x_actor: str | None = Header(default=None, alias="X-Actor"),
-):
-    actor = resolve_actor(authorization=authorization, x_actor=x_actor)
+def feishu_test(authorization: str | None = Header(default=None)):
+    ctx = auth.require_perm(authorization, DATA, "manage_users")
+    actor = ctx["name"]
     r = feishu_push.send_text(
         f"【备案审核工作台】手动测试推送\n操作人：{actor}\n时间：{now_iso()}"
     )
@@ -1659,7 +1804,10 @@ def feishu_test(
 
 
 @app.get("/api/presets")
-def list_presets():
+def list_presets(authorization: str | None = Header(default=None)):
+    auth.require_perm(authorization, DATA, "read")
+    if not SAMPLES or not SAMPLES.exists():
+        return []
     return [
         {
             "id": k,
@@ -1675,18 +1823,25 @@ def list_presets():
 def list_tasks(
     authorization: str | None = Header(default=None),
     mine: bool = False,
+    q: str | None = None,
 ):
-    ctx = auth.session_context(authorization, DATA)
+    ctx = auth.require_perm(authorization, DATA, "read")
+    needle = (q or "").strip().lower()
     items = []
     for p in sorted(TASKS.glob("*.json"), key=lambda x: x.stat().st_mtime, reverse=True):
         t = json.loads(p.read_text(encoding="utf-8"))
         owner = t.get("owner") or t.get("created_by") or t.get("actor")
         if mine and ctx.get("name") and owner and owner != ctx["name"] and ctx.get("role") != "admin":
             continue
+        product_name = str(t.get("product_name") or "")
+        title = str(t.get("title") or "")
+        if needle and needle not in f"{product_name} {title}".lower():
+            continue
         items.append(
             {
                 "id": t["id"],
-                "title": t["title"],
+                "title": title,
+                "product_name": product_name,
                 "type": t["type"],
                 "status": t["status"],
                 "created_at": t.get("created_at"),
@@ -1696,7 +1851,11 @@ def list_tasks(
                 "completed_by": t.get("completed_by"),
             }
         )
-    return items
+    open_rows = [x for x in items if x.get("status") != "completed"]
+    done_rows = [x for x in items if x.get("status") == "completed"]
+    open_rows.sort(key=lambda x: x.get("created_at") or "", reverse=True)
+    done_rows.sort(key=lambda x: x.get("created_at") or "", reverse=True)
+    return open_rows + done_rows
 
 
 class CreateFromPreset(BaseModel):
@@ -1713,18 +1872,23 @@ def create_from_preset(
 ):
     if body.preset_id not in PRESETS:
         raise HTTPException(400, "未知 preset")
+    if not SAMPLES or not SAMPLES.exists():
+        raise HTTPException(412, "未配置 WB_SAMPLES_DIR，或样本目录不存在")
     ctx = auth.require_perm(
-        authorization, DATA, "create", body_actor=body.actor
+        authorization, DATA, "create"
     )
     actor = ctx["name"]
     preset = PRESETS[body.preset_id]
     tid = uuid.uuid4().hex[:12]
     tdir = UPLOADS / tid
     tdir.mkdir(parents=True, exist_ok=True)
+    body.max_pages = clamp_max_pages(body.max_pages)
     try:
         if preset["type"] == "excel_pdf":
             excel = tdir / "source.xlsx"
             pdf = tdir / "artwork.pdf"
+            if not Path(preset["excel"]).exists() or not Path(preset["pdf"]).exists():
+                raise HTTPException(412, f"样本文件不存在：{preset['title']}")
             shutil.copy(preset["excel"], excel)
             shutil.copy(preset["pdf"], pdf)
             pouch_path = None
@@ -1824,6 +1988,7 @@ async def create_from_upload(
     notify: bool = Form(True),
     # carton=花盒 | pouch=膜袋；Excel 任务二选一，单面识别
     pack_surface: str = Form("carton"),
+    product_name: str = Form(""),
     excel: UploadFile | None = File(None),
     pdf: UploadFile | None = File(None),
     pdf_pouch: UploadFile | None = File(None),  # 兼容旧客户端，忽略双面
@@ -1831,31 +1996,55 @@ async def create_from_upload(
     pdf_b: UploadFile | None = File(None),
     authorization: str | None = Header(default=None),
 ):
-    ctx = auth.require_perm(authorization, DATA, "create", body_actor=actor)
+    ctx = auth.require_perm(authorization, DATA, "create")
     who = ctx["name"]
     tid = uuid.uuid4().hex[:12]
     tdir = UPLOADS / tid
     tdir.mkdir(parents=True, exist_ok=True)
     limit = MAX_UPLOAD_MB * 1024 * 1024
+    max_pages = clamp_max_pages(max_pages)
 
-    async def save_up(uf: UploadFile, dest: Path) -> None:
-        data = await uf.read()
-        size_mb = len(data) / (1024 * 1024)
-        if len(data) > limit:
-            raise HTTPException(
-                400,
-                f"文件超过 {MAX_UPLOAD_MB}MB（当前 {size_mb:.1f}MB）：{uf.filename}。"
-                f"可压缩转曲 PDF，或设置环境变量 WB_MAX_UPLOAD_MB 提高上限。",
-            )
-        dest.write_bytes(data)
+    async def save_up(uf: UploadFile, dest: Path, kind: str) -> None:
+        written = 0
+        head = b""
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with dest.open("wb") as fh:
+            while True:
+                chunk = await uf.read(1024 * 1024)
+                if not chunk:
+                    break
+                if not head:
+                    head = chunk[:8]
+                written += len(chunk)
+                if written > limit:
+                    fh.close()
+                    dest.unlink(missing_ok=True)
+                    raise HTTPException(
+                        400,
+                        f"文件超过 {MAX_UPLOAD_MB}MB：{uf.filename}。"
+                        f"可压缩转曲 PDF，或设置环境变量 WB_MAX_UPLOAD_MB 提高上限。",
+                    )
+                fh.write(chunk)
+        if written == 0:
+            dest.unlink(missing_ok=True)
+            raise HTTPException(400, f"空文件：{uf.filename or dest.name}")
+        if kind == "xlsx" and not head.startswith(b"PK"):
+            dest.unlink(missing_ok=True)
+            raise HTTPException(400, "Excel 必须是 .xlsx（ZIP 格式），不接受空文件或旧 .xls")
+        if kind == "pdf" and not head.startswith(b"%PDF"):
+            dest.unlink(missing_ok=True)
+            raise HTTPException(400, f"不是有效的 PDF：{uf.filename}")
 
     try:
         if task_type == "excel_pdf":
+            pname = (product_name or "").strip()
+            if not pname:
+                raise HTTPException(400, "品名必填")
             if not excel or not pdf:
                 raise HTTPException(400, "需要 excel + 包装 PDF（花盒或膜袋二选一）")
             ep, pp = tdir / "source.xlsx", tdir / "artwork.pdf"
-            await save_up(excel, ep)
-            await save_up(pdf, pp)
+            await save_up(excel, ep, "xlsx")
+            await save_up(pdf, pp, "pdf")
             # 单面：花盒 / 膜袋 二选一（不再同时识别两面）
             surf = (pack_surface or "carton").strip().lower()
             if surf in ("pouch", "膜袋", "bag"):
@@ -1869,24 +2058,29 @@ async def create_from_upload(
                 "花盒",
             ):
                 surface_label = "膜袋"
+            job_title = (title or "").strip() or pname
+            if job_title == "Excel↔包装":
+                job_title = pname
             task = run_excel_pdf_job(
                 tid,
                 ep,
                 pp,
                 max_pages,
-                title or "Excel↔包装",
+                job_title,
                 pdf_pouch=None,  # 强制单面
                 surface_a_label=surface_label,
                 surface_b_label="膜袋",
             )
             task["pack_surface"] = surface_label
             task["label_a"] = surface_label
+            task["product_name"] = pname
+            task["title"] = job_title
         elif task_type in ("pdf_pdf", "cross_spec"):
             if not pdf_a or not pdf_b:
                 raise HTTPException(400, "需要 pdf_a + pdf_b")
             a, b = tdir / "a.pdf", tdir / "b.pdf"
-            await save_up(pdf_a, a)
-            await save_up(pdf_b, b)
+            await save_up(pdf_a, a, "pdf")
+            await save_up(pdf_b, b, "pdf")
             labels = (
                 ("30ml", "95ml")
                 if task_type == "cross_spec"
@@ -1907,14 +2101,14 @@ async def create_from_upload(
             # 独立验收：单双页 PDF，或两个 PDF（各一面）
             if pdf_a and pdf_b:
                 a, b = tdir / "a.pdf", tdir / "b.pdf"
-                await save_up(pdf_a, a)
-                await save_up(pdf_b, b)
+                await save_up(pdf_a, a, "pdf")
+                await save_up(pdf_b, b, "pdf")
                 task = run_dual_pdf_compare_job(
                     tid, a, b, title or "双页文案对比"
                 )
             elif pdf:
                 p = tdir / "artwork.pdf"
-                await save_up(pdf, p)
+                await save_up(pdf, p, "pdf")
                 task = run_pdf_internal_job(tid, p, title or "双页文案对比")
             else:
                 raise HTTPException(
@@ -1925,7 +2119,7 @@ async def create_from_upload(
             if not pdf:
                 raise HTTPException(400, "需要检测报告 pdf")
             p = tdir / "report.pdf"
-            await save_up(pdf, p)
+            await save_up(pdf, p, "pdf")
             rs = run_report_summary_job(
                 tid, p, tdir, title=title or "检测报告功效摘要", use_ai=True
             )
@@ -1954,7 +2148,10 @@ async def create_from_upload(
                 "actor": who,
             }
         else:
-            raise HTTPException(400, "task_type 无效")
+            raise HTTPException(
+                400,
+                "task_type 无效。第一期请用 excel_pdf（或 pdf_pdf / pdf_internal / cross_spec / report_summary）",
+            )
         task["actor"] = who
         task["created_by"] = who
         task["owner"] = who
@@ -1982,7 +2179,8 @@ async def create_from_upload(
 
 
 @app.get("/api/tasks/{tid}")
-def get_task(tid: str):
+def get_task(tid: str, authorization: str | None = Header(default=None)):
+    auth.require_perm(authorization, DATA, "read")
     return load_task(tid)
 
 
@@ -2004,7 +2202,7 @@ def delete_task(
     """
     task = load_task(tid)
     ctx = auth.require_perm(
-        authorization, DATA, "delete", body_actor=body.actor
+        authorization, DATA, "delete"
     )
     who = ctx["name"]
     title = str(task.get("title") or "")
@@ -2038,10 +2236,13 @@ def delete_task(
 
 
 @app.get("/api/tasks/{tid}/docx")
-def get_docx(tid: str):
+def get_docx(tid: str, authorization: str | None = Header(default=None)):
+    auth.require_perm(authorization, DATA, "read")
     task = load_task(tid)
-    name = task.get("docx_name") or "efficacy_summary.docx"
-    p = UPLOADS / tid / name
+    name = Path(str(task.get("docx_name") or "efficacy_summary.docx")).name
+    if name.endswith(".tmp") or "/" in name or "\\" in name:
+        raise HTTPException(400, "非法 Word 文件名")
+    p = safe_upload_file(tid, name)
     if not p.exists():
         raise HTTPException(404, "Word 尚未生成")
     return FileResponse(
@@ -2052,16 +2253,23 @@ def get_docx(tid: str):
 
 
 @app.get("/api/tasks/{tid}/pages/{name}")
-def get_page(tid: str, name: str):
-    p = UPLOADS / tid / "pages" / name
+def get_page(tid: str, name: str, authorization: str | None = Header(default=None)):
+    auth.require_perm(authorization, DATA, "read")
+    p = page_file(tid, name)
     if not p.exists():
         raise HTTPException(404)
     return FileResponse(p)
 
 
 @app.get("/api/tasks/{tid}/pages/{side}/{name}")
-def get_page_side(tid: str, side: str, name: str):
-    p = UPLOADS / tid / "pages" / side / name
+def get_page_side(
+    tid: str,
+    side: str,
+    name: str,
+    authorization: str | None = Header(default=None),
+):
+    auth.require_perm(authorization, DATA, "read")
+    p = page_file(tid, name, side)
     if not p.exists():
         raise HTTPException(404)
     return FileResponse(p)
@@ -2071,6 +2279,7 @@ class DecisionBody(BaseModel):
     hit_id: str
     decision: Literal["confirm", "issue", "ignore", "pending"]
     actor: str = "审核员"
+    note: str | None = None
 
 
 @app.post("/api/tasks/{tid}/decision")
@@ -2083,7 +2292,7 @@ def decide(
     if task["status"] not in ("pending_review", "in_review"):
         raise HTTPException(400, "当前状态不可审核")
     ctx = auth.require_perm(
-        authorization, DATA, "decide", body_actor=body.actor
+        authorization, DATA, "decide"
     )
     who = ctx["name"]
     task["status"] = "in_review"
@@ -2097,6 +2306,8 @@ def decide(
             h["decision"] = body.decision
             h["decided_by"] = who
             h["decided_at"] = now_iso()
+            if body.note is not None:
+                h["note"] = str(body.note).strip()
             field_name = h.get("field")
             found = True
             break
@@ -2138,7 +2349,7 @@ def ai_review(
     """MiniMax-M3 对疑点/缺失做语义复核（第二层）。不自动终审。"""
     task = load_task(tid)
     ctx = auth.require_perm(
-        authorization, DATA, "ai_review", body_actor=body.actor
+        authorization, DATA, "ai_review"
     )
     who = ctx["name"]
     try:
@@ -2235,7 +2446,7 @@ def text_compare_summary(
     if task.get("type") not in ("pdf_internal", "cross_spec", "pdf_pdf"):
         raise HTTPException(400, "仅 PDF 双页/双稿文字对比任务可用")
     ctx = auth.require_perm(
-        authorization, DATA, "ai_review", body_actor=body.actor
+        authorization, DATA, "ai_review"
     )
     who = ctx["name"]
     from app import text_compare_ui
@@ -2278,7 +2489,7 @@ def typo_check_layer(
     """
     task = load_task(tid)
     ctx = auth.require_perm(
-        authorization, DATA, "ai_review", body_actor=body.actor
+        authorization, DATA, "ai_review"
     )
     who = ctx["name"]
     try:
@@ -2337,6 +2548,7 @@ def typo_check_layer(
 class CompleteBody(BaseModel):
     actor: str = "审核员"
     notify: bool = True
+    conclusion: str = ""
 
 
 @app.post("/api/tasks/{tid}/complete")
@@ -2347,7 +2559,7 @@ def complete(
 ):
     task = load_task(tid)
     ctx = auth.require_perm(
-        authorization, DATA, "complete", body_actor=body.actor
+        authorization, DATA, "complete"
     )
     who = ctx["name"]
     pending = [
@@ -2357,11 +2569,19 @@ def complete(
     ]
     if pending:
         raise HTTPException(400, f"仍有 {len(pending)} 条疑点/缺失未处理")
+    conclusion = (body.conclusion or "").strip()
+    if not conclusion:
+        raise HTTPException(400, "请写下结论")
+    issues = [h for h in task.get("hits") or [] if h.get("decision") == "issue"]
     task["status"] = "completed"
     task["completed_at"] = now_iso()
     task["completed_by"] = who
     task["actor"] = who
-    task.setdefault("audit", []).append({"at": now_iso(), "actor": who, "action": "complete"})
+    task["conclusion"] = conclusion
+    task["complete_kind"] = "rework" if issues else "signed"
+    task.setdefault("audit", []).append(
+        {"at": now_iso(), "actor": who, "action": "complete", "kind": task["complete_kind"]}
+    )
     save_task(task)
     audit_log.append(
         DATA,
@@ -2383,10 +2603,10 @@ def report_pdf(
     tid: str,
     authorization: str | None = Header(default=None),
 ):
-    t = load_task(tid)
     ctx = auth.require_perm(authorization, DATA, "export")
+    t = load_task(tid)
     who = ctx["name"]
-    out = UPLOADS / tid / "audit_report.pdf"
+    out = safe_upload_file(tid, "audit_report.pdf")
     try:
         build_report_pdf(t, out)
     except Exception as e:
@@ -2445,25 +2665,14 @@ def _html_esc(s: Any) -> str:
 def report_html(
     tid: str,
     authorization: str | None = Header(default=None),
-    x_actor: str | None = Header(default=None, alias="X-Actor"),
 ):
-    """
-    HTML 审核报告。飞书链接常无登录 Header，须匿名可读，不能因 Header 默认对象崩 500。
-    """
+    """HTML 审核报告。须登录。GET 不改任务 JSON。"""
+    ctx = auth.require_perm(authorization, DATA, "read")
     t = load_task(tid)
-    # 显式传入，避免 resolve_actor() 把 Header() 默认对象当成 x_actor
     try:
-        who = resolve_actor(authorization=authorization, x_actor=x_actor)
+        audit_log.append(DATA, action="export_report", actor=ctx["name"], task_id=tid)
     except Exception:
-        who = "匿名"
-    try:
-        audit_log.append(DATA, action="export_report", actor=who, task_id=tid)
-        t.setdefault("audit", []).append(
-            {"at": now_iso(), "actor": who, "action": "export_report"}
-        )
-        save_task(t)
-    except Exception:
-        pass  # 报告页优先可读，审计失败不挡展示
+        pass
 
     rows = []
     for h in t.get("hits") or []:
@@ -2541,6 +2750,22 @@ pre{{white-space:pre-wrap;margin:0;font-size:12px}}
 if FRONTEND.exists():
     app.mount("/static", StaticFiles(directory=str(FRONTEND / "static")), name="static")
 
-    @app.get("/")
-    def index():
-        return FileResponse(FRONTEND / "index.html")
+_brand_dir = ROOT.parent / "ui" / "public" / "brand"
+if _brand_dir.is_dir():
+    app.mount("/brand", StaticFiles(directory=str(_brand_dir)), name="brand")
+
+_ui_assets = ROOT.parent / "ui" / "dist" / "assets"
+if _ui_assets.is_dir():
+    app.mount("/assets", StaticFiles(directory=str(_ui_assets)), name="ui-assets")
+
+
+@app.get("/")
+def index():
+    """验收入口是 React 构建，不要静默回旧 frontend/。"""
+    built = UI_DIST / "index.html"
+    if built.is_file():
+        return FileResponse(built)
+    raise HTTPException(
+        503,
+        "审稿台前端未构建。请在 apps/web/ui 执行 npm run build。",
+    )

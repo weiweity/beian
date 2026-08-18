@@ -15,7 +15,12 @@
 
 ## 选型
 
-FastAPI 静态页、JSON 落盘、审核同步处理、Cloudflare Named Tunnel、Python 3.12、飞书网页应用（待接）。不买云，不映射端口。
+- HTTP 产品层：TypeScript + Hono（`apps/web/server`），挂 React 静态资源。
+- 对照引擎 / 3D 流水线：Python worker（`apps/web/backend`、`workers/packaging`），不重写规则。
+- 设计：对齐客服 Demo 的内部工具纪律（见根目录 `DESIGN.md`），不搬 Electron / 狐狸 / Dashboard。
+- 暴露：Cloudflare Named Tunnel。飞书网页应用（待接）。不买云，不映射端口。
+
+详见 `docs/adr-001-frontend-stack.md`。
 
 ## 不做（8/31）
 
