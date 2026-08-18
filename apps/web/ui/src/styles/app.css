@@ -53,28 +53,210 @@
   font-weight: 600;
 }
 
-.settings {
-  max-width: 720px;
-}
-
 .content {
   padding: 24px 32px 48px;
 }
 
-.login-wrap {
+.content-flush {
+  padding: 0;
+  background: #fff;
+}
+
+.login-page {
   min-height: 100vh;
   display: grid;
+  grid-template-columns: minmax(280px, 42%) minmax(0, 1fr);
+  background: #fff;
+}
+
+.login-brand {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 48px 56px;
+  background:
+    radial-gradient(720px 360px at 0% 0%, #f3e8ff 0%, transparent 58%),
+    #faf7ff;
+  border-right: 1px solid var(--line);
+}
+
+.login-brand-logo {
+  width: 56px;
+  height: 56px;
+  object-fit: contain;
+  object-position: left center;
+  display: block;
+  margin-bottom: 28px;
+  flex-shrink: 0;
+}
+
+.login-brand-title {
+  margin: 0 0 12px !important;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.login-brand-copy {
+  margin: 0 !important;
+  max-width: 320px;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1.7;
+}
+
+.login-panel {
+  display: grid;
   place-items: center;
-  background: var(--bg);
+  padding: 32px 24px 48px;
+  background: #fff;
 }
 
-.login-card {
-  width: min(420px, calc(100vw - 32px));
+.login-box {
+  width: min(400px, 100%);
 }
 
-.login-logo {
-  height: 32px;
+.login-box-title {
+  margin: 0 0 4px !important;
+}
+
+.login-box-sub {
+  margin: 0 0 8px !important;
+}
+
+.login-hint {
+  margin: 8px 0 0 !important;
+  font-size: 13px;
+}
+
+.login-qr {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px 0 0;
+  text-align: center;
+}
+
+.login-qr-cap {
+  margin: 16px 0 0 !important;
+  font-weight: 600;
+}
+
+.feishu-mark {
+  display: inline-block;
+  vertical-align: -2px;
+  margin-right: 8px;
+}
+
+.settings-page {
+  min-height: calc(100vh - 56px);
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+}
+
+.settings-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 20px 32px 16px;
+  background: #fff;
+  border-bottom: 1px solid var(--line);
+}
+
+.settings-alert {
+  margin: 16px 32px 0;
+}
+
+.settings-body {
+  display: grid;
+  grid-template-columns: 208px minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
+}
+
+.settings-aside {
+  background: #fff;
+  border-right: 1px solid var(--line);
+  padding: 8px 0 80px;
+}
+
+.settings-aside .ant-menu {
+  border-inline-end: none !important;
+}
+
+.settings-main {
+  padding: 24px 32px 120px;
+  max-width: 760px;
+  background: #fff;
+}
+
+.settings-main-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
   margin-bottom: 16px;
+}
+
+.settings-form .ant-form-item {
+  margin-bottom: 20px;
+}
+
+.settings-footer {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 32px;
+  background: #fff;
+  border-top: 1px solid var(--line);
+  box-shadow: 0 -1px 0 var(--line);
+}
+
+@media (max-width: 899px) {
+  .login-page {
+    grid-template-columns: 1fr;
+  }
+
+  .login-brand {
+    padding: 28px 24px 20px;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .login-brand-copy {
+    max-width: none;
+  }
+
+  .settings-head,
+  .settings-body {
+    display: block;
+  }
+
+  .settings-aside {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+    padding: 0;
+  }
+
+  .settings-aside .ant-menu {
+    display: flex;
+    overflow-x: auto;
+  }
+
+  .settings-main {
+    padding: 20px 16px 96px;
+  }
+
+  .settings-footer,
+  .settings-head,
+  .settings-alert {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
 }
 
 .review-desk {
@@ -98,6 +280,11 @@
   display: block;
   width: 100%;
   height: auto;
+}
+
+img.login-brand-logo {
+  width: 56px;
+  max-width: 56px;
 }
 
 .pin {

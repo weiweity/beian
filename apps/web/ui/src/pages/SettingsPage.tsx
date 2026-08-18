@@ -1,6 +1,25 @@
-import { useEffect, useState } from "react";
-import { Alert, App, Button, Card, Input, Space, Switch, Typography } from "antd";
+import { useEffect, useMemo, useState } from "react";
+import {
+  Alert,
+  App,
+  Button,
+  Form,
+  Input,
+  Menu,
+  Space,
+  Switch,
+  Tag,
+  Typography,
+} from "antd";
 import { api, type ProbeResult, type SettingFieldView, type SettingsView } from "../api";
+
+const PROBE_BY_GROUP: Record<string, string[]> = {
+  飞书登录: ["feishu"],
+  飞书推送: ["lark"],
+  "百度 OCR": ["baidu"],
+  "MiniMax（可选）": [],
+  本机依赖: ["python", "blender"],
+};
 
 export function SettingsPage({ canWrite = true }: { canWrite?: boolean }) {
   const { message } = App.useApp();
@@ -10,6 +29,7 @@ export function SettingsPage({ canWrite = true }: { canWrite?: boolean }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [restart, setRestart] = useState(false);
+  const [group, setGroup] = useState<string>("飞书登录");
   const [probes, setProbes] = useState<Record<string, ProbeResult | { pending: true }>>({});
 
   useEffect(() => {
@@ -20,6 +40,7 @@ export function SettingsPage({ canWrite = true }: { canWrite?: boolean }) {
       .then((next) => {
         if (cancelled) return;
         setView(next);
+        if (next.groups[0]) setGroup(next.groups[0].title);
         const init: Record<string, string> = {};
         for (const g of next.groups) {
           for (const f of g.fields) init[f.key] = f.kind === "secret" ? "" : f.value;
@@ -36,6 +57,17 @@ export function SettingsPage({ canWrite = true }: { canWrite?: boolean }) {
       cancelled = true;
     };
   }, []);
+
+  const current = view?.groups.find((g) => g.title === group) || view?.groups[0];
+
+  const menuItems = useMemo(
+    () =>
+      (view?.groups || []).map((g) => ({
+        key: g.title,
+        label: g.title,
+      })),
+    [view],
+  );
 
   function setField(key: string, value: string) {
     setDraft((prev) => ({ ...prev, [key]: value }));
@@ -85,132 +117,155 @@ export function SettingsPage({ canWrite = true }: { canWrite?: boolean }) {
     }
   }
 
+  async function probeGroup() {
+    const ids = PROBE_BY_GROUP[group] || [];
+    for (const id of ids) await probe(id);
+  }
+
   if (loading) {
     return (
-      <section>
-        <Typography.Title level={3}>设置</Typography.Title>
-        <Typography.Paragraph type="secondary">读取本机配置…</Typography.Paragraph>
+      <section className="settings-page">
+        <header className="settings-head">
+          <Typography.Title level={3} style={{ margin: 0 }}>
+            设置
+          </Typography.Title>
+          <Typography.Paragraph type="secondary" style={{ margin: "4px 0 0" }}>
+            读取本机配置…
+          </Typography.Paragraph>
+        </header>
       </section>
     );
   }
 
+  const groupProbes = (PROBE_BY_GROUP[current?.title || ""] || [])
+    .map((id) => view?.probes.find((p) => p.id === id))
+    .filter((p): p is { id: string; label: string } => Boolean(p));
+
   return (
-    <section className="settings">
-      <Typography.Title level={3} style={{ marginBottom: 4 }}>
-        设置
-      </Typography.Title>
-      <Typography.Paragraph type="secondary">
-        换人用时在这里填。密钥只存在这台电脑，界面不会回显。不要改代码、不要提交到 git。
-      </Typography.Paragraph>
-      {error ? <Alert type="error" showIcon message={error} style={{ marginBottom: 16 }} /> : null}
+    <section className="settings-page">
+      <header className="settings-head">
+        <div>
+          <Typography.Title level={3} style={{ margin: 0 }}>
+            设置
+          </Typography.Title>
+          <Typography.Paragraph type="secondary" style={{ margin: "4px 0 0" }}>
+            本机配置。密钥不回显、不进 git。换人换机在这里填。
+          </Typography.Paragraph>
+        </div>
+        <Space wrap>
+          {(view?.probes || []).map((p) => {
+            const r = probes[p.id];
+            const done = r && !("pending" in r) ? r : null;
+            const color = !done ? "default" : done.ok ? "success" : "error";
+            return (
+              <Tag key={p.id} color={color} bordered={false}>
+                {p.label}
+                {done ? (done.ok ? " 通" : " 不通") : " 未测"}
+              </Tag>
+            );
+          })}
+        </Space>
+      </header>
+
+      {error ? <Alert type="error" showIcon message={error} className="settings-alert" /> : null}
       {!canWrite ? (
-        <Alert type="info" showIcon message="只读。改配置需要审核员或管理员。" style={{ marginBottom: 16 }} />
+        <Alert type="info" showIcon message="只读。改配置需要审核员或管理员。" className="settings-alert" />
       ) : null}
       {restart ? (
         <Alert
           type="warning"
           showIcon
           message="数据目录或公网开关改过，需要重启服务后才完全生效。"
-          style={{ marginBottom: 16 }}
+          className="settings-alert"
         />
       ) : null}
 
-      {view ? (
-        <Card size="small" style={{ marginBottom: 16 }}>
-          <Typography.Text strong>连通探测</Typography.Text>
-          <Typography.Paragraph type="secondary" style={{ margin: "4px 0 12px" }}>
-            测的是这台机器现在的配置，不会把密钥带回页面。
-          </Typography.Paragraph>
-          <Space wrap>
-            {view.probes.map((p) => {
-              const r = probes[p.id];
-              const pending = r && "pending" in r;
-              const done = r && !("pending" in r) ? r : null;
-              return (
-                <Button key={p.id} onClick={() => void probe(p.id)} loading={Boolean(pending)}>
-                  {p.label}
-                  {done ? (done.ok ? " · 通" : " · 不通") : ""}
-                </Button>
-              );
-            })}
-          </Space>
-          {Object.values(probes)
-            .filter((r): r is ProbeResult => Boolean(r) && !("pending" in r))
-            .map((r) => (
-              <Typography.Paragraph key={r.id} type={r.ok ? "secondary" : "danger"} style={{ margin: "8px 0 0" }}>
-                {view.probes.find((p) => p.id === r.id)?.label}：{r.message}
+      <div className="settings-body">
+        <aside className="settings-aside">
+          <Menu
+            mode="inline"
+            selectedKeys={[current?.title || group]}
+            items={menuItems}
+            onClick={({ key }) => setGroup(String(key))}
+          />
+        </aside>
+        <div className="settings-main">
+          <div className="settings-main-head">
+            <Typography.Title level={4} style={{ margin: 0 }}>
+              {current?.title}
+            </Typography.Title>
+            {groupProbes.length ? (
+              <Button onClick={() => void probeGroup()}>检测连通</Button>
+            ) : null}
+          </div>
+          {groupProbes.map((p) => {
+            const r = probes[p.id];
+            const done = r && !("pending" in r) ? r : null;
+            if (!done) return null;
+            return (
+              <Typography.Paragraph
+                key={p.id}
+                type={done.ok ? "secondary" : "danger"}
+                style={{ margin: "0 0 8px" }}
+              >
+                {p.label}：{done.message}
               </Typography.Paragraph>
-            ))}
-        </Card>
-      ) : null}
-
-      {(view?.groups || []).map((g) => (
-        <Card key={g.title} title={g.title} size="small" style={{ marginBottom: 16 }}>
-          <Space direction="vertical" size={16} style={{ width: "100%" }}>
-            {g.fields.map((f) => (
-              <FieldRow
+            );
+          })}
+          <Form layout="vertical" requiredMark={false} className="settings-form" disabled={!canWrite}>
+            {(current?.fields || []).map((f) => (
+              <FieldItem
                 key={f.key}
                 field={f}
                 value={draft[f.key] ?? ""}
                 onChange={(v) => setField(f.key, v)}
-                disabled={!canWrite}
               />
             ))}
-          </Space>
-        </Card>
-      ))}
+          </Form>
+        </div>
+      </div>
 
-      <Button type="primary" onClick={() => void save()} loading={saving} disabled={!canWrite}>
-        保存到本机
-      </Button>
+      <footer className="settings-footer">
+        <Typography.Text type="secondary">保存后立即写入本机，部分项需重启。</Typography.Text>
+        <Button type="primary" onClick={() => void save()} loading={saving} disabled={!canWrite}>
+          保存
+        </Button>
+      </footer>
     </section>
   );
 }
 
-function FieldRow({
+function FieldItem({
   field,
   value,
   onChange,
-  disabled,
 }: {
   field: SettingFieldView;
   value: string;
   onChange: (v: string) => void;
-  disabled?: boolean;
 }) {
   return (
-    <div>
-      <Typography.Text>{field.label}</Typography.Text>
-      {field.restart ? (
-        <Typography.Text type="secondary"> · 改完要重启</Typography.Text>
-      ) : null}
-      <div style={{ marginTop: 6 }}>
-        {field.kind === "toggle" ? (
-          <Switch
-            checked={value === "true"}
-            onChange={(on) => onChange(on ? "true" : "false")}
-            disabled={disabled}
-          />
-        ) : field.kind === "secret" ? (
-          <Input.Password
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            autoComplete="new-password"
-            placeholder={field.set ? `已填 ${field.last4}，留空不改` : "未填"}
-            disabled={disabled}
-          />
-        ) : (
-          <Input
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            placeholder={field.help}
-            disabled={disabled}
-          />
-        )}
-      </div>
-      <Typography.Paragraph type="secondary" style={{ margin: "4px 0 0", fontSize: 13 }}>
-        {field.help}
-      </Typography.Paragraph>
-    </div>
+    <Form.Item
+      label={
+        <span>
+          {field.label}
+          {field.restart ? <Typography.Text type="secondary">（改完重启）</Typography.Text> : null}
+        </span>
+      }
+      extra={field.help}
+    >
+      {field.kind === "toggle" ? (
+        <Switch checked={value === "true"} onChange={(on) => onChange(on ? "true" : "false")} />
+      ) : field.kind === "secret" ? (
+        <Input.Password
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          autoComplete="new-password"
+          placeholder={field.set ? `已填 ${field.last4}，留空不改` : "未填"}
+        />
+      ) : (
+        <Input value={value} onChange={(e) => onChange(e.target.value)} />
+      )}
+    </Form.Item>
   );
 }

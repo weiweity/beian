@@ -22,7 +22,7 @@ export function App() {
       const next = await api.me();
       setMe(next);
       if (next.logged_in && view === "login") {
-        setView("tasks");
+        setView(window.location.hash === "#settings" ? "settings" : "tasks");
         setDesk("review");
       }
       if (!next.logged_in) {
@@ -96,7 +96,7 @@ export function App() {
           </Button>
         </div>
       </header>
-      <Layout.Content className="content">
+      <Layout.Content className={view === "settings" ? "content content-flush" : "content"}>
         {view === "settings" ? <SettingsPage canWrite={Boolean(me?.perms.includes("create"))} /> : null}
         {view !== "settings" && desk === "mockup" ? <MockupPage /> : null}
         {view !== "settings" && desk === "review" && view === "tasks" ? (

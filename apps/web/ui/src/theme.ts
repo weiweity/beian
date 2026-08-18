@@ -19,4 +19,15 @@ export const theme: ThemeConfig = {
       '-apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Noto Sans SC", sans-serif',
     controlHeight: 40,
   },
+  components: {
+    Menu: {
+      itemSelectedColor: "#722ED1",
+      itemSelectedBg: "#F9F0FF",
+      itemHoverBg: "#F9F0FF",
+    },
+    Tabs: {
+      itemSelectedColor: "#722ED1",
+      inkBarColor: "#722ED1",
+    },
+  },
 };
