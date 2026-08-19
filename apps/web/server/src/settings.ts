@@ -2,6 +2,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "n
 import { execFile, execFileSync } from "node:child_process";
 import { join, resolve } from "node:path";
 import { DATA_DIR, PYTHON_APP } from "./config.js";
+import { httpsJson } from "./outbound.js";
 
 export type FieldKind = "text" | "secret" | "toggle" | "path";
 
@@ -59,6 +60,13 @@ export const CATALOG: SettingField[] = [
     label: "额外白名单 open_id",
     kind: "text",
     help: "逗号分隔 ou_…。也可写在本机 users.json。",
+  },
+  {
+    group: "飞书登录",
+    key: "FEISHU_TENANT_KEY",
+    label: "伸美企业 tenant_key",
+    kind: "text",
+    help: "只放行这家飞书企业。空则首次伸美授权后自动写入。其他公司主体进不来。",
   },
   {
     group: "飞书登录",
@@ -121,6 +129,20 @@ export const CATALOG: SettingField[] = [
     kind: "text",
     help: "默认 accurate（带位置）。不要随便改。",
     default: "accurate",
+  },
+  {
+    group: "百度 OCR",
+    key: "BAIDU_CLOUD_AK",
+    label: "智能云账单 AK",
+    kind: "secret",
+    help: "拉余额/月账单用。和 OCR Key 不是同一把时在这里另填；空则尝试用 OCR Key。",
+  },
+  {
+    group: "百度 OCR",
+    key: "BAIDU_CLOUD_SK",
+    label: "智能云账单 SK",
+    kind: "secret",
+    help: "与账单 AK 成对。账号需开通财务只读。",
   },
   {
     group: "MiniMax（可选）",
@@ -320,10 +342,45 @@ export function publicView() {
     probes: [
       { id: "feishu", label: "飞书应用" },
       { id: "baidu", label: "百度 OCR" },
+      { id: "minimax", label: "MiniMax" },
       { id: "python", label: "对照 Python" },
       { id: "blender", label: "Blender" },
       { id: "lark", label: "lark-cli 推送" },
     ],
+    derived: {
+      redirect_uri: feishuRedirect(),
+      tenant_key_filled: Boolean(getSetting("FEISHU_TENANT_KEY")),
+      python: pythonBin(),
+    },
+    health: computeHealth(),
+  };
+}
+
+export function computeHealth() {
+  const appId = getSetting("FEISHU_APP_ID");
+  const secret = getSetting("FEISHU_APP_SECRET");
+  const baiduAk = getSetting("BAIDU_OCR_API_KEY");
+  const baiduSk = getSetting("BAIDU_OCR_SECRET_KEY");
+  const blender = blenderBin();
+  const loginOk = Boolean(appId && secret);
+  const reviewOk = Boolean(baiduAk && baiduSk);
+  const mockupOk = Boolean(blender && existsSync(blender));
+  return {
+    login: {
+      ok: loginOk,
+      title: "人能进来吗",
+      detail: loginOk ? "已填飞书应用凭证" : "缺 App ID 或 Secret",
+    },
+    review: {
+      ok: reviewOk,
+      title: "今天能审一单吗",
+      detail: reviewOk ? "已填百度 OCR" : "缺百度 OCR 密钥；没有它机审几乎不能跑",
+    },
+    mockup: {
+      ok: mockupOk,
+      title: "今天能打样吗",
+      detail: mockupOk ? `Blender：${blender}` : blender ? "Blender 路径不存在" : "还没填 Blender 路径",
+    },
   };
 }
 
@@ -416,13 +473,12 @@ async function probeFeishu(): Promise<ProbeResult> {
   const secret = getSetting("FEISHU_APP_SECRET");
   if (!appId || !secret) return { id, ok: false, message: "还没填 App ID 或 Secret" };
   try {
-    const res = await fetch("https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal", {
+    const res = await httpsJson("https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ app_id: appId, app_secret: secret }),
-      signal: AbortSignal.timeout(8000),
     });
-    const json = (await res.json()) as { code?: number; msg?: string };
+    const json = (res.json || {}) as { code?: number; msg?: string };
     if (json.code === 0) return { id, ok: true, message: "应用凭证有效" };
     return { id, ok: false, message: redact(json.msg || `飞书返回 ${json.code ?? res.status}`) };
   } catch (err) {
@@ -475,12 +531,36 @@ function probeLark(): ProbeResult {
   return { id, ok: true, message: `已安装，将推给 ${oid.slice(0, 8)}…` };
 }
 
+async function probeMinimax(): Promise<ProbeResult> {
+  const id = "minimax";
+  const key = getSetting("MINIMAX_API_KEY");
+  if (!/^(1|true|yes|on)$/i.test(getSetting("MINIMAX_ENABLED"))) {
+    return { id, ok: true, message: key ? "已填 Key，语义复核未开" : "未启用（不影响主对照）" };
+  }
+  if (!key) return { id, ok: false, message: "已启用但还没填 API Key" };
+  const urls = ["https://api.minimaxi.com/v1/models", "https://api.minimax.io/v1/models"];
+  for (const url of urls) {
+    try {
+      const res = await fetch(url, {
+        headers: { Authorization: `Bearer ${key}` },
+        signal: AbortSignal.timeout(8000),
+      });
+      if (res.ok) return { id, ok: true, message: "Key 能调通模型列表" };
+    } catch {
+      /* try next */
+    }
+  }
+  return { id, ok: false, message: "Key 调不通模型列表，核对国内/国际域名和 Key 种类" };
+}
+
 export async function runProbe(id: string): Promise<ProbeResult> {
   switch (id) {
     case "feishu":
       return probeFeishu();
     case "baidu":
       return probeWorker("baidu");
+    case "minimax":
+      return probeMinimax();
     case "python":
       return probeWorker("python");
     case "blender":
