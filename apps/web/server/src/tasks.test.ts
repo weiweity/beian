@@ -6,7 +6,7 @@ import { describe, it, before } from "node:test";
 
 process.env.WB_DATA_DIR = mkdtempSync(join(tmpdir(), "beian-ts-"));
 
-const { isHitDecision, isReviewableStatus, listTasks, saveTask } = await import("./tasks.js");
+const { hasReworkPages, isHitDecision, isReviewableStatus, isReworkableStatus, listTasks, saveTask } = await import("./tasks.js");
 
 describe("listTasks", () => {
   before(() => {
@@ -61,5 +61,16 @@ describe("review gates", () => {
     assert.equal(isHitDecision("pending"), false);
     assert.equal(isHitDecision("ai_pass"), false);
     assert.equal(isHitDecision(""), false);
+  });
+
+  it("lets signed tasks rework but not failed or comparing ones", () => {
+    assert.equal(isReworkableStatus("pending_review"), true);
+    assert.equal(isReworkableStatus("in_review"), true);
+    assert.equal(isReworkableStatus("completed"), true);
+    assert.equal(isReworkableStatus("compare_failed"), false);
+    assert.equal(isReworkableStatus("comparing"), false);
+    assert.equal(hasReworkPages({}), false);
+    assert.equal(hasReworkPages({ pages_v2: [] }), false);
+    assert.equal(hasReworkPages({ pages_v2: [{ url: "/x.png" }] }), true);
   });
 });

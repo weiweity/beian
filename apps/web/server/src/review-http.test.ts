@@ -132,6 +132,64 @@ describe("review http", () => {
     assert.equal(body.complete_kind, "signed");
   });
 
+  it("rejects a decision on a compare_failed task", async () => {
+    const tid = seed({
+      id: "ffffffffffff",
+      title: "失败不可点",
+      product_name: "失败不可点",
+      type: "excel_pdf",
+      status: "compare_failed",
+      error: "对照失败",
+      hits: [hit()],
+    });
+    const res = await app.request(`/api/tasks/${tid}/decision`, {
+      method: "POST",
+      headers: { ...authHeader(), "content-type": "application/json" },
+      body: JSON.stringify({ hit_id: "h1", decision: "confirm" }),
+    });
+    assert.equal(res.status, 400);
+    const body = (await res.json()) as { detail?: string };
+    assert.match(String(body.detail || ""), /当前状态不可审核/);
+  });
+
+  it("lets a completed task reach the rework pdf check", async () => {
+    const tid = seed({
+      id: "222222222222",
+      title: "已签待对红",
+      product_name: "已签待对红",
+      type: "excel_pdf",
+      status: "completed",
+      conclusion: "待设计改稿",
+      hits: [hit({ decision: "issue" })],
+    });
+    const res = await app.request(`/api/tasks/${tid}/rework`, {
+      method: "POST",
+      headers: authHeader(),
+    });
+    assert.equal(res.status, 400);
+    const body = (await res.json()) as { detail?: string };
+    assert.match(String(body.detail || ""), /需要改稿后的 PDF/);
+  });
+
+  it("rejects rework on a compare_failed task", async () => {
+    const tid = seed({
+      id: "111111111111",
+      title: "失败不可对红",
+      product_name: "失败不可对红",
+      type: "excel_pdf",
+      status: "compare_failed",
+      error: "对照失败",
+      hits: [],
+    });
+    const res = await app.request(`/api/tasks/${tid}/rework`, {
+      method: "POST",
+      headers: authHeader(),
+    });
+    assert.equal(res.status, 400);
+    const body = (await res.json()) as { detail?: string };
+    assert.match(String(body.detail || ""), /当前状态不可对红/);
+  });
+
   it("still records confirm on an in_review hit", async () => {
     const tid = seed({
       id: "eeeeeeeeeeee",

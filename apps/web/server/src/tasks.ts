@@ -114,6 +114,14 @@ export function isReviewableStatus(status: string): boolean {
   return (REVIEWABLE_STATUSES as readonly string[]).includes(status);
 }
 
+export function isReworkableStatus(status: string): boolean {
+  return status === "pending_review" || status === "in_review" || status === "completed";
+}
+
+export function hasReworkPages(task: { pages_v2?: unknown }): boolean {
+  return Array.isArray(task.pages_v2) && task.pages_v2.length > 0;
+}
+
 export function isHitDecision(value: unknown): value is HitDecision {
   return typeof value === "string" && (HIT_DECISIONS as readonly string[]).includes(value);
 }

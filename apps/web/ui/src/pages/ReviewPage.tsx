@@ -19,6 +19,12 @@ function isReviewable(status?: string) {
   return status === "pending_review" || status === "in_review";
 }
 
+function isReworkable(task: TaskDetail | null) {
+  if (!task) return false;
+  if (task.pages_v2 && task.pages_v2.length > 0) return false;
+  return task.status === "pending_review" || task.status === "in_review" || task.status === "completed";
+}
+
 function statusTag(status?: string) {
   const s = status || "";
   if (s.includes("待人工") || s.includes("不清")) return <Tag color="warning">待人工确认</Tag>;
@@ -98,6 +104,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
   const page = pages[pageIdx];
   const signed = task?.status === "completed";
   const reviewable = isReviewable(task?.status);
+  const reworkable = isReworkable(task);
 
   const pinHits = useMemo(() => {
     return hits
@@ -146,7 +153,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
   }
 
   async function uploadRework(file: File) {
-    if (!task || !reviewable) return;
+    if (!task || !reworkable) return;
     const fd = new FormData();
     fd.append("pdf", file);
     setBusy(true);
@@ -186,7 +193,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
           </Button>
         ) : (
           <Button
-            disabled={!reviewable || busy}
+            disabled={!reworkable || busy}
             onClick={() => {
               const input = document.createElement("input");
               input.type = "file";

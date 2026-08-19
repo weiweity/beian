@@ -33,7 +33,18 @@ import {
   type Session,
 } from "./auth.js";
 import { fileOf, getJob, startMockup } from "./mockup.js";
-import { assertTid, isHitDecision, isReviewableStatus, listTasks, loadTask, newTid, nowIso, saveTask } from "./tasks.js";
+import {
+  assertTid,
+  hasReworkPages,
+  isHitDecision,
+  isReviewableStatus,
+  isReworkableStatus,
+  listTasks,
+  loadTask,
+  newTid,
+  nowIso,
+  saveTask,
+} from "./tasks.js";
 import { compareTask, reworkTask } from "./workers.js";
 
 type Env = { Variables: { session: Session } };
@@ -301,7 +312,13 @@ app.post("/api/tasks/:tid/complete", async (c) => {
 app.post("/api/tasks/:tid/rework", async (c) => {
   const s = need(c, "create");
   const tid = assertTid(c.req.param("tid"));
-  loadTask(tid);
+  const task = loadTask(tid);
+  if (!isReworkableStatus(task.status)) {
+    throw new HTTPException(400, { message: "当前状态不可对红" });
+  }
+  if (hasReworkPages(task)) {
+    throw new HTTPException(400, { message: "已经有对红结果" });
+  }
   const body = await c.req.parseBody();
   const pdf = body.pdf;
   if (!(pdf instanceof File)) throw new HTTPException(400, { message: "需要改稿后的 PDF" });
