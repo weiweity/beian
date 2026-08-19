@@ -25,6 +25,7 @@ HTTP 是 TypeScript。对照规则和 Blender 仍是 Python。见 `docs/adr-002-
 | `docs/00-charter.md` | 8/31 章程 |
 | `docs/adr-002-typescript-http.md` | 为什么对外 HTTP 是 TypeScript |
 | `docs/adr-003-settings-overlay.md` | 本机设置覆盖密钥文件 |
+| `docs/adr-004-ousterhout-design.md` | 深模块、唯一入口、8/31 前不拆引擎 |
 | `docs/risks.md` | 密钥、Tunnel、3D 验收门 |
 | `docs/designs/` | 对红循环、两张台 |
 | `CHANGELOG.md` | 已发布版本 |
