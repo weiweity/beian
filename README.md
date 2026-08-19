@@ -39,12 +39,14 @@ HTTP 是 TypeScript。对照规则和 Blender 仍是 Python。见 `docs/adr-002-
 ./scripts/dev-start.sh
 ```
 
-- 产品：http://127.0.0.1:8787/ （先 `cd apps/web/ui && npm run build`）
-- 开发 UI：http://127.0.0.1:5173/ （`npm run dev:ui`，API 反代到 8787）
+- 产品 / 验收：http://127.0.0.1:8787/ （先 `cd apps/web/ui && npm run build`）
+- 开发 UI：http://127.0.0.1:5173/ （`npm run dev:ui`；Vite 听本机网卡，`/api` 反代到 8787，端口占用即失败）
+
+5173 登录闪或 `/api` 返回 HTML / 空 Content-Type：打开 http://127.0.0.1:8787/，或重启 `npm run dev:ui`。飞书授权失败回到飞书重试，不要把远程验收人指到本机。JSON 404（任务不存在等）不是 Vite 挂了。
 
 不要再跑 `uvicorn app.main:app` 当入口。
 
-测服务端和对照 worker：仓库根目录 `npm test`。只要服务端：`npm run test -w beian-server`。
+测服务端、界面和对照 worker：仓库根目录 `npm test`。只要服务端：`npm run test -w beian-server`。只要界面：`npm run test -w beian-ui`。
 
 ## 给别人用：设置页
 
@@ -71,7 +73,7 @@ HTTP 是 TypeScript。对照规则和 Blender 仍是 Python。见 `docs/adr-002-
 
 ## 不要提交
 
-密钥、`.venv`、任务 JSON、上传稿、`.ai/.pdf/.xlsx` 样本、`settings.json`、`settings.secrets.json`。见 `.gitignore`。
+密钥、`.venv`、任务 JSON、上传稿、`.ai/.pdf/.xlsx` 样本、`settings.json`、`settings.secrets.json`、Vite 缓存（`.vite/`）、`.claude/`。见 `.gitignore`。
 
 ## 生产
 

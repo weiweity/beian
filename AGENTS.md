@@ -10,11 +10,13 @@
 
 - 不重写审核引擎和 3D 流水线，在迁入代码上改。
 - 不重写 3D 流水线。打样台只调用 `workers/packaging`，缺 Blender 要写清失败。
-- 不得提交 `.env`、`.env.baidu`、`.env.secrets`、`backend/data` 运行时文件、稿件。
+- 不得提交 `.env`、`.env.baidu`、`.env.secrets`、`backend/data` 运行时文件、稿件、Vite 缓存、`.claude/`。
 - 不得读取或打印真实密钥。
 - 不得自行改 DNS、发布飞书版本、购买云、映射公网端口。
 - 公网/Tunnel 后禁止显示名裸登录。
 - Mac 绿灯不等于 Windows 已验收。
+- 对照失败或已完成的单不能签字；干净签字单不能再对红；对红后优先读非空 `hits_v2`（空数组回退第一轮）。
+- 飞书授权失败回到飞书，不要把远程验收人送到本机 `:8787`。JSON 404 不是 Vite 挂了；只有 HTML 或空 Content-Type 才当开发页没转到 8787。
 
 ## 目录
 
@@ -49,8 +51,9 @@ When the user's request matches an available skill, invoke it via the Skill tool
 ## Testing
 
 - 服务端：`npm run test -w beian-server`（`node:test`，`apps/web/server/src/*.test.ts`）
+- 界面：`npm run test -w beian-ui`（`node:test`，现覆盖 `apps/web/ui/src/authGate.test.ts`）
 - 对照 worker：`cd apps/web/backend && .venv/bin/python -m pytest -q`
-- 全量：仓库根目录 `npm test`
+- 全量：仓库根目录 `npm test`（server + ui + pytest）
 - 类型：`npm run typecheck -w beian-server` 与 `npm run build -w beian-ui`
 - 新逻辑要有行为测试（含失败路径）。不要把密钥写进测试。
 
