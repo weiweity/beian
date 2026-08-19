@@ -36,6 +36,7 @@ export type Me = {
   logged_in: boolean;
   display_name: string | null;
   role: string | null;
+  open_id?: string;
   perms: string[];
 };
 
@@ -56,6 +57,9 @@ export type TaskSummary = {
   summary?: unknown;
   owner?: string;
   completed_by?: string;
+  board?: "comparing" | "review" | "done";
+  error?: string;
+  round?: number;
 };
 
 export type FieldHit = {
@@ -141,6 +145,9 @@ export const api = {
     method: "POST",
     body: JSON.stringify({ id }),
   }),
+  billing: () => request<BillingView>("/api/settings/billing"),
+  refreshBilling: () =>
+    request<BillingView>("/api/settings/billing/refresh", { method: "POST", body: JSON.stringify({}) }),
 };
 
 export type SettingFieldView = {
@@ -157,6 +164,61 @@ export type SettingFieldView = {
 export type SettingsView = {
   groups: { title: string; fields: SettingFieldView[] }[];
   probes: { id: string; label: string }[];
+  derived?: { redirect_uri?: string; tenant_key_filled?: boolean; python?: string };
+  health?: Record<string, { ok: boolean; title: string; detail: string }>;
+};
+
+export type BillRow = {
+  month?: string;
+  service?: string;
+  product?: string;
+  cash?: number;
+  origin?: number;
+  amount?: string;
+  unit?: string;
+};
+
+export type VendorBill = {
+  vendor: string;
+  label: string;
+  ok: boolean;
+  status?: "ok" | "fail" | "partial" | "skip";
+  message: string;
+  balance?: number | string;
+  balance_ok?: boolean;
+  bills_ok?: boolean;
+  bills_truncated?: boolean;
+  bills_total?: number;
+  fetched_at?: string;
+  remains?: {
+    remains_time?: number;
+    usage_percent?: number;
+    model_count?: number;
+    window_start?: string;
+    window_end?: string;
+  };
+  bills: BillRow[];
+};
+
+export type LedgerEvent = {
+  at: string;
+  vendor: string;
+  kind: string;
+  units: number;
+  task_id?: string;
+  actor?: string;
+  note?: string;
+  charge_status?: string;
+  attempt?: "ok" | "failed";
+};
+
+export type BillingView = {
+  vendors: VendorBill[];
+  cached_at: string | null;
+  ledger: LedgerEvent[];
+  ledger_window?: number;
+  ledger_label?: string;
+  totals: Record<string, { count: number; units: number }>;
 };
 
 export type ProbeResult = { id: string; ok: boolean; message: string };

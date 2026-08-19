@@ -1,7 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
-import { Button, Layout } from "antd";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { Dropdown, Layout } from "antd";
 import { api, type Me } from "./api";
-import { LoginPage } from "./pages/LoginPage";
 import { MockupPage } from "./pages/MockupPage";
 import { NewTaskPage } from "./pages/NewTaskPage";
 import { ReviewPage } from "./pages/ReviewPage";
@@ -9,11 +8,46 @@ import { SettingsPage } from "./pages/SettingsPage";
 import { TasksPage } from "./pages/TasksPage";
 
 type Desk = "review" | "mockup";
-type View = "login" | "tasks" | "new" | "review" | "mockup" | "settings";
+type View = "tasks" | "new" | "review" | "mockup" | "settings";
+
+const AUTH_HINT = "wb_login_hint";
+const AUTH_FALLBACK: Record<string, string> = {
+  denied: "已取消飞书授权。",
+  expired: "登录已过期，请再点一次。",
+  forbidden: "只允许伸美公司的飞书号进入。",
+  failed: "飞书授权失败，请再试一次。",
+};
+
+function readAuthHint(): string {
+  const raw = document.cookie.split(";").map((s) => s.trim());
+  const hit = raw.find((s) => s.startsWith(`${AUTH_HINT}=`));
+  if (!hit) return "";
+  const val = decodeURIComponent(hit.slice(AUTH_HINT.length + 1));
+  document.cookie = `${AUTH_HINT}=; Path=/; Max-Age=0`;
+  return val;
+}
+
+function authTitle(message: string): string {
+  if (message.includes("伸美") || message.includes("不允许")) return "进不了这间审稿室";
+  if (message.includes("取消")) return "授权未完成";
+  if (message.includes("过期")) return "登录已过期";
+  return "飞书授权未完成";
+}
+
+function AuthShell({ title, children }: { title?: string; children: ReactNode }) {
+  return (
+    <div className="auth-result">
+      <img className="auth-result-logo" src="/brand/shine-mage.png" alt="SHINE MAGE" />
+      {title ? <h1 className="auth-result-title">{title}</h1> : null}
+      {children}
+    </div>
+  );
+}
 
 export function App() {
   const [me, setMe] = useState<Me | null>(null);
-  const [view, setView] = useState<View>("login");
+  const [view, setView] = useState<View>("tasks");
+  const [authError, setAuthError] = useState<string | null>(null);
   const [desk, setDesk] = useState<Desk>("review");
   const [taskId, setTaskId] = useState<string | null>(null);
 
@@ -21,21 +55,25 @@ export function App() {
     try {
       const next = await api.me();
       setMe(next);
-      if (next.logged_in && view === "login") {
-        setView(window.location.hash === "#settings" ? "settings" : "tasks");
-        setDesk("review");
-      }
-      if (!next.logged_in) {
-        setView("login");
+      if (next.logged_in) {
+        setView((cur) => (cur === "tasks" && window.location.hash === "#settings" ? "settings" : cur));
+        setAuthError(null);
+      } else {
         setTaskId(null);
       }
     } catch {
       setMe({ logged_in: false, display_name: null, role: null, perms: [] });
-      setView("login");
     }
-  }, [view]);
+  }, []);
 
   useEffect(() => {
+    const err = new URLSearchParams(window.location.search).get("feishu_error") || "";
+    if (err) {
+      setAuthError(readAuthHint() || AUTH_FALLBACK[err] || "飞书授权未完成。");
+      const url = new URL(window.location.href);
+      url.searchParams.delete("feishu_error");
+      window.history.replaceState({}, "", url.pathname + url.search);
+    }
     void refreshMe();
     // 只在进站时拉一次登录态
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -45,23 +83,45 @@ export function App() {
 
   async function logout() {
     await api.logout();
-    setMe({ logged_in: false, display_name: null, role: null, perms: [] });
-    setView("login");
-    setTaskId(null);
+    window.location.replace("/api/auth/feishu/login");
+  }
+
+  if (me === null) {
+    return (
+      <AuthShell>
+        <p>正在进入…</p>
+      </AuthShell>
+    );
   }
 
   if (!loggedIn) {
-    return <LoginPage onEntered={refreshMe} />;
+    if (authError) {
+      return (
+        <AuthShell title={authTitle(authError)}>
+          <p>{authError}</p>
+          <a className="auth-result-retry" href="/api/auth/feishu/login">
+            再试一次
+          </a>
+        </AuthShell>
+      );
+    }
+    window.location.replace("/api/auth/feishu/login");
+    return (
+      <AuthShell>
+        <p>正在前往飞书授权…</p>
+      </AuthShell>
+    );
   }
 
   return (
     <Layout className="shell">
       <header className="topbar">
-        <img className="topbar-logo" src="/brand/logo.png" alt="" />
-        <nav className="topbar-tabs">
+        <img className="topbar-logo" src="/brand/shine-mage.png" alt="SHINE MAGE" />
+        <nav className="topbar-tabs" aria-label="工作台">
           <button
             type="button"
-            className={desk === "review" ? "topbar-tab is-on" : "topbar-tab"}
+            className={desk === "review" && view !== "settings" ? "topbar-tab is-on" : "topbar-tab"}
+            aria-current={desk === "review" && view !== "settings" ? "page" : undefined}
             onClick={() => {
               setDesk("review");
               if (view === "mockup" || view === "settings") setView("tasks");
@@ -71,7 +131,8 @@ export function App() {
           </button>
           <button
             type="button"
-            className={desk === "mockup" ? "topbar-tab is-on" : "topbar-tab"}
+            className={desk === "mockup" && view !== "settings" ? "topbar-tab is-on" : "topbar-tab"}
+            aria-current={desk === "mockup" && view !== "settings" ? "page" : undefined}
             onClick={() => {
               setDesk("mockup");
               setView("mockup");
@@ -81,23 +142,42 @@ export function App() {
             打样台
           </button>
         </nav>
-        <div className="topbar-who">
-          <Button
-            type="text"
-            size="small"
-            className={view === "settings" ? "topbar-settings is-on" : "topbar-settings"}
-            onClick={() => setView("settings")}
+        <Dropdown
+          trigger={["click"]}
+          placement="bottomRight"
+          menu={{
+            selectedKeys: view === "settings" ? ["settings"] : [],
+            items: [
+              { key: "settings", label: "设置" },
+              { type: "divider" },
+              { key: "logout", label: "退出", danger: true },
+            ],
+            onClick: ({ key }) => {
+              if (key === "settings") setView("settings");
+              if (key === "logout") void logout();
+            },
+          }}
+        >
+          <button
+            type="button"
+            className={view === "settings" ? "topbar-who is-on" : "topbar-who"}
+            aria-haspopup="menu"
           >
-            设置
-          </Button>
-          <span>{me?.display_name}</span>
-          <Button size="small" onClick={() => void logout()}>
-            退出
-          </Button>
-        </div>
+            <span>{me?.display_name}</span>
+            <span className="topbar-who-caret" aria-hidden>
+              ▾
+            </span>
+          </button>
+        </Dropdown>
       </header>
       <Layout.Content className={view === "settings" ? "content content-flush" : "content"}>
-        {view === "settings" ? <SettingsPage canWrite={Boolean(me?.perms.includes("create"))} /> : null}
+        {view === "settings" ? (
+          <SettingsPage
+            canWrite={Boolean(me?.perms.includes("create"))}
+            openId={me?.open_id || ""}
+            displayName={me?.display_name}
+          />
+        ) : null}
         {view !== "settings" && desk === "mockup" ? <MockupPage /> : null}
         {view !== "settings" && desk === "review" && view === "tasks" ? (
           <TasksPage
