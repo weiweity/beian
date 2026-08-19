@@ -24,6 +24,9 @@ data/tasks/
 **/backend/data/sessions.json
 **/backend/data/users.json
 **/backend/data/audit.jsonl
+**/backend/data/settings.json
+**/backend/data/settings.secrets.json
+**/backend/data/mockups/
 
 # Artwork / office samples
 *.ai
@@ -51,3 +54,8 @@ Thumbs.db
 
 # Node
 node_modules/
+dist/
+
+# Local agent/session artifacts
+.context/
+.gstack/

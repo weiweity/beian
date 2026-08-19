@@ -99,15 +99,21 @@ def notify_task_complete(task: dict[str, Any], actor: str) -> dict[str, Any]:
     for h in issues[:12]:
         issue_lines.append(f"· [{h.get('status')}] {h.get('field')} → {h.get('decision')}")
     more = f"\n…另有 {len(issues) - 12} 条" if len(issues) > 12 else ""
+    kind = task.get("complete_kind")
+    if kind == "rework" or any(h.get("decision") == "issue" for h in (task.get("hits") or [])):
+        headline = "待设计改稿"
+    else:
+        headline = "已签字"
     text = (
-        f"【备案审核】终审完成\n"
+        f"【备案审核】{headline}\n"
         f"任务：{task.get('title')}\n"
         f"ID：{task.get('id')}\n"
         f"审核人：{actor}\n"
+        f"结论：{(task.get('conclusion') or '—')}\n"
         f"汇总：一致 {s.get('一致', 0)} · 疑点 {s.get('疑点', 0)} · 缺失 {s.get('缺失', 0)}\n"
         f"人审标为问题：{sum(1 for h in (task.get('hits') or []) if h.get('decision') == 'issue')} 条\n"
         + ("\n".join(issue_lines) + more if issue_lines else "（无待关注 issue 列表）")
-        + f"\n报告：http://127.0.0.1:8787/api/tasks/{task.get('id')}/report"
+        + f"\n报告：{config.get('WB_PUBLIC_BASE') or 'https://www.jianghua.site'}/api/tasks/{task.get('id')}/report"
     )
     return send_text(text)
 
@@ -124,7 +130,7 @@ def notify_task_created(task: dict[str, Any], actor: str) -> dict[str, Any]:
         f"引擎：{task.get('engine')}\n"
         f"汇总：一致 {s.get('一致', 0)} · 疑点 {s.get('疑点', 0)} · 缺失 {s.get('缺失', 0)}\n"
         f"{'⚠ 有 ' + str(warn) + ' 条需人审' if warn else '全部一致，仍请抽检'}\n"
-        f"打开：http://127.0.0.1:8787/"
+        f"打开：{(config.get('WB_PUBLIC_BASE') or 'https://www.jianghua.site').rstrip('/')}/"
     )
     return send_text(text)
 
@@ -142,8 +148,8 @@ def notify_report_archive(
         f"操作人：{actor}\n"
         f"状态：{task.get('status')}\n"
         f"汇总：一致 {s.get('一致', 0)} · 疑点 {s.get('疑点', 0)} · 缺失 {s.get('缺失', 0)}\n"
-        f"HTML：http://127.0.0.1:8787/api/tasks/{tid}/report\n"
-        f"PDF：http://127.0.0.1:8787/api/tasks/{tid}/report.pdf\n"
+        f"HTML：{(config.get('WB_PUBLIC_BASE') or 'https://www.jianghua.site').rstrip('/')}/api/tasks/{tid}/report\n"
+        f"PDF：{(config.get('WB_PUBLIC_BASE') or 'https://www.jianghua.site').rstrip('/')}/api/tasks/{tid}/report.pdf\n"
         + (f"本机文件：{pdf_path}\n" if pdf_path else "")
         + "请在内网浏览器下载 PDF 归档。"
     )

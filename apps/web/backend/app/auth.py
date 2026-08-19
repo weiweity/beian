@@ -1,36 +1,21 @@
-"""显示名登录 · 角色（admin / reviewer / viewer）· session 落盘"""
+"""Session-only 身份。禁止 X-Actor / body.actor 提权。"""
 from __future__ import annotations
 
 import json
+import os
 import secrets
 import time
 from pathlib import Path
 from typing import Any, Literal
-from urllib.parse import unquote
 
-from fastapi import Header, HTTPException
+from fastapi import HTTPException
 
-
-def _decode_actor_header(raw: str | None) -> str:
-    """X-Actor 可能是 encodeURIComponent 后的中文"""
-    # 防止误把 FastAPI Header() 默认对象当字符串传入
-    if raw is None or not isinstance(raw, str):
-        return ""
-    s = raw.strip()
-    if not s:
-        return ""
-    try:
-        s = unquote(s)
-    except Exception:
-        pass
-    return s[:40]
 
 SESSIONS: dict[str, dict[str, Any]] = {}
 SESSION_TTL_SEC = 7 * 24 * 3600
 
 Role = Literal["admin", "reviewer", "viewer"]
 
-# 权限矩阵
 ROLE_PERMS: dict[str, set[str]] = {
     "admin": {
         "read",
@@ -59,8 +44,9 @@ ROLE_PERMS: dict[str, set[str]] = {
 
 DEFAULT_USERS: list[dict[str, Any]] = [
     {"name": "管理员", "role": "admin", "note": "可备份/管理"},
-    {"name": "审核员", "role": "reviewer", "note": "默认可审"},
+    {"name": "审核员", "role": "reviewer", "note": "本机显示名"},
     {"name": "魏炜", "role": "reviewer", "note": ""},
+    {"name": "刘籽烨", "role": "reviewer", "note": "第一期验收人", "open_id": ""},
     {"name": "只读", "role": "viewer", "note": "仅查看导出"},
     {"name": "访客", "role": "viewer", "note": ""},
 ]
@@ -75,6 +61,7 @@ def _users_path(data_dir: Path) -> Path:
 
 
 def load_sessions(data_dir: Path) -> None:
+    SESSIONS.clear()
     p = _sessions_path(data_dir)
     if not p.exists():
         return
@@ -91,7 +78,13 @@ def load_sessions(data_dir: Path) -> None:
 def save_sessions(data_dir: Path) -> None:
     p = _sessions_path(data_dir)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(SESSIONS, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp = p.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(SESSIONS, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, p)
+    try:
+        os.chmod(p, 0o600)
+    except OSError:
+        pass
 
 
 def ensure_users_file(data_dir: Path) -> list[dict[str, Any]]:
@@ -115,47 +108,87 @@ def ensure_users_file(data_dir: Path) -> list[dict[str, Any]]:
 
 def list_users(data_dir: Path) -> list[dict[str, Any]]:
     return [
-        {"name": u.get("name"), "role": u.get("role") or "reviewer", "note": u.get("note") or ""}
+        {
+            "name": u.get("name"),
+            "role": u.get("role") or "reviewer",
+            "note": u.get("note") or "",
+            "open_id_set": bool(str(u.get("open_id") or "").strip()),
+        }
         for u in ensure_users_file(data_dir)
         if u.get("name")
     ]
 
 
-def resolve_role(display_name: str, data_dir: Path) -> str:
+def env_allow_open_ids() -> set[str]:
+    from app import config
+
+    raw = config.get("FEISHU_ALLOW_OPEN_IDS") or ""
+    return {p.strip() for p in raw.split(",") if p.strip().startswith("ou_")}
+
+
+def find_user_by_open_id(open_id: str, data_dir: Path) -> dict[str, Any] | None:
+    oid = (open_id or "").strip()
+    if not oid:
+        return None
+    for u in ensure_users_file(data_dir):
+        if str(u.get("open_id") or "").strip() == oid:
+            return u
+    return None
+
+
+def resolve_role(display_name: str, data_dir: Path) -> str | None:
     name = (display_name or "").strip()
+    if not name:
+        return None
     for u in ensure_users_file(data_dir):
         if str(u.get("name") or "").strip() == name:
             role = str(u.get("role") or "reviewer").lower()
-            if role in ROLE_PERMS:
-                return role
-            return "reviewer"
-    # 未知显示名：默认可审（便于本地试用），viewer 需显式登记
-    return "reviewer"
+            return role if role in ROLE_PERMS else "reviewer"
+    return None
 
 
 def has_perm(role: str, perm: str) -> bool:
-    return perm in ROLE_PERMS.get(role or "viewer", set())
+    return perm in ROLE_PERMS.get(role or "", set())
+
+
+def display_login_allowed() -> bool:
+    from app import config
+
+    if config.public_mode():
+        return False
+    return config.truthy("WB_DEV_DISPLAY_LOGIN", True)
 
 
 def create_session(display_name: str, data_dir: Path) -> dict[str, Any]:
+    if not display_login_allowed():
+        raise HTTPException(410, "显示名登录已关闭。公网请用飞书身份。")
     name = (display_name or "").strip()
     if not name or len(name) > 40:
         raise HTTPException(400, "显示名 1–40 字")
-    # 可选：仅允许登记用户（AUTH_REQUIRE_KNOWN=true）
-    from app import config
-
-    if config.truthy("AUTH_REQUIRE_KNOWN", False):
-        known = {str(u.get("name") or "").strip() for u in ensure_users_file(data_dir)}
-        if name not in known:
-            raise HTTPException(403, f"未登记用户「{name}」，请联系管理员加入 users.json")
-
     role = resolve_role(name, data_dir)
+    if role is None:
+        raise HTTPException(403, f"未登记用户「{name}」，请联系管理员加入 users.json")
+    return issue_session(name, role, data_dir, source="display")
+
+
+def issue_session(
+    display_name: str,
+    role: str,
+    data_dir: Path,
+    *,
+    open_id: str = "",
+    source: str = "display",
+) -> dict[str, Any]:
+    if role not in ROLE_PERMS:
+        role = "reviewer"
     token = secrets.token_urlsafe(24)
     now = time.time()
     sess = {
         "token": token,
-        "display_name": name,
+        "display_name": display_name,
         "role": role,
+        "open_id": (open_id or "")[:64],
+        "source": source,
         "created_at": now,
         "expires_at": now + SESSION_TTL_SEC,
     }
@@ -163,11 +196,32 @@ def create_session(display_name: str, data_dir: Path) -> dict[str, Any]:
     save_sessions(data_dir)
     return {
         "token": token,
-        "display_name": name,
+        "display_name": display_name,
         "role": role,
         "perms": sorted(ROLE_PERMS.get(role, set())),
         "expires_at": sess["expires_at"],
+        "source": source,
     }
+
+
+def session_from_feishu(open_id: str, feishu_name: str, data_dir: Path) -> dict[str, Any]:
+    oid = (open_id or "").strip()
+    if not oid.startswith("ou_"):
+        raise HTTPException(403, "飞书身份无效")
+    user = find_user_by_open_id(oid, data_dir)
+    allowed = bool(user) or oid in env_allow_open_ids()
+    if not allowed:
+        raise HTTPException(
+            403,
+            f"这个飞书号不在白名单（open_id={oid}）。请管理员写入 users.json 的 open_id，或环境变量 FEISHU_ALLOW_OPEN_IDS。",
+        )
+    if user:
+        name = str(user.get("name") or feishu_name or "飞书用户")[:40]
+        role = str(user.get("role") or "reviewer").lower()
+    else:
+        name = (feishu_name or "飞书用户")[:40]
+        role = "reviewer"
+    return issue_session(name, role, data_dir, open_id=oid, source="feishu")
 
 
 def get_session(token: str | None) -> dict[str, Any] | None:
@@ -184,56 +238,35 @@ def get_session(token: str | None) -> dict[str, Any] | None:
     return s
 
 
-def require_actor(
-    authorization: str | None = Header(default=None),
-    x_actor: str | None = Header(default=None, alias="X-Actor"),
-) -> str:
+def session_context(authorization: str | None, data_dir: Path) -> dict[str, Any]:
+    """只认 Bearer session。没有登录就是未登录，不能靠请求头冒充。"""
     s = get_session(authorization)
-    if s:
-        return str(s["display_name"])
-    decoded = _decode_actor_header(x_actor)
-    if decoded:
-        return decoded
-    return "匿名"
-
-
-def session_context(
-    authorization: str | None,
-    data_dir: Path,
-    *,
-    body_actor: str | None = None,
-    x_actor: str | None = None,
-) -> dict[str, Any]:
-    """统一解析当前操作人 + 角色"""
-    s = get_session(authorization)
-    if s:
-        role = s.get("role") or resolve_role(str(s["display_name"]), data_dir)
+    if not s:
         return {
-            "name": str(s["display_name"]),
-            "role": role,
-            "logged_in": True,
-            "perms": sorted(ROLE_PERMS.get(role, set())),
+            "name": None,
+            "role": None,
+            "logged_in": False,
+            "perms": [],
         }
-    name = (body_actor or _decode_actor_header(x_actor) or "匿名").strip()[:40] or "匿名"
-    role = resolve_role(name, data_dir) if name != "匿名" else "viewer"
+    role = s.get("role") or resolve_role(str(s["display_name"]), data_dir) or "viewer"
     return {
-        "name": name,
+        "name": str(s["display_name"]),
         "role": role,
+        "logged_in": True,
         "perms": sorted(ROLE_PERMS.get(role, set())),
-        "logged_in": False,
     }
 
 
-def require_perm(
-    authorization: str | None,
-    data_dir: Path,
-    perm: str,
-    *,
-    body_actor: str | None = None,
-    x_actor: str | None = None,
-) -> dict[str, Any]:
-    ctx = session_context(authorization, data_dir, body_actor=body_actor, x_actor=x_actor)
-    if not has_perm(ctx["role"], perm):
+def require_session(authorization: str | None, data_dir: Path) -> dict[str, Any]:
+    ctx = session_context(authorization, data_dir)
+    if not ctx["logged_in"]:
+        raise HTTPException(401, "未登录")
+    return ctx
+
+
+def require_perm(authorization: str | None, data_dir: Path, perm: str) -> dict[str, Any]:
+    ctx = require_session(authorization, data_dir)
+    if not has_perm(str(ctx["role"] or ""), perm):
         raise HTTPException(
             403,
             f"角色「{ctx['role']}」无权限：{perm}（当前用户 {ctx['name']}）",

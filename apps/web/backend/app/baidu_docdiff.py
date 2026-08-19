@@ -27,8 +27,8 @@ SDK_URL_TMPL = (
 
 def _token() -> str:
     cfg = load_baidu_env()
-    ak = cfg.get("BAIDU_OCR_API_KEY") or ""
-    sk = cfg.get("BAIDU_OCR_SECRET_KEY") or ""
+    ak = cfg.get("BAIDU_OCR_API_KEY") or cfg.get("BAIDU_API_KEY") or ""
+    sk = cfg.get("BAIDU_OCR_SECRET_KEY") or cfg.get("BAIDU_SECRET_KEY") or ""
     if not ak or not sk:
         raise RuntimeError("未配置百度 AK/SK")
     return get_access_token(ak, sk)

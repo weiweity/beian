@@ -2,21 +2,39 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BACKEND="$ROOT/apps/web/backend"
+SERVER="$ROOT/apps/web/server"
 PORT="${WB_PORT:-8787}"
 HOST="${WB_HOST:-127.0.0.1}"
-cd "$BACKEND"
-if [[ ! -x .venv/bin/python ]]; then
-  python3 -m venv .venv
-  .venv/bin/pip install -U pip wheel
-  .venv/bin/pip install -r requirements.txt
+
+if [[ ! -x "$BACKEND/.venv/bin/python" ]]; then
+  PY=python3
+  if command -v python3.12 >/dev/null 2>&1; then
+    PY=python3.12
+  fi
+  "$PY" -m venv "$BACKEND/.venv"
+  "$BACKEND/.venv/bin/pip" install -U pip wheel
+  "$BACKEND/.venv/bin/pip" install -r "$BACKEND/requirements.txt"
 fi
-# shellcheck disable=SC1091
-source .venv/bin/activate
-export PYTHONPATH="."
-if [[ ! -f .env.baidu ]]; then
+
+if [[ ! -f "$BACKEND/.env.baidu" ]]; then
   echo "⚠ 缺少 apps/web/backend/.env.baidu （参考 .env.baidu.example）"
 fi
-if [[ ! -f .env.secrets ]]; then
+if [[ ! -f "$BACKEND/.env.secrets" ]]; then
   echo "⚠ 缺少 apps/web/backend/.env.secrets （参考 .env.secrets.example）"
 fi
-exec .venv/bin/uvicorn app.main:app --host "$HOST" --port "$PORT" --log-level info
+
+cd "$ROOT"
+if [[ ! -d "$SERVER/node_modules" ]]; then
+  npm install
+fi
+if [[ ! -d "$ROOT/apps/web/ui/node_modules/@google" ]]; then
+  npm install
+fi
+
+export WB_PORT="$PORT"
+export WB_HOST="$HOST"
+export WB_PYTHON="$BACKEND/.venv/bin/python"
+export PYTHONPATH="$BACKEND"
+export WB_DATA_DIR="${WB_DATA_DIR:-$BACKEND/data}"
+cd "$SERVER"
+exec npx tsx src/index.ts
