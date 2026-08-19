@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Dropdown, Layout } from "antd";
 import { ApiError, api, type Me } from "./api";
-import { shouldAutoRedirectToFeishu } from "./authGate";
+import { authFailureAction, shouldAutoRedirectToFeishu } from "./authGate";
 import { MockupPage } from "./pages/MockupPage";
 import { NewTaskPage } from "./pages/NewTaskPage";
 import { ReviewPage } from "./pages/ReviewPage";
@@ -117,11 +117,12 @@ export function App() {
   if (!loggedIn) {
     if (authError || apiBroken) {
       const message = authError || apiBroken || "";
+      const action = authFailureAction({ authError, apiBroken });
       return (
         <AuthShell title={authError ? authTitle(authError) : "进不了这间审稿室"}>
           <p>{message}</p>
-          <a className="auth-result-retry" href="http://127.0.0.1:8787/">
-            打开本机审稿服务
+          <a className="auth-result-retry" href={action.href}>
+            {action.label}
           </a>
         </AuthShell>
       );

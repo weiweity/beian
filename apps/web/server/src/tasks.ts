@@ -106,6 +106,18 @@ export function listTasks(q = "", mineName = "", admin = false): Record<string, 
   }));
 }
 
+export const REVIEWABLE_STATUSES = ["pending_review", "in_review"] as const;
+export const HIT_DECISIONS = ["confirm", "issue", "ignore"] as const;
+export type HitDecision = (typeof HIT_DECISIONS)[number];
+
+export function isReviewableStatus(status: string): boolean {
+  return (REVIEWABLE_STATUSES as readonly string[]).includes(status);
+}
+
+export function isHitDecision(value: unknown): value is HitDecision {
+  return typeof value === "string" && (HIT_DECISIONS as readonly string[]).includes(value);
+}
+
 export type BoardColumn = "comparing" | "review" | "done";
 
 export function boardColumn(status: string): BoardColumn {

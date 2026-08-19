@@ -6,7 +6,7 @@ import { describe, it, before } from "node:test";
 
 process.env.WB_DATA_DIR = mkdtempSync(join(tmpdir(), "beian-ts-"));
 
-const { listTasks, saveTask } = await import("./tasks.js");
+const { isHitDecision, isReviewableStatus, listTasks, saveTask } = await import("./tasks.js");
 
 describe("listTasks", () => {
   before(() => {
@@ -42,5 +42,24 @@ describe("listTasks", () => {
 
   it("搜不到为空", () => {
     assert.deepEqual(listTasks("没有这个品"), []);
+  });
+});
+
+describe("review gates", () => {
+  it("only pending_review and in_review are reviewable", () => {
+    assert.equal(isReviewableStatus("pending_review"), true);
+    assert.equal(isReviewableStatus("in_review"), true);
+    assert.equal(isReviewableStatus("compare_failed"), false);
+    assert.equal(isReviewableStatus("comparing"), false);
+    assert.equal(isReviewableStatus("completed"), false);
+  });
+
+  it("only confirm issue ignore are hit decisions", () => {
+    assert.equal(isHitDecision("confirm"), true);
+    assert.equal(isHitDecision("issue"), true);
+    assert.equal(isHitDecision("ignore"), true);
+    assert.equal(isHitDecision("pending"), false);
+    assert.equal(isHitDecision("ai_pass"), false);
+    assert.equal(isHitDecision(""), false);
   });
 });

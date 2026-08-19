@@ -127,7 +127,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
-  complete: (id: string, body: { conclusion: string; notify?: boolean }) =>
+  complete: (id: string, body: { conclusion: string }) =>
     request<TaskDetail>(`/api/tasks/${id}/complete`, {
       method: "POST",
       body: JSON.stringify(body),
@@ -214,7 +214,7 @@ export type LedgerEvent = {
   task_id?: string;
   actor?: string;
   note?: string;
-  charge_status?: string;
+  charge_status?: "unknown";
   attempt?: "ok" | "failed";
 };
 

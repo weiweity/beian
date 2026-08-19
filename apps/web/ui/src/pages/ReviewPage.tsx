@@ -15,6 +15,10 @@ function pdfText(h: FieldHit) {
   return h.pdf || h.found || "—";
 }
 
+function isReviewable(status?: string) {
+  return status === "pending_review" || status === "in_review";
+}
+
 function statusTag(status?: string) {
   const s = status || "";
   if (s.includes("待人工") || s.includes("不清")) return <Tag color="warning">待人工确认</Tag>;
@@ -93,6 +97,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
   const pages = pageList(useV2 ? { ...(task as TaskDetail), pages: task?.pages_v2 } : task);
   const page = pages[pageIdx];
   const signed = task?.status === "completed";
+  const reviewable = isReviewable(task?.status);
 
   const pinHits = useMemo(() => {
     return hits
@@ -113,7 +118,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
   }
 
   async function decide(hit: FieldHit, decision: Decision) {
-    if (!task || !hit.id || signed) return;
+    if (!task || !hit.id || !reviewable) return;
     setBusy(true);
     try {
       const next = await api.decide(task.id, {
@@ -141,7 +146,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
   }
 
   async function uploadRework(file: File) {
-    if (!task) return;
+    if (!task || !reviewable) return;
     const fd = new FormData();
     fd.append("pdf", file);
     setBusy(true);
@@ -158,10 +163,10 @@ export function ReviewPage({ taskId, onBack }: Props) {
   }
 
   async function signOff() {
-    if (!task) return;
+    if (!task || !reviewable) return;
     setBusy(true);
     try {
-      const next = await api.complete(task.id, { conclusion, notify: true });
+      const next = await api.complete(task.id, { conclusion });
       setTask(next);
       message.success("已记录你的结论，不是系统过审");
     } catch (err) {
@@ -181,7 +186,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
           </Button>
         ) : (
           <Button
-            disabled={signed || busy}
+            disabled={!reviewable || busy}
             onClick={() => {
               const input = document.createElement("input");
               input.type = "file";
@@ -209,7 +214,11 @@ export function ReviewPage({ taskId, onBack }: Props) {
       </Typography.Title>
       {error ? <Alert type="error" title={error} style={{ marginBottom: 16 }} /> : null}
       {!task ? <Typography.Paragraph>正在对照，请稍候</Typography.Paragraph> : null}
-      {task && hits.length === 0 ? (
+      {task?.error ? <Alert type="error" showIcon style={{ marginBottom: 16 }} title={task.error} /> : null}
+      {task && task.status === "comparing" ? (
+        <Alert type="info" showIcon style={{ marginBottom: 16 }} title="正在对照，请稍候" />
+      ) : null}
+      {task && reviewable && hits.length === 0 ? (
         <Alert
           type="info"
           showIcon
@@ -281,13 +290,13 @@ export function ReviewPage({ taskId, onBack }: Props) {
                   style={{ marginTop: 8 }}
                   placeholder="给你自己看的话，会进改稿清单"
                   value={h.id ? notes[h.id] || "" : ""}
-                  disabled={signed || !h.id}
+                  disabled={!reviewable || !h.id}
                   onChange={(e) => {
                     if (!h.id) return;
                     setNotes((prev) => ({ ...prev, [h.id as string]: e.target.value }));
                   }}
                 />
-                {!signed && h.id ? (
+                {reviewable && h.id ? (
                   <Space style={{ marginTop: 8 }} wrap>
                     <Button size="small" onClick={() => void decide(h, "confirm")}>
                       一致
@@ -323,13 +332,13 @@ export function ReviewPage({ taskId, onBack }: Props) {
           <Input.TextArea
             rows={3}
             value={conclusion}
-            disabled={signed}
+            disabled={!reviewable}
             onChange={(e) => setConclusion(e.target.value)}
             placeholder="人话结论，不是系统过审"
           />
           <Space style={{ marginTop: 12 }} wrap>
             <Button onClick={() => void copyList()}>复制改稿清单</Button>
-            <Button type="primary" loading={busy} disabled={signed} onClick={() => void signOff()}>
+            <Button type="primary" loading={busy} disabled={!reviewable} onClick={() => void signOff()}>
               {hits.some((h) => h.decision === "issue") ? "签字并待设计改稿" : "签字"}
             </Button>
           </Space>

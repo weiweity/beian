@@ -33,7 +33,7 @@ import {
   type Session,
 } from "./auth.js";
 import { fileOf, getJob, startMockup } from "./mockup.js";
-import { assertTid, listTasks, loadTask, newTid, nowIso, saveTask } from "./tasks.js";
+import { assertTid, isHitDecision, isReviewableStatus, listTasks, loadTask, newTid, nowIso, saveTask } from "./tasks.js";
 import { compareTask, reworkTask } from "./workers.js";
 
 type Env = { Variables: { session: Session } };
@@ -255,8 +255,11 @@ app.post("/api/tasks/:tid/decision", async (c) => {
   const tid = assertTid(c.req.param("tid"));
   const body = (await c.req.json()) as { hit_id?: string; decision?: string; note?: string };
   const task = loadTask(tid);
-  if (!["pending_review", "in_review"].includes(task.status)) {
+  if (!isReviewableStatus(task.status)) {
     throw new HTTPException(400, { message: "当前状态不可审核" });
+  }
+  if (!isHitDecision(body.decision)) {
+    throw new HTTPException(400, { message: "非法审核结论" });
   }
   const hit = (task.hits || []).find((h) => h.id === body.hit_id);
   if (!hit) throw new HTTPException(404, { message: "字段不存在" });
@@ -272,6 +275,9 @@ app.post("/api/tasks/:tid/decision", async (c) => {
 app.post("/api/tasks/:tid/complete", async (c) => {
   const s = need(c, "complete");
   const task = loadTask(c.req.param("tid"));
+  if (!isReviewableStatus(task.status)) {
+    throw new HTTPException(400, { message: "当前状态不可签字" });
+  }
   const body = (await c.req.json().catch(() => ({}))) as { conclusion?: string };
   const pending = (task.hits || []).filter(
     (h) => (h.status === "疑点" || h.status === "缺失") && (h.decision || "pending") === "pending",

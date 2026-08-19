@@ -12,6 +12,16 @@ export function shouldAutoRedirectToFeishu(input: {
   return true;
 }
 
+export function authFailureAction(input: {
+  authError: string | null;
+  apiBroken: string | null;
+}): { href: string; label: string } {
+  if (input.apiBroken && !input.authError) {
+    return { href: "http://127.0.0.1:8787/", label: "打开本机审稿服务" };
+  }
+  return { href: "/api/auth/feishu/login", label: "重新飞书授权" };
+}
+
 export function describeBrokenApi(status: number, contentType: string): string | null {
   const ct = contentType.toLowerCase();
   if (status === 404 || ct.includes("text/html") || ct === "") {

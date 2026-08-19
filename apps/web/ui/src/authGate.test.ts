@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { describeBrokenApi, shouldAutoRedirectToFeishu } from "./authGate.js";
+import { authFailureAction, describeBrokenApi, shouldAutoRedirectToFeishu } from "./authGate.js";
 
 describe("shouldAutoRedirectToFeishu", () => {
   it("does not redirect when already on a proxied /api path", () => {
@@ -36,6 +36,25 @@ describe("shouldAutoRedirectToFeishu", () => {
         apiBroken: "本机开发页没有把 /api 转到审稿服务",
       }),
       false,
+    );
+  });
+});
+
+describe("authFailureAction", () => {
+  it("sends Feishu auth errors back to Feishu, not localhost", () => {
+    assert.deepEqual(
+      authFailureAction({ authError: "只允许伸美公司的飞书号进入。", apiBroken: null }),
+      { href: "/api/auth/feishu/login", label: "重新飞书授权" },
+    );
+  });
+
+  it("only points at :8787 when the API proxy is broken", () => {
+    assert.deepEqual(
+      authFailureAction({
+        authError: null,
+        apiBroken: "本机开发页没有把 /api 转到审稿服务",
+      }),
+      { href: "http://127.0.0.1:8787/", label: "打开本机审稿服务" },
     );
   });
 });
