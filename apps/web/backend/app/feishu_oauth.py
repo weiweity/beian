@@ -15,8 +15,7 @@ from app import config
 AUTHORIZE_URL = "https://accounts.feishu.cn/open-apis/authen/v1/authorize"
 TOKEN_URL = "https://open.feishu.cn/open-apis/authen/v2/oauth/token"
 USER_INFO_URL = "https://open.feishu.cn/open-apis/authen/v1/user_info"
-# 须在开放平台「权限管理」用【用户身份】开通同名权限，否则授权页会 20027。
-OAUTH_SCOPES = "contact:user.base:readonly"
+# 只拿 open_id/name，不传 scope，避免控制台未开通时报 20027。
 
 _STATES: dict[str, float] = {}
 STATE_TTL_SEC = 600
@@ -80,7 +79,6 @@ def authorize_url() -> str:
         "redirect_uri": redirect_uri(),
         "response_type": "code",
         "state": new_state(),
-        "scope": OAUTH_SCOPES,
     }
     return AUTHORIZE_URL + "?" + urlencode(params, quote_via=quote)
 
@@ -175,5 +173,5 @@ def status() -> dict[str, Any]:
         "secret_set": bool(app_secret()),
         "redirect_uri": redirect_uri(),
         "public_base": public_base(),
-        "scopes": OAUTH_SCOPES,
+        "scopes": "",
     }

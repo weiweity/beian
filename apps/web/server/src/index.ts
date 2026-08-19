@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import { HTTPException } from "hono/http-exception";
 import { COOKIE, DATA_DIR, HOST, PORT, REPO_ROOT, UI_BRAND, UI_DIST, cookieSecure } from "./config.js";
@@ -17,6 +17,7 @@ import {
 } from "./settings.js";
 import {
   authorizeUrl,
+  beginOAuth,
   consumeOAuthState,
   createDisplaySession,
   displayLoginAllowed,
@@ -24,7 +25,6 @@ import {
   getSession,
   logout as dropSession,
   hasPerm,
-  newOAuthState,
   oauthReady,
   sessionFromFeishu,
   type Role,
@@ -114,20 +114,34 @@ app.post("/api/auth/logout", (c) => {
   return c.json({ ok: true });
 });
 
+const HINT = "wb_login_hint";
+
+function failLogin(c: Context, code: string, hint: string) {
+  setCookie(c, HINT, hint.slice(0, 200), {
+    httpOnly: false,
+    sameSite: "Lax",
+    secure: cookieSecure(),
+    path: "/",
+    maxAge: 120,
+  });
+  return c.redirect(`/?feishu_error=${encodeURIComponent(code)}`, 302);
+}
+
 app.get("/api/auth/feishu/login", (c) => {
   if (!oauthReady()) throw new HTTPException(503, { message: "未配置 FEISHU_APP_SECRET" });
-  const state = newOAuthState();
-  return c.redirect(authorizeUrl(feishuRedirect(), state), 302);
+  const { state, challenge } = beginOAuth();
+  return c.redirect(authorizeUrl(feishuRedirect(), state, challenge), 302);
 });
 
 app.get("/api/auth/feishu/callback", async (c) => {
   const error = c.req.query("error") || "";
-  if (error) return c.html(`<p>飞书拒绝授权：${error}</p>`, 400);
+  if (error) return failLogin(c, "denied", "已取消飞书授权。");
   const state = c.req.query("state") || "";
   const code = c.req.query("code") || "";
-  if (!consumeOAuthState(state)) return c.html("<p>登录已过期。</p>", 400);
+  const verifier = consumeOAuthState(state);
+  if (!verifier) return failLogin(c, "expired", "登录已过期，请再点一次飞书登录。");
   try {
-    const ident = await exchangeCode(code, feishuRedirect());
+    const ident = await exchangeCode(code, feishuRedirect(), verifier);
     const sess = sessionFromFeishu(ident.open_id, ident.name);
     setCookie(c, COOKIE, sess.token, {
       httpOnly: true,
@@ -139,7 +153,8 @@ app.get("/api/auth/feishu/callback", async (c) => {
     return c.redirect(`${publicBase()}/`, 302);
   } catch (e) {
     const msg = e instanceof Error ? e.message : "登录失败";
-    return c.html(`<p>${msg}</p><p><a href="/api/auth/feishu/login">重试</a></p>`, 400);
+    const code = /白名单/.test(msg) ? "forbidden" : "failed";
+    return failLogin(c, code, msg);
   }
 });
 

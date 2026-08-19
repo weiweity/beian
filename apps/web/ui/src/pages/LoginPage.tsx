@@ -1,28 +1,51 @@
-import { useEffect, useMemo, useState } from "react";
-import { App, Button, Checkbox, Divider, Form, Input, QRCode, Tabs, Typography } from "antd";
-import { LockOutlined, QrcodeOutlined, UserOutlined } from "@ant-design/icons";
+import { useEffect, useState } from "react";
+import { Alert, App, Button, Checkbox, Divider, Form, Input, Typography } from "antd";
+import { LockOutlined, UserOutlined } from "@ant-design/icons";
 import { api } from "../api";
 
 type Props = { onEntered: () => void };
 
 const ACCOUNT_KEY = "wb.login.account";
+const HINT = "wb_login_hint";
+
+const ERROR_FALLBACK: Record<string, string> = {
+  denied: "已取消飞书授权。",
+  expired: "登录已过期，请再点一次飞书登录。",
+  forbidden: "这个飞书号不在白名单。",
+  failed: "飞书登录失败，请再试一次。",
+};
+
+function readHintCookie(): string {
+  const raw = document.cookie.split(";").map((s) => s.trim());
+  const hit = raw.find((s) => s.startsWith(`${HINT}=`));
+  if (!hit) return "";
+  const val = decodeURIComponent(hit.slice(HINT.length + 1));
+  document.cookie = `${HINT}=; Path=/; Max-Age=0`;
+  return val;
+}
 
 export function LoginPage({ onEntered }: Props) {
   const { message } = App.useApp();
   const [form] = Form.useForm<{ account: string; password: string; remember: boolean }>();
   const [feishuOk, setFeishuOk] = useState(true);
   const [displayOk, setDisplayOk] = useState(false);
-  const [base, setBase] = useState("https://www.jianghua.site");
   const [busy, setBusy] = useState(false);
-  const [tab, setTab] = useState(() => (window.location.hash === "#qr" ? "qr" : "account"));
+  const [banner, setBanner] = useState<string | null>(null);
 
   useEffect(() => {
+    const err = new URLSearchParams(window.location.search).get("feishu_error") || "";
+    const hint = readHintCookie();
+    if (err) {
+      setBanner(hint || ERROR_FALLBACK[err] || "飞书登录未完成。");
+      const url = new URL(window.location.href);
+      url.searchParams.delete("feishu_error");
+      window.history.replaceState({}, "", url.pathname + url.search);
+    }
     void api
       .methods()
       .then((m) => {
         setFeishuOk(m.feishu);
         setDisplayOk(m.display_login);
-        if (m.public_base) setBase(m.public_base);
       })
       .catch(() => setFeishuOk(false));
     void api.me().then((me) => {
@@ -32,14 +55,12 @@ export function LoginPage({ onEntered }: Props) {
     if (saved) form.setFieldsValue({ account: saved, remember: true });
   }, [form, onEntered]);
 
-  const qrValue = useMemo(() => `${base.replace(/\/$/, "")}/api/auth/feishu/login`, [base]);
-
   async function onAccountFinish(values: { account: string; password: string; remember: boolean }) {
     if (values.remember) localStorage.setItem(ACCOUNT_KEY, values.account.trim());
     else localStorage.removeItem(ACCOUNT_KEY);
 
     if (!displayOk) {
-      message.info("账号密码仅作展示。内部请用飞书登录。");
+      message.info("账号密码仅作展示。请用飞书登录。");
       return;
     }
     setBusy(true);
@@ -52,68 +73,6 @@ export function LoginPage({ onEntered }: Props) {
       setBusy(false);
     }
   }
-
-  const accountPane = (
-    <Form
-      form={form}
-      layout="vertical"
-      requiredMark={false}
-      initialValues={{ remember: true }}
-      onFinish={(v) => void onAccountFinish(v)}
-    >
-      <Form.Item name="account" label="账号" rules={[{ required: true, message: "请输入账号" }]}>
-        <Input prefix={<UserOutlined />} placeholder="工号或姓名" autoComplete="username" size="large" />
-      </Form.Item>
-      <Form.Item name="password" label="密码" rules={[{ required: true, message: "请输入密码" }]}>
-        <Input.Password prefix={<LockOutlined />} placeholder="密码" autoComplete="current-password" size="large" />
-      </Form.Item>
-      <Form.Item name="remember" valuePropName="checked" style={{ marginBottom: 12 }}>
-        <Checkbox>记住账号</Checkbox>
-      </Form.Item>
-      <Form.Item>
-        <Button htmlType="submit" block size="large" loading={busy}>
-          登录
-        </Button>
-      </Form.Item>
-      <Typography.Paragraph type="secondary" className="login-hint">
-        {displayOk ? "本机调试可用显示名。生产请走飞书。" : "账号密码为示意入口，正式身份走飞书。"}
-      </Typography.Paragraph>
-      <Divider plain>其他登录方式</Divider>
-      <Button type="primary" block size="large" href="/api/auth/feishu/login" disabled={!feishuOk}>
-        <FeishuMark />
-        飞书登录
-      </Button>
-      {!feishuOk ? (
-        <Typography.Paragraph type="warning" className="login-hint">
-          飞书还没配好 App Secret。本机可先用上面的账号进入设置。
-        </Typography.Paragraph>
-      ) : null}
-    </Form>
-  );
-
-  const qrPane = (
-    <div className="login-qr">
-      <QRCode
-        value={feishuOk ? qrValue : "feishu-not-ready"}
-        size={188}
-        icon="/brand/logo.png"
-        iconSize={36}
-        color="#722ED1"
-        bgColor="#ffffff"
-        bordered
-        status={feishuOk ? "active" : "expired"}
-        statusRender={() => "飞书未配置"}
-      />
-      <Typography.Paragraph className="login-qr-cap">打开飞书扫一扫</Typography.Paragraph>
-      <Typography.Paragraph type="secondary" className="login-hint">
-        扫码后走同一套飞书授权。白名单外进不来。
-      </Typography.Paragraph>
-      <Button type="primary" block size="large" href="/api/auth/feishu/login" disabled={!feishuOk}>
-        <FeishuMark />
-        飞书登录
-      </Button>
-    </div>
-  );
 
   return (
     <div className="login-page">
@@ -132,26 +91,43 @@ export function LoginPage({ onEntered }: Props) {
             登录
           </Typography.Title>
           <Typography.Paragraph type="secondary" className="login-box-sub">
-            未登录看不到任务和文件。
+            用公司飞书进入。扫码在飞书页完成。
           </Typography.Paragraph>
-          <Tabs
-            activeKey={tab}
-            onChange={setTab}
-            centered
-            size="large"
-            items={[
-              { key: "account", label: "账号密码", children: accountPane },
-              {
-                key: "qr",
-                label: (
-                  <span>
-                    <QrcodeOutlined /> 飞书扫码
-                  </span>
-                ),
-                children: qrPane,
-              },
-            ]}
-          />
+          {banner ? <Alert type="warning" showIcon message={banner} style={{ marginBottom: 16 }} /> : null}
+          <Button type="primary" block size="large" href="/api/auth/feishu/login" disabled={!feishuOk}>
+            <FeishuMark />
+            飞书登录
+          </Button>
+          {!feishuOk ? (
+            <Typography.Paragraph type="warning" className="login-hint">
+              飞书还没配好。本机可用下面的账号进设置。
+            </Typography.Paragraph>
+          ) : (
+            <Typography.Paragraph type="secondary" className="login-hint">
+              将跳到飞书官方授权页。白名单外进不来。
+            </Typography.Paragraph>
+          )}
+          <Divider plain>本机调试</Divider>
+          <Form
+            form={form}
+            layout="vertical"
+            requiredMark={false}
+            initialValues={{ remember: true }}
+            onFinish={(v) => void onAccountFinish(v)}
+          >
+            <Form.Item name="account" label="账号" rules={[{ required: true, message: "请输入账号" }]}>
+              <Input prefix={<UserOutlined />} placeholder="本机显示名，不是飞书账号" autoComplete="username" />
+            </Form.Item>
+            <Form.Item name="password" label="密码" rules={[{ required: true, message: "请输入密码" }]}>
+              <Input.Password prefix={<LockOutlined />} placeholder="示意，不会发给服务器" autoComplete="current-password" />
+            </Form.Item>
+            <Form.Item name="remember" valuePropName="checked" style={{ marginBottom: 12 }}>
+              <Checkbox>记住账号</Checkbox>
+            </Form.Item>
+            <Button htmlType="submit" block loading={busy} disabled={!displayOk}>
+              用显示名进入
+            </Button>
+          </Form>
         </div>
       </main>
     </div>

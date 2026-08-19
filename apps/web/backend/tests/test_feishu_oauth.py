@@ -3,11 +3,12 @@ from __future__ import annotations
 from app import auth, feishu_oauth
 
 
-def test_authorize_url_asks_user_base_scope():
+def test_authorize_url_has_client_and_redirect():
     url = feishu_oauth.authorize_url()
-    assert "contact%3Auser.base%3Areadonly" in url or "contact:user.base:readonly" in url
+    assert "contact:user.base" not in url
     assert "cli_aa0ebd6422385ce0" in url
     assert "redirect_uri=" in url
+    assert "response_type=code" in url
 
 
 def test_auth_methods_public(client):

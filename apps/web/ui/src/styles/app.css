@@ -128,19 +128,6 @@
   font-size: 13px;
 }
 
-.login-qr {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 8px 0 0;
-  text-align: center;
-}
-
-.login-qr-cap {
-  margin: 16px 0 0 !important;
-  font-weight: 600;
-}
-
 .feishu-mark {
   display: inline-block;
   vertical-align: -2px;

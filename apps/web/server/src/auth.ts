@@ -1,4 +1,4 @@
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DATA_DIR } from "./config.js";
@@ -24,7 +24,7 @@ export type Session = {
 
 const TTL = 7 * 24 * 3600;
 const sessions = new Map<string, Session>();
-const oauthStates = new Map<string, number>();
+const oauthStates = new Map<string, { exp: number; verifier: string }>();
 
 function sessionsPath() {
   return join(DATA_DIR, "sessions.json");
@@ -182,34 +182,48 @@ export function createDisplaySession(name: string): Session {
   return issueSession(n, role, "", "display");
 }
 
-export function newOAuthState(): string {
-  const token = randomBytes(18).toString("base64url");
-  oauthStates.set(token, Date.now() + 600_000);
-  return token;
+export function pkcePair(): { verifier: string; challenge: string } {
+  const verifier = randomBytes(32).toString("base64url");
+  const challenge = createHash("sha256").update(verifier).digest("base64url");
+  return { verifier, challenge };
 }
 
-export function consumeOAuthState(state: string): boolean {
-  const exp = oauthStates.get(state);
+export function beginOAuth(): { state: string; challenge: string } {
+  const state = randomBytes(18).toString("base64url");
+  const { verifier, challenge } = pkcePair();
+  oauthStates.set(state, { exp: Date.now() + 600_000, verifier });
+  return { state, challenge };
+}
+
+/** 用过即删。过期或不存在返回 null。 */
+export function consumeOAuthState(state: string): string | null {
+  const row = oauthStates.get(state);
   oauthStates.delete(state);
-  return Boolean(exp && exp >= Date.now());
+  if (!row || row.exp < Date.now()) return null;
+  return row.verifier;
 }
 
 export function oauthReady(): boolean {
   return Boolean(appId() && appSecret());
 }
 
-export function authorizeUrl(redirectUri: string, state: string): string {
+export function authorizeUrl(redirectUri: string, state: string, challenge: string): string {
   const q = new URLSearchParams({
     client_id: appId(),
     redirect_uri: redirectUri,
     response_type: "code",
     state,
-    scope: "contact:user.base:readonly",
+    code_challenge: challenge,
+    code_challenge_method: "S256",
   });
   return `https://accounts.feishu.cn/open-apis/authen/v1/authorize?${q.toString()}`;
 }
 
-export async function exchangeCode(code: string, redirectUri: string): Promise<{ open_id: string; name: string }> {
+export async function exchangeCode(
+  code: string,
+  redirectUri: string,
+  verifier: string,
+): Promise<{ open_id: string; name: string }> {
   const tokenRes = await fetch("https://open.feishu.cn/open-apis/authen/v2/oauth/token", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -219,6 +233,7 @@ export async function exchangeCode(code: string, redirectUri: string): Promise<{
       client_secret: appSecret(),
       code,
       redirect_uri: redirectUri,
+      code_verifier: verifier,
     }),
   });
   const tokenJson = (await tokenRes.json()) as { access_token?: string; code?: number; msg?: string };
