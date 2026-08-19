@@ -15,6 +15,30 @@ describe("shouldAutoRedirectToFeishu", () => {
     );
   });
 
+  it("does not redirect when already logged in", () => {
+    assert.equal(
+      shouldAutoRedirectToFeishu({
+        pathname: "/",
+        loggedIn: true,
+        authError: null,
+        apiBroken: null,
+      }),
+      false,
+    );
+  });
+
+  it("does not redirect when Feishu already returned an error", () => {
+    assert.equal(
+      shouldAutoRedirectToFeishu({
+        pathname: "/",
+        loggedIn: false,
+        authError: "只允许伸美公司的飞书号进入。",
+        apiBroken: null,
+      }),
+      false,
+    );
+  });
+
   it("redirects from the app root when session is missing", () => {
     assert.equal(
       shouldAutoRedirectToFeishu({

@@ -31,6 +31,7 @@ type SeedTask = {
   complete_kind?: string;
   hits?: SeedHit[];
   hits_v2?: SeedHit[];
+  pages_v2?: Array<{ url?: string }>;
 };
 
 function authHeader() {
@@ -251,6 +252,84 @@ describe("review http", () => {
     assert.equal(res.status, 200);
     const body = (await res.json()) as { hits_v2?: Array<{ id?: string; decision?: string }> };
     assert.equal(body.hits_v2?.[0]?.decision, "confirm");
+  });
+
+  it("rejects a decision on a missing hit", async () => {
+    const tid = seed({
+      id: "666666666666",
+      title: "没有这个字段",
+      product_name: "没有这个字段",
+      type: "excel_pdf",
+      status: "pending_review",
+      hits: [hit()],
+    });
+    const res = await app.request(`/api/tasks/${tid}/decision`, {
+      method: "POST",
+      headers: { ...authHeader(), "content-type": "application/json" },
+      body: JSON.stringify({ hit_id: "nope", decision: "confirm" }),
+    });
+    assert.equal(res.status, 404);
+    const body = (await res.json()) as { detail?: string };
+    assert.match(String(body.detail || ""), /字段不存在/);
+  });
+
+  it("rejects sign-off without a conclusion", async () => {
+    const tid = seed({
+      id: "777777777777",
+      title: "没写结论",
+      product_name: "没写结论",
+      type: "excel_pdf",
+      status: "pending_review",
+      hits: [hit({ status: "一致", decision: "confirm" })],
+    });
+    const res = await app.request(`/api/tasks/${tid}/complete`, {
+      method: "POST",
+      headers: { ...authHeader(), "content-type": "application/json" },
+      body: JSON.stringify({ conclusion: "   " }),
+    });
+    assert.equal(res.status, 400);
+    const body = (await res.json()) as { detail?: string };
+    assert.match(String(body.detail || ""), /请写下结论/);
+  });
+
+  it("marks complete_kind rework when any hit is issue", async () => {
+    const tid = seed({
+      id: "888888888888",
+      title: "有错待改",
+      product_name: "有错待改",
+      type: "excel_pdf",
+      status: "in_review",
+      hits: [hit({ decision: "issue" })],
+    });
+    const res = await app.request(`/api/tasks/${tid}/complete`, {
+      method: "POST",
+      headers: { ...authHeader(), "content-type": "application/json" },
+      body: JSON.stringify({ conclusion: "待设计改稿" }),
+    });
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as { complete_kind?: string; status?: string };
+    assert.equal(body.status, "completed");
+    assert.equal(body.complete_kind, "rework");
+  });
+
+  it("rejects a second rework after pages_v2 already exist", async () => {
+    const tid = seed({
+      id: "999999999999",
+      title: "已经对过红",
+      product_name: "已经对过红",
+      type: "excel_pdf",
+      status: "in_review",
+      hits: [hit({ decision: "issue" })],
+      hits_v2: [hit({ id: "v2_h1", decision: "pending" })],
+      pages_v2: [{ url: "/x.png" }],
+    });
+    const res = await app.request(`/api/tasks/${tid}/rework`, {
+      method: "POST",
+      headers: authHeader(),
+    });
+    assert.equal(res.status, 400);
+    const body = (await res.json()) as { detail?: string };
+    assert.match(String(body.detail || ""), /当前状态不可对红/);
   });
 
   it("still records confirm on an in_review hit", async () => {
