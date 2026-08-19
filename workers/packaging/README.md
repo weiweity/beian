@@ -12,7 +12,7 @@
 
 ## 运行
 
-    # 本目录尚未对网页接线；仅本地 CLI。PPT 依赖本机 Node，不要提交 node_modules。
+    # 网页打样台会调这份 CLI。本机直接跑也可以。PPT 依赖本机 Node，不要提交 node_modules。
     python3 pipeline.py examples/jobs_26H17.json --workers 2 --force
 
 首次运行加 --force；同一源文件、模板和流程版本未变化时，去掉 --force 会直接复用缓存。

@@ -1,9 +1,9 @@
 # Design System — 江华审稿室
 
 来源：`/design-consultation` + `/design-shotgun`（2026-08-18）。  
-锁定稿：飞书顶栏 + 云文档批注钉 + 左上角仅蝴蝶 logo。  
+锁定稿：飞书顶栏 + 云文档批注钉 + 左上角完整 SHINE MAGE 标。  
 预览：`http://127.0.0.1:4179/variant-ac.html`  
-资产：`apps/web/ui/public/brand/logo.png`
+资产：`apps/web/ui/public/brand/shine-mage.png`
 
 ## Product Context
 
@@ -13,7 +13,7 @@
 - **Project type:** 内部工具。飞书只坐身份。
 
 记住的一句：**这是给人签字的审稿台。**  
-8/31 只交审稿台。打样台共用顶栏，点开写「内部准备中」，不对业务开放提交口。
+8/31 只交审稿台。打样台共用顶栏，可交平面稿出白底 / PPT / GLB；验收仍只看审稿台，不对业务承诺 Windows 打样。
 
 ## Aesthetic Direction
 

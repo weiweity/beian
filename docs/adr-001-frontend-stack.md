@@ -1,7 +1,7 @@
 # ADR-001 前端栈与设计来源
 
 日期：2026-08-18  
-状态：已接受（用户否决「沿用原生 JS」）  
+状态：已接受（用户否决「沿用原生 JS」）。HTTP 产品层见 `docs/adr-002-typescript-http.md`；本机设置见 `docs/adr-003-settings-overlay.md`。视觉 token 以根目录 `DESIGN.md` 为准。  
 覆盖：8/31 第一期网页，不含 3D 查看器
 
 ## 决策

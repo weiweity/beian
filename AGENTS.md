@@ -4,7 +4,7 @@
 
 ## 项目
 
-`beian`：供应链备案审核网页 + 未接线的 3D Worker。第一期验收人刘籽烨，收尾 2026-08-31。
+`beian`：供应链备案审核网页。打样台调用 `workers/packaging`（缺 Blender 要失败写清）。第一期验收人刘籽烨，收尾 2026-08-31。
 
 ## 硬约束
 
@@ -21,7 +21,7 @@
 - 网页：`apps/web/ui`（React+TS）+ `apps/web/server`（Hono+TS，对外 :8787）
 - 对照 worker：`apps/web/backend`（Python，由 TS `app.cli` 调用）
 - 3D CLI：`workers/packaging/`
-- 本机配置：右上角点姓名 →「设置」→ `data/settings.json` + `data/settings.secrets.json`（gitignore）。密钥不要写进前端或仓库。
+- 本机配置：右上角点姓名 →「设置」→ 默认 `apps/web/backend/data/settings.json` + `settings.secrets.json`（gitignore；`WB_DATA_DIR` 可改）。密钥不要写进前端或仓库。
 - 章程：`docs/00-charter.md`
 - 旧 `apps/web/frontend/` 已退役，不要再往里面加功能。
 
