@@ -39,7 +39,7 @@ import { compareTask, reworkTask } from "./workers.js";
 type Env = { Variables: { session: Session } };
 
 const app = new Hono<Env>();
-const VERSION = "0.9.1";
+const VERSION = "0.10.0";
 
 app.use("/api/*", async (c, next) => {
   const tok = c.req.header("authorization") || (getCookie(c, COOKIE) ? `Bearer ${getCookie(c, COOKIE)}` : "");
