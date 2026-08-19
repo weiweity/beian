@@ -20,7 +20,7 @@
 - 设计：对齐客服 Demo 的内部工具纪律（见根目录 `DESIGN.md`），不搬 Electron / 狐狸 / Dashboard。
 - 暴露：Cloudflare Named Tunnel。飞书网页应用（OAuth 已接）。不买云，不映射端口。
 
-详见 `docs/adr-001-frontend-stack.md`。
+详见 `docs/adr-001-frontend-stack.md`。实现约束见 `docs/adr-004-ousterhout-design.md`（不改变已批准的路径 A 和 8/31 验收范围）。
 
 ## 不做（8/31）
 

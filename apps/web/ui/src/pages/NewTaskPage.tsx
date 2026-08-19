@@ -25,11 +25,9 @@ export function NewTaskPage({ onCreated }: Props) {
       return;
     }
     const fd = new FormData();
-    fd.append("task_type", "excel_pdf");
     fd.append("product_name", productName);
     fd.append("title", productName);
     fd.append("pack_surface", values.pack_surface);
-    fd.append("max_pages", "2");
     fd.append("excel", excelFile);
     fd.append("pdf", pdfFile);
     setSubmitting(true);

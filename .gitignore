@@ -55,7 +55,9 @@ Thumbs.db
 # Node
 node_modules/
 dist/
+**/.vite/
 
 # Local agent/session artifacts
 .context/
 .gstack/
+.claude/

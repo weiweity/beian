@@ -106,6 +106,37 @@ export function listTasks(q = "", mineName = "", admin = false): Record<string, 
   }));
 }
 
+export const REVIEWABLE_STATUSES = ["pending_review", "in_review"] as const;
+export const HIT_DECISIONS = ["confirm", "issue", "ignore"] as const;
+export type HitDecision = (typeof HIT_DECISIONS)[number];
+
+export function isReviewableStatus(status: string): boolean {
+  return (REVIEWABLE_STATUSES as readonly string[]).includes(status);
+}
+
+export function isReworkableStatus(status: string): boolean {
+  return status === "pending_review" || status === "in_review" || status === "completed";
+}
+
+export function hasReworkPages(task: { pages_v2?: unknown }): boolean {
+  return Array.isArray(task.pages_v2) && task.pages_v2.length > 0;
+}
+
+export function isReworkableTask(task: { status: string; complete_kind?: string; pages_v2?: unknown }): boolean {
+  if (hasReworkPages(task)) return false;
+  if (task.status === "pending_review" || task.status === "in_review") return true;
+  return task.status === "completed" && task.complete_kind === "rework";
+}
+
+export function activeHits(task: Task): Hit[] {
+  if (Array.isArray(task.hits_v2) && task.hits_v2.length > 0) return task.hits_v2;
+  return task.hits || [];
+}
+
+export function isHitDecision(value: unknown): value is HitDecision {
+  return typeof value === "string" && (HIT_DECISIONS as readonly string[]).includes(value);
+}
+
 export type BoardColumn = "comparing" | "review" | "done";
 
 export function boardColumn(status: string): BoardColumn {
