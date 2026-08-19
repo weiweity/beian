@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { trustPublicCas } from "./certs.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = resolve(here, "../../../..");
@@ -30,6 +31,25 @@ function loadEnvFile(path: string): void {
 loadEnvFile(join(PYTHON_APP, ".env.secrets"));
 loadEnvFile(join(PYTHON_APP, ".env.baidu"));
 loadEnvFile(join(WEB_ROOT, ".env"));
+
+const LOOPBACK_PROXY = /^(https?|socks5h?):\/\/(127\.0\.0\.1|localhost|\[::1\])/i;
+const PROXY_KEYS = ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"];
+
+/** Clash 等本机代理会给 HTTPS 塞自签证书，Node fetch 直接报 fetch failed。服务端调飞书/百度走直连。 */
+export function stripLoopbackProxy(env: NodeJS.ProcessEnv = process.env): string[] {
+  const removed: string[] = [];
+  for (const key of PROXY_KEYS) {
+    const val = env[key] || "";
+    if (LOOPBACK_PROXY.test(val)) {
+      delete env[key];
+      removed.push(key);
+    }
+  }
+  return removed;
+}
+
+stripLoopbackProxy();
+trustPublicCas();
 
 export const PORT = Number(process.env.WB_PORT || 8787);
 export const HOST = process.env.WB_HOST || "127.0.0.1";
