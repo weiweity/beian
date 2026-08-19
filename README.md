@@ -30,7 +30,7 @@ HTTP 是 TypeScript。对照规则和 Blender 仍是 Python。见 `docs/adr-002-
 
 ## 给别人用：设置页
 
-登录后顶栏右侧「设置」。飞书、百度 OCR、MiniMax、Python、Blender 都在这里填。
+登录后点右上角姓名 →「设置」。飞书、百度 OCR、MiniMax、Python、Blender 都在这里填。
 
 - 密钥只写到本机 `data/settings.secrets.json`（0600，不进 git）
 - 界面只显示是否已填

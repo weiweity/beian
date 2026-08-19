@@ -21,7 +21,7 @@
 - 网页：`apps/web/ui`（React+TS）+ `apps/web/server`（Hono+TS，对外 :8787）
 - 对照 worker：`apps/web/backend`（Python，由 TS `app.cli` 调用）
 - 3D CLI：`workers/packaging/`
-- 本机配置：顶栏「设置」→ `data/settings.json` + `data/settings.secrets.json`（gitignore）。密钥不要写进前端或仓库。
+- 本机配置：右上角点姓名 →「设置」→ `data/settings.json` + `data/settings.secrets.json`（gitignore）。密钥不要写进前端或仓库。
 - 章程：`docs/00-charter.md`
 - 旧 `apps/web/frontend/` 已退役，不要再往里面加功能。
 
@@ -41,7 +41,15 @@ When the user's request matches an available skill, invoke it via the Skill tool
 改任何界面之前先读 `DESIGN.md`。字体、色、间距、顶栏、审稿构图都以那份为准。
 
 - Ant Design 6 只当零件箱。`colorPrimary` = `#722ED1`，不要默认蓝。
-- 顶栏切「审稿台 / 打样台」。不要 220px 品牌侧栏。
-- 左上角只放 `apps/web/ui/public/brand/logo.png`，不要旁标「江华」。
+- 顶栏切「审稿台 / 打样台」（字 + 底线，不要紫胶囊）。设置收在姓名菜单里。不要 220px 品牌侧栏。
+- 左上角放完整 `apps/web/ui/public/brand/shine-mage.png`（狐狸头 + SHINE MAGE），不要裁成只留头，不要旁标「江华」。
 - 审稿：左图画布 + 编号钉，右批注列，结论由人写。禁止「AI 已过审」。
 - 打样台 8/31 不对业务开放。QA 时标出任何与 `DESIGN.md` 不符的实现。
+
+## Testing
+
+- 服务端：`npm run test -w beian-server`（`node:test`，`apps/web/server/src/*.test.ts`）
+- 对照 worker：`cd apps/web/backend && .venv/bin/python -m pytest -q`
+- 全量：仓库根目录 `npm test`
+- 类型：`npm run typecheck -w beian-server` 与 `npm run build -w beian-ui`
+- 新逻辑要有行为测试（含失败路径）。不要把密钥写进测试。

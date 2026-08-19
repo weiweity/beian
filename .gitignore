@@ -55,3 +55,7 @@ Thumbs.db
 # Node
 node_modules/
 dist/
+
+# Local agent/session artifacts
+.context/
+.gstack/

@@ -24,8 +24,8 @@
 
 ## Typography
 
-- **Display/Hero:** PingFang SC / Microsoft YaHei UI Medium — 稿名、顶栏桌签
-- **Body:** 同上 Regular — 界面
+- **Display/Hero:** 阿里普惠体 Medium — 稿名、顶栏桌签
+- **Body:** 阿里普惠体 Regular — 界面
 - **UI/Labels:** 同上
 - **Data/Tables:** IBM Plex Mono 或 ui-monospace，17px，tabular-nums — Excel/PDF 原文、条码、批号
 - **Code:** 同证据栏
@@ -33,8 +33,8 @@
 - **Scale:** 辅助 ≥13px，正文 ≥16px，稿名 20–28px。默认密度 = 大字。控件高度 ≥40px
 
 ```css
---font-body: -apple-system, BlinkMacSystemFont, "PingFang SC",
-  "Hiragino Sans GB", "Microsoft YaHei UI", "Noto Sans SC", sans-serif;
+--font-body: "Alibaba PuHuiTi", "PingFang SC", "Hiragino Sans GB",
+  "Microsoft YaHei UI", "Noto Sans SC", sans-serif;
 --font-mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
 ```
 
@@ -74,10 +74,15 @@ controlHeight           40
 ## Layout
 
 - **Approach:** hybrid。顶栏网格纪律，审稿区画布 + 右抽屉。
-- **Chrome:** 56px 白顶栏。左上角**只放** `public/brand/logo.png`（紫蝴蝶），不要旁边再写「江华」或产品名。
-- **一级切换:** 顶栏「审稿台 / 打样台」。不要 220px 品牌侧栏。右侧「设置」是本机配置，不是第三张台。
+- **Chrome:** 56px 白顶栏。左上角放完整 `public/brand/shine-mage.png`（紫狐狸头 + SHINE MAGE），不要裁成只留头，不要再旁标「江华」。
+- **一级切换:** 顶栏「审稿台 / 打样台」，飞书式字 + 底线。选中用字重 + 紫底线，不要紫胶囊。一屏只留一个实心紫：列表上的「新建 Excel↔PDF」。
+- **本机配置:** 右上角点姓名打开菜单（设置 / 退出）。设置不是第三张台，不要和台签抢权重。
+- **审稿台列表:** 顶栏是工作场，H1 是「审核单」。默认看板三栏：对照中 / 待她判 / 已签字。也可切回表格。空列表不画表头、不放搜索。
+- **设置:** 含开工板（三步能否干活）和费用账单（厂商余额/月账单 + 本机台账）。字段先全开，权限以后再切。
 - **审稿台:** 左画布（包装图 / OpenSeadragon）+ 图上编号钉；右 340px 批注列（字段、Excel/PDF 原文、状态汉字）；右下「写下结论」。
+- **登录:** 没有自建登录页。未登录直接去飞书官方授权。只放行伸美企业（`tenant_key`）。其他公司主体进不来。拒绝页要像结果页：logo +「进不了这间审稿室」+ 原因 +「再试一次」。
 - **打样台:** 同一顶栏。交平面稿，下载 2 张白底 + PPT + GLB。GLB 可旋转供她截图。备案用静帧，不要带色泽尺寸标注。
+- **窄屏:** 顶栏两行——logo + 姓名在上，台签整行在下。台签文字不拆字。
 - **Max content:** 审稿画布吃满剩余宽度
 - **Border radius:** 钉 9999px，按钮/卡片 8px，批注块 10px
 
@@ -86,14 +91,14 @@ controlHeight           40
 - **Approach:** minimal-functional
 - **Easing:** enter(ease-out) exit(ease-in) move(ease-in-out)
 - **Duration:** micro(50–100ms) short(150–250ms)
-- 只过渡 `opacity / color / background`。遵守 `prefers-reduced-motion`
+- 登录无自建动效。未登录即跳飞书授权页。
 
 ## 文案与状态
 
 | 状态 | 她看见 |
 |---|---|
-| 未登录 | 飞书登录，无任务 |
-| 无任务 | 「还没有审核单」+「新建 Excel↔PDF」 |
+| 未登录 | 直接去飞书授权。非伸美企业：logo +「进不了这间审稿室」+ 原因 +「再试一次」 |
+| 无任务 | 不画空表。卡片：「还没有审核单」+「把 Excel 和备案/包装 PDF 交上来对照」+「新建 Excel↔PDF」 |
 | 机审中 | 「正在对照，请稍候」 |
 | 待她判 | 图上钉 + 右侧疑点；OCR 不清必须写「待人工确认」 |
 | 她提交 | 「已记录你的结论，不是系统过审」 |
@@ -103,9 +108,9 @@ controlHeight           40
 
 ## Logo
 
-- 文件：`apps/web/ui/public/brand/logo.png`
-- 用法：顶栏左侧单独出现，高度约 32px
-- 不要加中文词标，不要黑底矩形
+- 文件：`apps/web/ui/public/brand/shine-mage.png`（完整：狐狸头 + SHINE MAGE）；`logo-mark.png` 仅登录卡片小标
+- 用法：顶栏左侧整图出现，高度约 32px，宽随图，不要裁头
+- 不要再手写中文词标，不要黑底矩形
 
 ## Decisions Log
 
@@ -115,6 +120,12 @@ controlHeight           40
 | 2026-08-18 | 放弃纸台印泥 | 用户要紫调、白底、Ant Design、大厂风 |
 | 2026-08-18 | 定稿 A+C | 飞书顶栏 + 云文档批注钉 |
 | 2026-08-18 | 左上角只放蝴蝶 | 用户提供 logo，不要旁标「江华」 |
+| 2026-08-19 | 顶栏用完整 logo | 用户不要只放头；整图是狐狸头 + SHINE MAGE |
 | 2026-08-18 | 3D 9 月再接线 | 8/31 只验收人终审 |
 | 2026-08-19 | HTTP 产品层 TypeScript | 对照/Blender 仍是 Python worker |
 | 2026-08-19 | 打样台交三件套 | 同一人第二段土办法：备案立体图 |
+| 2026-08-19 | 登录定稿 A 飞书 SSO | 居中卡片 + 飞书蓝主按钮；调试入口折叠 |
+| 2026-08-19 | 登录按入口分流 | 飞书内授权；外网伪装表单。字体阿里普惠体 |
+| 2026-08-19 | 去掉登录页 | 进站即飞书授权；只放行伸美 tenant |
+| 2026-08-19 | 行业对照后全量调 chrome | 下划线台签；紫只留给新建；姓名菜单收设置/退出；空状态当功能；拒绝页当结果页；H1=审核单 |
+| 2026-08-19 | 看板 + 费用 C 档 | 审稿三栏看板；设置开工板；百度财务余额/月账单 + MiniMax 余量 + 本机台账 |

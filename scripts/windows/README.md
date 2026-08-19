@@ -9,7 +9,7 @@
 
 打样台需要本机 Blender 可执行文件路径，在网页「设置」里填。不要只写 `blender`。
 
-对外入口是 TypeScript（`apps/web/server`），不是 `uvicorn`。密钥和路径优先在顶栏「设置」里填。
+对外入口是 TypeScript（`apps/web/server`），不是 `uvicorn`。密钥和路径优先点右上角姓名 →「设置」里填。
 
 生产数据必须设环境变量，不要放在 git 工作树里：
 

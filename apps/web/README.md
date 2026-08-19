@@ -25,7 +25,7 @@ cd ui && npm run dev
 
 ## 密钥
 
-优先用顶栏「设置」。也可以：
+优先点右上角姓名 →「设置」。也可以：
 
 ```bash
 cp backend/.env.baidu.example backend/.env.baidu
