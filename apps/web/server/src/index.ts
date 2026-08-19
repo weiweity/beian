@@ -33,13 +33,24 @@ import {
   type Session,
 } from "./auth.js";
 import { fileOf, getJob, startMockup } from "./mockup.js";
-import { assertTid, listTasks, loadTask, newTid, nowIso, saveTask } from "./tasks.js";
+import {
+  activeHits,
+  assertTid,
+  isHitDecision,
+  isReviewableStatus,
+  isReworkableTask,
+  listTasks,
+  loadTask,
+  newTid,
+  nowIso,
+  saveTask,
+} from "./tasks.js";
 import { compareTask, reworkTask } from "./workers.js";
 
 type Env = { Variables: { session: Session } };
 
 const app = new Hono<Env>();
-const VERSION = "0.10.0";
+const VERSION = "0.10.1";
 
 app.use("/api/*", async (c, next) => {
   const tok = c.req.header("authorization") || (getCookie(c, COOKIE) ? `Bearer ${getCookie(c, COOKIE)}` : "");
@@ -255,10 +266,13 @@ app.post("/api/tasks/:tid/decision", async (c) => {
   const tid = assertTid(c.req.param("tid"));
   const body = (await c.req.json()) as { hit_id?: string; decision?: string; note?: string };
   const task = loadTask(tid);
-  if (!["pending_review", "in_review"].includes(task.status)) {
+  if (!isReviewableStatus(task.status)) {
     throw new HTTPException(400, { message: "当前状态不可审核" });
   }
-  const hit = (task.hits || []).find((h) => h.id === body.hit_id);
+  if (!isHitDecision(body.decision)) {
+    throw new HTTPException(400, { message: "非法审核结论" });
+  }
+  const hit = activeHits(task).find((h) => h.id === body.hit_id);
   if (!hit) throw new HTTPException(404, { message: "字段不存在" });
   hit.decision = body.decision;
   if (body.note != null) hit.note = String(body.note).trim();
@@ -272,14 +286,18 @@ app.post("/api/tasks/:tid/decision", async (c) => {
 app.post("/api/tasks/:tid/complete", async (c) => {
   const s = need(c, "complete");
   const task = loadTask(c.req.param("tid"));
+  if (!isReviewableStatus(task.status)) {
+    throw new HTTPException(400, { message: "当前状态不可签字" });
+  }
   const body = (await c.req.json().catch(() => ({}))) as { conclusion?: string };
-  const pending = (task.hits || []).filter(
+  const hits = activeHits(task);
+  const pending = hits.filter(
     (h) => (h.status === "疑点" || h.status === "缺失") && (h.decision || "pending") === "pending",
   );
   if (pending.length) throw new HTTPException(400, { message: `仍有 ${pending.length} 条疑点/缺失未处理` });
   const conclusion = (body.conclusion || "").trim();
   if (!conclusion) throw new HTTPException(400, { message: "请写下结论" });
-  const issues = (task.hits || []).filter((h) => h.decision === "issue");
+  const issues = hits.filter((h) => h.decision === "issue");
   task.status = "completed";
   task.completed_at = nowIso();
   task.completed_by = s.display_name;
@@ -295,7 +313,10 @@ app.post("/api/tasks/:tid/complete", async (c) => {
 app.post("/api/tasks/:tid/rework", async (c) => {
   const s = need(c, "create");
   const tid = assertTid(c.req.param("tid"));
-  loadTask(tid);
+  const task = loadTask(tid);
+  if (!isReworkableTask(task)) {
+    throw new HTTPException(400, { message: "当前状态不可对红" });
+  }
   const body = await c.req.parseBody();
   const pdf = body.pdf;
   if (!(pdf instanceof File)) throw new HTTPException(400, { message: "需要改稿后的 PDF" });

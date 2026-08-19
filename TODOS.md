@@ -23,8 +23,9 @@
 ## P1 — 对红（金标门，不进本周 P0）
 
 - [ ] **同一单第二份 PDF / 对红**  
-  依赖：刘籽烨一套真实改稿前后（旧 PDF、新 PDF、发给设计的话、二校新发现的漏字/少字/空格）+ 书面许可进机。  
-  做什么：`artwork_v2.pdf` 不覆盖 v1；`open_issues` 用 `field+expected_text+observed_text`；默认队列只复检上一轮 issue；对红比较保留空白。  
+  代码已能传第二份 PDF，并卡住签字/对红门（待审才可签；干净签字单不能对红；对红后优先读非空 `hits_v2`）。  
+  仍阻塞：刘籽烨一套真实改稿前后（旧 PDF、新 PDF、发给设计的话、二校新发现的漏字/少字/空格）+ 书面许可进机。没有金标，不加严空格引擎、不宣称业务验收完成。  
+  还缺：`open_issues` 用 `field+expected_text+observed_text`；默认队列只复检上一轮 issue；对红比较保留空白。  
   不做：历史中心、第三份 PDF、改 `normalize()` 去空白、旧新 PDF 全量 diff。  
   入口：`docs/designs/review-rework-loop.md` Recommended Approach。
 
