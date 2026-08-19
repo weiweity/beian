@@ -6,7 +6,8 @@ import { Hono, type Context } from "hono";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import { HTTPException } from "hono/http-exception";
 import { COOKIE, DATA_DIR, HOST, PORT, REPO_ROOT, UI_BRAND, UI_DIST, cookieSecure } from "./config.js";
-import { notifyTaskComplete } from "./notify.js";
+import { billingSnapshot, compareBookkeeping, loadVendorBills, resetBillingCache } from "./billing.js";
+import { notifyTaskComplete, sendText } from "./notify.js";
 import {
   feishuRedirect,
   maxUploadBytes,
@@ -26,6 +27,7 @@ import {
   logout as dropSession,
   hasPerm,
   oauthReady,
+  lockAllowedTenant,
   sessionFromFeishu,
   type Role,
   type Session,
@@ -71,7 +73,7 @@ app.get("/api/health", (c) => c.json({ ok: true, version: VERSION, runtime: "typ
 app.get("/api/auth/methods", (c) =>
   c.json({
     feishu: oauthReady(),
-    display_login: displayLoginAllowed(),
+    display_login: displayLoginAllowed(c.req.header("host") || ""),
     login_url: "/api/auth/feishu/login",
     public_base: publicBase(),
   }),
@@ -84,6 +86,7 @@ app.get("/api/auth/me", (c) => {
     logged_in: true,
     display_name: s.display_name,
     role: s.role,
+    open_id: s.open_id || "",
     perms: s.role === "admin"
       ? ["read", "create", "decide", "complete", "delete", "export", "manage_users"]
       : ["read", "create", "decide", "complete", "delete", "export"],
@@ -94,7 +97,7 @@ app.get("/api/auth/me", (c) => {
 app.post("/api/auth/login", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as { display_name?: string };
   try {
-    const sess = createDisplaySession(body.display_name || "");
+    const sess = createDisplaySession(body.display_name || "", c.req.header("host") || "");
     setCookie(c, COOKIE, sess.token, {
       httpOnly: true,
       sameSite: "Lax",
@@ -142,7 +145,13 @@ app.get("/api/auth/feishu/callback", async (c) => {
   if (!verifier) return failLogin(c, "expired", "登录已过期，请再点一次飞书登录。");
   try {
     const ident = await exchangeCode(code, feishuRedirect(), verifier);
-    const sess = sessionFromFeishu(ident.open_id, ident.name);
+    const expected = await lockAllowedTenant(ident.tenant_key);
+    if (expected && ident.tenant_key && ident.tenant_key !== expected) {
+      return failLogin(c, "forbidden", "只允许伸美公司的飞书号进入。");
+    }
+    const sess = sessionFromFeishu(ident.open_id, ident.name, ident.tenant_key, expected, {
+      provision: true,
+    });
     setCookie(c, COOKIE, sess.token, {
       httpOnly: true,
       sameSite: "Lax",
@@ -202,18 +211,41 @@ app.post("/api/tasks/upload", async (c) => {
   }
   writeFileSync(excelPath, excelBuf);
   writeFileSync(pdfPath, pdfBuf);
+  const title = String(body.title || product);
+  saveTask({
+    id: tid,
+    title,
+    product_name: product,
+    type: "excel_pdf",
+    status: "comparing",
+    created_at: nowIso(),
+    owner: s.display_name,
+    created_by: s.display_name,
+  });
   try {
     await compareTask({
       tid,
       excel: excelPath,
       pdf: pdfPath,
       productName: product,
-      title: String(body.title || product),
+      title,
       surface: String(body.pack_surface || "carton"),
       actor: s.display_name,
     });
+    compareBookkeeping(true, { task_id: tid, actor: s.display_name, note: product });
     return c.json(loadTask(tid));
   } catch (e) {
+    compareBookkeeping(false, { task_id: tid, actor: s.display_name, note: product });
+    try {
+      const t = loadTask(tid);
+      if (t.status === "comparing") {
+        t.status = "compare_failed";
+        t.error = e instanceof Error ? e.message : "对照失败";
+        saveTask(t);
+      }
+    } catch {
+      /* ignore */
+    }
     boom(e);
   }
 });
@@ -273,8 +305,10 @@ app.post("/api/tasks/:tid/rework", async (c) => {
   writeFileSync(pdfPath, Buffer.from(await pdf.arrayBuffer()));
   try {
     await reworkTask({ tid, pdf: pdfPath, actor: s.display_name });
+    compareBookkeeping(true, { task_id: tid, actor: s.display_name, note: "rework" });
     return c.json(loadTask(tid));
   } catch (e) {
+    compareBookkeeping(false, { task_id: tid, actor: s.display_name, note: "rework" });
     boom(e);
   }
 });
@@ -320,6 +354,14 @@ app.post("/api/settings", async (c) => {
     if (typeof v === "string") patch[k] = v;
   }
   const { restart } = saveSettings(patch);
+  const billingKeys = [
+    "BAIDU_CLOUD_AK",
+    "BAIDU_CLOUD_SK",
+    "BAIDU_OCR_API_KEY",
+    "BAIDU_OCR_SECRET_KEY",
+    "MINIMAX_API_KEY",
+  ];
+  if (billingKeys.some((k) => k in patch)) resetBillingCache();
   return c.json({ ...publicView(), restart });
 });
 
@@ -328,7 +370,27 @@ app.post("/api/settings/probe", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as { id?: string };
   const id = String(body.id || "").trim();
   if (!id) throw new HTTPException(400, { message: "缺少探测 id" });
+  if (id === "lark_send") {
+    const r = await sendText("【审稿台】推送测试。看到这条就说明 lark-cli 通了。");
+    return c.json({
+      id,
+      ok: Boolean(r.ok),
+      message: r.ok ? "已发出测试消息" : r.reason || "发送失败",
+    });
+  }
   return c.json(await runProbe(id));
+});
+
+app.get("/api/settings/billing", async (c) => {
+  need(c, "read");
+  await loadVendorBills(false);
+  return c.json(billingSnapshot());
+});
+
+app.post("/api/settings/billing/refresh", async (c) => {
+  need(c, "read");
+  const vendors = await loadVendorBills(true);
+  return c.json({ ...billingSnapshot(), vendors });
 });
 
 app.post("/api/mockups", async (c) => {

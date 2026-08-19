@@ -23,7 +23,7 @@ function whichLark(): string | null {
   return null;
 }
 
-function sendText(text: string): Promise<{ ok: boolean; skipped?: boolean; reason?: string }> {
+export function sendText(text: string): Promise<{ ok: boolean; skipped?: boolean; reason?: string }> {
   if (!/^(1|true|yes|on)$/i.test(getSetting("FEISHU_ENABLED"))) {
     return Promise.resolve({ ok: false, skipped: true, reason: "FEISHU_ENABLED=false" });
   }
