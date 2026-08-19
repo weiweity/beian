@@ -122,6 +122,17 @@ export function hasReworkPages(task: { pages_v2?: unknown }): boolean {
   return Array.isArray(task.pages_v2) && task.pages_v2.length > 0;
 }
 
+export function isReworkableTask(task: { status: string; complete_kind?: string; pages_v2?: unknown }): boolean {
+  if (hasReworkPages(task)) return false;
+  if (task.status === "pending_review" || task.status === "in_review") return true;
+  return task.status === "completed" && task.complete_kind === "rework";
+}
+
+export function activeHits(task: Task): Hit[] {
+  if (Array.isArray(task.hits_v2) && task.hits_v2.length > 0) return task.hits_v2;
+  return task.hits || [];
+}
+
 export function isHitDecision(value: unknown): value is HitDecision {
   return typeof value === "string" && (HIT_DECISIONS as readonly string[]).includes(value);
 }

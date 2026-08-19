@@ -21,8 +21,9 @@ function isReviewable(status?: string) {
 
 function isReworkable(task: TaskDetail | null) {
   if (!task) return false;
-  if (task.pages_v2 && task.pages_v2.length > 0) return false;
-  return task.status === "pending_review" || task.status === "in_review" || task.status === "completed";
+  if (Array.isArray(task.pages_v2) && task.pages_v2.length > 0) return false;
+  if (task.status === "pending_review" || task.status === "in_review") return true;
+  return task.status === "completed" && task.complete_kind === "rework";
 }
 
 function statusTag(status?: string) {
@@ -187,7 +188,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
     <section>
       <Space style={{ marginBottom: 12 }} wrap>
         <Button onClick={onBack}>返回列表</Button>
-        {task?.pages_v2 ? (
+        {Array.isArray(task?.pages_v2) && task.pages_v2.length > 0 ? (
           <Button type={useV2 ? "primary" : "default"} onClick={() => setUseV2((v) => !v)}>
             {useV2 ? "看这一版" : "看上一版"}
           </Button>

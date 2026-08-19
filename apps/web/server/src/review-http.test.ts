@@ -28,7 +28,9 @@ type SeedTask = {
   status: string;
   error?: string;
   conclusion?: string;
+  complete_kind?: string;
   hits?: SeedHit[];
+  hits_v2?: SeedHit[];
 };
 
 function authHeader() {
@@ -152,13 +154,34 @@ describe("review http", () => {
     assert.match(String(body.detail || ""), /当前状态不可审核/);
   });
 
-  it("lets a completed task reach the rework pdf check", async () => {
+  it("rejects rework on a signed-clean task", async () => {
+    const tid = seed({
+      id: "333333333333",
+      title: "干净签字",
+      product_name: "干净签字",
+      type: "excel_pdf",
+      status: "completed",
+      complete_kind: "signed",
+      conclusion: "人看过了",
+      hits: [hit({ status: "一致", decision: "confirm" })],
+    });
+    const res = await app.request(`/api/tasks/${tid}/rework`, {
+      method: "POST",
+      headers: authHeader(),
+    });
+    assert.equal(res.status, 400);
+    const body = (await res.json()) as { detail?: string };
+    assert.match(String(body.detail || ""), /当前状态不可对红/);
+  });
+
+  it("lets a completed-rework task reach the rework pdf check", async () => {
     const tid = seed({
       id: "222222222222",
       title: "已签待对红",
       product_name: "已签待对红",
       type: "excel_pdf",
       status: "completed",
+      complete_kind: "rework",
       conclusion: "待设计改稿",
       hits: [hit({ decision: "issue" })],
     });
@@ -188,6 +211,46 @@ describe("review http", () => {
     assert.equal(res.status, 400);
     const body = (await res.json()) as { detail?: string };
     assert.match(String(body.detail || ""), /当前状态不可对红/);
+  });
+
+  it("blocks sign-off when v2 hits still have pending 疑点", async () => {
+    const tid = seed({
+      id: "444444444444",
+      title: "对红后",
+      product_name: "对红后",
+      type: "excel_pdf",
+      status: "in_review",
+      hits: [hit({ status: "一致", decision: "confirm" })],
+      hits_v2: [hit({ id: "v2_h1", status: "疑点", decision: "pending" })],
+    });
+    const res = await app.request(`/api/tasks/${tid}/complete`, {
+      method: "POST",
+      headers: { ...authHeader(), "content-type": "application/json" },
+      body: JSON.stringify({ conclusion: "第二轮也过了" }),
+    });
+    assert.equal(res.status, 400);
+    const body = (await res.json()) as { detail?: string };
+    assert.match(String(body.detail || ""), /仍有 1 条疑点/);
+  });
+
+  it("records a v2 hit decision", async () => {
+    const tid = seed({
+      id: "555555555555",
+      title: "对红点字段",
+      product_name: "对红点字段",
+      type: "excel_pdf",
+      status: "in_review",
+      hits: [hit({ status: "一致", decision: "confirm" })],
+      hits_v2: [hit({ id: "v2_h1", status: "疑点", decision: "pending" })],
+    });
+    const res = await app.request(`/api/tasks/${tid}/decision`, {
+      method: "POST",
+      headers: { ...authHeader(), "content-type": "application/json" },
+      body: JSON.stringify({ hit_id: "v2_h1", decision: "confirm" }),
+    });
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as { hits_v2?: Array<{ id?: string; decision?: string }> };
+    assert.equal(body.hits_v2?.[0]?.decision, "confirm");
   });
 
   it("still records confirm on an in_review hit", async () => {
