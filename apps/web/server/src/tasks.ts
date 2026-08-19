@@ -101,7 +101,17 @@ export function listTasks(q = "", mineName = "", admin = false): Record<string, 
     owner: t.owner || t.created_by || t.actor,
     completed_by: t.completed_by,
     round: t.round || 1,
+    board: boardColumn(t.status),
+    error: typeof t.error === "string" ? t.error : "",
   }));
+}
+
+export type BoardColumn = "comparing" | "review" | "done";
+
+export function boardColumn(status: string): BoardColumn {
+  if (status === "completed") return "done";
+  if (status === "pending_review" || status === "in_review") return "review";
+  return "comparing";
 }
 
 export function nowIso(): string {
