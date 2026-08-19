@@ -1,3 +1,5 @@
+import { describeBrokenApi } from "./authGate";
+
 export class ApiError extends Error {
   status: number;
   constructor(status: number, message: string) {
@@ -16,20 +18,24 @@ async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
     ...opts,
     headers,
   });
+  const ct = res.headers.get("content-type") || "";
   if (!res.ok) {
     let detail = res.statusText;
     try {
-      const body = (await res.json()) as { detail?: unknown };
-      if (typeof body.detail === "string") detail = body.detail;
-      else if (body.detail) detail = JSON.stringify(body.detail);
+      if (ct.includes("application/json")) {
+        const body = (await res.json()) as { detail?: unknown };
+        if (typeof body.detail === "string") detail = body.detail;
+        else if (body.detail) detail = JSON.stringify(body.detail);
+      }
     } catch {
       /* keep statusText */
     }
-    throw new ApiError(res.status, detail);
+    throw new ApiError(res.status, describeBrokenApi(res.status, ct) || detail);
   }
-  const ct = res.headers.get("content-type") || "";
-  if (ct.includes("application/json")) return (await res.json()) as T;
-  return undefined as T;
+  if (!ct.includes("application/json")) {
+    throw new ApiError(res.status || 502, describeBrokenApi(res.status, ct) || "接口没有返回 JSON");
+  }
+  return (await res.json()) as T;
 }
 
 export type Me = {

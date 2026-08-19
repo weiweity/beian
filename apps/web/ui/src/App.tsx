@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Dropdown, Layout } from "antd";
-import { api, type Me } from "./api";
+import { ApiError, api, type Me } from "./api";
+import { shouldAutoRedirectToFeishu } from "./authGate";
 import { MockupPage } from "./pages/MockupPage";
 import { NewTaskPage } from "./pages/NewTaskPage";
 import { ReviewPage } from "./pages/ReviewPage";
@@ -48,6 +49,7 @@ export function App() {
   const [me, setMe] = useState<Me | null>(null);
   const [view, setView] = useState<View>("tasks");
   const [authError, setAuthError] = useState<string | null>(null);
+  const [apiBroken, setApiBroken] = useState<string | null>(null);
   const [desk, setDesk] = useState<Desk>("review");
   const [taskId, setTaskId] = useState<string | null>(null);
 
@@ -55,13 +57,16 @@ export function App() {
     try {
       const next = await api.me();
       setMe(next);
+      setApiBroken(null);
       if (next.logged_in) {
         setView((cur) => (cur === "tasks" && window.location.hash === "#settings" ? "settings" : cur));
         setAuthError(null);
       } else {
         setTaskId(null);
       }
-    } catch {
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : "";
+      if (msg.includes("8787") || msg.includes("JSON")) setApiBroken(msg);
       setMe({ logged_in: false, display_name: null, role: null, perms: [] });
     }
   }, []);
@@ -81,6 +86,21 @@ export function App() {
 
   const loggedIn = Boolean(me?.logged_in);
 
+  useEffect(() => {
+    if (me === null) return;
+    if (
+      !shouldAutoRedirectToFeishu({
+        pathname: window.location.pathname,
+        loggedIn,
+        authError,
+        apiBroken,
+      })
+    ) {
+      return;
+    }
+    window.location.replace("/api/auth/feishu/login");
+  }, [me, loggedIn, authError, apiBroken]);
+
   async function logout() {
     await api.logout();
     window.location.replace("/api/auth/feishu/login");
@@ -95,17 +115,17 @@ export function App() {
   }
 
   if (!loggedIn) {
-    if (authError) {
+    if (authError || apiBroken) {
+      const message = authError || apiBroken || "";
       return (
-        <AuthShell title={authTitle(authError)}>
-          <p>{authError}</p>
-          <a className="auth-result-retry" href="/api/auth/feishu/login">
-            再试一次
+        <AuthShell title={authError ? authTitle(authError) : "进不了这间审稿室"}>
+          <p>{message}</p>
+          <a className="auth-result-retry" href="http://127.0.0.1:8787/">
+            打开本机审稿服务
           </a>
         </AuthShell>
       );
     }
-    window.location.replace("/api/auth/feishu/login");
     return (
       <AuthShell>
         <p>正在前往飞书授权…</p>

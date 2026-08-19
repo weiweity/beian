@@ -9,7 +9,7 @@
     "dev": "npm run dev -w beian-server",
     "dev:ui": "npm run dev -w beian-ui",
     "build": "npm run build -w beian-ui",
-    "test": "npm run test -w beian-server && cd apps/web/backend && .venv/bin/python -m pytest -q",
+    "test": "npm run test -w beian-server && npm run test -w beian-ui && cd apps/web/backend && .venv/bin/python -m pytest -q",
     "typecheck": "npm run typecheck -w beian-server && npm run build -w beian-ui"
   },
   "engines": {
