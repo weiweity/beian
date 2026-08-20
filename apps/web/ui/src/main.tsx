@@ -1,11 +1,16 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { App as AntApp, ConfigProvider } from "antd";
-import zhCN from "antd/locale/zh_CN";
+import { App as AntApp } from "antd";
 import { App } from "./App";
-import { theme } from "./theme";
+import { applyAppearance, loadAppearance } from "./chrome/appearance";
+import { AppearanceRoot } from "./chrome/AppearanceRoot";
 import "./styles/tokens.css";
 import "./styles/app.css";
+
+applyAppearance(
+  loadAppearance(),
+  window.matchMedia("(prefers-color-scheme: dark)").matches,
+);
 
 const root = document.getElementById("root");
 if (!root) {
@@ -14,10 +19,10 @@ if (!root) {
 
 createRoot(root).render(
   <StrictMode>
-    <ConfigProvider locale={zhCN} theme={theme}>
+    <AppearanceRoot>
       <AntApp>
         <App />
       </AntApp>
-    </ConfigProvider>
+    </AppearanceRoot>
   </StrictMode>,
 );

@@ -62,7 +62,7 @@ export function Sidebar({
               title={collapsed ? item.label : undefined}
               onClick={() => onNavigate(item.key)}
             >
-              <img className="side-icon" src={item.icon} alt="" width={22} height={22} />
+              <img className="side-icon" src={item.icon} alt="" width={24} height={24} />
               {collapsed ? null : <span className="side-label">{item.label}</span>}
             </button>
           );
@@ -83,7 +83,7 @@ export function Sidebar({
       >
         <button type="button" className="account-row" aria-haspopup="menu" title={displayName}>
           {avatarUrl ? (
-            <img className="account-avatar" src={avatarUrl} alt="" width={28} height={28} />
+            <img className="account-avatar" src={avatarUrl} alt="" width={36} height={36} />
           ) : (
             <span className="account-fallback">{initial(displayName)}</span>
           )}

@@ -96,7 +96,7 @@ export function MockupPage() {
                 style={{
                   width: "100%",
                   height: 360,
-                  background: "#fff",
+                  background: "var(--stage)",
                   border: "1px solid var(--line)",
                   borderRadius: 16,
                 }}
