@@ -24,7 +24,8 @@
 - 对照 worker：`apps/web/backend`（Python，由 TS `app.cli` 调用）
 - 3D CLI：`workers/packaging/`
 - 本机配置：右上角点姓名 →「设置」→ 默认 `apps/web/backend/data/settings.json` + `settings.secrets.json`（gitignore；`WB_DATA_DIR` 可改）。密钥不要写进前端或仓库。
-- 章程：`docs/00-charter.md`
+- 文档入口：`README.md`（启动、设置）、`DESIGN.md`（视觉）、`docs/00-charter.md`（8/31 章程）、`docs/adr-004-ousterhout-design.md`（深模块）、`CHANGELOG.md`、`TODOS.md`。实现约定见下面「设计哲学」。
+- 入口：开发口 `:5173`（Vite 听本机网卡，`/api` 反代到 8787）；产品/验收入口 `:8787`。不要再加第三个 HTTP 入口。
 - 旧 `apps/web/frontend/` 已退役，不要再往里面加功能。
 
 ## Skill routing
