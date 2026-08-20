@@ -41,6 +41,7 @@ async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
 export type Me = {
   logged_in: boolean;
   display_name: string | null;
+  avatar_url?: string | null;
   role: string | null;
   open_id?: string;
   perms: string[];
@@ -135,6 +136,7 @@ export const api = {
   rework: (id: string, fd: FormData) =>
     request<TaskDetail>(`/api/tasks/${id}/rework`, { method: "POST", body: fd }),
   createMockup: (fd: FormData) => request<MockupJob>("/api/mockups", { method: "POST", body: fd }),
+  mockups: () => request<MockupJob[]>("/api/mockups"),
   mockup: (id: string) => request<MockupJob>(`/api/mockups/${id}`),
   loginDisplay: (display_name: string) =>
     request<{ token?: string }>("/api/auth/login", {
@@ -233,5 +235,6 @@ export type MockupJob = {
   id: string;
   status: "queued" | "running" | "done" | "failed";
   error?: string;
+  created_at?: string;
   files: { key: string; name: string }[];
 };

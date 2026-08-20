@@ -19,6 +19,7 @@ import {
   type SettingsView,
 } from "../api";
 import { BillingPane } from "../features/billing/BillingPane";
+import { AppearancePane } from "../chrome/AppearancePane";
 
 const PROBE_BY_GROUP: Record<string, string[]> = {
   开工板: ["feishu", "baidu", "python", "blender", "lark", "minimax"],
@@ -29,7 +30,7 @@ const PROBE_BY_GROUP: Record<string, string[]> = {
   本机依赖: ["python", "blender"],
 };
 
-const VIRTUAL = new Set(["开工板", "费用账单"]);
+const VIRTUAL = new Set(["外观", "开工板", "费用账单"]);
 
 type Props = { canWrite?: boolean; openId?: string; displayName?: string | null };
 
@@ -41,7 +42,7 @@ export function SettingsPage({ canWrite = true, openId = "", displayName = "" }:
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [restart, setRestart] = useState(false);
-  const [group, setGroup] = useState<string>("开工板");
+  const [group, setGroup] = useState<string>("外观");
   const [probes, setProbes] = useState<Record<string, ProbeResult | { pending: true }>>({});
   const [billing, setBilling] = useState<BillingView | null>(null);
   const [billBusy, setBillBusy] = useState(false);
@@ -102,6 +103,7 @@ export function SettingsPage({ canWrite = true, openId = "", displayName = "" }:
   const catalogGroup = view?.groups.find((g) => g.title === group);
   const menuItems = useMemo(() => {
     const extra = [
+      { key: "外观", label: "外观" },
       { key: "开工板", label: "开工板" },
       { key: "费用账单", label: "费用账单" },
     ];
@@ -254,6 +256,8 @@ export function SettingsPage({ canWrite = true, openId = "", displayName = "" }:
             ) : null}
           </div>
 
+          {group === "外观" ? <AppearancePane /> : null}
+
           {group === "开工板" ? (
             <HealthPane
               view={view}
@@ -302,12 +306,14 @@ export function SettingsPage({ canWrite = true, openId = "", displayName = "" }:
         </div>
       </div>
 
-      <footer className="settings-footer">
-        <Typography.Text type="secondary">保存后立即写入本机，部分项需重启。</Typography.Text>
-        <Button type="primary" onClick={() => void save()} loading={saving} disabled={!canWrite}>
-          保存
-        </Button>
-      </footer>
+      {group === "外观" ? null : (
+        <footer className="settings-footer">
+          <Typography.Text type="secondary">保存后立即写入本机，部分项需重启。</Typography.Text>
+          <Button type="primary" onClick={() => void save()} loading={saving} disabled={!canWrite}>
+            保存
+          </Button>
+        </footer>
+      )}
     </section>
   );
 }
@@ -340,6 +346,7 @@ function HealthPane({
       <div className="health-meta">
         <Typography.Paragraph type="secondary">
           当前登录：{displayName || "—"}
+          {openId ? " · 飞书身份" : ""}
           {openId ? ` · ${openId}` : " · 显示名登录没有 open_id"}
         </Typography.Paragraph>
         <Typography.Paragraph type="secondary">

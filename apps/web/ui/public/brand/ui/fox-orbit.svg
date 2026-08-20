@@ -1,0 +1,8 @@
+<svg preserveAspectRatio="none" overflow="visible" style="display: block;" width="200" height="200" viewBox="0 0 200 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g id="orbit">
+<path id="Vector" opacity="0.55" d="M112.274 125.166C154.964 104.345 184.075 76.199 177.296 62.3001C170.517 48.4012 130.415 54.0127 87.7256 74.8338C45.036 95.6549 15.9248 123.801 22.7037 137.7C29.4827 151.599 69.5848 145.987 112.274 125.166Z" stroke="#805898" stroke-width="2.6"/>
+<path id="Vector_2" opacity="0.35" d="M168 78C186 86 190 106 180 120" stroke="#805898" stroke-width="3" stroke-linecap="round"/>
+<path id="Vector_3" d="M178 93C181.866 93 185 89.866 185 86C185 82.134 181.866 79 178 79C174.134 79 171 82.134 171 86C171 89.866 174.134 93 178 93Z" fill="#805898"/>
+<path id="Vector_4" d="M178 89.2C179.767 89.2 181.2 87.7673 181.2 86C181.2 84.2327 179.767 82.8 178 82.8C176.233 82.8 174.8 84.2327 174.8 86C174.8 87.7673 176.233 89.2 178 89.2Z" fill="white"/>
+</g>
+</svg>

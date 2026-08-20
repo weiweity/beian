@@ -41,6 +41,17 @@ export function listJobs(): MockupJob[] {
   return [...jobs.values()].sort((a, b) => b.created_at.localeCompare(a.created_at));
 }
 
+/** JSON for the webpage: keep key/name, drop disk paths. */
+export function publicMockup(job: MockupJob) {
+  return {
+    id: job.id,
+    status: job.status,
+    error: job.error,
+    created_at: job.created_at,
+    files: job.files.map((f) => ({ key: f.key, name: f.name })),
+  };
+}
+
 export async function startMockup(opts: {
   id: string;
   sourcePath: string;
