@@ -58,6 +58,27 @@ export function TasksPage({ onCreate, onOpen }: Props) {
     };
   }, [submitted, reload]);
 
+  const live = rows.some(
+    (r) => r.board === "comparing" || r.job_status === "queued" || r.job_status === "running",
+  );
+
+  useEffect(() => {
+    if (!live) return;
+    let cancelled = false;
+    const id = window.setInterval(() => {
+      void api
+        .tasks(submitted || undefined)
+        .then((list) => {
+          if (!cancelled) setRows(list);
+        })
+        .catch(() => undefined);
+    }, 2500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [live, submitted]);
+
   const showSearch = Boolean(submitted) || rows.length > 0;
   const showBoard = shouldShowTaskBoard(rows.length, submitted);
   const board = useMemo(

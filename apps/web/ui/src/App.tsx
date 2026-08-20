@@ -53,6 +53,40 @@ function navOf(view: View): NavKey {
   return "review";
 }
 
+const TASK_DEEPLINK = /^[0-9a-f]{12}$/i;
+const TASK_STASH = "wb_open_task";
+
+function readTaskDeeplink(search: string): string | null {
+  const raw = new URLSearchParams(search).get("task") || "";
+  return TASK_DEEPLINK.test(raw) ? raw.toLowerCase() : null;
+}
+
+function stripTaskQuery(href: string): string {
+  const url = new URL(href);
+  url.searchParams.delete("task");
+  const qs = url.searchParams.toString();
+  return `${url.pathname}${qs ? `?${qs}` : ""}${url.hash}`;
+}
+
+function stashTaskDeeplink(tid: string) {
+  try {
+    sessionStorage.setItem(TASK_STASH, tid);
+  } catch {
+    /* ignore */
+  }
+}
+
+function takeStashedTask(): string | null {
+  try {
+    const raw = sessionStorage.getItem(TASK_STASH) || "";
+    if (!TASK_DEEPLINK.test(raw)) return null;
+    sessionStorage.removeItem(TASK_STASH);
+    return raw.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
 function readCollapsed() {
   try {
     return localStorage.getItem(SIDEBAR_KEY) === "1";
@@ -89,6 +123,8 @@ export function App() {
 
   useEffect(() => {
     const err = new URLSearchParams(window.location.search).get("feishu_error") || "";
+    const tid = readTaskDeeplink(window.location.search);
+    if (tid) stashTaskDeeplink(tid);
     if (err) {
       setAuthError(readAuthHint() || AUTH_FALLBACK[err] || "飞书授权未完成。");
       const url = new URL(window.location.href);
@@ -116,6 +152,23 @@ export function App() {
     }
     window.location.replace("/api/auth/feishu/login");
   }, [me, loggedIn, authError, apiBroken]);
+
+  useEffect(() => {
+    if (!loggedIn) return;
+    const fromUrl = readTaskDeeplink(window.location.search);
+    const tid = fromUrl || takeStashedTask();
+    if (!tid) return;
+    if (fromUrl) {
+      window.history.replaceState({}, "", stripTaskQuery(window.location.href));
+      try {
+        sessionStorage.removeItem(TASK_STASH);
+      } catch {
+        /* ignore */
+      }
+    }
+    setTaskId(tid);
+    setView("review");
+  }, [loggedIn]);
 
   function toggleSidebar() {
     setCollapsed((cur) => {

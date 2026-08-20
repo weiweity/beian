@@ -23,3 +23,13 @@ set WB_DEV_DISPLAY_LOGIN=false
 ```
 
 代码读取 `WB_DATA_DIR`。公网模式（`WB_PUBLIC=1`）若仍指向仓库内 `backend\data`，进程会拒绝启动。
+
+## 升到本版之前
+
+看板没有「对照中」再 pull / 重启。对照跑着时不要直接切版本。
+
+## 上线后手工冒烟
+
+1. 对照跑着时重启 Node：孤儿 Python 被杀掉，作业重新入队或变成「对照中断」。
+2. 已有任务 JSON 可以被替换（Windows 上目标文件已存在时 replace 成功）。
+3. 超时之后，任务管理器里没有第二条 python / blender。

@@ -54,6 +54,14 @@ export type AuthMethods = {
   public_base: string;
 };
 
+export type HealthView = {
+  ok?: boolean;
+  jobs?: unknown;
+  feishu_notify?: boolean;
+  version?: string;
+  runtime?: string;
+};
+
 export type TaskSummary = {
   id: string;
   title: string;
@@ -67,6 +75,15 @@ export type TaskSummary = {
   board?: "comparing" | "review" | "done";
   error?: string;
   round?: number;
+  job_kind?: string;
+  job_status?: string;
+  job_stage?: string;
+  job_stage_label?: string;
+  job_eta_s?: number;
+  job_error?: string;
+  job_started_at?: string;
+  job_finished_at?: string;
+  queue_ahead?: number;
 };
 
 export type FieldHit = {
@@ -117,6 +134,7 @@ export type Decision = "confirm" | "issue" | "ignore" | "pending";
 export const api = {
   me: () => request<Me>("/api/auth/me"),
   methods: () => request<AuthMethods>("/api/auth/methods"),
+  health: () => request<HealthView>("/api/health"),
   logout: () => request<{ ok: boolean }>("/api/auth/logout", { method: "POST" }),
   tasks: (q?: string) =>
     request<TaskSummary[]>(q ? `/api/tasks?q=${encodeURIComponent(q)}` : "/api/tasks"),
@@ -237,4 +255,13 @@ export type MockupJob = {
   error?: string;
   created_at?: string;
   files: { key: string; name: string }[];
+  job_kind?: string;
+  job_status?: string;
+  job_stage?: string;
+  job_stage_label?: string;
+  job_eta_s?: number;
+  job_error?: string;
+  job_started_at?: string;
+  job_finished_at?: string;
+  queue_ahead?: number;
 };

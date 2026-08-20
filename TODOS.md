@@ -37,3 +37,5 @@
 - [ ] SQLite / 异步通用队列
 - [ ] React 审稿台接 OpenSeadragon（若 8/31 冻结了换栈）
 - [ ] 飞书机器人收文件回报告（网页路径的备选）
+- [x] **打样 GET owner 校验**  
+  `list` / `get` / `files` 非 admin 只读自己的。已在 `feat/review-job-module`：`assertCanAccessMockup` + `listJobsFor`。

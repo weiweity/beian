@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.11.0.0] - 2026-08-20
+
+### Breaking
+
+- `python -m app.cli compare|rework` 不再 `save_task`；stdout 最后一行是结果 JSON；`STAGE` 打在 stderr。
+- 杭州：看板没有「对照中」再 pull / 重启。
+
+### Added / Changed
+
+- 上传 / 对红 / 打样入队后立即返回；WaitCard 轮询；作业终态飞书带 `?task=` 深链。
+- 一个 OCR 槽 + 一个 Blender 槽，队列写在任务 JSON 上。
+
 ## [0.10.2.0] - 2026-08-20
 
 ### Added

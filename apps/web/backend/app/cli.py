@@ -9,6 +9,14 @@ from pathlib import Path
 
 from app import main as m
 
+# 任务 JSON 只由 jobs.ts 写；成功时 stdout 最后一行是结果，失败走 _err。
+_CLI_DESCRIPTION = "对照 worker（python -m app.cli）。不是 HTTP，不写任务 JSON。"
+_CLI_EPILOG = """stderr: STAGE <name>
+stdout last line = result JSON (no ocr_text)
+do not call save_task；任务 JSON 只由 jobs.ts 写。
+unique HTTP is Hono :8787, not this CLI。
+打样 is NOT a subcommand; jobs.ts calls workers/packaging; HTTP is /api/mockups。"""
+
 
 def _ok(payload: dict) -> int:
     print(json.dumps(payload, ensure_ascii=False))
@@ -18,6 +26,12 @@ def _ok(payload: dict) -> int:
 def _err(msg: str, code: int = 2) -> int:
     print(json.dumps({"ok": False, "error": msg}, ensure_ascii=False), file=sys.stderr)
     return code
+
+
+def _result(payload: dict) -> int:
+    body = {k: v for k, v in payload.items() if k != "ocr_text"}
+    print(json.dumps(body, ensure_ascii=False))
+    return 0
 
 
 def cmd_probe(args: argparse.Namespace) -> int:
@@ -89,8 +103,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
     task.setdefault("audit", []).append(
         {"at": m.now_iso(), "actor": args.actor or "", "action": "create", "via": "ts-cli"}
     )
-    m.save_task(task)
-    return _ok({"ok": True, "id": tid, "status": task.get("status")})
+    return _result(task)
 
 
 def cmd_rework(args: argparse.Namespace) -> int:
@@ -103,7 +116,8 @@ def cmd_rework(args: argparse.Namespace) -> int:
         return _err("新 PDF 不存在")
     dest = m.UPLOADS / tid / "artwork_v2.pdf"
     dest.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(pdf, dest)
+    if pdf.resolve() != dest.resolve():
+        shutil.copy2(pdf, dest)
     excel = m.UPLOADS / tid / "source.xlsx"
     if not excel.is_file():
         return _err("找不到原 Excel")
@@ -150,15 +164,19 @@ def cmd_rework(args: argparse.Namespace) -> int:
     task.setdefault("audit", []).append(
         {"at": m.now_iso(), "actor": args.actor or "", "action": "rework_v2"}
     )
-    m.save_task(task)
-    return _ok({"ok": True, "id": tid, "round": 2, "checks": len(rematch)})
+    return _result(task)
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(prog="beian-review-worker")
+    p = argparse.ArgumentParser(
+        prog="beian-review-worker",
+        description=_CLI_DESCRIPTION,
+        epilog=_CLI_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    c = sub.add_parser("compare")
+    c = sub.add_parser("compare", help="Excel↔PDF 对照；stdout 最后一行结果 JSON")
     c.add_argument("--tid", required=True)
     c.add_argument("--excel", required=True)
     c.add_argument("--pdf", required=True)
@@ -169,7 +187,7 @@ def main() -> int:
     c.add_argument("--actor", default="")
     c.add_argument("--data-dir", default="")
 
-    r = sub.add_parser("rework")
+    r = sub.add_parser("rework", help="对红第二轮 PDF；stdout 最后一行结果 JSON")
     r.add_argument("--tid", required=True)
     r.add_argument("--pdf", required=True)
     r.add_argument("--max-pages", default="2")

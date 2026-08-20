@@ -28,6 +28,31 @@
 - 入口：开发口 `:5173`（Vite 听本机网卡，`/api` 反代到 8787）；产品/验收入口 `:8787`。不要再加第三个 HTTP 入口。
 - 旧 `apps/web/frontend/` 已退役，不要再往里面加功能。
 
+## 加长作业（对照 / 对红 / 打样）
+
+对照 / 对红 / 打样共用作业合同。确认合同不必启动产品。
+
+0. 不启动产品、先核对 CLI 合同：
+
+```bash
+cd apps/web/backend && PYTHONPATH=. .venv/bin/python -m app.cli --help
+```
+
+禁止：`uvicorn`、新 FastAPI 路由、把 `m.save_task` 抄回 CLI。产品入口仍是 `./scripts/dev-start.sh` → Hono `:8787`。
+
+1. CLI 在 `apps/web/backend/app/cli.py`。stderr 打 `STAGE <name>`。stdout 最后一行是结果 JSON（不要 `ocr_text`）。不要 `save_task`。
+   打样不是 `app.cli` 子命令；`jobs.ts` 调 `workers/packaging`；HTTP 仍是 `/api/mockups`。
+
+2. 第一次 queued 落盘之后，只有 `apps/web/server/src/jobs.ts` 再写任务文件。`enqueue(kind, id)`。路由只 save queued 一次，之后这个 tid 归 `jobs.ts`。
+
+3. Hono 动作立即返回。没有 `/api/jobs` 资源。
+
+4. 测试：抄 `jobs.test.ts` 的对照块。必写断言：第二单 queued、GET 无 `job_pid`、没有最后一行 JSON →「对照中断」、对红失败仍可签字。pytest：CLI 不 `save_task`；`--help` 含 `STAGE` / `save_task` / `packaging`。
+
+5. UI 等待：`shouldShowWaitCard`（`queued` | `running` | `comparing`）。
+
+调试：对外 `job_error` 用短中文。Node 日志写 problem + cause + fix。打开 `DATA_DIR/tasks/{tid}.json`。不要新 FastAPI 路由。
+
 ## Skill routing
 
 When the user's request matches an available skill, invoke it via the Skill tool. When in doubt, invoke the skill.

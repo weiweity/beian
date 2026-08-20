@@ -12,6 +12,7 @@ process.env.WB_PORT = "0";
 const { app } = await import("./index.js");
 const { issueSession } = await import("./auth.js");
 const { saveTask } = await import("./tasks.js");
+const { resetJobsTestHooks, setJobsTestHooks } = await import("./jobs.js");
 
 type SeedHit = {
   id?: string;
@@ -351,5 +352,151 @@ describe("review http", () => {
     assert.equal(body.status, "in_review");
     assert.equal(body.hits?.[0]?.decision, "confirm");
     assert.equal(body.hits?.[0]?.note, "看过了");
+  });
+
+  it("GET task hides job_pid from the client", async () => {
+    saveTask({
+      id: "121212121212",
+      title: "排队",
+      product_name: "排队",
+      type: "excel_pdf",
+      status: "comparing",
+      owner: "刘籽烨",
+      job_kind: "compare",
+      job_status: "running",
+      job_pid: 4242,
+    });
+    const res = await app.request("/api/tasks/121212121212", { headers: authHeader() });
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as Record<string, unknown>;
+    assert.equal("job_pid" in body, false);
+    assert.equal(body.job_status, "running");
+  });
+
+  it("decision is owner-scoped for reviewers", async () => {
+    saveTask({
+      id: "151515151515",
+      title: "别人的点",
+      product_name: "别人的点",
+      type: "excel_pdf",
+      status: "pending_review",
+      owner: "刘籽烨",
+      hits: [{ id: "h1", field: "净含量", status: "疑点", decision: "pending" }],
+    });
+    const other = issueSession("路人", "reviewer", "ou_other_decision", "feishu");
+    const res = await app.request("/api/tasks/151515151515/decision", {
+      method: "POST",
+      headers: { authorization: `Bearer ${other.token}`, "content-type": "application/json" },
+      body: JSON.stringify({ hit_id: "h1", decision: "confirm" }),
+    });
+    assert.equal(res.status, 403);
+  });
+
+  it("pages are owner-scoped for reviewers", async () => {
+    saveTask({
+      id: "161616161616",
+      title: "别人的页",
+      product_name: "别人的页",
+      type: "excel_pdf",
+      status: "pending_review",
+      owner: "刘籽烨",
+    });
+    const other = issueSession("路人", "reviewer", "ou_other_pages", "feishu");
+    const res = await app.request("/api/tasks/161616161616/pages/page_01.png", {
+      headers: { authorization: `Bearer ${other.token}` },
+    });
+    assert.equal(res.status, 403);
+  });
+
+  it("rework is owner-scoped for reviewers", async () => {
+    saveTask({
+      id: "171717171717",
+      title: "别人的对红",
+      product_name: "别人的对红",
+      type: "excel_pdf",
+      status: "pending_review",
+      owner: "刘籽烨",
+      hits: [{ id: "h1", field: "净含量", status: "疑点", decision: "issue" }],
+    });
+    const other = issueSession("路人", "reviewer", "ou_other_rework", "feishu");
+    const fd = new FormData();
+    fd.set("pdf", new File([Buffer.from("%PDF-1.4\n")], "v2.pdf", { type: "application/pdf" }));
+    const res = await app.request("/api/tasks/171717171717/rework", {
+      method: "POST",
+      headers: { authorization: `Bearer ${other.token}` },
+      body: fd,
+    });
+    assert.equal(res.status, 403);
+  });
+
+  it("complete is owner-scoped for reviewers", async () => {
+    saveTask({
+      id: "141414141414",
+      title: "别人的签",
+      product_name: "别人的签",
+      type: "excel_pdf",
+      status: "pending_review",
+      owner: "刘籽烨",
+      hits: [{ id: "h1", field: "净含量", status: "一致", decision: "confirm" }],
+    });
+    const other = issueSession("路人", "reviewer", "ou_other_complete", "feishu");
+    const res = await app.request("/api/tasks/141414141414/complete", {
+      method: "POST",
+      headers: { ...{ authorization: `Bearer ${other.token}` }, "content-type": "application/json" },
+      body: JSON.stringify({ conclusion: "偷签" }),
+    });
+    assert.equal(res.status, 403);
+  });
+
+  it("GET task is owner-scoped for reviewers", async () => {
+    saveTask({
+      id: "131313131313",
+      title: "别人的",
+      product_name: "别人的",
+      type: "excel_pdf",
+      status: "pending_review",
+      owner: "刘籽烨",
+    });
+    const other = issueSession("路人", "reviewer", "ou_other_owner", "feishu");
+    const res = await app.request("/api/tasks/131313131313", {
+      headers: { authorization: `Bearer ${other.token}` },
+    });
+    assert.equal(res.status, 403);
+  });
+
+  it("health includes job queue snapshot", async () => {
+    const res = await app.request("/api/health");
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as { version?: string; jobs?: { ocr?: { running: number; queued: number } } };
+    assert.equal(body.version, "0.11.0.0");
+    assert.equal(typeof body.jobs?.ocr?.running, "number");
+    assert.equal(typeof body.jobs?.ocr?.queued, "number");
+  });
+
+  it("upload returns comparing before the worker finishes", async () => {
+    setJobsTestHooks({
+      runCompare: () => new Promise(() => {
+        /* hang until process exit; slot is occupied on purpose */
+      }),
+    });
+    try {
+      const fd = new FormData();
+      fd.set("product_name", "挂机精华");
+      fd.set("title", "挂机精华");
+      fd.set("pack_surface", "carton");
+      fd.set("excel", new File([Buffer.from([0x50, 0x4b, 0x03, 0x04])], "a.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
+      fd.set("pdf", new File([Buffer.from("%PDF-1.4\n")], "a.pdf", { type: "application/pdf" }));
+      const started = Date.now();
+      const res = await app.request("/api/tasks/upload", { method: "POST", headers: authHeader(), body: fd });
+      const elapsed = Date.now() - started;
+      assert.equal(res.status, 200);
+      assert.ok(elapsed < 2000, `upload waited ${elapsed}ms`);
+      const body = (await res.json()) as { status?: string; job_status?: string; job_pid?: number };
+      assert.equal(body.status, "comparing");
+      assert.ok(body.job_status === "queued" || body.job_status === "running");
+      assert.equal("job_pid" in body, false);
+    } finally {
+      resetJobsTestHooks();
+    }
   });
 });

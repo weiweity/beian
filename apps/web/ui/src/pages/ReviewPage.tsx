@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Alert, App, Button, Empty, Input, Space, Tag } from "antd";
 import { api, type Decision, type FieldHit, type TaskDetail, type TaskPage } from "../api";
 import { WaitCard } from "../chrome/WaitCard";
+import { shouldShowWaitCard } from "./waitCard";
 
 type Props = {
   taskId: string | null;
@@ -109,13 +110,35 @@ export function ReviewPage({ taskId, onBack }: Props) {
     };
   }, [taskId]);
 
+  const waiting = shouldShowWaitCard(task);
+
   useEffect(() => {
-    if (!taskId || task?.status !== "comparing") return;
+    if (!taskId || !waiting) return;
     const id = window.setInterval(() => {
-      void api.task(taskId).then(setTask).catch(() => undefined);
+      void api
+        .task(taskId)
+        .then((next) => {
+          setTask(next);
+          if (shouldShowWaitCard(next)) return;
+          const seed: Record<string, string> = {};
+          for (const h of [...(next.hits || []), ...(next.hits_v2 || [])]) {
+            if (h.id && h.note) seed[h.id] = h.note;
+          }
+          if (Object.keys(seed).length) setNotes((prev) => ({ ...seed, ...prev }));
+          if (next.conclusion) setConclusion((cur) => cur || next.conclusion || "");
+          if (next.job_kind !== "rework" || next.job_status === "failed") return;
+          if (
+            (Array.isArray(next.hits_v2) && next.hits_v2.length > 0) ||
+            (Array.isArray(next.pages_v2) && next.pages_v2.length > 0)
+          ) {
+            setUseV2(true);
+          }
+          message.success("已对照第二份 PDF。请核对上一轮有错的字段。");
+        })
+        .catch(() => undefined);
     }, 2500);
     return () => window.clearInterval(id);
-  }, [taskId, task?.status]);
+  }, [taskId, waiting]);
 
   const hits = (useV2 ? task?.hits_v2 : task?.hits) || [];
   const pages = pageList(useV2 ? { ...(task as TaskDetail), pages: task?.pages_v2 } : task);
@@ -179,6 +202,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
     try {
       const next = await api.rework(task.id, fd);
       setTask(next);
+      if (shouldShowWaitCard(next)) return;
       setUseV2(true);
       message.success("已对照第二份 PDF。请核对上一轮有错的字段。");
     } catch (err) {
@@ -210,7 +234,17 @@ export function ReviewPage({ taskId, onBack }: Props) {
   }
 
   if (!task && !error) return <WaitCard job="对照" />;
-  if (task?.status === "comparing") return <WaitCard job="对照" />;
+  if (waiting && task) {
+    return (
+      <WaitCard
+        job={task.job_kind === "rework" ? "对红" : "对照"}
+        jobStatus={task.job_status}
+        queueAhead={task.queue_ahead}
+        stageLabel={task.job_stage_label}
+        etaS={task.job_eta_s}
+      />
+    );
+  }
 
   return (
     <section>
@@ -270,7 +304,9 @@ export function ReviewPage({ taskId, onBack }: Props) {
       </header>
 
       {error ? <Alert type="error" title={error} style={{ marginBottom: 16 }} /> : null}
-      {task?.error ? <Alert type="error" showIcon style={{ marginBottom: 16 }} title={task.error} /> : null}
+      {task?.error || task?.job_error ? (
+        <Alert type="error" showIcon style={{ marginBottom: 16 }} title={task.error || task.job_error} />
+      ) : null}
       {task && reviewable && hits.length === 0 ? (
         <Alert type="info" showIcon style={{ marginBottom: 16 }} title="机审没标出疑点，仍要你过一遍" />
       ) : null}

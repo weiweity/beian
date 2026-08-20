@@ -30,7 +30,7 @@ HTTP 是 TypeScript。对照规则和 Blender 仍是 Python。见 `docs/adr-002-
 | `docs/designs/` | 对红循环、两张台 |
 | `CHANGELOG.md` | 已发布版本 |
 | `TODOS.md` | 未做项 |
-| `AGENTS.md` | 给代理的硬约束 |
+| `AGENTS.md` | 给代理的硬约束、加长作业合同（CLI `--help` / 禁止新 FastAPI 路由） |
 | `scripts/windows/README.md` | 杭州 Windows 生产备忘 |
 
 ## 本机启动
