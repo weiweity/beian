@@ -32,7 +32,7 @@ import {
   type Role,
   type Session,
 } from "./auth.js";
-import { fileOf, getJob, listJobs, startMockup } from "./mockup.js";
+import { fileOf, getJob, listJobs, publicMockup, startMockup } from "./mockup.js";
 import {
   activeHits,
   assertTid,
@@ -419,15 +419,7 @@ app.post("/api/settings/billing/refresh", async (c) => {
 
 app.get("/api/mockups", (c) => {
   need(c, "read");
-  return c.json(
-    listJobs().map((job) => ({
-      id: job.id,
-      status: job.status,
-      error: job.error,
-      created_at: job.created_at,
-      files: job.files.map((f) => ({ key: f.key, name: f.name })),
-    })),
-  );
+  return c.json(listJobs().map(publicMockup));
 });
 
 app.post("/api/mockups", async (c) => {

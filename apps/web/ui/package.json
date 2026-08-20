@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "test": "tsx --test src/authGate.test.ts",
+    "test": "tsx --test src/authGate.test.ts src/chrome/nav.test.ts",
     "preview": "vite preview"
   },
   "engines": {

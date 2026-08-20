@@ -1,13 +1,7 @@
 import { Dropdown } from "antd";
+import { SIDE_NAV, type NavKey } from "./nav";
 
-export type NavKey = "review" | "mockup" | "history" | "settings";
-
-const NAV: { key: NavKey; label: string; icon: string }[] = [
-  { key: "review", label: "审稿台", icon: "/brand/ui/nav-review.svg" },
-  { key: "mockup", label: "打样台", icon: "/brand/ui/nav-mockup.svg" },
-  { key: "history", label: "历史记录", icon: "/brand/ui/nav-history.svg" },
-  { key: "settings", label: "设置", icon: "/brand/ui/nav-settings.svg" },
-];
+export type { NavKey };
 
 type Props = {
   collapsed: boolean;
@@ -57,7 +51,7 @@ export function Sidebar({
       )}
 
       <nav className="side-nav">
-        {NAV.map((item) => {
+        {SIDE_NAV.map((item) => {
           const on = item.key === active;
           return (
             <button
