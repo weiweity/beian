@@ -45,9 +45,10 @@ When the user's request matches an available skill, invoke it via the Skill tool
 
 - Figma：https://www.figma.com/design/BL3PGUjLGLPb9iUZMzRhD6 （`Web · 锁定稿`。iPad 页是探索，不是实现依据。）
 - Ant Design 6 只当零件箱。`colorPrimary` = `#805898`，不要默认蓝，不要旧主色 `#722ED1`。
-- 左侧玻璃侧栏切「审稿台 / 打样台 / 历史记录 / 设置」。展开 280px，折叠 76px。不要飞书顶栏。
+- 左侧玻璃侧栏切「审稿台 / 打样台 / 历史记录 / 设置」。展开 280px，折叠 76px。不要飞书顶栏。页底淡紫雾，主区独立淡白板块。
 - 侧栏顶用 `apps/web/ui/public/brand/logo-mark.png`。折叠时悬停变成展开按钮（同一 44pt）。完整 `shine-mage.png` 只放拒绝页。
-- 左下角飞书头像 + `花名（真名）`，例如 `天元（魏炜）`。
+- 左下角飞书头像 36px + `花名（真名）` 15px，例如 `天元（魏炜）`。
+- 空审核单不画三栏。设置里有「外观」：主题、13–28px 字号（可手写）、半透明侧栏、侧栏雾面对比度滑条、差异标记。只写 `localStorage`。深色走品牌紫雾，不是灰黑中台。
 - 审稿：专属核对页，左画布 + 编号钉，右一对一检视。结论由人写。禁止「AI 已过审」。
 - 历史记录是侧栏 tab，不是第三张台。
 - 打样台 8/31 不对业务开放。QA 时标出任何与 `DESIGN.md` 不符的实现。
@@ -55,7 +56,7 @@ When the user's request matches an available skill, invoke it via the Skill tool
 ## Testing
 
 - 服务端：`npm run test -w beian-server`（`node:test`，`apps/web/server/src/*.test.ts`）
-- 界面：`npm run test -w beian-ui`（`node:test`，现覆盖 `apps/web/ui/src/authGate.test.ts`）
+- 界面：`npm run test -w beian-ui`（`node:test`，`authGate` / `nav` / `appearance` / `tasksBoard`）
 - 对照 worker：`cd apps/web/backend && .venv/bin/python -m pytest -q`
 - 全量：仓库根目录 `npm test`（server + ui + pytest）
 - 类型：`npm run typecheck -w beian-server` 与 `npm run build -w beian-ui`
