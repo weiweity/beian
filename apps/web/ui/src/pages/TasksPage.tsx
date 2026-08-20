@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Button, Empty, Input, Segmented, Space, Table, Tag, Typography } from "antd";
+import { Alert, Button, Empty, Input, Segmented, Space, Table, Tag } from "antd";
 import { api, ApiError, type TaskSummary } from "../api";
 
 type Props = {
@@ -71,12 +71,8 @@ export function TasksPage({ onCreate, onOpen }: Props) {
     <section>
       <div className="desk-head">
         <div>
-          <Typography.Title level={3} style={{ margin: 0 }}>
-            审核单
-          </Typography.Title>
-          <Typography.Paragraph type="secondary" style={{ margin: "4px 0 0" }}>
-            待签在上。机审只标疑点，结论由你来写。
-          </Typography.Paragraph>
+          <h1 className="page-title">审核单</h1>
+          <p className="page-lead">待签在上。机审只标疑点，结论由你来写。</p>
         </div>
         <Space wrap>
           {showSearch ? (

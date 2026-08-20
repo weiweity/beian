@@ -25,7 +25,7 @@ cd ui && npm run dev
 
 ## 密钥
 
-优先点右上角姓名 →「设置」。也可以：
+优先点侧栏「设置」。也可以：
 
 ```bash
 cp backend/.env.baidu.example backend/.env.baidu
@@ -38,7 +38,7 @@ chmod 600 backend/.env.baidu backend/.env.secrets
 ## 结构
 
 ```text
-ui/          React 审稿台 / 打样台 / 设置
+ui/          React 审稿台 / 打样台 / 历史 / 设置
 server/      TypeScript HTTP
 backend/     Python worker + 测试
 frontend/    退役

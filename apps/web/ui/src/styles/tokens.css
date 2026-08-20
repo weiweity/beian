@@ -17,22 +17,34 @@
 }
 
 :root {
-  --bg: #f5f6f8;
+  --bg: #f8f5fa;
   --surface: #ffffff;
-  --ink: #1f2329;
-  --muted: #646a73;
-  --line: #dee0e3;
-  --focus: #722ed1;
-  --accent: #722ed1;
-  --accent-soft: #f9f0ff;
-  --pin: #7b61ff;
+  --ink: #1c1a1f;
+  --muted: #6b6572;
+  --line: #e7e2ec;
+  --focus: #805898;
+  --accent: #805898;
+  --accent-soft: #f6f1f8;
+  --accent-mist: #ede7f1;
+  --hover-gray: #e2e2e8;
+  --pin: #805898;
   --ok: #389e0d;
   --warn: #d48806;
   --danger: #f5222d;
-  --radius: 8px;
-  --font-body: "Alibaba PuHuiTi", "PingFang SC", "Hiragino Sans GB",
-    "Microsoft YaHei UI", "Noto Sans SC", sans-serif;
+  --feishu: #3370ff;
+  --glass: rgba(255, 255, 255, 0.58);
+  --glass-strong: rgba(255, 255, 255, 0.88);
+  --radius: 16px;
+  --radius-nav: 12px;
+  --radius-well: 22px;
+  --radius-pane: 26px;
+  --radius-side: 28px;
+  --sidebar: 280px;
+  --sidebar-collapsed: 76px;
+  --font-body: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI",
+    "Noto Sans SC", "Alibaba PuHuiTi", sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  --ease-gentle: cubic-bezier(0.32, 0.72, 0, 1);
 }
 
 *,

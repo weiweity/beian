@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, App, Button, Empty, Input, Space, Tag, Typography } from "antd";
+import { Alert, App, Button, Empty, Input, Space, Tag } from "antd";
 import { api, type Decision, type FieldHit, type TaskDetail, type TaskPage } from "../api";
+import { WaitCard } from "../chrome/WaitCard";
 
 type Props = {
   taskId: string | null;
@@ -66,6 +67,14 @@ function buildList(productName: string, hits: FieldHit[]) {
   return { text: lines.join("\n"), count: issues.length };
 }
 
+function statusLead(task: TaskDetail | null, pageIdx: number, pages: TaskPage[]) {
+  const pageNo = pages[pageIdx]?.page || pageIdx + 1;
+  if (!task) return "核对页";
+  if (task.status === "completed") return `核对页 · 第 ${pageNo} 页 · 已签字`;
+  if (isReviewable(task.status)) return `核对页 · 点字段，图上定位。第 ${pageNo} 页 · 待她判`;
+  return `核对页 · 第 ${pageNo} 页`;
+}
+
 export function ReviewPage({ taskId, onBack }: Props) {
   const { message } = App.useApp();
   const [task, setTask] = useState<TaskDetail | null>(null);
@@ -100,12 +109,21 @@ export function ReviewPage({ taskId, onBack }: Props) {
     };
   }, [taskId]);
 
+  useEffect(() => {
+    if (!taskId || task?.status !== "comparing") return;
+    const id = window.setInterval(() => {
+      void api.task(taskId).then(setTask).catch(() => undefined);
+    }, 2500);
+    return () => window.clearInterval(id);
+  }, [taskId, task?.status]);
+
   const hits = (useV2 ? task?.hits_v2 : task?.hits) || [];
   const pages = pageList(useV2 ? { ...(task as TaskDetail), pages: task?.pages_v2 } : task);
   const page = pages[pageIdx];
   const signed = task?.status === "completed";
   const reviewable = isReviewable(task?.status);
   const reworkable = isReworkable(task);
+  const current = hits[active];
 
   const pinHits = useMemo(() => {
     return hits
@@ -184,62 +202,84 @@ export function ReviewPage({ taskId, onBack }: Props) {
     }
   }
 
+  function pickHit(i: number) {
+    setActive(i);
+    const p = Number(hits[i]?.page || 0);
+    const idx = pages.findIndex((pg) => Number(pg.page) === p);
+    if (idx >= 0) setPageIdx(idx);
+  }
+
+  if (!task && !error) return <WaitCard job="对照" />;
+  if (task?.status === "comparing") return <WaitCard job="对照" />;
+
   return (
     <section>
-      <Space style={{ marginBottom: 12 }} wrap>
-        <Button onClick={onBack}>返回列表</Button>
-        {Array.isArray(task?.pages_v2) && task.pages_v2.length > 0 ? (
-          <Button type={useV2 ? "primary" : "default"} onClick={() => setUseV2((v) => !v)}>
-            {useV2 ? "看这一版" : "看上一版"}
-          </Button>
-        ) : (
-          <Button
-            disabled={!reworkable || busy}
-            onClick={() => {
-              const input = document.createElement("input");
-              input.type = "file";
-              input.accept = ".pdf";
-              input.onchange = () => {
-                const f = input.files?.[0];
-                if (f) void uploadRework(f);
-              };
-              input.click();
-            }}
+      <header className="page-head">
+        <div>
+          <h1 className="page-title">{task?.product_name || task?.title || "核对页"}</h1>
+          <p className="page-lead">{statusLead(task, pageIdx, pages)}</p>
+        </div>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          <button type="button" className="btn-ghost" onClick={onBack}>
+            返回列表
+          </button>
+          {Array.isArray(task?.pages_v2) && task.pages_v2.length > 0 ? (
+            <button type="button" className="btn-ghost" onClick={() => setUseV2((v) => !v)}>
+              {useV2 ? "看这一版" : "看上一版"}
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="btn-ghost"
+              disabled={!reworkable || busy}
+              onClick={() => {
+                const input = document.createElement("input");
+                input.type = "file";
+                input.accept = ".pdf";
+                input.onchange = () => {
+                  const f = input.files?.[0];
+                  if (f) void uploadRework(f);
+                };
+                input.click();
+              }}
+            >
+              上传改稿 PDF
+            </button>
+          )}
+          {pages.length > 1
+            ? pages.map((p, i) => (
+                <button
+                  key={p.url || i}
+                  type="button"
+                  className={i === pageIdx ? "btn-primary" : "btn-ghost"}
+                  onClick={() => setPageIdx(i)}
+                >
+                  第 {p.page || i + 1} 页
+                </button>
+              ))
+            : null}
+          <button
+            type="button"
+            className="btn-primary"
+            disabled={!reviewable || busy}
+            onClick={() => void signOff()}
           >
-            上传改稿 PDF（对红）
-          </Button>
-        )}
-        {pages.length > 1
-          ? pages.map((p, i) => (
-              <Button key={p.url || i} type={i === pageIdx ? "primary" : "default"} onClick={() => setPageIdx(i)}>
-                第 {p.page || i + 1} 页
-              </Button>
-            ))
-          : null}
-      </Space>
-      <Typography.Title level={3} style={{ marginTop: 0 }}>
-        {task?.product_name || task?.title || "审核"}
-      </Typography.Title>
+            {hits.some((h) => h.decision === "issue") ? "签字并待设计改稿" : "签字"}
+          </button>
+        </div>
+      </header>
+
       {error ? <Alert type="error" title={error} style={{ marginBottom: 16 }} /> : null}
-      {!task ? <Typography.Paragraph>正在对照，请稍候</Typography.Paragraph> : null}
       {task?.error ? <Alert type="error" showIcon style={{ marginBottom: 16 }} title={task.error} /> : null}
-      {task && task.status === "comparing" ? (
-        <Alert type="info" showIcon style={{ marginBottom: 16 }} title="正在对照，请稍候" />
-      ) : null}
       {task && reviewable && hits.length === 0 ? (
-        <Alert
-          type="info"
-          showIcon
-          style={{ marginBottom: 16 }}
-          title="机审没标出疑点，仍要你过一遍"
-        />
+        <Alert type="info" showIcon style={{ marginBottom: 16 }} title="机审没标出疑点，仍要你过一遍" />
       ) : null}
       {signed ? (
         <Alert type="success" showIcon style={{ marginBottom: 16 }} title="已签字，不是系统过审" />
       ) : null}
 
       <div className="review-desk">
-        <div className="canvas">
+        <div className="canvas glass-pane">
           {page?.url ? (
             <div style={{ position: "relative" }}>
               <img src={page.url} alt="" />
@@ -252,13 +292,13 @@ export function ReviewPage({ taskId, onBack }: Props) {
                   <button
                     key={h.id || i}
                     type="button"
-                    className={i === active ? "pin is-on" : "pin"}
+                    className={i === active ? "pin is-on" : "pin is-dim"}
                     style={
                       hasBox
                         ? { left: boxLeft(box, w), top: boxTop(box, ht) }
                         : { left: `${12 + (i % 8) * 28}px`, top: "12px" }
                     }
-                    onClick={() => setActive(i)}
+                    onClick={() => pickHit(i)}
                   >
                     {i + 1}
                   </button>
@@ -268,62 +308,86 @@ export function ReviewPage({ taskId, onBack }: Props) {
           ) : (
             <Empty description="这一页还没有图" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ padding: 48 }} />
           )}
+          <p className="page-lead" style={{ padding: "0 16px 12px" }}>
+            紫框 已命中 · 黄框 待核对 · 点右侧字段，图上跟到这一条
+          </p>
         </div>
 
-        <aside className="notes">
-          <Typography.Title level={5}>疑点</Typography.Title>
-          {hits.length === 0 ? (
-            <Typography.Paragraph type="secondary">没有机审条目。仍请翻页看一遍。</Typography.Paragraph>
-          ) : (
-            hits.map((h, i) => (
-              <div
-                key={h.id || i}
-                className={i === active ? "hit-card is-on" : "hit-card"}
-                onClick={() => {
-                  setActive(i);
-                  const p = Number(h.page || 0);
-                  const idx = pages.findIndex((pg) => Number(pg.page) === p);
-                  if (idx >= 0) setPageIdx(idx);
-                }}
-              >
-                <Space wrap>
-                  <strong>{i + 1}. {h.field || "字段"}</strong>
-                  {statusTag(h.status)}
-                  {h.decision && h.decision !== "pending" ? <Tag>{h.decision}</Tag> : null}
-                </Space>
-                <div className="mono">Excel：{excelText(h)}</div>
-                <div className="mono">稿上：{pdfText(h)}</div>
-                <Typography.Text type="secondary">第 {h.page ?? "?"} 页</Typography.Text>
-                <Input
-                  style={{ marginTop: 8 }}
-                  placeholder="给你自己看的话，会进改稿清单"
-                  value={h.id ? notes[h.id] || "" : ""}
-                  disabled={!reviewable || !h.id}
-                  onChange={(e) => {
-                    if (!h.id) return;
-                    setNotes((prev) => ({ ...prev, [h.id as string]: e.target.value }));
-                  }}
-                />
-                {reviewable && h.id ? (
-                  <Space style={{ marginTop: 8 }} wrap>
-                    <Button size="small" onClick={() => void decide(h, "confirm")}>
-                      一致
-                    </Button>
-                    <Button size="small" danger onClick={() => void decide(h, "issue")}>
-                      有错
-                    </Button>
-                    <Button size="small" onClick={() => void decide(h, "ignore")}>
-                      忽略
-                    </Button>
-                  </Space>
-                ) : null}
+        <aside className="notes glass-pane">
+          <p className="field-label" style={{ color: "var(--muted)", margin: 0 }}>
+            当前字段
+          </p>
+          {current ? (
+            <>
+              <div className="hit-now">
+                <strong style={{ fontSize: 18 }}>
+                  {active + 1} · {current.field || "字段"}
+                </strong>
+                {statusTag(current.status)}
               </div>
-            ))
+              <div className="pair">
+                <p className="pair-k">Excel 应印</p>
+                <p className="pair-v mono">{excelText(current)}</p>
+              </div>
+              <div className="pair">
+                <p className="pair-k">稿上 OCR</p>
+                <p className="pair-v mono">{pdfText(current)}</p>
+              </div>
+              <p className="pair-k">包装定位 · 页 {current.page ?? "?"} · 点定位</p>
+              {reviewable && current.id ? (
+                <Space wrap>
+                  <Button size="small" onClick={() => void decide(current, "confirm")}>
+                    一致
+                  </Button>
+                  <Button size="small" danger onClick={() => void decide(current, "issue")}>
+                    有错
+                  </Button>
+                  <Button size="small" onClick={() => void decide(current, "ignore")}>
+                    忽略
+                  </Button>
+                  <Button size="small" onClick={() => void copyList()}>
+                    复制改稿清单
+                  </Button>
+                </Space>
+              ) : (
+                <Button size="small" onClick={() => void copyList()}>
+                  复制改稿清单
+                </Button>
+              )}
+              <Input
+                placeholder="给你自己看的话，会进改稿清单"
+                value={current.id ? notes[current.id] || "" : ""}
+                disabled={!reviewable || !current.id}
+                onChange={(e) => {
+                  if (!current.id) return;
+                  setNotes((prev) => ({ ...prev, [current.id as string]: e.target.value }));
+                }}
+              />
+            </>
+          ) : (
+            <p className="page-lead">没有机审条目。仍请翻页看一遍。</p>
           )}
+
+          <p className="field-label" style={{ margin: "8px 0 0" }}>
+            疑点列表
+          </p>
+          {hits.map((h, i) => (
+            <button
+              key={h.id || i}
+              type="button"
+              className={i === active ? "hit-card is-on" : "hit-card"}
+              onClick={() => pickHit(i)}
+            >
+              <div className="hit-now">
+                <strong>{h.field || "字段"}</strong>
+                {statusTag(h.status)}
+              </div>
+            </button>
+          ))}
 
           {task?.rework_check && task.rework_check.length > 0 ? (
             <>
-              <Typography.Title level={5}>对红</Typography.Title>
+              <p className="field-label">对红</p>
               {task.rework_check.map((row) => (
                 <div key={row.field} className="hit-card">
                   <strong>{row.field}</strong>
@@ -334,9 +398,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
             </>
           ) : null}
 
-          <Typography.Title level={5} style={{ marginTop: 16 }}>
-            写下结论
-          </Typography.Title>
+          <p className="field-label">写下结论</p>
           <Input.TextArea
             rows={3}
             value={conclusion}
@@ -344,12 +406,6 @@ export function ReviewPage({ taskId, onBack }: Props) {
             onChange={(e) => setConclusion(e.target.value)}
             placeholder="人话结论，不是系统过审"
           />
-          <Space style={{ marginTop: 12 }} wrap>
-            <Button onClick={() => void copyList()}>复制改稿清单</Button>
-            <Button type="primary" loading={busy} disabled={!reviewable} onClick={() => void signOff()}>
-              {hits.some((h) => h.decision === "issue") ? "签字并待设计改稿" : "签字"}
-            </Button>
-          </Space>
         </aside>
       </div>
     </section>

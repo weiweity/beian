@@ -19,9 +19,26 @@ export type Session = {
   role: Role;
   open_id: string;
   source: string;
+  avatar_url: string;
   created_at: number;
   expires_at: number;
 };
+
+export type FeishuIdent = {
+  open_id: string;
+  name: string;
+  nickname: string;
+  avatar_url: string;
+  tenant_key: string;
+};
+
+/** 花名（真名）。只有一个名字时不套括号。 */
+export function formatAccountLabel(name: string, nickname = ""): string {
+  const legal = name.trim();
+  const flower = nickname.trim();
+  if (flower && legal && flower !== legal) return `${flower}（${legal}）`.slice(0, 40);
+  return (flower || legal || "飞书用户").slice(0, 40);
+}
 
 const TTL = 7 * 24 * 3600;
 const sessions = new Map<string, Session>();
@@ -44,7 +61,9 @@ export function loadSessions(): void {
     const raw = JSON.parse(readFileSync(p, "utf8")) as Record<string, Session>;
     const now = Date.now() / 1000;
     for (const [tok, s] of Object.entries(raw || {})) {
-      if (Number(s.expires_at) > now) sessions.set(tok, s);
+      if (Number(s.expires_at) > now) {
+        sessions.set(tok, { ...s, avatar_url: s.avatar_url || "" });
+      }
     }
   } catch {
     /* ignore corrupt */
@@ -130,7 +149,13 @@ function appSecret(): string {
   return getSetting("FEISHU_APP_SECRET").trim();
 }
 
-export function issueSession(name: string, role: Role, openId = "", source = "feishu"): Session {
+export function issueSession(
+  name: string,
+  role: Role,
+  openId = "",
+  source = "feishu",
+  ident: { avatar_url?: string } = {},
+): Session {
   const now = Date.now() / 1000;
   const sess: Session = {
     token: randomBytes(18).toString("base64url"),
@@ -138,6 +163,7 @@ export function issueSession(name: string, role: Role, openId = "", source = "fe
     role,
     open_id: openId.slice(0, 64),
     source,
+    avatar_url: (ident.avatar_url || "").slice(0, 500),
     created_at: now,
     expires_at: now + TTL,
   };
@@ -176,7 +202,7 @@ export function sessionFromFeishu(
   feishuName: string,
   tenantKey = "",
   expectedTenant = "",
-  opts: { provision?: boolean } = {},
+  opts: { provision?: boolean; nickname?: string; avatar_url?: string } = {},
 ): Session {
   const expected = expectedTenant || allowedTenantKey();
   if (expected && tenantKey && tenantKey !== expected) {
@@ -195,9 +221,10 @@ export function sessionFromFeishu(
       { status: 403 },
     );
   }
-  const name = String(user?.name || feishuName || "飞书用户").slice(0, 40);
+  const legal = (feishuName || String(user?.name || "")).trim();
+  const label = formatAccountLabel(legal, opts.nickname || "");
   const role = ((user?.role || "reviewer") as Role) in PERMS ? ((user?.role || "reviewer") as Role) : "reviewer";
-  return issueSession(name, role, openId, "feishu");
+  return issueSession(label, role, openId, "feishu", { avatar_url: opts.avatar_url || "" });
 }
 
 export function getSession(token: string | undefined | null): Session | null {
@@ -307,7 +334,7 @@ export async function exchangeCode(
   code: string,
   redirectUri: string,
   verifier: string,
-): Promise<{ open_id: string; name: string; tenant_key: string }> {
+): Promise<FeishuIdent> {
   let tokenJson: { access_token?: string; code?: number; msg?: string };
   try {
     const tokenRes = await httpsJson("https://open.feishu.cn/open-apis/authen/v2/oauth/token", {
@@ -330,25 +357,77 @@ export async function exchangeCode(
     throw new Error(tokenJson.msg || "飞书换票失败");
   }
   let userJson: {
-    data?: { open_id?: string; name?: string; tenant_key?: string };
+    data?: {
+      open_id?: string;
+      name?: string;
+      en_name?: string;
+      avatar_url?: string;
+      avatar_middle?: string;
+      avatar_thumb?: string;
+      tenant_key?: string;
+    };
     msg?: string;
   };
   try {
     const userRes = await httpsJson("https://open.feishu.cn/open-apis/authen/v1/user_info", {
       headers: { Authorization: `Bearer ${tokenJson.access_token}` },
     });
-    userJson = (userRes.json || {}) as {
-      data?: { open_id?: string; name?: string; tenant_key?: string };
-      msg?: string;
-    };
+    userJson = (userRes.json || {}) as typeof userJson;
   } catch (err) {
     throw new Error(describeOutboundError(err));
   }
   const openId = userJson.data?.open_id || "";
   const name = userJson.data?.name || "";
   const tenantKey = userJson.data?.tenant_key || "";
+  const avatar =
+    userJson.data?.avatar_middle || userJson.data?.avatar_url || userJson.data?.avatar_thumb || "";
   if (!openId) throw new Error(userJson.msg || "飞书未返回 open_id");
-  return { open_id: openId, name, tenant_key: tenantKey };
+  const extra = await lookupContactProfile(openId);
+  return {
+    open_id: openId,
+    name: extra?.name || name,
+    nickname: extra?.nickname || "",
+    avatar_url: extra?.avatar_url || avatar,
+    tenant_key: tenantKey,
+  };
+}
+
+/** 通讯录别名=花名、姓名=真名。应用没开通讯录权限时静默跳过，不挡登录。 */
+async function lookupContactProfile(
+  openId: string,
+): Promise<{ name: string; nickname: string; avatar_url: string } | null> {
+  if (!oauthReady() || !openId.startsWith("ou_")) return null;
+  try {
+    const tokenRes = await httpsJson("https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ app_id: appId(), app_secret: appSecret() }),
+    });
+    const tokenJson = (tokenRes.json || {}) as { tenant_access_token?: string };
+    if (!tokenJson.tenant_access_token) return null;
+    const q = await httpsJson(
+      `https://open.feishu.cn/open-apis/contact/v3/users/${encodeURIComponent(openId)}?user_id_type=open_id`,
+      { headers: { Authorization: `Bearer ${tokenJson.tenant_access_token}` } },
+    );
+    const body = (q.json || {}) as {
+      data?: {
+        user?: {
+          name?: string;
+          nickname?: string;
+          avatar?: { avatar_72?: string; avatar_240?: string };
+        };
+      };
+    };
+    const user = body.data?.user;
+    if (!user) return null;
+    return {
+      name: (user.name || "").trim(),
+      nickname: (user.nickname || "").trim(),
+      avatar_url: user.avatar?.avatar_240 || user.avatar?.avatar_72 || "",
+    };
+  } catch {
+    return null;
+  }
 }
 
 /**

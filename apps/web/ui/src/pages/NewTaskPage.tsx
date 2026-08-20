@@ -1,35 +1,35 @@
 import { useState } from "react";
-import { Alert, App, Button, Form, Input, Radio, Typography, Upload } from "antd";
-import { InboxOutlined } from "@ant-design/icons";
-import type { UploadFile } from "antd/es/upload/interface";
+import { Alert, App } from "antd";
 import { api } from "../api";
+import { UploadWell } from "../chrome/UploadWell";
+import { WaitCard } from "../chrome/WaitCard";
 
-type Props = { onCreated: (id: string) => void };
+type Props = { onCreated: (id: string) => void; onBack: () => void };
 
-export function NewTaskPage({ onCreated }: Props) {
+export function NewTaskPage({ onCreated, onBack }: Props) {
   const { message } = App.useApp();
-  const [excel, setExcel] = useState<UploadFile[]>([]);
-  const [pdf, setPdf] = useState<UploadFile[]>([]);
+  const [productName, setProductName] = useState("");
+  const [pack, setPack] = useState("carton");
+  const [excel, setExcel] = useState<File | null>(null);
+  const [pdf, setPdf] = useState<File | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  async function onFinish(values: { product_name: string; pack_surface: string }) {
-    const excelFile = excel[0]?.originFileObj;
-    const pdfFile = pdf[0]?.originFileObj;
-    const productName = (values.product_name || "").trim();
-    if (!productName) {
+  async function submit() {
+    const name = productName.trim();
+    if (!name) {
       message.warning("品名必填。");
       return;
     }
-    if (!excelFile || !pdfFile) {
+    if (!excel || !pdf) {
       message.warning("请同时选择 Excel 和包装 PDF。");
       return;
     }
     const fd = new FormData();
-    fd.append("product_name", productName);
-    fd.append("title", productName);
-    fd.append("pack_surface", values.pack_surface);
-    fd.append("excel", excelFile);
-    fd.append("pdf", pdfFile);
+    fd.append("product_name", name);
+    fd.append("title", name);
+    fd.append("pack_surface", pack);
+    fd.append("excel", excel);
+    fd.append("pdf", pdf);
     setSubmitting(true);
     try {
       const task = await api.uploadExcelPdf(fd);
@@ -37,76 +37,106 @@ export function NewTaskPage({ onCreated }: Props) {
       onCreated(task.id);
     } catch (err) {
       message.error(err instanceof Error ? err.message : "上传失败");
-    } finally {
       setSubmitting(false);
     }
   }
 
+  if (submitting) return <WaitCard job="对照" />;
+
   return (
-    <section>
-      <Typography.Title level={3}>新建 Excel↔PDF</Typography.Title>
-      <Typography.Paragraph type="secondary">
-        一次只传一对：确认单 Excel 和包装 PDF。品名用来以后找这单。
-      </Typography.Paragraph>
+    <section className="new-form">
+      <header className="page-head">
+        <div>
+          <h1 className="page-title">新建 Excel↔PDF</h1>
+          <p className="page-lead">一次只传一对。机审只标疑点。</p>
+        </div>
+        <div style={{ display: "flex", gap: 12 }}>
+          <button type="button" className="btn-ghost" onClick={onBack}>
+            返回
+          </button>
+          <button type="button" className="btn-primary" onClick={() => void submit()}>
+            开始对照
+          </button>
+        </div>
+      </header>
+
+      <div className="new-meta">
+        <label className="new-meta-name">
+          品名
+          <input
+            maxLength={80}
+            placeholder="包装上的中文品名"
+            value={productName}
+            onChange={(e) => setProductName(e.target.value)}
+          />
+        </label>
+        <div className="new-meta-pack">
+          <span>包装面</span>
+          <div className="pack-pills">
+            <button
+              type="button"
+              className={pack === "carton" ? "pack-pill is-on" : "pack-pill"}
+              onClick={() => setPack("carton")}
+            >
+              花盒
+            </button>
+            <button
+              type="button"
+              className={pack === "pouch" ? "pack-pill is-on" : "pack-pill"}
+              onClick={() => setPack("pouch")}
+            >
+              膜袋
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="upload-row">
+        <UploadWell
+          icon="/brand/ui/well-excel.svg"
+          title="Excel 确认单"
+          hint="把 .xlsx 拖进来，或点选取"
+          accept=".xlsx"
+          fileName={excel?.name}
+          onFile={setExcel}
+        >
+          <span className="upload-well-btn">选取 Excel</span>
+        </UploadWell>
+        <UploadWell
+          icon="/brand/ui/well-pdf.svg"
+          title="包装 PDF"
+          hint="花盒或膜袋展开图"
+          accept=".pdf"
+          fileName={pdf?.name}
+          onFile={setPdf}
+        >
+          <span className="upload-well-btn">选取 PDF</span>
+        </UploadWell>
+      </div>
+
       <Alert
         type="info"
         showIcon
-        style={{ marginBottom: 16 }}
-        title="机审只标疑点。OCR 认不清会写成「待人工确认」，不会自动过审。"
+        title="OCR 认不清会写成「待人工确认」，不会自动过审。一次只传一对。"
       />
-      <Form
-        layout="vertical"
-        initialValues={{ pack_surface: "carton" }}
-        onFinish={(v) => void onFinish(v)}
-        style={{ maxWidth: 560 }}
-      >
-        <Form.Item
-          label="品名"
-          name="product_name"
-          rules={[{ required: true, message: "品名必填" }]}
-        >
-          <Input maxLength={80} placeholder="包装上的中文品名" />
-        </Form.Item>
-        <Form.Item label="包装面" name="pack_surface">
-          <Radio.Group>
-            <Radio.Button value="carton">花盒</Radio.Button>
-            <Radio.Button value="pouch">膜袋</Radio.Button>
-          </Radio.Group>
-        </Form.Item>
-        <Form.Item label="Excel" required>
-          <Upload.Dragger
-            maxCount={1}
-            accept=".xlsx"
-            fileList={excel}
-            beforeUpload={() => false}
-            onChange={({ fileList }) => setExcel(fileList.slice(-1))}
-            disabled={submitting}
-          >
-            <p className="ant-upload-drag-icon">
-              <InboxOutlined />
-            </p>
-            <p>{excel[0]?.name || "把确认单 .xlsx 拖到这里"}</p>
-          </Upload.Dragger>
-        </Form.Item>
-        <Form.Item label="包装 PDF" required>
-          <Upload.Dragger
-            maxCount={1}
-            accept=".pdf"
-            fileList={pdf}
-            beforeUpload={() => false}
-            onChange={({ fileList }) => setPdf(fileList.slice(-1))}
-            disabled={submitting}
-          >
-            <p className="ant-upload-drag-icon">
-              <InboxOutlined />
-            </p>
-            <p>{pdf[0]?.name || "把包装 PDF 拖到这里"}</p>
-          </Upload.Dragger>
-        </Form.Item>
-        <Button type="primary" htmlType="submit" loading={submitting}>
-          {submitting ? `正在对照 ${excel[0]?.name || ""}` : "开始对照"}
-        </Button>
-      </Form>
+
+      <div className="step-row">
+        <article className="step-card">
+          <b>1</b>
+          <strong>传一对</strong>
+          <p>Excel 确认单和包装展开图一次只传一对。</p>
+        </article>
+        <article className="step-card">
+          <b>2</b>
+          <strong>机审标疑点</strong>
+          <p>认不清就写成待人工确认，不会自动过审。</p>
+        </article>
+        <article className="step-card">
+          <b>3</b>
+          <strong>她来签字</strong>
+          <p>人话结论。待签在上，点开核对页一对一对。</p>
+        </article>
+      </div>
     </section>
   );
 }

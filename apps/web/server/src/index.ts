@@ -32,7 +32,7 @@ import {
   type Role,
   type Session,
 } from "./auth.js";
-import { fileOf, getJob, startMockup } from "./mockup.js";
+import { fileOf, getJob, listJobs, startMockup } from "./mockup.js";
 import {
   activeHits,
   assertTid,
@@ -92,10 +92,11 @@ app.get("/api/auth/methods", (c) =>
 
 app.get("/api/auth/me", (c) => {
   const s = c.get("session");
-  if (!s) return c.json({ logged_in: false, display_name: null, role: null, perms: [] });
+  if (!s) return c.json({ logged_in: false, display_name: null, avatar_url: null, role: null, perms: [] });
   return c.json({
     logged_in: true,
     display_name: s.display_name,
+    avatar_url: s.avatar_url || "",
     role: s.role,
     open_id: s.open_id || "",
     perms: s.role === "admin"
@@ -162,6 +163,8 @@ app.get("/api/auth/feishu/callback", async (c) => {
     }
     const sess = sessionFromFeishu(ident.open_id, ident.name, ident.tenant_key, expected, {
       provision: true,
+      nickname: ident.nickname,
+      avatar_url: ident.avatar_url,
     });
     setCookie(c, COOKIE, sess.token, {
       httpOnly: true,
@@ -412,6 +415,19 @@ app.post("/api/settings/billing/refresh", async (c) => {
   need(c, "read");
   const vendors = await loadVendorBills(true);
   return c.json({ ...billingSnapshot(), vendors });
+});
+
+app.get("/api/mockups", (c) => {
+  need(c, "read");
+  return c.json(
+    listJobs().map((job) => ({
+      id: job.id,
+      status: job.status,
+      error: job.error,
+      created_at: job.created_at,
+      files: job.files.map((f) => ({ key: f.key, name: f.name })),
+    })),
+  );
 });
 
 app.post("/api/mockups", async (c) => {

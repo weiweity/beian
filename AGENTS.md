@@ -23,7 +23,7 @@
 - 网页：`apps/web/ui`（React+TS）+ `apps/web/server`（Hono+TS，对外 :8787）
 - 对照 worker：`apps/web/backend`（Python，由 TS `app.cli` 调用）
 - 3D CLI：`workers/packaging/`
-- 本机配置：右上角点姓名 →「设置」→ 默认 `apps/web/backend/data/settings.json` + `settings.secrets.json`（gitignore；`WB_DATA_DIR` 可改）。密钥不要写进前端或仓库。
+- 本机配置：侧栏「设置」→ 默认 `apps/web/backend/data/settings.json` + `settings.secrets.json`（gitignore；`WB_DATA_DIR` 可改）。密钥不要写进前端或仓库。
 - 文档入口：`README.md`（启动、设置）、`DESIGN.md`（视觉）、`docs/00-charter.md`（8/31 章程）、`docs/adr-004-ousterhout-design.md`（深模块）、`CHANGELOG.md`、`TODOS.md`。实现约定见下面「设计哲学」。
 - 入口：开发口 `:5173`（Vite 听本机网卡，`/api` 反代到 8787）；产品/验收入口 `:8787`。不要再加第三个 HTTP 入口。
 - 旧 `apps/web/frontend/` 已退役，不要再往里面加功能。
@@ -41,12 +41,15 @@ When the user's request matches an available skill, invoke it via the Skill tool
 
 ## Design System
 
-改任何界面之前先读 `DESIGN.md`。字体、色、间距、顶栏、审稿构图都以那份为准。
+改任何界面之前先读 `DESIGN.md`。字体、色、间距、侧栏、核对页都以那份为准。锁定稿是 Figma Web 页，不是飞书顶栏。
 
-- Ant Design 6 只当零件箱。`colorPrimary` = `#722ED1`，不要默认蓝。
-- 顶栏切「审稿台 / 打样台」（字 + 底线，不要紫胶囊）。设置收在姓名菜单里。不要 220px 品牌侧栏。
-- 左上角放完整 `apps/web/ui/public/brand/shine-mage.png`（狐狸头 + SHINE MAGE），不要裁成只留头，不要旁标「江华」。
-- 审稿：左图画布 + 编号钉，右批注列，结论由人写。禁止「AI 已过审」。
+- Figma：https://www.figma.com/design/BL3PGUjLGLPb9iUZMzRhD6 （`Web · 锁定稿`。iPad 页是探索，不是实现依据。）
+- Ant Design 6 只当零件箱。`colorPrimary` = `#805898`，不要默认蓝，不要旧主色 `#722ED1`。
+- 左侧玻璃侧栏切「审稿台 / 打样台 / 历史记录 / 设置」。展开 280px，折叠 76px。不要飞书顶栏。
+- 侧栏顶用 `apps/web/ui/public/brand/logo-mark.png`。折叠时悬停变成展开按钮（同一 44pt）。完整 `shine-mage.png` 只放拒绝页。
+- 左下角飞书头像 + `花名（真名）`，例如 `天元（魏炜）`。
+- 审稿：专属核对页，左画布 + 编号钉，右一对一检视。结论由人写。禁止「AI 已过审」。
+- 历史记录是侧栏 tab，不是第三张台。
 - 打样台 8/31 不对业务开放。QA 时标出任何与 `DESIGN.md` 不符的实现。
 
 ## Testing

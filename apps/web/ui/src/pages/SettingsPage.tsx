@@ -340,6 +340,7 @@ function HealthPane({
       <div className="health-meta">
         <Typography.Paragraph type="secondary">
           当前登录：{displayName || "—"}
+          {openId ? " · 飞书身份" : ""}
           {openId ? ` · ${openId}` : " · 显示名登录没有 open_id"}
         </Typography.Paragraph>
         <Typography.Paragraph type="secondary">
