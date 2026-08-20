@@ -17,22 +17,63 @@
 }
 
 :root {
-  --bg: #f5f6f8;
+  --bg: #f8f5fa;
   --surface: #ffffff;
-  --ink: #1f2329;
-  --muted: #646a73;
-  --line: #dee0e3;
-  --focus: #722ed1;
-  --accent: #722ed1;
-  --accent-soft: #f9f0ff;
-  --pin: #7b61ff;
+  --stage: #fffcfe;
+  --col: #f6f3f8;
+  --ink: #1c1a1f;
+  --muted: #6b6572;
+  --line: #e7e2ec;
+  --focus: #805898;
+  --accent: #805898;
+  --accent-soft: #f6f1f8;
+  --accent-mist: #ede7f1;
+  --hover-gray: #e2e2e8;
+  --pin: #805898;
   --ok: #389e0d;
   --warn: #d48806;
   --danger: #f5222d;
-  --radius: 8px;
-  --font-body: "Alibaba PuHuiTi", "PingFang SC", "Hiragino Sans GB",
-    "Microsoft YaHei UI", "Noto Sans SC", sans-serif;
+  --feishu: #3370ff;
+  --glass-alpha: 0.55;
+  --glass: rgba(255, 255, 255, var(--glass-alpha));
+  --glass-strong: rgba(255, 255, 255, 0.88);
+  --radius: 16px;
+  --radius-nav: 12px;
+  --radius-well: 22px;
+  --radius-pane: 26px;
+  --radius-side: 28px;
+  --sidebar: 280px;
+  --sidebar-collapsed: 76px;
+  --ui-font-px: 16;
+  --ui-font: 16px;
+  --page-title: 28px;
+  --side-label: 17px;
+  --account-name: 15px;
+  --side-icon: 24px;
+  --account-avatar: 36px;
+  --font-body: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI",
+    "Noto Sans SC", "Alibaba PuHuiTi", sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  --ease-gentle: cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+html[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #141018;
+  --surface: #2a2232;
+  --stage: #221b28;
+  --col: #322838;
+  --ink: #f6f1f8;
+  --muted: #c9b8d4;
+  --line: rgba(196, 163, 208, 0.28);
+  --focus: #c9a3d6;
+  --accent: #c9a3d6;
+  --accent-soft: rgba(128, 88, 152, 0.38);
+  --accent-mist: #3a2e44;
+  --hover-gray: rgba(255, 255, 255, 0.08);
+  --glass: rgba(42, 32, 52, var(--glass-alpha));
+  --glass-strong: rgba(42, 32, 52, 0.88);
+  --pin: #c9a3d6;
 }
 
 *,
@@ -45,16 +86,23 @@ html,
 body,
 #root {
   margin: 0;
-  min-height: 100%;
+  height: 100%;
+  overflow: hidden;
 }
 
 body {
   color: var(--ink);
   background: var(--bg);
   font-family: var(--font-body);
-  font-size: 16px;
+  font-size: var(--ui-font);
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+html[data-theme="dark"] body {
+  font-weight: 500;
+  letter-spacing: 0.01em;
 }
 
 button,

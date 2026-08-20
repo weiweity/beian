@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Button, Empty, Input, Segmented, Space, Table, Tag, Typography } from "antd";
+import { Alert, Button, Empty, Input, Segmented, Space, Table, Tag } from "antd";
 import { api, ApiError, type TaskSummary } from "../api";
+import { shouldShowTaskBoard } from "./tasksBoard";
 
 type Props = {
   onCreate: () => void;
@@ -33,6 +34,7 @@ export function TasksPage({ onCreate, onOpen }: Props) {
   const [q, setQ] = useState("");
   const [submitted, setSubmitted] = useState("");
   const [layout, setLayout] = useState<Layout>("board");
+  const [reload, setReload] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -54,10 +56,10 @@ export function TasksPage({ onCreate, onOpen }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [submitted]);
+  }, [submitted, reload]);
 
   const showSearch = Boolean(submitted) || rows.length > 0;
-  const showTable = loading || Boolean(error) || Boolean(submitted) || rows.length > 0;
+  const showBoard = shouldShowTaskBoard(rows.length, submitted);
   const board = useMemo(
     () => ({
       comparing: rows.filter((r) => columnOf(r) === "comparing"),
@@ -71,12 +73,8 @@ export function TasksPage({ onCreate, onOpen }: Props) {
     <section>
       <div className="desk-head">
         <div>
-          <Typography.Title level={3} style={{ margin: 0 }}>
-            审核单
-          </Typography.Title>
-          <Typography.Paragraph type="secondary" style={{ margin: "4px 0 0" }}>
-            待签在上。机审只标疑点，结论由你来写。
-          </Typography.Paragraph>
+          <h1 className="page-title">审核单</h1>
+          <p className="page-lead">待签在上。机审只标疑点，结论由你来写。</p>
         </div>
         <Space wrap>
           {showSearch ? (
@@ -89,14 +87,16 @@ export function TasksPage({ onCreate, onOpen }: Props) {
               style={{ width: 240 }}
             />
           ) : null}
-          <Segmented
-            value={layout}
-            onChange={(v) => setLayout(v as Layout)}
-            options={[
-              { label: "看板", value: "board" },
-              { label: "表格", value: "table" },
-            ]}
-          />
+          {showBoard ? (
+            <Segmented
+              value={layout}
+              onChange={(v) => setLayout(v as Layout)}
+              options={[
+                { label: "看板", value: "board" },
+                { label: "表格", value: "table" },
+              ]}
+            />
+          ) : null}
           <Button type="primary" onClick={onCreate}>
             新建 Excel↔PDF
           </Button>
@@ -109,26 +109,32 @@ export function TasksPage({ onCreate, onOpen }: Props) {
           style={{ marginBottom: 16 }}
           title={error}
           action={
-            <Button size="small" onClick={() => setSubmitted((s) => s)}>
+            <Button size="small" onClick={() => setReload((n) => n + 1)}>
               再试一次
             </Button>
           }
         />
       ) : null}
-      {!showTable ? (
+      {!showBoard ? (
         <div className="desk-empty">
           <Empty
             image={Empty.PRESENTED_IMAGE_SIMPLE}
             description={
-              <div>
-                <div>还没有审核单</div>
-                <div className="desk-empty-hint">把 Excel 和备案/包装 PDF 交上来对照</div>
-              </div>
+              loading ? (
+                <div>读取审核单…</div>
+              ) : (
+                <div>
+                  <div>还没有审核单</div>
+                  <div className="desk-empty-hint">把 Excel 和备案/包装 PDF 交上来对照</div>
+                </div>
+              )
             }
           >
-            <Button type="primary" onClick={onCreate}>
-              新建 Excel↔PDF
-            </Button>
+            {loading ? null : (
+              <Button type="primary" onClick={onCreate}>
+                新建 Excel↔PDF
+              </Button>
+            )}
           </Empty>
         </div>
       ) : layout === "board" ? (

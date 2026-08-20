@@ -96,6 +96,25 @@ describe("feishu authorize", () => {
     assert.equal(sess.open_id, "ou_brand_account_xxxx");
   });
 
+  it("formats 花名（真名） and keeps a single name bare", () => {
+    assert.equal(auth.formatAccountLabel("魏炜", "天元"), "天元（魏炜）");
+    assert.equal(auth.formatAccountLabel("天元", ""), "天元");
+    assert.equal(auth.formatAccountLabel("天元", "天元"), "天元");
+    assert.equal(auth.formatAccountLabel("", ""), "飞书用户");
+  });
+
+  it("uses Feishu nickname in session display and keeps avatar", () => {
+    const sess = auth.sessionFromFeishu(
+      "ou_tianyuan_xxxx",
+      "魏炜",
+      "tenant_shenmei",
+      "tenant_shenmei",
+      { provision: true, nickname: "天元", avatar_url: "https://img.example/a.png" },
+    );
+    assert.equal(sess.display_name, "天元（魏炜）");
+    assert.equal(sess.avatar_url, "https://img.example/a.png");
+  });
+
   it("does not grant admin by Feishu display name", () => {
     const dir = process.env.WB_DATA_DIR as string;
     mkdirSync(dir, { recursive: true });

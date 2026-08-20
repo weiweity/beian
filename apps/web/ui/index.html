@@ -4,6 +4,21 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>审稿台</title>
+    <script>
+      (function () {
+        try {
+          var raw = localStorage.getItem("wb_appearance");
+          if (!raw) return;
+          var o = JSON.parse(raw);
+          var theme = o && o.theme;
+          var dark =
+            theme === "dark" ||
+            (theme === "system" &&
+              window.matchMedia("(prefers-color-scheme: dark)").matches);
+          if (dark) document.documentElement.setAttribute("data-theme", "dark");
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

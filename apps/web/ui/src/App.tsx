@@ -1,17 +1,18 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { Dropdown, Layout } from "antd";
 import { ApiError, api, type Me } from "./api";
 import { authFailureAction, shouldAutoRedirectToFeishu } from "./authGate";
+import { Sidebar, type NavKey } from "./chrome/Sidebar";
+import { HistoryPage } from "./pages/HistoryPage";
 import { MockupPage } from "./pages/MockupPage";
 import { NewTaskPage } from "./pages/NewTaskPage";
 import { ReviewPage } from "./pages/ReviewPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { TasksPage } from "./pages/TasksPage";
 
-type Desk = "review" | "mockup";
-type View = "tasks" | "new" | "review" | "mockup" | "settings";
+type View = "tasks" | "new" | "review" | "mockup" | "history" | "settings";
 
 const AUTH_HINT = "wb_login_hint";
+const SIDEBAR_KEY = "wb_sidebar";
 const AUTH_FALLBACK: Record<string, string> = {
   denied: "已取消飞书授权。",
   expired: "登录已过期，请再点一次。",
@@ -45,13 +46,28 @@ function AuthShell({ title, children }: { title?: string; children: ReactNode })
   );
 }
 
+function navOf(view: View): NavKey {
+  if (view === "mockup") return "mockup";
+  if (view === "history") return "history";
+  if (view === "settings") return "settings";
+  return "review";
+}
+
+function readCollapsed() {
+  try {
+    return localStorage.getItem(SIDEBAR_KEY) === "1";
+  } catch {
+    return window.matchMedia("(max-width: 1024px)").matches;
+  }
+}
+
 export function App() {
   const [me, setMe] = useState<Me | null>(null);
   const [view, setView] = useState<View>("tasks");
   const [authError, setAuthError] = useState<string | null>(null);
   const [apiBroken, setApiBroken] = useState<string | null>(null);
-  const [desk, setDesk] = useState<Desk>("review");
   const [taskId, setTaskId] = useState<string | null>(null);
+  const [collapsed, setCollapsed] = useState(readCollapsed);
 
   const refreshMe = useCallback(async () => {
     try {
@@ -67,7 +83,7 @@ export function App() {
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : "";
       if (msg.includes("8787") || msg.includes("JSON")) setApiBroken(msg);
-      setMe({ logged_in: false, display_name: null, role: null, perms: [] });
+      setMe({ logged_in: false, display_name: null, avatar_url: null, role: null, perms: [] });
     }
   }, []);
 
@@ -101,9 +117,40 @@ export function App() {
     window.location.replace("/api/auth/feishu/login");
   }, [me, loggedIn, authError, apiBroken]);
 
+  function toggleSidebar() {
+    setCollapsed((cur) => {
+      const next = !cur;
+      try {
+        localStorage.setItem(SIDEBAR_KEY, next ? "1" : "0");
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  }
+
   async function logout() {
     await api.logout();
     window.location.replace("/api/auth/feishu/login");
+  }
+
+  function go(key: NavKey) {
+    if (key === "review") {
+      setView("tasks");
+      setTaskId(null);
+      return;
+    }
+    if (key === "mockup") {
+      setView("mockup");
+      setTaskId(null);
+      return;
+    }
+    if (key === "history") {
+      setView("history");
+      setTaskId(null);
+      return;
+    }
+    setView("settings");
   }
 
   if (me === null) {
@@ -135,72 +182,35 @@ export function App() {
   }
 
   return (
-    <Layout className="shell">
-      <header className="topbar">
-        <img className="topbar-logo" src="/brand/shine-mage.png" alt="SHINE MAGE" />
-        <nav className="topbar-tabs" aria-label="工作台">
-          <button
-            type="button"
-            className={desk === "review" && view !== "settings" ? "topbar-tab is-on" : "topbar-tab"}
-            aria-current={desk === "review" && view !== "settings" ? "page" : undefined}
-            onClick={() => {
-              setDesk("review");
-              if (view === "mockup" || view === "settings") setView("tasks");
-            }}
-          >
-            审稿台
-          </button>
-          <button
-            type="button"
-            className={desk === "mockup" && view !== "settings" ? "topbar-tab is-on" : "topbar-tab"}
-            aria-current={desk === "mockup" && view !== "settings" ? "page" : undefined}
-            onClick={() => {
-              setDesk("mockup");
-              setView("mockup");
-              setTaskId(null);
-            }}
-          >
-            打样台
-          </button>
-        </nav>
-        <Dropdown
-          trigger={["click"]}
-          placement="bottomRight"
-          menu={{
-            selectedKeys: view === "settings" ? ["settings"] : [],
-            items: [
-              { key: "settings", label: "设置" },
-              { type: "divider" },
-              { key: "logout", label: "退出", danger: true },
-            ],
-            onClick: ({ key }) => {
-              if (key === "settings") setView("settings");
-              if (key === "logout") void logout();
-            },
-          }}
-        >
-          <button
-            type="button"
-            className={view === "settings" ? "topbar-who is-on" : "topbar-who"}
-            aria-haspopup="menu"
-          >
-            <span>{me?.display_name}</span>
-            <span className="topbar-who-caret" aria-hidden>
-              ▾
-            </span>
-          </button>
-        </Dropdown>
-      </header>
-      <Layout.Content className={view === "settings" ? "content content-flush" : "content"}>
+    <div className="shell">
+      <Sidebar
+        collapsed={collapsed}
+        active={navOf(view)}
+        displayName={me.display_name || "飞书用户"}
+        avatarUrl={me.avatar_url}
+        onNavigate={go}
+        onToggle={toggleSidebar}
+        onLogout={() => void logout()}
+      />
+      <main className={view === "settings" ? "stage stage-flush" : "stage"}>
         {view === "settings" ? (
           <SettingsPage
-            canWrite={Boolean(me?.perms.includes("create"))}
-            openId={me?.open_id || ""}
-            displayName={me?.display_name}
+            canWrite={Boolean(me.perms.includes("create"))}
+            openId={me.open_id || ""}
+            displayName={me.display_name}
           />
         ) : null}
-        {view !== "settings" && desk === "mockup" ? <MockupPage /> : null}
-        {view !== "settings" && desk === "review" && view === "tasks" ? (
+        {view === "mockup" ? <MockupPage /> : null}
+        {view === "history" ? (
+          <HistoryPage
+            onOpenTask={(id) => {
+              setTaskId(id);
+              setView("review");
+            }}
+            onOpenMockup={() => setView("mockup")}
+          />
+        ) : null}
+        {view === "tasks" ? (
           <TasksPage
             onCreate={() => setView("new")}
             onOpen={(id) => {
@@ -209,15 +219,16 @@ export function App() {
             }}
           />
         ) : null}
-        {view !== "settings" && desk === "review" && view === "new" ? (
+        {view === "new" ? (
           <NewTaskPage
             onCreated={(id) => {
               setTaskId(id);
               setView("review");
             }}
+            onBack={() => setView("tasks")}
           />
         ) : null}
-        {view !== "settings" && desk === "review" && view === "review" ? (
+        {view === "review" ? (
           <ReviewPage
             taskId={taskId}
             onBack={() => {
@@ -226,7 +237,7 @@ export function App() {
             }}
           />
         ) : null}
-      </Layout.Content>
-    </Layout>
+      </main>
+    </div>
   );
 }
