@@ -115,6 +115,7 @@ html[data-theme="dark"] .sidebar-glass {
 .sidebar.is-collapsed .brand-row {
   justify-content: center;
   gap: 0;
+  position: relative;
 }
 
 .sidebar:not(.is-collapsed) .brand-hit {
@@ -129,7 +130,9 @@ html[data-theme="dark"] .sidebar-glass {
 .sidebar.is-collapsed .brand-mark,
 .sidebar.is-collapsed .brand-word,
 .sidebar.is-collapsed .brand-collapse {
+  position: absolute;
   width: 0;
+  height: 0;
   min-width: 0;
   opacity: 0;
   overflow: hidden;
@@ -256,8 +259,12 @@ html[data-theme="dark"] .brand-collapse {
   width: 48px;
   min-height: 48px;
   padding: 0;
+  gap: 0;
   justify-content: center;
+  align-items: center;
+  overflow: hidden;
   border-radius: 12px;
+  position: relative;
 }
 
 .side-item:hover {
@@ -297,10 +304,14 @@ html[data-theme="dark"] .side-item.is-on .side-icon {
 }
 
 .sidebar.is-collapsed .side-label {
-  flex: 0;
+  position: absolute;
+  flex: none;
   width: 0;
+  height: 0;
   min-width: 0;
+  overflow: hidden;
   opacity: 0;
+  pointer-events: none;
 }
 
 .side-spacer {
@@ -325,7 +336,10 @@ html[data-theme="dark"] .side-item.is-on .side-icon {
 .sidebar.is-collapsed .account-row {
   width: 48px;
   min-height: 48px;
+  gap: 0;
   justify-content: center;
+  overflow: hidden;
+  position: relative;
 }
 
 .sidebar.is-collapsed .account-avatar,
@@ -368,10 +382,14 @@ html[data-theme="dark"] .side-item.is-on .side-icon {
 }
 
 .sidebar.is-collapsed .account-name {
-  flex: 0;
+  position: absolute;
+  flex: none;
   width: 0;
+  height: 0;
   min-width: 0;
+  overflow: hidden;
   opacity: 0;
+  pointer-events: none;
 }
 
 .stage {
