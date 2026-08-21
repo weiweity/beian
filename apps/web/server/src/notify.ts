@@ -92,3 +92,21 @@ export async function notifyTaskComplete(task: TaskLike, actor: string): Promise
     console.warn("feishu notify skipped:", r.reason);
   }
 }
+
+export async function notifyJobFinished(opts: {
+  tid: string;
+  title: string;
+  kind: "compare" | "rework" | "mockup";
+  ok: boolean;
+  error?: string;
+}): Promise<{ ok: boolean; skipped?: boolean; reason?: string }> {
+  const verb = opts.kind === "mockup" ? "打样" : opts.kind === "rework" ? "对红" : "对照";
+  const name = opts.title || opts.tid;
+  const link = `${publicBase()}/?task=${opts.tid}`;
+  const text = opts.ok
+    ? opts.kind === "mockup"
+      ? `${name} 打样完了，来看产物。\n打开：${link}`
+      : `${name} ${verb}完了，来签字。\n打开：${link}`
+    : `${name} ${verb}失败：${opts.error || "对照中断"}\n打开：${link}`;
+  return sendText(text);
+}

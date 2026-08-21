@@ -28,9 +28,22 @@ export function Sidebar({
   onLogout,
 }: Props) {
   return (
-    <aside className={collapsed ? "sidebar is-collapsed" : "sidebar"} aria-label="审稿室">
-      {collapsed ? (
-        <button type="button" className="brand-hit" onClick={onToggle} aria-label="展开侧栏">
+    <aside
+      className={collapsed ? "sidebar is-collapsed" : "sidebar"}
+      aria-label="审稿室"
+      aria-expanded={!collapsed}
+    >
+      <div className="sidebar-glass" aria-hidden="true" />
+      <div className="brand-row">
+        <button
+          type="button"
+          className="brand-hit"
+          onClick={onToggle}
+          tabIndex={collapsed ? 0 : -1}
+          aria-hidden={!collapsed}
+          aria-label="展开侧栏"
+          aria-expanded={false}
+        >
           <img className="brand-hit-logo" src="/brand/logo-mark.png" alt="" width={32} height={32} />
           <img
             className="brand-hit-expand"
@@ -40,15 +53,20 @@ export function Sidebar({
             height={22}
           />
         </button>
-      ) : (
-        <div className="brand-row">
-          <img className="brand-mark" src="/brand/logo-mark.png" alt="" width={36} height={36} />
-          <span className="brand-word">SHINE MAGE</span>
-          <button type="button" className="brand-collapse" onClick={onToggle} aria-label="折叠侧栏">
-            <img src="/brand/ui/sidebar-collapse.svg" alt="" width={22} height={22} />
-          </button>
-        </div>
-      )}
+        <img className="brand-mark" src="/brand/logo-mark.png" alt="" width={36} height={36} />
+        <span className="brand-word">SHINE MAGE</span>
+        <button
+          type="button"
+          className="brand-collapse"
+          onClick={onToggle}
+          tabIndex={collapsed ? -1 : 0}
+          aria-hidden={collapsed}
+          aria-label="折叠侧栏"
+          aria-expanded={true}
+        >
+          <img src="/brand/ui/sidebar-collapse.svg" alt="" width={22} height={22} />
+        </button>
+      </div>
 
       <nav className="side-nav">
         {SIDE_NAV.map((item) => {
@@ -63,7 +81,7 @@ export function Sidebar({
               onClick={() => onNavigate(item.key)}
             >
               <img className="side-icon" src={item.icon} alt="" width={24} height={24} />
-              {collapsed ? null : <span className="side-label">{item.label}</span>}
+              <span className="side-label">{item.label}</span>
             </button>
           );
         })}
@@ -87,7 +105,7 @@ export function Sidebar({
           ) : (
             <span className="account-fallback">{initial(displayName)}</span>
           )}
-          {collapsed ? null : <span className="account-name">{displayName}</span>}
+          <span className="account-name">{displayName}</span>
         </button>
       </Dropdown>
     </aside>

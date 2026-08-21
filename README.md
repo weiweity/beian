@@ -27,10 +27,10 @@ HTTP 是 TypeScript。对照规则和 Blender 仍是 Python。见 `docs/adr-002-
 | `docs/adr-003-settings-overlay.md` | 本机设置覆盖密钥文件 |
 | `docs/adr-004-ousterhout-design.md` | 深模块、唯一入口、8/31 前不拆引擎 |
 | `docs/risks.md` | 密钥、Tunnel、3D 验收门 |
-| `docs/designs/` | 对红循环、两张台 |
+| `docs/designs/` | 对红循环、两张台、作业模块（对照/对红/打样入队） |
 | `CHANGELOG.md` | 已发布版本 |
 | `TODOS.md` | 未做项 |
-| `AGENTS.md` | 给代理的硬约束 |
+| `AGENTS.md` | 给代理的硬约束、加长作业合同（CLI `--help` / 禁止新 FastAPI 路由） |
 | `scripts/windows/README.md` | 杭州 Windows 生产备忘 |
 
 ## 本机启动

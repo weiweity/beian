@@ -53,12 +53,49 @@ function navOf(view: View): NavKey {
   return "review";
 }
 
+const TASK_DEEPLINK = /^[0-9a-f]{12}$/i;
+const TASK_STASH = "wb_open_task";
+
+function readTaskDeeplink(search: string): string | null {
+  const raw = new URLSearchParams(search).get("task") || "";
+  return TASK_DEEPLINK.test(raw) ? raw.toLowerCase() : null;
+}
+
+function stripTaskQuery(href: string): string {
+  const url = new URL(href);
+  url.searchParams.delete("task");
+  const qs = url.searchParams.toString();
+  return `${url.pathname}${qs ? `?${qs}` : ""}${url.hash}`;
+}
+
+function stashTaskDeeplink(tid: string) {
+  try {
+    sessionStorage.setItem(TASK_STASH, tid);
+  } catch {
+    /* ignore */
+  }
+}
+
+function takeStashedTask(): string | null {
+  try {
+    const raw = sessionStorage.getItem(TASK_STASH) || "";
+    if (!TASK_DEEPLINK.test(raw)) return null;
+    sessionStorage.removeItem(TASK_STASH);
+    return raw.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
 function readCollapsed() {
   try {
-    return localStorage.getItem(SIDEBAR_KEY) === "1";
+    const raw = localStorage.getItem(SIDEBAR_KEY);
+    if (raw === "1") return true;
+    if (raw === "0") return false;
   } catch {
-    return window.matchMedia("(max-width: 1024px)").matches;
+    /* fall through to viewport */
   }
+  return window.matchMedia("(max-width: 1024px)").matches;
 }
 
 export function App() {
@@ -89,6 +126,8 @@ export function App() {
 
   useEffect(() => {
     const err = new URLSearchParams(window.location.search).get("feishu_error") || "";
+    const tid = readTaskDeeplink(window.location.search);
+    if (tid) stashTaskDeeplink(tid);
     if (err) {
       setAuthError(readAuthHint() || AUTH_FALLBACK[err] || "飞书授权未完成。");
       const url = new URL(window.location.href);
@@ -117,6 +156,23 @@ export function App() {
     window.location.replace("/api/auth/feishu/login");
   }, [me, loggedIn, authError, apiBroken]);
 
+  useEffect(() => {
+    if (!loggedIn) return;
+    const fromUrl = readTaskDeeplink(window.location.search);
+    const tid = fromUrl || takeStashedTask();
+    if (!tid) return;
+    if (fromUrl) {
+      window.history.replaceState({}, "", stripTaskQuery(window.location.href));
+      try {
+        sessionStorage.removeItem(TASK_STASH);
+      } catch {
+        /* ignore */
+      }
+    }
+    setTaskId(tid);
+    setView("review");
+  }, [loggedIn]);
+
   function toggleSidebar() {
     setCollapsed((cur) => {
       const next = !cur;
@@ -134,23 +190,37 @@ export function App() {
     window.location.replace("/api/auth/feishu/login");
   }
 
+  function collapsePhoneSheet() {
+    if (!window.matchMedia("(max-width: 720px)").matches) return;
+    setCollapsed(true);
+    try {
+      localStorage.setItem(SIDEBAR_KEY, "1");
+    } catch {
+      /* ignore */
+    }
+  }
+
   function go(key: NavKey) {
     if (key === "review") {
       setView("tasks");
       setTaskId(null);
+      collapsePhoneSheet();
       return;
     }
     if (key === "mockup") {
       setView("mockup");
       setTaskId(null);
+      collapsePhoneSheet();
       return;
     }
     if (key === "history") {
       setView("history");
       setTaskId(null);
+      collapsePhoneSheet();
       return;
     }
     setView("settings");
+    collapsePhoneSheet();
   }
 
   if (me === null) {
@@ -183,16 +253,20 @@ export function App() {
 
   return (
     <div className="shell">
-      <Sidebar
-        collapsed={collapsed}
-        active={navOf(view)}
-        displayName={me.display_name || "飞书用户"}
-        avatarUrl={me.avatar_url}
-        onNavigate={go}
-        onToggle={toggleSidebar}
-        onLogout={() => void logout()}
-      />
-      <main className={view === "settings" ? "stage stage-flush" : "stage"}>
+      <div className="workspace">
+        {!collapsed ? (
+          <button type="button" className="sidebar-scrim" aria-label="收起侧栏" onClick={toggleSidebar} />
+        ) : null}
+        <Sidebar
+          collapsed={collapsed}
+          active={navOf(view)}
+          displayName={me.display_name || "飞书用户"}
+          avatarUrl={me.avatar_url}
+          onNavigate={go}
+          onToggle={toggleSidebar}
+          onLogout={() => void logout()}
+        />
+        <main className={view === "settings" ? "stage stage-flush" : "stage"}>
         {view === "settings" ? (
           <SettingsPage
             canWrite={Boolean(me.perms.includes("create"))}
@@ -237,7 +311,8 @@ export function App() {
             }}
           />
         ) : null}
-      </main>
+        </main>
+      </div>
     </div>
   );
 }

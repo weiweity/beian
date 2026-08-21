@@ -24,9 +24,34 @@
 - 对照 worker：`apps/web/backend`（Python，由 TS `app.cli` 调用）
 - 3D CLI：`workers/packaging/`
 - 本机配置：侧栏「设置」→ 默认 `apps/web/backend/data/settings.json` + `settings.secrets.json`（gitignore；`WB_DATA_DIR` 可改）。密钥不要写进前端或仓库。
-- 文档入口：`README.md`（启动、设置）、`DESIGN.md`（视觉）、`docs/00-charter.md`（8/31 章程）、`docs/adr-004-ousterhout-design.md`（深模块）、`CHANGELOG.md`、`TODOS.md`。实现约定见下面「设计哲学」。
+- 文档入口：`README.md`（启动、设置）、`DESIGN.md`（视觉）、`docs/00-charter.md`（8/31 章程）、`docs/adr-004-ousterhout-design.md`（深模块）、`docs/designs/review-job-module.md`（对照/对红/打样入队）、`CHANGELOG.md`、`TODOS.md`。实现约定见下面「设计哲学」。
 - 入口：开发口 `:5173`（Vite 听本机网卡，`/api` 反代到 8787）；产品/验收入口 `:8787`。不要再加第三个 HTTP 入口。
 - 旧 `apps/web/frontend/` 已退役，不要再往里面加功能。
+
+## 加长作业（对照 / 对红 / 打样）
+
+对照 / 对红 / 打样共用作业合同。确认合同不必启动产品。
+
+0. 不启动产品、先核对 CLI 合同：
+
+```bash
+cd apps/web/backend && PYTHONPATH=. .venv/bin/python -m app.cli --help
+```
+
+禁止：`uvicorn`、新 FastAPI 路由、把 `m.save_task` 抄回 CLI。产品入口仍是 `./scripts/dev-start.sh` → Hono `:8787`。
+
+1. CLI 在 `apps/web/backend/app/cli.py`。stderr 打 `STAGE <name>`。stdout 最后一行是结果 JSON（不要 `ocr_text`）。不要 `save_task`。
+   打样不是 `app.cli` 子命令；`jobs.ts` 调 `workers/packaging`；HTTP 仍是 `/api/mockups`。
+
+2. 第一次 queued 落盘之后，只有 `apps/web/server/src/jobs.ts` 再写任务文件。`enqueue({ kind, id })`。路由只 save queued 一次，之后这个 tid 归 `jobs.ts`。
+
+3. Hono 动作立即返回。没有 `/api/jobs` 资源。
+
+4. 测试：抄 `jobs.test.ts` 的对照块。必写断言：第二单 queued、GET 无 `job_pid`、没有最后一行 JSON →「对照中断」、对红失败仍可签字。pytest：CLI 不 `save_task`；`--help` 含 `STAGE` / `save_task` / `packaging`。
+
+5. UI 等待：`shouldShowWaitCard`（`queued` | `running` | `comparing`）。
+
+调试：对外 `job_error` 用短中文。Node 日志写 problem + cause + fix。打开 `DATA_DIR/tasks/{tid}.json`。不要新 FastAPI 路由。
 
 ## Skill routing
 
@@ -45,7 +70,7 @@ When the user's request matches an available skill, invoke it via the Skill tool
 
 - Figma：https://www.figma.com/design/BL3PGUjLGLPb9iUZMzRhD6 （`Web · 锁定稿`。iPad 页是探索，不是实现依据。）
 - Ant Design 6 只当零件箱。`colorPrimary` = `#805898`，不要默认蓝，不要旧主色 `#722ED1`。
-- 左侧玻璃侧栏切「审稿台 / 打样台 / 历史记录 / 设置」。展开 280px，折叠 76px。不要飞书顶栏。页底淡紫雾，主区独立淡白板块。
+- 左侧玻璃侧栏切「审稿台 / 打样台 / 历史记录 / 设置」。展开 280px，折叠 76px。不要飞书顶栏。页底淡紫雾；侧栏与主区连成一块 28px 圆角工作场。≤1024 默认折叠；≤720 展开为遮罩抽屉。
 - 侧栏顶用 `apps/web/ui/public/brand/logo-mark.png`。折叠时悬停变成展开按钮（同一 44pt）。完整 `shine-mage.png` 只放拒绝页。
 - 左下角飞书头像 36px + `花名（真名）` 15px，例如 `天元（魏炜）`。
 - 空审核单不画三栏。设置里有「外观」：主题、13–28px 字号（可手写）、半透明侧栏、侧栏雾面对比度滑条、差异标记。只写 `localStorage`。深色走品牌紫雾，不是灰黑中台。
@@ -56,7 +81,7 @@ When the user's request matches an available skill, invoke it via the Skill tool
 ## Testing
 
 - 服务端：`npm run test -w beian-server`（`node:test`，`apps/web/server/src/*.test.ts`）
-- 界面：`npm run test -w beian-ui`（`node:test`，`authGate` / `nav` / `appearance` / `tasksBoard`）
+- 界面：`npm run test -w beian-ui`（`node:test`，`authGate` / `nav` / `appearance` / `tasksBoard` / `waitCard`）
 - 对照 worker：`cd apps/web/backend && .venv/bin/python -m pytest -q`
 - 全量：仓库根目录 `npm test`（server + ui + pytest）
 - 类型：`npm run typecheck -w beian-server` 与 `npm run build -w beian-ui`
