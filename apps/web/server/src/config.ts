@@ -7,7 +7,9 @@ const here = dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = resolve(here, "../../../..");
 export const WEB_ROOT = resolve(here, "../..");
 export const UI_DIST = join(WEB_ROOT, "ui/dist");
-export const UI_BRAND = join(WEB_ROOT, "ui/public/brand");
+/** Vite public dir. serveStatic root for `/brand/*` — parent of `UI_BRAND`. */
+export const UI_PUBLIC = join(WEB_ROOT, "ui/public");
+export const UI_BRAND = join(UI_PUBLIC, "brand");
 export const PYTHON_APP = join(WEB_ROOT, "backend");
 export const PACKAGING = join(REPO_ROOT, "workers/packaging");
 
