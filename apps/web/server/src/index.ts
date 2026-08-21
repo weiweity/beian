@@ -20,14 +20,16 @@ import {
   getSetting,
   maxUploadBytes,
   publicBase,
+  adminOnlyKeys,
   publicView,
   runProbe,
   saveSettings,
 } from "./settings.js";
+import { scanLocalApps } from "./scanLocal.js";
 import {
   authorizeUrl,
   beginOAuth,
-  consumeOAuthState,
+  consumeOAuth,
   createDisplaySession,
   displayLoginAllowed,
   exchangeCode,
@@ -49,6 +51,7 @@ import {
   publicMockup,
   queueMockup,
 } from "./mockup.js";
+import { assertIllustratorReady } from "./aiRaster.js";
 import {
   activeHits,
   assertCanAccessTask,
@@ -172,7 +175,7 @@ function failLogin(c: Context, code: string, hint: string) {
 
 app.get("/api/auth/feishu/login", (c) => {
   if (!oauthReady()) throw new HTTPException(503, { message: "未配置 FEISHU_APP_SECRET" });
-  const { state, challenge } = beginOAuth();
+  const { state, challenge } = beginOAuth(c.req.query("next") || "");
   return c.redirect(authorizeUrl(feishuRedirect(), state, challenge), 302);
 });
 
@@ -181,10 +184,10 @@ app.get("/api/auth/feishu/callback", async (c) => {
   if (error) return failLogin(c, "denied", "已取消飞书授权。");
   const state = c.req.query("state") || "";
   const code = c.req.query("code") || "";
-  const verifier = consumeOAuthState(state);
-  if (!verifier) return failLogin(c, "expired", "登录已过期，请再点一次飞书登录。");
+  const oauth = consumeOAuth(state);
+  if (!oauth) return failLogin(c, "expired", "登录已过期，请再点一次飞书登录。");
   try {
-    const ident = await exchangeCode(code, feishuRedirect(), verifier);
+    const ident = await exchangeCode(code, feishuRedirect(), oauth.verifier);
     const expected = await lockAllowedTenant(ident.tenant_key);
     if (expected && ident.tenant_key && ident.tenant_key !== expected) {
       return failLogin(c, "forbidden", "只允许伸美公司的飞书号进入。");
@@ -201,7 +204,7 @@ app.get("/api/auth/feishu/callback", async (c) => {
       path: "/",
       maxAge: 7 * 24 * 3600,
     });
-    return c.redirect(`${publicBase()}/`, 302);
+    return c.redirect(`${publicBase()}${oauth.next || "/"}`, 302);
   } catch (e) {
     const msg = e instanceof Error ? e.message : "登录失败";
     const code = /白名单/.test(msg) ? "forbidden" : "failed";
@@ -416,7 +419,7 @@ app.get("/api/settings", (c) => {
 });
 
 app.post("/api/settings", async (c) => {
-  need(c, "create");
+  const s = need(c, "create");
   const body = (await c.req.json().catch(() => ({}))) as { values?: Record<string, string> } & Record<
     string,
     string
@@ -426,6 +429,10 @@ app.post("/api/settings", async (c) => {
   for (const [k, v] of Object.entries(values)) {
     if (k === "values") continue;
     if (typeof v === "string") patch[k] = v;
+  }
+  const locked = adminOnlyKeys().filter((k) => k in patch);
+  if (locked.length && s.role !== "admin") {
+    throw new HTTPException(403, { message: "改本机软件路径需要管理员" });
   }
   const { restart } = saveSettings(patch);
   const billingKeys = [
@@ -440,19 +447,35 @@ app.post("/api/settings", async (c) => {
 });
 
 app.post("/api/settings/probe", async (c) => {
-  need(c, "read");
+  const s = need(c, "read");
   const body = (await c.req.json().catch(() => ({}))) as { id?: string };
   const id = String(body.id || "").trim();
   if (!id) throw new HTTPException(400, { message: "缺少探测 id" });
   if (id === "lark_send") {
-    const r = await sendText("【审稿台】推送测试。看到这条就说明 lark-cli 通了。");
+    const to = (s.open_id || "").trim();
+    if (!to) {
+      return c.json({ id, ok: false, message: "显示名登录没有 open_id，发不了测试" });
+    }
+    const r = await sendText("【审稿台】推送测试。发给当前登录。", to);
     return c.json({
       id,
       ok: Boolean(r.ok),
-      message: r.ok ? "已发出测试消息" : r.reason || "发送失败",
+      message: r.ok ? `已发给当前登录 ${to.slice(0, 8)}…` : r.reason || "发送失败",
     });
   }
   return c.json(await runProbe(id));
+});
+
+app.post("/api/settings/scan", (c) => {
+  const s = need(c, "read");
+  if (s.role !== "admin") throw new HTTPException(403, { message: "扫描这台电脑需要管理员" });
+  const result = scanLocalApps();
+  return c.json({
+    hits: result.hits,
+    timedOut: result.timedOut,
+    roots: result.roots,
+    message: result.timedOut ? "扫描超时，已找到的留下。没有全盘搜。" : `白名单 ${result.roots.length} 个目录`,
+  });
 });
 
 app.get("/api/settings/billing", async (c) => {
@@ -482,6 +505,13 @@ app.post("/api/mockups", async (c) => {
   const body = await c.req.parseBody();
   const file = body.file || body.pdf || body.source;
   if (!(file instanceof File)) throw new HTTPException(400, { message: "需要平面 PDF 或 AI" });
+  if (/\.ai$/i.test(file.name)) {
+    try {
+      assertIllustratorReady();
+    } catch (e) {
+      boom(e);
+    }
+  }
   const id = newTid();
   const dir = join(DATA_DIR, "mockups", id);
   mkdirSync(dir, { recursive: true });

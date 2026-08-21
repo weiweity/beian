@@ -39,6 +39,21 @@ describe("feishu authorize", () => {
     assert.equal(auth.consumeOAuthState("nope"), null);
   });
 
+  it("sanitizeNext only allows same-origin relative paths", () => {
+    assert.equal(auth.sanitizeNext("/?tab=settings&group=开工板"), "/?tab=settings&group=开工板");
+    assert.equal(auth.sanitizeNext("https://evil.example/"), "/");
+    assert.equal(auth.sanitizeNext("//evil.example"), "/");
+    assert.equal(auth.sanitizeNext("ok"), "/");
+  });
+
+  it("beginOAuth stores next and consumeOAuth returns it once", () => {
+    const { state } = auth.beginOAuth("/?tab=settings&group=开工板");
+    const row = auth.consumeOAuth(state);
+    assert.ok(row);
+    assert.equal(row.next, "/?tab=settings&group=开工板");
+    assert.equal(auth.consumeOAuth(state), null);
+  });
+
   it("display login stays on loopback only", () => {
     assert.equal(auth.displayLoginAllowed("www.jianghua.site"), false);
     assert.equal(auth.displayLoginAllowed("localhost:8787"), true);

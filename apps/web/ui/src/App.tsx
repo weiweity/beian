@@ -112,7 +112,10 @@ export function App() {
       setMe(next);
       setApiBroken(null);
       if (next.logged_in) {
-        setView((cur) => (cur === "tasks" && window.location.hash === "#settings" ? "settings" : cur));
+        const tab = new URLSearchParams(window.location.search).get("tab");
+        setView((cur) =>
+          cur === "tasks" && (window.location.hash === "#settings" || tab === "settings") ? "settings" : cur,
+        );
         setAuthError(null);
       } else {
         setTaskId(null);
@@ -270,6 +273,7 @@ export function App() {
         {view === "settings" ? (
           <SettingsPage
             canWrite={Boolean(me.perms.includes("create"))}
+            canAdmin={me.role === "admin"}
             openId={me.open_id || ""}
             displayName={me.display_name}
           />

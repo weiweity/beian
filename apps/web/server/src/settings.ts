@@ -14,6 +14,7 @@ export type SettingField = {
   group: string;
   restart?: boolean;
   default?: string;
+  adminOnly?: boolean;
 };
 
 function defaultPython(): string {
@@ -165,7 +166,7 @@ export const CATALOG: SettingField[] = [
     label: "模型名",
     kind: "text",
     default: "MiniMax-M3",
-    help: "默认 MiniMax-M3。",
+    help: "默认 MiniMax-M3。只填国内能用的模型，探测是 GET /v1/models 模型列表，不是对话。",
   },
   {
     group: "本机依赖",
@@ -181,6 +182,15 @@ export const CATALOG: SettingField[] = [
     label: "Blender 路径",
     kind: "path",
     help: "打样台要这个。必须是可执行文件，不能只写 blender。",
+    adminOnly: true,
+  },
+  {
+    group: "本机依赖",
+    key: "ILLUSTRATOR_EXECUTABLE",
+    label: "Illustrator 路径",
+    kind: "path",
+    help: ".ai 转图用。只保存路径，不在探测时启动 Illustrator。",
+    adminOnly: true,
   },
   {
     group: "本机依赖",
@@ -322,6 +332,14 @@ export function blenderBin(): string {
   return getSetting("BLENDER_EXECUTABLE");
 }
 
+export function illustratorBin(): string {
+  return getSetting("ILLUSTRATOR_EXECUTABLE");
+}
+
+export function adminOnlyKeys(): string[] {
+  return CATALOG.filter((f) => f.adminOnly).map((f) => f.key);
+}
+
 export function maxUploadBytes(): number {
   const n = Number(getSetting("WB_MAX_UPLOAD_MB") || "200");
   const mb = Number.isFinite(n) && n > 0 ? n : 200;
@@ -345,6 +363,7 @@ export function publicView() {
       { id: "minimax", label: "MiniMax" },
       { id: "python", label: "对照 Python" },
       { id: "blender", label: "Blender" },
+      { id: "illustrator", label: "Illustrator" },
       { id: "lark", label: "lark-cli 推送" },
     ],
     derived: {
@@ -392,6 +411,7 @@ function fieldView(f: SettingField, val: string) {
       kind: f.kind,
       help: f.help,
       restart: Boolean(f.restart),
+      adminOnly: Boolean(f.adminOnly),
       set: Boolean(val),
       last4: val ? last4(val) : "",
       value: "",
@@ -404,6 +424,7 @@ function fieldView(f: SettingField, val: string) {
       kind: f.kind,
       help: f.help,
       restart: Boolean(f.restart),
+      adminOnly: Boolean(f.adminOnly),
       set: true,
       last4: "",
       value: /^(1|true|yes|on)$/i.test(val) ? "true" : "false",
@@ -415,6 +436,7 @@ function fieldView(f: SettingField, val: string) {
     kind: f.kind,
     help: f.help,
     restart: Boolean(f.restart),
+    adminOnly: Boolean(f.adminOnly),
     set: Boolean(val),
     last4: "",
     value: val,
@@ -497,14 +519,14 @@ async function probeWorker(target: "python" | "baidu"): Promise<ProbeResult> {
       return {
         id: target,
         ok: true,
-        message: target === "python" ? `可用 ${parsed.executable || bin}` : "能拿到 token",
+        message: target === "python" ? `worker 解释器在 · ${parsed.executable || bin}` : "对照用的识别接口通了",
       };
     }
     if (parsed.error) msg = parsed.error;
   } catch {
     /* 非 JSON */
   }
-  if (r.code === 0) return { id: target, ok: true, message: "通过" };
+  if (r.code === 0) return { id: target, ok: true, message: target === "python" ? "worker 解释器可用" : "对照用的识别接口通了" };
   return { id: target, ok: false, message: redact(msg || `${target} 探测失败`) };
 }
 
@@ -516,8 +538,16 @@ async function probeBlender(): Promise<ProbeResult> {
   const r = await runCmd(p, ["--version"], 15_000);
   const line = (r.stdout || r.stderr || "").split(/\r?\n/)[0] || "";
   if (r.code === 0 && /blender/i.test(line)) return { id, ok: true, message: line.slice(0, 80) };
-  if (r.code === 0) return { id, ok: true, message: "能启动" };
+  if (r.code === 0) return { id, ok: true, message: "能启动 Blender（--version）" };
   return { id, ok: false, message: redact(line || "启动失败") };
+}
+
+function probeIllustrator(): ProbeResult {
+  const id = "illustrator";
+  const p = illustratorBin();
+  if (!p) return { id, ok: false, message: "还没填 Illustrator 路径。点扫描这台电脑。" };
+  if (!existsSync(p)) return { id, ok: false, message: "这个路径不存在" };
+  return { id, ok: true, message: `已确认路径 · ${p}（探测不启动 Illustrator）` };
 }
 
 function probeLark(): ProbeResult {
@@ -545,7 +575,7 @@ async function probeMinimax(): Promise<ProbeResult> {
         headers: { Authorization: `Bearer ${key}` },
         signal: AbortSignal.timeout(8000),
       });
-      if (res.ok) return { id, ok: true, message: "Key 能调通模型列表" };
+      if (res.ok) return { id, ok: true, message: `Key 能调通模型列表 GET /v1/models · ${url} · 不是对话，也不是余额` };
     } catch {
       /* try next */
     }
@@ -565,6 +595,8 @@ export async function runProbe(id: string): Promise<ProbeResult> {
       return probeWorker("python");
     case "blender":
       return probeBlender();
+    case "illustrator":
+      return probeIllustrator();
     case "lark":
       return probeLark();
     default:

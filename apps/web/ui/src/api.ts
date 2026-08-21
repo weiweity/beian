@@ -171,6 +171,11 @@ export const api = {
     method: "POST",
     body: JSON.stringify({ id }),
   }),
+  scanLocal: () =>
+    request<{ hits: { kind: string; label: string; path: string }[]; timedOut: boolean; roots: string[]; message: string }>(
+      "/api/settings/scan",
+      { method: "POST", body: JSON.stringify({}) },
+    ),
   billing: () => request<BillingView>("/api/settings/billing"),
   refreshBilling: () =>
     request<BillingView>("/api/settings/billing/refresh", { method: "POST", body: JSON.stringify({}) }),
@@ -182,6 +187,7 @@ export type SettingFieldView = {
   kind: "text" | "secret" | "toggle" | "path";
   help: string;
   restart: boolean;
+  adminOnly?: boolean;
   set: boolean;
   last4: string;
   value: string;

@@ -42,7 +42,7 @@ export function formatAccountLabel(name: string, nickname = ""): string {
 
 const TTL = 7 * 24 * 3600;
 const sessions = new Map<string, Session>();
-const oauthStates = new Map<string, { exp: number; verifier: string }>();
+const oauthStates = new Map<string, { exp: number; verifier: string; next?: string }>();
 let tenantCache: { key: string; exp: number } | null = null;
 
 function sessionsPath() {
@@ -286,19 +286,30 @@ export function pkcePair(): { verifier: string; challenge: string } {
   return { verifier, challenge };
 }
 
-export function beginOAuth(): { state: string; challenge: string } {
+export function sanitizeNext(raw: string): string {
+  const s = (raw || "").trim();
+  if (!s.startsWith("/")) return "/";
+  if (s.startsWith("//") || s.includes("\\") || s.includes("://") || s.length > 200) return "/";
+  return s;
+}
+
+export function beginOAuth(next = ""): { state: string; challenge: string } {
   const state = randomBytes(18).toString("base64url");
   const { verifier, challenge } = pkcePair();
-  oauthStates.set(state, { exp: Date.now() + 600_000, verifier });
+  oauthStates.set(state, { exp: Date.now() + 600_000, verifier, next: sanitizeNext(next) });
   return { state, challenge };
 }
 
 /** 用过即删。过期或不存在返回 null。 */
 export function consumeOAuthState(state: string): string | null {
+  return consumeOAuth(state)?.verifier ?? null;
+}
+
+export function consumeOAuth(state: string): { verifier: string; next: string } | null {
   const row = oauthStates.get(state);
   oauthStates.delete(state);
   if (!row || row.exp < Date.now()) return null;
-  return row.verifier;
+  return { verifier: row.verifier, next: row.next || "/" };
 }
 
 export function oauthReady(): boolean {

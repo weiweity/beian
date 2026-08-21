@@ -44,4 +44,25 @@ describe("settings mask", () => {
     assert.equal(r.ok, false);
     assert.match(r.message, /未知/);
   });
+
+  it("minimax disabled copy is not an isolated 通", async () => {
+    saveSettings({ MINIMAX_ENABLED: "false", MINIMAX_API_KEY: "" });
+    const r = await runProbe("minimax");
+    assert.equal(r.message.trim() === "通" || r.message.trim() === "不通", false);
+    assert.match(r.message, /未启用|模型列表|Key/);
+  });
+
+  it("adminOnly keys include blender and illustrator", async () => {
+    const { adminOnlyKeys } = await import("./settings.js");
+    const keys = adminOnlyKeys();
+    assert.ok(keys.includes("BLENDER_EXECUTABLE"));
+    assert.ok(keys.includes("ILLUSTRATOR_EXECUTABLE"));
+  });
+
+  it("illustrator probe does not claim isolated 通", async () => {
+    const r = await runProbe("illustrator");
+    assert.equal(r.ok, false);
+    assert.equal(r.message.trim() === "通" || r.message.trim() === "不通", false);
+    assert.match(r.message, /路径|扫描/);
+  });
 });
