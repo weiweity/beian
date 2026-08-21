@@ -43,6 +43,16 @@
   不做：历史中心、第三份 PDF、改 `normalize()` 去空白、旧新 PDF 全量 diff。  
   入口：`docs/designs/review-rework-loop.md` Recommended Approach。
 
+## P2 — 开工板向导页画面（设计审查 2026-08-21）
+
+- [x] **百度 / 飞书 / MiniMax 向导页 mockup**  
+  落地页已是编号步骤 + 原字段，不是第二套密钥表。HTML 线框仍可后补。  
+  **Completed:** v0.11.1.0 (2026-08-21)
+
+- [x] **390 开工板画面**  
+  ≤720 顶上 Segmented，行右 ≥44px，桌面仍 208px 左栏。已在实机 390 验过。  
+  **Completed:** v0.11.1.0 (2026-08-21)
+
 ## P3 — 9 月以后
 
 - [x] 3D Worker 接线（打样台调用 pipeline；缺 Blender 会失败而不是装可用）
