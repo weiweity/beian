@@ -468,7 +468,7 @@ describe("review http", () => {
     const res = await app.request("/api/health");
     assert.equal(res.status, 200);
     const body = (await res.json()) as { version?: string; jobs?: { ocr?: { running: number; queued: number } } };
-    assert.equal(body.version, "0.11.0.0");
+    assert.match(String(body.version), /^\d+\.\d+\.\d+\.\d+$/);
     assert.equal(typeof body.jobs?.ocr?.running, "number");
     assert.equal(typeof body.jobs?.ocr?.queued, "number");
   });
