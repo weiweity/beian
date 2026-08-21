@@ -23,11 +23,14 @@ function whichLark(): string | null {
   return null;
 }
 
-export function sendText(text: string): Promise<{ ok: boolean; skipped?: boolean; reason?: string }> {
+export function sendText(
+  text: string,
+  to?: string,
+): Promise<{ ok: boolean; skipped?: boolean; reason?: string }> {
   if (!/^(1|true|yes|on)$/i.test(getSetting("FEISHU_ENABLED"))) {
     return Promise.resolve({ ok: false, skipped: true, reason: "FEISHU_ENABLED=false" });
   }
-  const openId = getSetting("FEISHU_OPEN_ID");
+  const openId = (to || getSetting("FEISHU_OPEN_ID") || "").trim();
   if (!openId) return Promise.resolve({ ok: false, skipped: true, reason: "missing FEISHU_OPEN_ID" });
   const bin = whichLark();
   if (!bin) return Promise.resolve({ ok: false, reason: "lark-cli not found" });

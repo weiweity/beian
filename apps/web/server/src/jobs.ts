@@ -19,6 +19,7 @@ import {
   type Task,
 } from "./tasks.js";
 import { compareTask, killTree, reworkTask, runPackaging, type RunPythonResult } from "./workers.js";
+import { rasterAiFile } from "./aiRaster.js";
 
 const STAGE_LABEL: Record<string, string> = {
   render_pdf: "出图",
@@ -58,14 +59,15 @@ const MERGE_ALLOW = new Set([
 const OCR_TIMEOUT_MS = 180_000;
 const MOCKUP_TIMEOUT_MS = 420_000;
 
-type Slot = "ocr" | "blender";
+type Slot = "ocr" | "blender" | "illustrator";
 
-const live: Record<Slot, string | null> = { ocr: null, blender: null };
+const live: Record<Slot, string | null> = { ocr: null, blender: null, illustrator: null };
 
 export type JobsTestHooks = {
   runCompare?: typeof compareTask;
   runRework?: typeof reworkTask;
   runPack?: typeof runPackaging;
+  runRaster?: (opts: { source: string; outDir: string }) => Promise<{ ok: boolean; png?: string; message: string }>;
   notify?: typeof notifyJobFinished;
   killTree?: typeof killTree;
   bookkeeping?: typeof compareBookkeeping;
@@ -81,18 +83,29 @@ export function resetJobsTestHooks(): void {
   hooks = {};
   live.ocr = null;
   live.blender = null;
+  live.illustrator = null;
 }
 
-export function queueSnapshot(): { ocr: { running: number; queued: number }; blender: { running: number; queued: number } } {
+export function queueSnapshot(): {
+  ocr: { running: number; queued: number };
+  blender: { running: number; queued: number };
+  illustrator: { running: number; queued: number };
+} {
   const tasks = loadAllTasks();
   const mocks = loadAllMockups();
   const ocrQueued = tasks.filter((t) => isOcr(t.job_kind) && t.job_status === "queued").length;
   const ocrRunning = tasks.filter((t) => isOcr(t.job_kind) && t.job_status === "running").length;
-  const bQueued = mocks.filter((j) => j.job_status === "queued").length;
-  const bRunning = mocks.filter((j) => j.job_status === "running").length;
+  const ai = mocks.filter((j) => needsRaster(j));
+  const rest = mocks.filter((j) => !needsRaster(j));
+  const bQueued = rest.filter((j) => j.job_status === "queued").length;
+  const bRunning = rest.filter((j) => j.job_status === "running" && j.job_stage !== "illustrator").length;
   return {
     ocr: { running: ocrRunning, queued: ocrQueued },
     blender: { running: bRunning, queued: bQueued },
+    illustrator: {
+      running: ai.filter((j) => j.job_status === "running").length,
+      queued: ai.filter((j) => j.job_status === "queued").length,
+    },
   };
 }
 
@@ -144,6 +157,7 @@ export function enqueue(opts: { kind: JobKind; id: string }): Task | MockupJob {
 export function reclaimOnBoot(): void {
   live.ocr = null;
   live.blender = null;
+  live.illustrator = null;
   for (const task of loadAllTasks()) reclaimTask(task);
   for (const job of loadAllMockups()) reclaimMockup(job);
   for (const task of loadAllTasks()) {
@@ -163,6 +177,10 @@ export function tryStart(): void {
   if (!live.ocr) {
     const next = oldestOcrQueued();
     if (next) claimOcr(next);
+  }
+  if (!live.illustrator) {
+    const next = oldestAiQueued();
+    if (next) claimAi(next);
   }
   if (!live.blender) {
     const next = oldestMockupQueued();
@@ -189,9 +207,19 @@ function oldestOcrQueued(): Task | undefined {
     .sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || "")))[0];
 }
 
+function needsRaster(job: MockupJob): boolean {
+  return /\.ai$/i.test(job.source_path || "") && !job.raster_png;
+}
+
+function oldestAiQueued(): MockupJob | undefined {
+  return loadAllMockups()
+    .filter((j) => j.job_status === "queued" && needsRaster(j))
+    .sort((a, b) => a.created_at.localeCompare(b.created_at))[0];
+}
+
 function oldestMockupQueued(): MockupJob | undefined {
   return loadAllMockups()
-    .filter((j) => j.job_status === "queued")
+    .filter((j) => j.job_status === "queued" && !needsRaster(j))
     .sort((a, b) => a.created_at.localeCompare(b.created_at))[0];
 }
 
@@ -250,6 +278,55 @@ function claimMockup(job: MockupJob): void {
   live.blender = job.id;
   const startedAt = job.job_started_at;
   void runMockup(job.id, startedAt);
+}
+
+function claimAi(job: MockupJob): void {
+  job.job_status = "running";
+  job.status = "running";
+  job.job_started_at = nowIso();
+  job.job_stage = "illustrator";
+  job.job_stage_label = "转图";
+  job.job_eta_s = 60;
+  job.job_error = undefined;
+  saveMockup(job);
+  live.illustrator = job.id;
+  const startedAt = job.job_started_at;
+  void runAi(job.id, startedAt);
+}
+
+async function runAi(id: string, startedAt: string): Promise<void> {
+  const job = loadMockup(id);
+  if (!job || job.job_started_at !== startedAt) return;
+  const run = hooks.runRaster || rasterAiFile;
+  const dir = join(DATA_DIR, "mockups", id);
+  let result: { ok: boolean; png?: string; message: string };
+  try {
+    result = await run({ source: job.source_path || "", outDir: dir });
+  } catch (err) {
+    result = { ok: false, message: err instanceof Error ? err.message : "转图失败" };
+  }
+  const cur = loadMockup(id);
+  if (!cur || cur.job_started_at !== startedAt) {
+    if (live.illustrator === id) live.illustrator = null;
+    tryStart();
+    return;
+  }
+  if (live.illustrator === id) live.illustrator = null;
+  if (!result.ok) {
+    cur.job_status = "failed";
+    cur.status = "failed";
+    cur.job_error = result.message || "转图失败";
+    cur.job_finished_at = nowIso();
+    saveMockup(cur);
+    tryStart();
+    return;
+  }
+  cur.raster_png = result.png;
+  cur.job_status = "queued";
+  cur.status = "queued";
+  cur.job_stage = undefined;
+  saveMockup(cur);
+  tryStart();
 }
 
 async function runOcr(id: string, startedAt: string): Promise<void> {

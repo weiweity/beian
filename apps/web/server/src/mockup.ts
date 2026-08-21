@@ -26,6 +26,7 @@ export type MockupJob = {
   notify_job_id?: string;
   notify_sent?: boolean;
   reclaim_count?: number;
+  raster_png?: string;
 };
 
 const cache = new Map<string, MockupJob>();
