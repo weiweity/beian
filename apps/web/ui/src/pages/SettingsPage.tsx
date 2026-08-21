@@ -1,16 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import {
-  Alert,
-  App,
-  Button,
-  Form,
-  Input,
-  Menu,
-  Space,
-  Switch,
-  Tag,
-  Typography,
-} from "antd";
+import { Alert, App, Button, Form, Input, Menu, Segmented, Switch, Typography } from "antd";
 import {
   api,
   type BillingView,
@@ -20,21 +9,48 @@ import {
 } from "../api";
 import { BillingPane } from "../features/billing/BillingPane";
 import { AppearancePane } from "../chrome/AppearancePane";
+import {
+  BOARD_ROWS,
+  HOST_INTRO,
+  PROBE_BY_GROUP,
+  PUSH_INTRO,
+  SETUP_NEXT,
+  SETUP_RETURN,
+  VIRTUAL,
+  WIZARD,
+  firstBadRow,
+  idleRowMessage,
+  probeErrorMessage,
+  progressSpoken,
+  setupHeadline,
+  shortGroupLabel,
+  statusWord,
+  type WizardGuide,
+} from "./setupBoard";
 
-const PROBE_BY_GROUP: Record<string, string[]> = {
-  开工板: ["feishu", "baidu", "python", "blender", "lark", "minimax"],
-  飞书登录: ["feishu"],
-  飞书推送: ["lark"],
-  "百度 OCR": ["baidu"],
-  "MiniMax（可选）": ["minimax"],
-  本机依赖: ["python", "blender"],
+type ScanHit = { kind: string; label: string; path: string };
+
+type Props = {
+  canWrite?: boolean;
+  canAdmin?: boolean;
+  openId?: string;
+  displayName?: string | null;
 };
 
-const VIRTUAL = new Set(["外观", "开工板", "费用账单"]);
+function readGroupParam(): string {
+  try {
+    return new URLSearchParams(window.location.search).get("group") || "";
+  } catch {
+    return "";
+  }
+}
 
-type Props = { canWrite?: boolean; openId?: string; displayName?: string | null };
-
-export function SettingsPage({ canWrite = true, openId = "", displayName = "" }: Props) {
+export function SettingsPage({
+  canWrite = true,
+  canAdmin = false,
+  openId = "",
+  displayName = "",
+}: Props) {
   const { message } = App.useApp();
   const [view, setView] = useState<SettingsView | null>(null);
   const [draft, setDraft] = useState<Record<string, string>>({});
@@ -42,8 +58,13 @@ export function SettingsPage({ canWrite = true, openId = "", displayName = "" }:
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [restart, setRestart] = useState(false);
-  const [group, setGroup] = useState<string>("外观");
+  const [group, setGroup] = useState<string>(() => readGroupParam() || "外观");
   const [probes, setProbes] = useState<Record<string, ProbeResult | { pending: true }>>({});
+  const [probeBusy, setProbeBusy] = useState("");
+  const [scanHits, setScanHits] = useState<ScanHit[]>([]);
+  const [scanMsg, setScanMsg] = useState("");
+  const [scanBusy, setScanBusy] = useState(false);
+  const [pick, setPick] = useState<Record<string, string>>({});
   const [billing, setBilling] = useState<BillingView | null>(null);
   const [billBusy, setBillBusy] = useState(false);
 
@@ -138,6 +159,17 @@ export function SettingsPage({ canWrite = true, openId = "", displayName = "" }:
       }
       setDraft(init);
       message.success(next.restart ? "已保存。改了需要重启的项，请重启服务。" : "已保存到本机。");
+      let bounce = "";
+      try {
+        bounce = sessionStorage.getItem(SETUP_RETURN) || "";
+        sessionStorage.removeItem(SETUP_RETURN);
+      } catch {
+        bounce = "";
+      }
+      if (bounce) {
+        setGroup("开工板");
+        void probe(bounce);
+      }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "保存失败");
     } finally {
@@ -153,14 +185,76 @@ export function SettingsPage({ canWrite = true, openId = "", displayName = "" }:
     } catch (err: unknown) {
       setProbes((prev) => ({
         ...prev,
-        [id]: { id, ok: false, message: err instanceof Error ? err.message : "探测失败" },
+        [id]: { id, ok: false, message: probeErrorMessage(err) },
       }));
     }
   }
 
   async function probeGroup() {
     const ids = PROBE_BY_GROUP[group] || [];
-    for (const id of ids) await probe(id);
+    setProbeBusy(`检测中 0/${ids.length}`);
+    for (let i = 0; i < ids.length; i++) {
+      setProbeBusy(`检测中 ${i + 1}/${ids.length}`);
+      await probe(ids[i]);
+    }
+    setProbeBusy("");
+  }
+
+  async function scanPc() {
+    if (!canAdmin) {
+      message.error("扫描这台电脑需要管理员");
+      return;
+    }
+    setScanBusy(true);
+    setScanMsg("扫描中，白名单目录，最多 8 秒。");
+    try {
+      const r = await api.scanLocal();
+      setScanHits(r.hits);
+      setScanMsg(
+        r.timedOut && r.roots?.length
+          ? `${r.message} 搜过：${r.roots.join("、")}`
+          : r.message,
+      );
+      const next: Record<string, string> = {};
+      for (const h of r.hits) {
+        if (!next[h.kind]) next[h.kind] = h.path;
+      }
+      setPick(next);
+    } catch (err: unknown) {
+      setScanMsg(err instanceof Error ? err.message : "扫描失败");
+    } finally {
+      setScanBusy(false);
+    }
+  }
+
+  async function adopt(kind: string, path: string) {
+    const key =
+      kind === "blender"
+        ? "BLENDER_EXECUTABLE"
+        : kind === "illustrator"
+          ? "ILLUSTRATOR_EXECUTABLE"
+          : kind === "python"
+            ? "WB_PYTHON"
+            : "";
+    if (!key) return;
+    try {
+      const next = await api.saveSettings({ [key]: path });
+      setView(next);
+      setDraft((prev) => ({ ...prev, [key]: path }));
+      message.success("已采用路径");
+      await probe(kind === "python" ? "python" : kind);
+    } catch (err: unknown) {
+      message.error(err instanceof Error ? err.message : "保存失败");
+    }
+  }
+
+  function openWizard(row: (typeof BOARD_ROWS)[number]) {
+    try {
+      sessionStorage.setItem(SETUP_RETURN, row.id);
+    } catch {
+      /* ignore */
+    }
+    setGroup(row.group);
   }
 
   async function refreshBills() {
@@ -179,12 +273,8 @@ export function SettingsPage({ canWrite = true, openId = "", displayName = "" }:
     return (
       <section className="settings-page">
         <header className="settings-head">
-          <Typography.Title level={3} style={{ margin: 0 }}>
-            设置
-          </Typography.Title>
-          <Typography.Paragraph type="secondary" style={{ margin: "4px 0 0" }}>
-            读取本机配置…
-          </Typography.Paragraph>
+          <h1 className="settings-title">设置</h1>
+          <p className="settings-lead">读取本机配置…</p>
         </header>
       </section>
     );
@@ -193,31 +283,16 @@ export function SettingsPage({ canWrite = true, openId = "", displayName = "" }:
   const groupProbes = (PROBE_BY_GROUP[group] || [])
     .map((id) => view?.probes.find((p) => p.id === id))
     .filter((p): p is { id: string; label: string } => Boolean(p));
+  const wizard = WIZARD[group];
+  const showBack = Boolean(wizard) || group === "飞书推送" || group === "本机依赖";
 
   return (
     <section className="settings-page">
       <header className="settings-head">
-        <div>
-          <Typography.Title level={3} style={{ margin: 0 }}>
-            设置
-          </Typography.Title>
-          <Typography.Paragraph type="secondary" style={{ margin: "4px 0 0" }}>
-            开工、费用、密钥都在这里。密钥不回显、不进 git。权限以后再切。
-          </Typography.Paragraph>
-        </div>
-        <Space wrap>
-          {(view?.probes || []).map((p) => {
-            const r = probes[p.id];
-            const done = r && !("pending" in r) ? r : null;
-            const color = !done ? "default" : done.ok ? "success" : "error";
-            return (
-              <Tag key={p.id} color={color} variant="filled">
-                {p.label}
-                {done ? (done.ok ? " 通" : " 不通") : " 未测"}
-              </Tag>
-            );
-          })}
-        </Space>
+        <h1 className="settings-title">设置</h1>
+        <p className="settings-lead">
+          {group === "开工板" ? setupHeadline(probes) : "密钥不回显、不进 git。籽烨不用进这页。"}
+        </p>
       </header>
 
       {error ? <Alert type="error" showIcon message={error} className="settings-alert" /> : null}
@@ -243,51 +318,91 @@ export function SettingsPage({ canWrite = true, openId = "", displayName = "" }:
           />
         </aside>
         <div className="settings-main">
+          <div className="settings-pills" role="navigation" aria-label="设置分组">
+            <Segmented
+              value={group}
+              options={menuItems.map((it) => ({
+                label: shortGroupLabel(String(it.key)),
+                value: it.key,
+              }))}
+              onChange={(v) => setGroup(String(v))}
+            />
+          </div>
           <div className="settings-main-head">
-            <Typography.Title level={4} style={{ margin: 0 }}>
-              {group}
-            </Typography.Title>
+            <h2 className="settings-group-title">{group}</h2>
             {group === "费用账单" ? (
               <Button type="primary" loading={billBusy} onClick={() => void refreshBills()}>
                 强制刷新厂商
               </Button>
+            ) : group === "开工板" ? (
+              <div className="setup-actions">
+                <Button onClick={() => void scanPc()} loading={scanBusy} disabled={!canAdmin}>
+                  扫描这台电脑
+                </Button>
+                <Button type="primary" onClick={() => void probeGroup()} loading={Boolean(probeBusy)}>
+                  {probeBusy || "全部检测"}
+                </Button>
+              </div>
             ) : groupProbes.length ? (
-              <Button onClick={() => void probeGroup()}>{group === "开工板" ? "全部检测" : "检测连通"}</Button>
+              <Button onClick={() => void probeGroup()}>检测连通</Button>
             ) : null}
           </div>
 
           {group === "外观" ? <AppearancePane /> : null}
 
           {group === "开工板" ? (
-            <HealthPane
-              view={view}
+            <SetupBoard
               probes={probes}
-              openId={openId}
-              displayName={displayName}
+              probeBusy={probeBusy}
+              scanHits={scanHits}
+              scanMsg={scanMsg}
+              pick={pick}
+              onPick={(kind, path) => setPick((p) => ({ ...p, [kind]: path }))}
+              onAdopt={(kind, path) => void adopt(kind, path)}
               onProbe={(id) => void probe(id)}
+              onWizard={(row) => openWizard(row)}
+              onScan={() => void scanPc()}
+              onPush={() => void probe("lark_send")}
+              displayName={displayName}
+              openId={openId}
             />
           ) : null}
 
           {group === "费用账单" ? <BillingPane billing={billing} /> : null}
+
+          {wizard ? <WizardSteps guide={wizard} /> : null}
+          {group === "本机依赖" ? <p className="wizard-intro">{HOST_INTRO}</p> : null}
+          {group === "飞书推送" ? <p className="wizard-intro">{PUSH_INTRO}</p> : null}
 
           {groupProbes.map((p) => {
             const r = probes[p.id];
             const done = r && !("pending" in r) ? r : null;
             if (!done || VIRTUAL.has(group)) return null;
             return (
-              <Typography.Paragraph
-                key={p.id}
-                type={done.ok ? "secondary" : "danger"}
-                style={{ margin: "0 0 8px" }}
-              >
+              <p key={p.id} className={done.ok ? "probe-line is-ok" : "probe-line is-bad"}>
                 {p.label}：{done.message}
-              </Typography.Paragraph>
+              </p>
             );
           })}
 
+          {group === "飞书登录" ? (
+            <Button
+              className="wizard-cta"
+              onClick={() => {
+                window.location.assign(`/api/auth/feishu/login?next=${encodeURIComponent(SETUP_NEXT)}`);
+              }}
+            >
+              用飞书走一遍授权
+            </Button>
+          ) : null}
           {group === "飞书推送" ? (
-            <Button style={{ marginBottom: 16 }} onClick={() => void probe("lark_send")}>
-              给推送对象发一条测试
+            <Button className="wizard-cta" onClick={() => void probe("lark_send")}>
+              给当前登录发一条测试
+            </Button>
+          ) : null}
+          {showBack ? (
+            <Button className="wizard-back" onClick={() => setGroup("开工板")}>
+              回开工板
             </Button>
           ) : null}
 
@@ -299,6 +414,7 @@ export function SettingsPage({ canWrite = true, openId = "", displayName = "" }:
                   field={f}
                   value={draft[f.key] ?? ""}
                   onChange={(v) => setField(f.key, v)}
+                  locked={Boolean(f.adminOnly) && !canAdmin}
                 />
               ))}
             </Form>
@@ -306,7 +422,7 @@ export function SettingsPage({ canWrite = true, openId = "", displayName = "" }:
         </div>
       </div>
 
-      {group === "外观" ? null : (
+      {group === "外观" || group === "开工板" ? null : (
         <footer className="settings-footer">
           <Typography.Text type="secondary">保存后立即写入本机，部分项需重启。</Typography.Text>
           <Button type="primary" onClick={() => void save()} loading={saving} disabled={!canWrite}>
@@ -318,60 +434,166 @@ export function SettingsPage({ canWrite = true, openId = "", displayName = "" }:
   );
 }
 
-function HealthPane({
-  view,
-  probes,
-  openId,
-  displayName,
-  onProbe,
-}: {
-  view: SettingsView | null;
-  probes: Record<string, ProbeResult | { pending: true }>;
-  openId: string;
-  displayName: string | null;
-  onProbe: (id: string) => void;
-}) {
-  const steps = view?.health
-    ? Object.entries(view.health)
-    : [];
+function WizardSteps({ guide }: { guide: WizardGuide }) {
   return (
-    <div className="health-grid">
-      {steps.map(([key, step]) => (
-        <div key={key} className={step.ok ? "health-card is-ok" : "health-card"}>
-          <div className="health-card-kicker">{step.ok ? "可以" : "还缺"}</div>
-          <strong>{step.title}</strong>
-          <p>{step.detail}</p>
+    <div className="wizard">
+      <p className="wizard-intro">{guide.intro}</p>
+      <ol className="wizard-steps">
+        {guide.steps.map((step, i) => (
+          <li key={step}>
+            <span className="wizard-n" aria-hidden="true">
+              {i + 1}
+            </span>
+            <p>{step}</p>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+function SetupBoard({
+  probes,
+  probeBusy,
+  scanHits,
+  scanMsg,
+  pick,
+  onPick,
+  onAdopt,
+  onProbe,
+  onWizard,
+  onScan,
+  onPush,
+  displayName,
+  openId,
+}: {
+  probes: Record<string, ProbeResult | { pending: true }>;
+  probeBusy: string;
+  scanHits: ScanHit[];
+  scanMsg: string;
+  pick: Record<string, string>;
+  onPick: (kind: string, path: string) => void;
+  onAdopt: (kind: string, path: string) => void;
+  onProbe: (id: string) => void;
+  onWizard: (row: (typeof BOARD_ROWS)[number]) => void;
+  onScan: () => void;
+  onPush: () => void;
+  displayName: string | null;
+  openId: string;
+}) {
+  const done = BOARD_ROWS.map((row) => probes[row.id]).filter(
+    (r): r is ProbeResult => Boolean(r) && !("pending" in r),
+  );
+  const ok = done.filter((r) => r.ok).length;
+  const firstBad = firstBadRow(probes);
+  const who = displayName || "当前登录";
+  return (
+    <div className="setup-board">
+      <p className="setup-hint">测的是杭州这台 Windows，不是你眼前这台 Mac。</p>
+      <div className="setup-progress" role="status" aria-live="polite">
+        <span className="sr-only">{progressSpoken(probes, probeBusy)}</span>
+        <div className="setup-progress-meta" aria-hidden="true">
+          <strong>{done.length ? `${ok} / ${BOARD_ROWS.length} 可用` : `0 / ${BOARD_ROWS.length} 未测`}</strong>
+          <span>
+            {probeBusy ||
+              (firstBad
+                ? `下一步：${firstBad.title}`
+                : ok === BOARD_ROWS.length && done.length
+                  ? "七条探测通过"
+                  : "")}
+          </span>
         </div>
-      ))}
-      <div className="health-meta">
-        <Typography.Paragraph type="secondary">
-          当前登录：{displayName || "—"}
-          {openId ? " · 飞书身份" : ""}
-          {openId ? ` · ${openId}` : " · 显示名登录没有 open_id"}
-        </Typography.Paragraph>
-        <Typography.Paragraph type="secondary">
-          派生回调：{view?.derived?.redirect_uri || "—"}
-        </Typography.Paragraph>
-        <Space wrap>
-          {(view?.probes || []).map((p) => {
-            const r = probes[p.id];
-            const done = r && !("pending" in r) ? r : null;
-            return (
-              <Button key={p.id} size="small" onClick={() => onProbe(p.id)}>
-                {p.label}
-                {done ? (done.ok ? " · 通" : " · 不通") : ""}
-              </Button>
-            );
-          })}
-        </Space>
-        {Object.values(probes)
-          .filter((r): r is ProbeResult => Boolean(r) && !("pending" in r))
-          .map((r) => (
-            <Typography.Paragraph key={r.id} type={r.ok ? "secondary" : "danger"} style={{ margin: "8px 0 0" }}>
-              {r.message}
-            </Typography.Paragraph>
-          ))}
+        <div className="setup-bar" aria-hidden="true">
+          <i style={{ width: `${(ok / BOARD_ROWS.length) * 100}%` }} />
+        </div>
       </div>
+      <div className="setup-group">
+        {BOARD_ROWS.map((row) => {
+          const r = probes[row.id];
+          const st = statusWord(r);
+          const msg =
+            r && !("pending" in r)
+              ? row.id === "lark" && r.ok
+                ? `能发给当前登录 · ${who}`
+                : r.message
+              : idleRowMessage(row.id, row.kind);
+          return (
+            <div key={row.id} className={`setup-row ${st.cls}`} role="group" aria-label={`${row.title} ${st.text}`}>
+              <div className="setup-status">{st.text}</div>
+              <div>
+                <h3>{row.title}</h3>
+                <p>{msg}</p>
+              </div>
+              {row.kind === "wizard" ? (
+                <button
+                  type="button"
+                  className={st.cls === "is-bad" ? "setup-btn danger" : "setup-btn ghost"}
+                  onClick={() => (st.cls === "is-ok" ? onProbe(row.id) : onWizard(row))}
+                >
+                  {st.cls === "is-ok" ? (
+                    <>
+                      <span className="setup-btn-full">再测一次</span>
+                      <span className="setup-btn-short">再测</span>
+                    </>
+                  ) : (
+                    "打开向导"
+                  )}
+                </button>
+              ) : null}
+              {row.kind === "push" ? (
+                <button type="button" className="setup-btn" onClick={onPush}>
+                  发一条测试
+                </button>
+              ) : null}
+              {row.kind === "scan" ? (
+                <button type="button" className="setup-btn" onClick={st.cls === "is-ok" ? () => onProbe(row.id) : onScan}>
+                  {st.cls === "is-ok" ? (
+                    <>
+                      <span className="setup-btn-full">再测一次</span>
+                      <span className="setup-btn-short">再测</span>
+                    </>
+                  ) : (
+                    "扫描这台电脑"
+                  )}
+                </button>
+              ) : null}
+              {row.kind === "retry" ? (
+                <button type="button" className="setup-btn ghost" onClick={() => onProbe(row.id)}>
+                  <span className="setup-btn-full">再测一次</span>
+                  <span className="setup-btn-short">再测</span>
+                </button>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+      <p className="setup-meta">
+        当前登录：{displayName || "—"}
+        {openId ? ` · 飞书身份 · ${openId}` : " · 显示名登录没有 open_id"}
+      </p>
+      {scanHits.length || scanMsg ? (
+        <div className="setup-cands">
+          <h3>扫描结果 · 杭州这台 Windows</h3>
+          <p>{scanMsg || "候选不是结论。点采用才写入。"}</p>
+          {scanHits.map((h) => (
+            <label key={h.path} className="setup-cand">
+              <input
+                type="radio"
+                name={`scan-${h.kind}`}
+                checked={pick[h.kind] === h.path}
+                onChange={() => onPick(h.kind, h.path)}
+              />
+              <span>
+                <em>{h.label}</em>
+                <code>{h.path}</code>
+              </span>
+              <button type="button" className="setup-btn" onClick={() => onAdopt(h.kind, h.path)}>
+                采用
+              </button>
+            </label>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -380,10 +602,12 @@ function FieldItem({
   field,
   value,
   onChange,
+  locked,
 }: {
   field: SettingFieldView;
   value: string;
   onChange: (v: string) => void;
+  locked?: boolean;
 }) {
   return (
     <Form.Item
@@ -393,19 +617,20 @@ function FieldItem({
           {field.restart ? <Typography.Text type="secondary">（改完重启）</Typography.Text> : null}
         </span>
       }
-      extra={field.help}
+      extra={locked ? `${field.help} 需要管理员。` : field.help}
     >
       {field.kind === "toggle" ? (
-        <Switch checked={value === "true"} onChange={(on) => onChange(on ? "true" : "false")} />
+        <Switch checked={value === "true"} onChange={(on) => onChange(on ? "true" : "false")} disabled={locked} />
       ) : field.kind === "secret" ? (
         <Input.Password
           value={value}
           onChange={(e) => onChange(e.target.value)}
           autoComplete="new-password"
           placeholder={field.set ? `已填 ${field.last4}，留空不改` : "未填"}
+          disabled={locked}
         />
       ) : (
-        <Input value={value} onChange={(e) => onChange(e.target.value)} />
+        <Input value={value} onChange={(e) => onChange(e.target.value)} disabled={locked} />
       )}
     </Form.Item>
   );

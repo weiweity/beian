@@ -642,6 +642,63 @@ describe("jobs dispatcher", () => {
     assert.equal(t.job_status, "failed");
     assert.equal(t.job_error, "超时");
   });
+
+  it("ai raster uses illustrator slot and does not fill OCR", async () => {
+    const { saveMockup, loadMockup } = await import("./mockup.js");
+    queuedCompare(tid(70), "2026-08-21T08:00:00.000Z");
+    setJobsTestHooks({
+      runCompare: () =>
+        new Promise(() => {
+          /* occupy ocr */
+        }),
+      runRaster: async () => ({ ok: true, png: "/tmp/x.png", message: "假 COM 已导出 PNG" }),
+      runPack: () =>
+        new Promise(() => {
+          /* occupy blender if reached */
+        }),
+    });
+    enqueue({ kind: "compare", id: tid(70) });
+    saveMockup({
+      id: tid(71),
+      status: "queued",
+      created_at: "2026-08-21T08:00:01.000Z",
+      files: [],
+      source_path: "/tmp/pack.ai",
+      job_kind: "mockup",
+      job_status: "queued",
+    });
+    enqueue({ kind: "mockup", id: tid(71) });
+    for (let i = 0; i < 40 && !loadMockup(tid(71))?.raster_png; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    assert.equal(loadTask(tid(70)).job_status, "running");
+    assert.equal(queueSnapshot().ocr.running, 1);
+    assert.equal(loadMockup(tid(71))?.raster_png, "/tmp/x.png");
+  });
+
+  it("ai raster failure is Chinese and does not take OCR", async () => {
+    const { saveMockup, loadMockup } = await import("./mockup.js");
+    setJobsTestHooks({
+      runRaster: async () => ({ ok: false, message: "COM 被拒绝或文件打不开" }),
+    });
+    saveMockup({
+      id: tid(72),
+      status: "queued",
+      created_at: "2026-08-21T08:01:00.000Z",
+      files: [],
+      source_path: "/tmp/fail.ai",
+      job_kind: "mockup",
+      job_status: "queued",
+    });
+    enqueue({ kind: "mockup", id: tid(72) });
+    for (let i = 0; i < 40 && loadMockup(tid(72))?.job_status !== "failed"; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    const job = loadMockup(tid(72));
+    assert.equal(job?.job_status, "failed");
+    assert.equal(job?.job_error, "COM 被拒绝或文件打不开");
+    assert.equal(job?.job_kind, "mockup");
+  });
 });
 
 describe("replaceFile", () => {
