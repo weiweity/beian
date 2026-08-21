@@ -39,7 +39,7 @@ chmod 600 backend/.env.baidu backend/.env.secrets
 
 ```text
 ui/          React 审稿台 / 打样台 / 历史 / 设置（WaitCard）
-server/      TypeScript HTTP（jobs.ts 管对照/对红/打样入队）
+server/      TypeScript HTTP（jobs.ts 管对照/对红/打样入队；`/brand/*` 挂 `ui/public`）
 backend/     Python worker + 测试（cli 不写任务 JSON）
 frontend/    退役
 ```
