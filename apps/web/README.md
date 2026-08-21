@@ -38,8 +38,8 @@ chmod 600 backend/.env.baidu backend/.env.secrets
 ## 结构
 
 ```text
-ui/          React 审稿台 / 打样台 / 历史 / 设置
-server/      TypeScript HTTP
-backend/     Python worker + 测试
+ui/          React 审稿台 / 打样台 / 历史 / 设置（WaitCard）
+server/      TypeScript HTTP（jobs.ts 管对照/对红/打样入队）
+backend/     Python worker + 测试（cli 不写任务 JSON）
 frontend/    退役
 ```
