@@ -65,15 +65,15 @@ describe("waitCardCopy", () => {
     assert.match(copy.hint, /认字/);
   });
 
-  it("mockup running defaults eta to 240 seconds", () => {
+  it("mockup running defaults eta to 4 minutes", () => {
     const copy = waitCardCopy({ kind: "mockup", job_status: "running" });
     assert.equal(copy.title, "打样中");
-    assert.equal(copy.eta, "大约还要 240 秒");
+    assert.equal(copy.eta, "大约还要 4 分钟");
   });
 
   it("mockup running uses job_eta_s when present", () => {
     const copy = waitCardCopy({ kind: "mockup", job_status: "running", job_eta_s: 120 });
-    assert.equal(copy.eta, "大约还要 120 秒");
+    assert.equal(copy.eta, "大约还要 2 分钟");
   });
 
   it("feishuReady true tells her she can leave", () => {
@@ -81,14 +81,30 @@ describe("waitCardCopy", () => {
     assert.match(copy.hint, /可以离开，完了飞书叫你/);
   });
 
-  it("feishuReady false points compare back to the board and mockup to this page", () => {
+  it("running uses Figma wait-card body, not a fake cancel", () => {
     const compare = waitCardCopy({ kind: "compare", job_status: "running", feishuReady: false });
     const rework = waitCardCopy({ kind: "rework", job_status: "queued", queue_ahead: 1, feishuReady: false });
     const mockup = waitCardCopy({ kind: "mockup", job_status: "running", feishuReady: false });
-    assert.match(compare.hint, /对照完回看板/);
+    assert.match(compare.hint, /机审只标疑点/);
     assert.match(rework.hint, /对照完回看板/);
-    assert.match(mockup.hint, /打样完回本页/);
+    assert.match(mockup.hint, /本机 Blender/);
     assert.doesNotMatch(compare.hint, /可以离开/);
+    assert.doesNotMatch(`${compare.hint}${mockup.hint}`, /取消/);
+  });
+
+  it("writes minutes once eta is 60 seconds or more", () => {
+    assert.equal(
+      waitCardCopy({ kind: "compare", job_status: "running", job_eta_s: 59 }).eta,
+      "大约还要 59 秒",
+    );
+    assert.equal(
+      waitCardCopy({ kind: "compare", job_status: "running", job_eta_s: 60 }).eta,
+      "大约还要 1 分钟",
+    );
+    assert.equal(
+      waitCardCopy({ kind: "mockup", job_status: "running", job_eta_s: 240 }).eta,
+      "大约还要 4 分钟",
+    );
   });
 
   it("never invents a percentage", () => {

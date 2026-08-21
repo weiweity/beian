@@ -97,3 +97,63 @@ describe("publicMockup", () => {
     assert.equal("path" in out.files[0], false);
   });
 });
+
+describe("mockup post", { concurrency: false }, () => {
+  it("returns 412 without enqueueing when Blender is missing", async () => {
+    const prevBin = process.env.BLENDER_EXECUTABLE;
+    const prevPath = process.env.PATH;
+    delete process.env.BLENDER_EXECUTABLE;
+    process.env.PATH = "/tmp/beian-no-blender-bin";
+    try {
+      const sess = issueSession("籽烨", "reviewer", "ou_mockup_post_412", "feishu");
+      const fd = new FormData();
+      fd.set("file", new File([Buffer.from("%PDF-1.4\n")], "art.pdf", { type: "application/pdf" }));
+      const res = await app.request("/api/mockups", {
+        method: "POST",
+        headers: { authorization: `Bearer ${sess.token}` },
+        body: fd,
+      });
+      assert.equal(res.status, 412);
+      const body = (await res.json()) as { detail?: string };
+      assert.match(String(body.detail || ""), /Blender/);
+    } finally {
+      process.env.PATH = prevPath;
+      if (prevBin !== undefined) process.env.BLENDER_EXECUTABLE = prevBin;
+      else delete process.env.BLENDER_EXECUTABLE;
+    }
+  });
+
+  it("returns queued or running before the pack worker finishes", async () => {
+    const { setJobsTestHooks, resetJobsTestHooks } = await import("./jobs.js");
+    const prevBin = process.env.BLENDER_EXECUTABLE;
+    process.env.BLENDER_EXECUTABLE = process.execPath;
+    setJobsTestHooks({
+      runPack: () =>
+        new Promise(() => {
+          /* hang until process exit */
+        }),
+    });
+    try {
+      const sess = issueSession("籽烨", "reviewer", "ou_mockup_post_ok", "feishu");
+      const fd = new FormData();
+      fd.set("file", new File([Buffer.from("%PDF-1.4\n")], "art.pdf", { type: "application/pdf" }));
+      const started = Date.now();
+      const res = await app.request("/api/mockups", {
+        method: "POST",
+        headers: { authorization: `Bearer ${sess.token}` },
+        body: fd,
+      });
+      const elapsed = Date.now() - started;
+      assert.equal(res.status, 200);
+      assert.ok(elapsed < 2000, `mockup POST waited ${elapsed}ms`);
+      const body = (await res.json()) as { status?: string; job_status?: string; job_pid?: number };
+      assert.ok(body.job_status === "queued" || body.job_status === "running");
+      assert.ok(body.status === "queued" || body.status === "running");
+      assert.equal("job_pid" in body, false);
+    } finally {
+      resetJobsTestHooks();
+      if (prevBin !== undefined) process.env.BLENDER_EXECUTABLE = prevBin;
+      else delete process.env.BLENDER_EXECUTABLE;
+    }
+  });
+});

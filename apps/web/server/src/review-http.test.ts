@@ -499,4 +499,52 @@ describe("review http", () => {
       resetJobsTestHooks();
     }
   });
+
+  it("rejects a second rework while the first is still queued", async () => {
+    const tid = seed({
+      id: "141414141414",
+      title: "对红排队",
+      product_name: "对红排队",
+      type: "excel_pdf",
+      status: "completed",
+      complete_kind: "rework",
+      conclusion: "待设计改稿",
+      hits: [hit({ decision: "issue" })],
+    });
+    const { loadTask, saveTask } = await import("./tasks.js");
+    const t = loadTask(tid);
+    t.job_kind = "rework";
+    t.job_status = "queued";
+    saveTask(t);
+    const res = await app.request(`/api/tasks/${tid}/rework`, {
+      method: "POST",
+      headers: authHeader(),
+    });
+    assert.equal(res.status, 409);
+    const body = (await res.json()) as { detail?: string };
+    assert.match(String(body.detail || ""), /对红还在排队或正在跑/);
+  });
+
+  it("rejects a rework upload that is not a PDF", async () => {
+    const tid = seed({
+      id: "151515151515",
+      title: "坏稿",
+      product_name: "坏稿",
+      type: "excel_pdf",
+      status: "completed",
+      complete_kind: "rework",
+      conclusion: "待设计改稿",
+      hits: [hit({ decision: "issue" })],
+    });
+    const fd = new FormData();
+    fd.set("pdf", new File([Buffer.from("not-a-pdf")], "a.txt", { type: "text/plain" }));
+    const res = await app.request(`/api/tasks/${tid}/rework`, {
+      method: "POST",
+      headers: authHeader(),
+      body: fd,
+    });
+    assert.equal(res.status, 400);
+    const body = (await res.json()) as { detail?: string };
+    assert.match(String(body.detail || ""), /不是有效的 PDF/);
+  });
 });
