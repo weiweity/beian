@@ -519,6 +519,129 @@ describe("jobs dispatcher", () => {
     assert.equal(job?.job_status, "succeeded");
     assert.equal(job?.files?.some((f) => f.key === "glb"), true);
   });
+
+  it("reclaim mockup orphan requeues once; second fail is 打样中断; done is not rerun", async () => {
+    const { saveMockup, loadMockup } = await import("./mockup.js");
+    setJobsTestHooks({
+      runPack: () =>
+        new Promise(() => {
+          /* occupy */
+        }),
+    });
+    saveMockup({
+      id: tid(50),
+      status: "running",
+      created_at: "2026-08-20T20:00:00.000Z",
+      files: [],
+      job_kind: "mockup",
+      job_status: "running",
+      job_started_at: new Date().toISOString(),
+    });
+    saveMockup({
+      id: tid(51),
+      status: "running",
+      created_at: "2026-08-20T20:00:01.000Z",
+      files: [],
+      job_kind: "mockup",
+      job_status: "running",
+      reclaim_count: 1,
+      job_started_at: new Date().toISOString(),
+    });
+    saveMockup({
+      id: tid(52),
+      status: "done",
+      created_at: "2026-08-20T20:00:02.000Z",
+      files: [{ key: "glb", name: "box.glb" }],
+      job_kind: "mockup",
+      job_status: "running",
+    });
+    reclaimOnBoot();
+    assert.equal(loadMockup(tid(50))?.reclaim_count, 1);
+    assert.ok(loadMockup(tid(50))?.job_status === "queued" || loadMockup(tid(50))?.job_status === "running");
+    assert.equal(loadMockup(tid(51))?.job_status, "failed");
+    assert.equal(loadMockup(tid(51))?.job_error, "打样中断");
+    assert.equal(loadMockup(tid(52))?.job_status, "succeeded");
+  });
+
+  it("rework success becomes in_review and keeps v1 hits", async () => {
+    setJobsTestHooks({
+      runRework: async () => ({
+        code: 0,
+        stdout:
+          JSON.stringify({ status: "in_review", hits_v2: [{ id: "v2" }], pages_v2: [{ name: "page_01.png" }] }) + "\n",
+        stderr: "",
+        timedOut: false,
+      }),
+    });
+    saveTask({
+      id: tid(53),
+      title: "x",
+      type: "excel_pdf",
+      status: "comparing",
+      status_before_job: "pending_review",
+      owner: "籽烨",
+      hits: [{ id: "h1", decision: "issue" }],
+      job_kind: "rework",
+      job_status: "queued",
+      created_at: "2026-08-20T21:00:00.000Z",
+    });
+    enqueue({ kind: "rework", id: tid(53) });
+    for (let i = 0; i < 50 && loadTask(tid(53)).job_status !== "succeeded"; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    const t = loadTask(tid(53));
+    assert.equal(t.status, "in_review");
+    assert.equal(t.job_status, "succeeded");
+    assert.equal(t.hits?.[0]?.id, "h1");
+    assert.equal(t.hits_v2?.[0]?.id, "v2");
+  });
+
+  it("worker status completed cannot skip the sign-off gate", async () => {
+    setJobsTestHooks({
+      runCompare: async () => ({
+        code: 0,
+        stdout: JSON.stringify({ status: "completed", hits: [] }) + "\n",
+        stderr: "",
+        timedOut: false,
+      }),
+    });
+    queuedCompare(tid(59), "2026-08-20T23:30:00.000Z");
+    enqueue({ kind: "compare", id: tid(59) });
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal(loadTask(tid(59)).status, "pending_review");
+  });
+
+  it("reclaim fails a 0.10 comparing task with no job_status", () => {
+    saveTask({
+      id: tid(60),
+      title: "旧对照",
+      type: "excel_pdf",
+      status: "comparing",
+      created_at: "2026-08-19T00:00:00.000Z",
+    });
+    reclaimOnBoot();
+    const t = loadTask(tid(60));
+    assert.equal(t.status, "compare_failed");
+    assert.equal(t.job_error, "对照中断");
+  });
+
+  it("reclaim of a long-running orphan is 超时 not a rerun", () => {
+    saveTask({
+      id: tid(57),
+      title: "x",
+      type: "excel_pdf",
+      status: "comparing",
+      job_kind: "compare",
+      job_status: "running",
+      job_started_at: "2020-01-01T00:00:00.000Z",
+      created_at: "2026-08-20T23:10:00.000Z",
+    });
+    reclaimOnBoot();
+    const t = loadTask(tid(57));
+    assert.equal(t.status, "compare_failed");
+    assert.equal(t.job_status, "failed");
+    assert.equal(t.job_error, "超时");
+  });
 });
 
 describe("replaceFile", () => {

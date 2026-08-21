@@ -99,7 +99,11 @@ export function queueSnapshot(): { ocr: { running: number; queued: number }; ble
 export function decorateQueueAhead<T extends { id?: string; created_at?: string; job_kind?: string; job_status?: string }>(
   rows: T[],
 ): Array<T & { queue_ahead: number }> {
-  return rows.map((row) => ({ ...row, queue_ahead: queueAheadId(row.id || "", row.job_kind, row.created_at, row.job_status) }));
+  const ranks = queueRanks();
+  return rows.map((row) => ({
+    ...row,
+    queue_ahead: queueAheadFrom(ranks, row.id || "", row.job_kind, row.job_status),
+  }));
 }
 
 export function publicTask(task: Task, viewer?: { name: string; admin: boolean }): Record<string, unknown> {
@@ -119,7 +123,7 @@ export function publicTask(task: Task, viewer?: { name: string; admin: boolean }
   } = task;
   return {
     ...rest,
-    queue_ahead: queueAheadId(task.id, task.job_kind, task.created_at, task.job_status),
+    queue_ahead: queueAheadFrom(queueRanks(), task.id, task.job_kind, task.job_status),
   };
 }
 
@@ -170,6 +174,15 @@ function isOcr(kind: string | undefined): boolean {
   return kind === "compare" || kind === "rework";
 }
 
+function allowedResultStatus(kind: string | undefined, raw: unknown): string {
+  const s = String(raw || "");
+  if (kind === "rework") {
+    if (s === "in_review" || s === "pending_review") return s;
+    return "in_review";
+  }
+  return s === "pending_review" ? s : "pending_review";
+}
+
 function oldestOcrQueued(): Task | undefined {
   return loadAllTasks()
     .filter((t) => isOcr(t.job_kind) && t.job_status === "queued")
@@ -182,14 +195,26 @@ function oldestMockupQueued(): MockupJob | undefined {
     .sort((a, b) => a.created_at.localeCompare(b.created_at))[0];
 }
 
-function queueAheadId(id: string, kind: string | undefined, createdAt: string | undefined, status: string | undefined): number {
+type QueueRanks = { ocr: Map<string, number>; mockup: Map<string, number> };
+
+function queueRanks(): QueueRanks {
+  const ocr = new Map<string, number>();
+  const mockup = new Map<string, number>();
+  const ocrQueued = loadAllTasks()
+    .filter((t) => isOcr(t.job_kind) && t.job_status === "queued")
+    .sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || "")));
+  ocrQueued.forEach((t, i) => ocr.set(t.id, i));
+  const mockQueued = loadAllMockups()
+    .filter((j) => j.job_status === "queued")
+    .sort((a, b) => a.created_at.localeCompare(b.created_at));
+  mockQueued.forEach((j, i) => mockup.set(j.id, i));
+  return { ocr, mockup };
+}
+
+function queueAheadFrom(ranks: QueueRanks, id: string, kind: string | undefined, status: string | undefined): number {
   if (status !== "queued") return 0;
-  if (kind === "mockup") {
-    return loadAllMockups().filter((j) => j.job_status === "queued" && j.created_at < String(createdAt || "") && j.id !== id).length;
-  }
-  return loadAllTasks().filter(
-    (t) => isOcr(t.job_kind) && t.job_status === "queued" && String(t.created_at || "") < String(createdAt || "") && t.id !== id,
-  ).length;
+  if (kind === "mockup") return ranks.mockup.get(id) ?? 0;
+  return ranks.ocr.get(id) ?? 0;
 }
 
 function claimOcr(task: Task): void {
@@ -303,8 +328,7 @@ function finishOcr(id: string, startedAt: string, result: RunPythonResult): void
     return;
   }
   mergeResult(task, payload);
-  if (task.job_kind === "rework") task.status = String(payload.status || "in_review");
-  else task.status = String(payload.status || "pending_review");
+  task.status = allowedResultStatus(task.job_kind, payload.status);
   task.job_status = "succeeded";
   task.job_error = undefined;
   saveTask(task);
@@ -539,6 +563,15 @@ function reclaimTask(task: Task): void {
     return;
   }
   if (task.status === "compare_failed" && task.job_finished_at) return;
+  if (task.status === "comparing" && task.job_status !== "queued" && task.job_status !== "running") {
+    task.status = "compare_failed";
+    task.job_status = "failed";
+    task.job_error = "对照中断";
+    task.error = "对照中断";
+    task.job_finished_at = nowIso();
+    saveTask(task);
+    return;
+  }
   if (task.job_status === "queued") return;
   if (task.job_status !== "running") return;
   const killer = hooks.killTree || killTree;

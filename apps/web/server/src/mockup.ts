@@ -1,9 +1,9 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { DATA_DIR, PACKAGING } from "./config.js";
 import { blenderBin } from "./settings.js";
-import { replaceFile } from "./tasks.js";
+import { isTid, replaceFile } from "./tasks.js";
 
 export type MockupJob = {
   id: string;
@@ -60,6 +60,7 @@ export function saveMockup(job: MockupJob): void {
 }
 
 export function loadMockup(id: string): MockupJob | undefined {
+  if (!isTid(id)) return undefined;
   const hit = cache.get(id);
   if (hit) return hit;
   const p = jobPath(id);
@@ -156,14 +157,21 @@ export function collectOutputs(root: string): MockupJob["files"] {
   return found;
 }
 
+function underJobDir(jobId: string, p: string): boolean {
+  const root = resolve(mockupRoot(), jobId);
+  const full = resolve(p);
+  const rel = relative(root, full);
+  return Boolean(rel) && !rel.startsWith("..") && !isAbsolute(rel);
+}
+
 export function fileOf(job: MockupJob, key: string) {
   const f = job.files.find((x) => x.key === key);
   if (!f) return undefined;
-  if (f.path && existsSync(f.path)) return f;
+  if (f.path && existsSync(f.path) && underJobDir(job.id, f.path)) return f;
   const dir = join(mockupRoot(), job.id);
-  const guess = join(dir, f.name);
-  if (existsSync(guess)) return { ...f, path: guess };
-  return f;
+  const guess = join(dir, basename(f.name || "file"));
+  if (existsSync(guess) && underJobDir(job.id, guess)) return { ...f, path: guess };
+  return undefined;
 }
 
 export function assertBlenderReady(): string {
@@ -222,13 +230,4 @@ export function queueMockup(opts: {
   };
   saveMockup(job);
   return job;
-}
-
-/** @deprecated jobs.ts runs packaging; kept for tests that call it directly. */
-export async function startMockup(opts: {
-  id: string;
-  sourcePath: string;
-  displayName: string;
-}): Promise<MockupJob> {
-  return queueMockup(opts);
 }

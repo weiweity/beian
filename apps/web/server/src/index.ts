@@ -334,11 +334,11 @@ app.post("/api/tasks/:tid/rework", async (c) => {
   const body = await c.req.parseBody();
   const task = loadTask(tid);
   assertCanAccessTask(task, { name: s.display_name, admin: s.role === "admin" });
-  if (!isReworkableTask(task)) {
-    throw new HTTPException(400, { message: "当前状态不可对红" });
-  }
   if (task.job_status === "queued" || task.job_status === "running") {
     throw new HTTPException(409, { message: "对红还在排队或正在跑" });
+  }
+  if (!isReworkableTask(task)) {
+    throw new HTTPException(400, { message: "当前状态不可对红" });
   }
   const pdf = body.pdf;
   if (!(pdf instanceof File)) throw new HTTPException(400, { message: "需要改稿后的 PDF" });
@@ -359,15 +359,15 @@ app.post("/api/tasks/:tid/rework", async (c) => {
   task.job_kind = "rework";
   task.job_status = "queued";
   task.job_error = undefined;
+  task.reclaim_count = 0;
+  delete task.job_pid;
+  delete task.job_finished_at;
   task.notify_job_id = undefined;
   task.notify_sent = false;
   saveTask(task);
   try {
     enqueue({ kind: "rework", id: tid });
   } catch (err) {
-    if (err && typeof err === "object" && "status" in err && Number((err as { status: number }).status) === 409) {
-      boom(err);
-    }
     console.warn("enqueue rework failed:", err instanceof Error ? err.message : err);
   }
   return c.json(publicTask(loadTask(tid), { name: s.display_name, admin: s.role === "admin" }));
@@ -502,7 +502,7 @@ app.post("/api/mockups", async (c) => {
 
 app.get("/api/mockups/:id", (c) => {
   const s = need(c, "read");
-  const job = getJob(c.req.param("id"));
+  const job = getJob(assertTid(c.req.param("id")));
   if (!job) throw new HTTPException(404, { message: "没有这单打样" });
   assertCanAccessMockup(job, { name: s.display_name, admin: s.role === "admin" });
   return c.json(decorateQueueAhead([publicMockup(job)])[0]);
@@ -510,7 +510,7 @@ app.get("/api/mockups/:id", (c) => {
 
 app.get("/api/mockups/:id/files/:key", (c) => {
   const s = need(c, "read");
-  const job = getJob(c.req.param("id"));
+  const job = getJob(assertTid(c.req.param("id")));
   if (!job) throw new HTTPException(404, { message: "没有这单打样" });
   assertCanAccessMockup(job, { name: s.display_name, admin: s.role === "admin" });
   const f = fileOf(job, c.req.param("key"));

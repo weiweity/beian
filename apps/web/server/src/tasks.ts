@@ -67,8 +67,12 @@ function tasksDir() {
   return d;
 }
 
+export function isTid(tid: string): boolean {
+  return TID.test(tid || "");
+}
+
 export function assertTid(tid: string): string {
-  if (!TID.test(tid || "")) throw Object.assign(new Error("无效任务 id"), { status: 400 });
+  if (!isTid(tid)) throw Object.assign(new Error("无效任务 id"), { status: 400 });
   return tid;
 }
 

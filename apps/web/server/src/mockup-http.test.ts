@@ -74,6 +74,14 @@ describe("mockup get", () => {
     assert.equal(res.status, 403);
   });
 
+  it("GET mockup id that is not a tid is 400", async () => {
+    const sess = issueSession("审稿", "reviewer", "ou_mockup_bad_id", "feishu");
+    const res = await app.request("/api/mockups/..%2fsecret", {
+      headers: { authorization: `Bearer ${sess.token}` },
+    });
+    assert.equal(res.status, 400);
+  });
+
   it("GET missing mockup is 404", async () => {
     const sess = issueSession("审稿", "reviewer", "ou_mockup_get_xx", "feishu");
     const res = await app.request("/api/mockups/ffffffffffff", {

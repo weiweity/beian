@@ -500,6 +500,50 @@ describe("review http", () => {
     }
   });
 
+  it("rework returns comparing before the worker finishes", async () => {
+    setJobsTestHooks({
+      runRework: () =>
+        new Promise(() => {
+          /* hang */
+        }),
+    });
+    try {
+      const tid = seed({
+        id: "181818181818",
+        title: "对红立即",
+        product_name: "对红立即",
+        type: "excel_pdf",
+        status: "completed",
+        complete_kind: "rework",
+        conclusion: "待设计改稿",
+        hits: [hit({ decision: "issue" })],
+      });
+      const fd = new FormData();
+      fd.set("pdf", new File([Buffer.from("%PDF-1.4\n")], "v2.pdf", { type: "application/pdf" }));
+      const started = Date.now();
+      const res = await app.request(`/api/tasks/${tid}/rework`, {
+        method: "POST",
+        headers: authHeader(),
+        body: fd,
+      });
+      assert.equal(res.status, 200);
+      assert.ok(Date.now() - started < 2000, "rework waited");
+      const body = (await res.json()) as { status?: string; job_kind?: string; job_status?: string; job_pid?: number };
+      assert.equal(body.status, "comparing");
+      assert.equal(body.job_kind, "rework");
+      assert.ok(body.job_status === "queued" || body.job_status === "running");
+      assert.equal("job_pid" in body, false);
+      const again = await app.request(`/api/tasks/${tid}/rework`, {
+        method: "POST",
+        headers: authHeader(),
+        body: fd,
+      });
+      assert.equal(again.status, 409);
+    } finally {
+      resetJobsTestHooks();
+    }
+  });
+
   it("rejects a second rework while the first is still queued", async () => {
     const tid = seed({
       id: "141414141414",
