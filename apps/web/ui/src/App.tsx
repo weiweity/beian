@@ -89,10 +89,13 @@ function takeStashedTask(): string | null {
 
 function readCollapsed() {
   try {
-    return localStorage.getItem(SIDEBAR_KEY) === "1";
+    const raw = localStorage.getItem(SIDEBAR_KEY);
+    if (raw === "1") return true;
+    if (raw === "0") return false;
   } catch {
-    return window.matchMedia("(max-width: 1024px)").matches;
+    /* fall through to viewport */
   }
+  return window.matchMedia("(max-width: 1024px)").matches;
 }
 
 export function App() {
@@ -187,23 +190,37 @@ export function App() {
     window.location.replace("/api/auth/feishu/login");
   }
 
+  function collapsePhoneSheet() {
+    if (!window.matchMedia("(max-width: 720px)").matches) return;
+    setCollapsed(true);
+    try {
+      localStorage.setItem(SIDEBAR_KEY, "1");
+    } catch {
+      /* ignore */
+    }
+  }
+
   function go(key: NavKey) {
     if (key === "review") {
       setView("tasks");
       setTaskId(null);
+      collapsePhoneSheet();
       return;
     }
     if (key === "mockup") {
       setView("mockup");
       setTaskId(null);
+      collapsePhoneSheet();
       return;
     }
     if (key === "history") {
       setView("history");
       setTaskId(null);
+      collapsePhoneSheet();
       return;
     }
     setView("settings");
+    collapsePhoneSheet();
   }
 
   if (me === null) {
@@ -236,16 +253,20 @@ export function App() {
 
   return (
     <div className="shell">
-      <Sidebar
-        collapsed={collapsed}
-        active={navOf(view)}
-        displayName={me.display_name || "飞书用户"}
-        avatarUrl={me.avatar_url}
-        onNavigate={go}
-        onToggle={toggleSidebar}
-        onLogout={() => void logout()}
-      />
-      <main className={view === "settings" ? "stage stage-flush" : "stage"}>
+      <div className="workspace">
+        {!collapsed ? (
+          <button type="button" className="sidebar-scrim" aria-label="收起侧栏" onClick={toggleSidebar} />
+        ) : null}
+        <Sidebar
+          collapsed={collapsed}
+          active={navOf(view)}
+          displayName={me.display_name || "飞书用户"}
+          avatarUrl={me.avatar_url}
+          onNavigate={go}
+          onToggle={toggleSidebar}
+          onLogout={() => void logout()}
+        />
+        <main className={view === "settings" ? "stage stage-flush" : "stage"}>
         {view === "settings" ? (
           <SettingsPage
             canWrite={Boolean(me.perms.includes("create"))}
@@ -290,7 +311,8 @@ export function App() {
             }}
           />
         ) : null}
-      </main>
+        </main>
+      </div>
     </div>
   );
 }

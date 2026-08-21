@@ -33,6 +33,21 @@ function leaveHint(kind: WaitKind, feishuReady?: boolean): string {
   return kind === "mockup" ? "打样完回本页" : "对照完回看板";
 }
 
+/** Figma 等待卡 68:1218 正文。不要假取消。 */
+function figmaWaitBody(kind: WaitKind): string {
+  if (kind === "mockup") return "本机 Blender。白底不要带尺寸标注再交备案。";
+  return "读表 + OCR 包装。机审只标疑点，不会自动过审。";
+}
+
+function formatEta(etaS: number): string {
+  const s = Math.max(0, Math.floor(Number(etaS) || 0));
+  if (s >= 60) {
+    const minutes = Math.max(1, Math.round(s / 60));
+    return `大约还要 ${minutes} 分钟`;
+  }
+  return `大约还要 ${s} 秒`;
+}
+
 /** job_status 为 queued|running，或看板 status 仍是 comparing。 */
 export function shouldShowWaitCard(t: WaitCardTask | null): boolean {
   if (!t) return false;
@@ -49,9 +64,10 @@ export function waitCardCopy(opts: WaitCardCopyOpts): { title: string; eta: stri
   }
   const fallback = opts.kind === "mockup" ? 240 : 40;
   const etaS = opts.job_eta_s || fallback;
-  const eta = `大约还要 ${etaS} 秒`;
+  const eta = formatEta(etaS);
   const stage = (opts.job_stage_label || "").trim();
-  const hint = stage ? `${stage}。${leave}` : leave;
+  const body = stage || figmaWaitBody(opts.kind);
+  const hint = opts.feishuReady ? `${body} ${leave}` : body;
   return { title, eta, hint };
 }
 

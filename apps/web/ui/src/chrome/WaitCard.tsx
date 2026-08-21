@@ -77,7 +77,13 @@ export function WaitCard({
     <div className="wait-wrap">
       <div className="wait-card" role="status" aria-live="polite">
         <div className="fox-ball">
-          <img className="fox-orbit" src={visual.orbit} alt="" width={200} height={200} />
+          <img
+            className={job === "打样" ? "fox-orbit is-pack" : "fox-orbit"}
+            src={visual.orbit}
+            alt=""
+            width={200}
+            height={200}
+          />
           <img className="fox-body" src="/brand/ui/fox-body.svg" alt="" width={148} height={148} />
           <img className="fox-face" src="/brand/logo-mark.png" alt="" width={88} height={88} />
         </div>
