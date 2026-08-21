@@ -20,6 +20,20 @@
 - [ ] **公司仓 / 第二管理员**  
   `weiweity/beian` 是个人账号私仓。确认组织仓或第二管理员 + 离职移交。
 
+## P1 — 作业模块审查留下的洞（本周不改）
+
+- [ ] **无主任务 / 打样默认拒绝**  
+  `assertCanAccessTask` / `assertCanAccessMockup` 在 owner 为空时 fail-open。新上传已写 owner。杭州旧 FastAPI JSON 可能没主人。`/review` D3=C。下次：开机用 `created_by`/`actor` 回填，仍空的非 admin 403，并补列表/深链测试。
+
+- [ ] **打样完成通知不要走 `/?task=`**  
+  `notifyJobFinished` 打样也拼审核单深链。前端把 12 位 hex 当审核单打开核对页。Codex P2。下次：`/?mockup=` 并在 App 里进打样台。
+
+- [ ] **上传先限体积再读进内存**  
+  `upload` / `rework` / `mockups` 现在 `arrayBuffer()` 之后才比 `maxUploadBytes()`。单进程 OOM 会拖死对照槽。下次：Hono `bodyLimit` 与 `maxUploadBytes` 对齐。
+
+- [ ] **未登录 health 不要带队列人数**  
+  `GET /api/health` 现把 `jobs` 槽位和 `feishu_notify` 公开。隧道探测够用 `ok`/`version`。WaitCard 的飞书开关改走已登录接口。
+
 ## P1 — 对红（金标门，不进本周 P0）
 
 - [ ] **同一单第二份 PDF / 对红**  
@@ -37,3 +51,9 @@
 - [ ] SQLite / 异步通用队列
 - [ ] React 审稿台接 OpenSeadragon（若 8/31 冻结了换栈）
 - [ ] 飞书机器人收文件回报告（网页路径的备选）
+
+## Completed
+
+- [x] **打样 GET owner 校验**  
+  `list` / `get` / `files` 非 admin 只读自己的。已在 `feat/review-job-module`：`assertCanAccessMockup` + `listJobsFor`。  
+  **Completed:** v0.11.0.0 (2026-08-21)

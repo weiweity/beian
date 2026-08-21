@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.11.0.0] - 2026-08-21
+
+### Breaking
+
+- `python -m app.cli compare|rework` 不再 `save_task`；stdout 最后一行是结果 JSON；`STAGE` 打在 stderr。
+- 上传 / 对红 / 打样 POST 立即 200（`comparing`/`queued` 或 `running`），不再等 worker 结束；对照失败不再用 5xx/504 挡在 POST 上。
+- 打样忙不再 409「一次只能跑一单」，改为入队；缺 Blender 仍当场 412。
+- 非 admin 只能读自己的审核单 / 打样；杭州旧 JSON 空 owner 仍放行。
+- 杭州：看板没有「对照中」再 pull / 重启。开机把没有 `job_status` 的旧「对照中」标成对照中断。
+
+### Added
+
+- 对照 / 对红 / 打样共用进程内作业：OCR 槽=1、Blender 槽=1，FIFO 写在任务 JSON 上。
+- WaitCard 2.5s 轮询；排队只写「前面还有 N 单」；≥60 秒写分钟。没有假取消，没有「AI 已过审」。
+- 作业终态飞书叫人。打样深链目前仍走 `/?task=`（已知洞）。
+
+### Changed
+
+- 侧栏与主区连成一块 28px 圆角工作场，0.5px 发丝分隔；玻璃层 280px 只裁切不缩放。
+- ≤1024 默认折叠到 76px；≤720 展开为遮罩抽屉，不挤主区。锁定稿：Figma `Web · 锁定稿`。
+
+### Fixed
+
+- `queue_ahead` 不再按行全盘扫 JSON。
+- 对红进行中再 POST 是 409，不会被 `comparing` 误成 400。
+- 打样 id 必须是 12 位 hex；产物路径不出 `mockups/{id}/`。
+- worker 的 `status: completed` 不能跳过签字门。
+
 ## [0.10.2.0] - 2026-08-20
 
 ### Added

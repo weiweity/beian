@@ -1,3 +1,6 @@
+# 冻结：这不是产品 HTTP。38 条路由不要增加。
+# 对外入口：apps/web/server :8787（Hono）。
+# Worker：python -m app.cli。不要 uvicorn。
 """
 备案审核工作台 · API M2.1
 - 预置样本 + 任意上传
@@ -12,6 +15,7 @@ import json
 import os
 import re
 import shutil
+import sys
 import tempfile
 import uuid
 from datetime import datetime, timezone
@@ -575,6 +579,10 @@ def _page_urls(tid: str, page_metas: list[dict], side: str | None = None) -> lis
     return out
 
 
+def emit_stage(name: str) -> None:
+    print(f"STAGE {name}", file=sys.stderr, flush=True)
+
+
 def _surface_job(
     *,
     tid: str,
@@ -589,6 +597,7 @@ def _surface_job(
     """单面（花盒或膜袋）OCR + 匹配，返回中间结果。"""
     pages_dir = UPLOADS / tid / "pages" / pages_subdir
     pages_dir.mkdir(parents=True, exist_ok=True)
+    emit_stage("render_pdf")
     page_metas = render_pdf_pages(pdf, pages_dir, max_pages=max_pages, quality="high")
     layer_text, layer_blocks, has_layer = text_verify.extract_pdf_text_layer(
         pdf, max_pages=max_pages
@@ -599,6 +608,7 @@ def _surface_job(
         else []
     )
     layer_words = text_verify.words_from_text_blocks(layer_px)
+    emit_stage("ocr")
     ocr_text, ocr_words, ocr_engine, ocr_meta = _ocr_pages(page_metas)
     pack_text, words, text_source = text_verify.merge_text_sources(
         layer_text,
@@ -650,6 +660,7 @@ def _surface_job(
     excel_joined_pre = "\n".join(
         (f.get("excel_value") or "") + "\n" + (f.get("remark") or "") for f in fields
     )
+    emit_stage("match")
     hits = compare_fields(
         fields,
         words,

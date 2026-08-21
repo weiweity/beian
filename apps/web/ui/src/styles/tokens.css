@@ -24,6 +24,7 @@
   --ink: #1c1a1f;
   --muted: #6b6572;
   --line: #e7e2ec;
+  --hairline: color-mix(in srgb, var(--ink) 10%, transparent);
   --focus: #805898;
   --accent: #805898;
   --accent-soft: #f6f1f8;
@@ -66,6 +67,7 @@ html[data-theme="dark"] {
   --ink: #f6f1f8;
   --muted: #c9b8d4;
   --line: rgba(196, 163, 208, 0.28);
+  --hairline: color-mix(in srgb, var(--ink) 14%, transparent);
   --focus: #c9a3d6;
   --accent: #c9a3d6;
   --accent-soft: rgba(128, 88, 152, 0.38);
