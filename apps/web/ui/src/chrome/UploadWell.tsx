@@ -1,4 +1,5 @@
 import type { ChangeEvent, DragEvent, ReactNode } from "react";
+import { fileMatchesAccept } from "./fileAccept";
 
 type Props = {
   icon: string;
@@ -8,6 +9,7 @@ type Props = {
   fileName?: string;
   disabled?: boolean;
   onFile: (file: File | null) => void;
+  onReject?: (file: File) => void;
   children?: ReactNode;
 };
 
@@ -19,18 +21,26 @@ export function UploadWell({
   fileName,
   disabled,
   onFile,
+  onReject,
   children,
 }: Props) {
+  function take(file: File | null, input?: HTMLInputElement) {
+    if (file && !fileMatchesAccept(file, accept)) {
+      if (input) input.value = "";
+      onReject?.(file);
+      return;
+    }
+    onFile(file);
+  }
+
   function onChange(e: ChangeEvent<HTMLInputElement>) {
-    const f = e.target.files?.[0] || null;
-    onFile(f);
+    take(e.target.files?.[0] || null, e.target);
   }
 
   function onDrop(e: DragEvent<HTMLLabelElement>) {
     e.preventDefault();
     if (disabled) return;
-    const f = e.dataTransfer.files?.[0] || null;
-    onFile(f);
+    take(e.dataTransfer.files?.[0] || null);
   }
 
   return (
