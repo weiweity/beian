@@ -4,10 +4,9 @@ import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 
-const script = readFileSync(
-  join(dirname(fileURLToPath(import.meta.url)), "../../../../scripts/windows/release.ps1"),
-  "utf8",
-);
+const scriptPath = join(dirname(fileURLToPath(import.meta.url)), "../../../../scripts/windows/release.ps1");
+const scriptBytes = readFileSync(scriptPath);
+const script = scriptBytes.toString("utf8").replace(/^\uFEFF/, "");
 
 function indexOf(re: RegExp): number {
   const m = re.exec(script);
@@ -17,6 +16,10 @@ function indexOf(re: RegExp): number {
 
 describe("windows release.ps1 contract", () => {
   it("is Hangzhou CD that always stops 8787 before pull", () => {
+    assert.equal(scriptBytes[0], 0xef);
+    assert.equal(scriptBytes[1], 0xbb);
+    assert.equal(scriptBytes[2], 0xbf);
+    assert.match(script, /UTF-8 with BOM/);
     assert.match(script, /Hangzhou production CD/);
     assert.match(script, /live pull-while-serving is gone/);
     assert.ok(indexOf(/taskkill\.exe \/T \/F \/PID/) < indexOf(/git pull --ff-only origin main/));
@@ -64,5 +67,6 @@ describe("windows release.ps1 contract", () => {
     assert.match(script, /0x89/);
     assert.match(script, /Start-Process -FilePath "npm\.cmd"/);
     assert.match(script, /"run","start","-w","beian-server"/);
+    assert.ok(indexOf(/@rollup\/rollup-win32-x64-msvc/) < indexOf(/npm run build -w beian-ui/));
   });
 });
