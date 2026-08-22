@@ -174,7 +174,7 @@ npm run build -w beian-ui
 if ($LASTEXITCODE -ne 0) { throw "npm run build -w beian-ui 失败 exit=$LASTEXITCODE" }
 
 Write-Host "start beian-server WB_DATA_DIR=$($env:WB_DATA_DIR)"
-# cmd start detaches from the GitHub Actions job object (Start-Process children get killed when the job ends).
+# GitHub Actions kills the job process tree. schtasks /Run is outside that tree.
 $bat = Join-Path $env:TEMP "beian-start-prod.cmd"
 @(
   "@echo off",
@@ -185,7 +185,11 @@ $bat = Join-Path $env:TEMP "beian-start-prod.cmd"
 ) + $(if ($env:WB_PYTHON) { @("set WB_PYTHON=$($env:WB_PYTHON)") } else { @() }) + @(
   "call npm.cmd run start -w beian-server"
 ) | Set-Content -Path $bat -Encoding ASCII
-cmd.exe /c "start `"beian-server`" /MIN `"$bat`""
+$task = "beian-server-8787"
+cmd.exe /c "schtasks /Create /TN $task /SC ONLOGON /RL LIMITED /TR `"$bat`" /F" | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "schtasks /Create $task 失败 exit=$LASTEXITCODE" }
+cmd.exe /c "schtasks /Run /TN $task" | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "schtasks /Run $task 失败 exit=$LASTEXITCODE" }
 $ok = $false
 for ($i = 0; $i -lt 20; $i++) {
   Start-Sleep -Seconds 2
