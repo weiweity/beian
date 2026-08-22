@@ -65,9 +65,9 @@ describe("windows release.ps1 contract", () => {
     assert.match(script, /health\.version=\$\(\$health\.version\) 但 VERSION=\$ver，拒绝 SMOKE ok/);
     assert.match(script, /logo 不是 PNG/);
     assert.match(script, /0x89/);
-    assert.match(script, /start `"beian-server`"/);
+    assert.match(script, /schtasks \/Run \/TN \$task/);
     assert.match(script, /npm\.cmd run start -w beian-server/);
-    assert.match(script, /job object/);
+    assert.match(script, /job process tree/);
     assert.ok(indexOf(/@rollup\/rollup-win32-x64-msvc/) < indexOf(/npm run build -w beian-ui/));
   });
 
