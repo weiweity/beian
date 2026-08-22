@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.12.0.2] - 2026-08-22
+
+### Added
+
+- 杭州生产机升版改走仓库里的 `scripts/windows/release.ps1`。对照、打样或 Illustrator 栅格在跑会直接失败；`git pull` 只快进。加 `-Restart` 只停占用 8787 的那个 Node，不动 cloudflared，也不杀 Grok Build。合进 GitHub 仍然不会自动升杭州。
+
 ## [0.12.0.1] - 2026-08-22
 
 ### Fixed
