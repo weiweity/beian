@@ -3,7 +3,7 @@
 来源：Figma「审稿室 · iOS 27」锁定稿（2026-08-20）。  
 稿：https://www.figma.com/design/BL3PGUjLGLPb9iUZMzRhD6  
 页：`Web · 锁定稿`（封面 `87:1448`）。`iPad` 页是探索，**不是**实现依据。  
-资产：`apps/web/ui/public/brand/logo-mark.png`（侧栏）、`shine-mage.png`（拒绝页整标）、`public/brand/ui/*.svg`（侧栏/上传/等待，从锁定稿导出）。
+资产：`apps/web/ui/public/brand/logo-mark.png`（侧栏）、`apps/web/ui/public/brand/shine-mage.png`（拒绝页整标）、`apps/web/ui/public/brand/ui/*.svg`（侧栏/上传/等待，从锁定稿导出）。
 
 实现入口：`apps/web/ui`。不要再画飞书顶栏。不要重写审核引擎和 3D 流水线。
 
