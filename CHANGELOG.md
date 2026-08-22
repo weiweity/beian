@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.12.0.2] - 2026-08-22
+
+### Added
+
+- 杭州生产机升版改走仓库里的 `scripts/windows/release.ps1`。对照、打样或 Illustrator 在跑或排队会失败。脚本先停监听 8787 的那棵进程树（`taskkill /T /F /PID`，不杀全部 node.exe），再 `git pull --ff-only` 并启动。公网会空几分钟。health 不通且还有 worker 不会当空闲。合进 GitHub 仍然不会自动升杭州。
+
 ## [0.12.0.1] - 2026-08-22
 
 ### Fixed

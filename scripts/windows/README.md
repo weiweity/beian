@@ -14,15 +14,33 @@
 
 对外入口是 TypeScript（`apps/web/server`），不是 `uvicorn`。密钥和路径优先点侧栏「设置」里填。
 
-生产数据必须设环境变量，不要放在 git 工作树里：
+生产数据必须设环境变量，不要放在 git 工作树里。PowerShell：
 
 ```
-set WB_DATA_DIR=C:\supply\data
-set WB_PUBLIC=1
-set WB_DEV_DISPLAY_LOGIN=false
+$env:WB_DATA_DIR="C:\supply\data"
+$env:WB_PUBLIC="1"
+$env:WB_DEV_DISPLAY_LOGIN="false"
 ```
+
+cmd.exe 才用 `set WB_DATA_DIR=...`。PowerShell 里写 `set` 不会进子进程。
 
 代码读取 `WB_DATA_DIR`。公网模式（`WB_PUBLIC=1`）若仍指向仓库内 `backend\data`，进程会拒绝启动。
+
+## CD（只在杭州本机）
+
+合进 GitHub `main` **不会**自动升这台机。发布入口是仓库里的脚本，人在杭州执行。脚本随仓库走：第一次拿到它仍用手 `git pull origin main`，之后升版用本脚本。
+
+看板没有对照中。仓库根目录 PowerShell（不要并行跑）：
+
+```
+powershell -ExecutionPolicy Bypass -File scripts\windows\release.ps1
+```
+
+脚本会：查 health（对照/打样/Illustrator 在跑或排队就失败）→ 校验 `$env:WB_DATA_DIR` 不在仓库内 → **先** `taskkill /T /F /PID` 只杀监听 8787 的那棵树（不杀全部 node.exe，不动 cloudflared）→ 再 `git pull --ff-only` + `npm install` + 编 UI + 启动。公网会空 2–5 分钟。health 不通且 8787 仍在听，或还有 python/blender，会失败，不会当空闲。
+
+`-Restart` 现在多余，行为一样。Mac 禁止 `cloudflared tunnel run beian`。
+
+不要用 GitHub Actions / SSH 远程触发这台机。
 
 ## 升到本版之前
 
