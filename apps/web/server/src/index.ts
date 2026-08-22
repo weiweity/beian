@@ -5,7 +5,7 @@ import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono, type Context } from "hono";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import { HTTPException } from "hono/http-exception";
-import { COOKIE, DATA_DIR, HOST, PORT, REPO_ROOT, UI_BRAND, UI_DIST, cookieSecure } from "./config.js";
+import { COOKIE, DATA_DIR, HOST, PORT, REPO_ROOT, UI_DIST, UI_PUBLIC, cookieSecure } from "./config.js";
 import { billingSnapshot, loadVendorBills, resetBillingCache } from "./billing.js";
 import { notifyTaskComplete, sendText } from "./notify.js";
 import {
@@ -70,7 +70,7 @@ import {
 type Env = { Variables: { session: Session } };
 
 const app = new Hono<Env>();
-const VERSION = "0.11.0.0";
+const VERSION = "0.12.0.1";
 
 app.use("/api/*", async (c, next) => {
   const tok = c.req.header("authorization") || (getCookie(c, COOKIE) ? `Bearer ${getCookie(c, COOKIE)}` : "");
@@ -558,7 +558,10 @@ app.get("/api/mockups/:id/files/:key", (c) => {
   });
 });
 
-app.use("/brand/*", serveStatic({ root: UI_BRAND.replace(/\/brand$/, "") }));
+// root = ui/public, so /brand/logo-mark.png → ui/public/brand/logo-mark.png.
+// Do not regex-strip /brand from UI_BRAND: Windows join uses `\brand`, the
+// replace is a no-op, and serveStatic looks in public\brand\brand\… (404).
+app.use("/brand/*", serveStatic({ root: UI_PUBLIC }));
 app.use("/assets/*", serveStatic({ root: UI_DIST }));
 
 app.get("/", (c) => {

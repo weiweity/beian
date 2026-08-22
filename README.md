@@ -97,4 +97,4 @@ docker buildx build --platform linux/amd64 -t beian:review-amd64 --load .
 
 ## 生产
 
-杭州 Windows + Cloudflare Named Tunnel → `127.0.0.1:8787`。Mac 只做开发。
+杭州 Windows + Cloudflare Named Tunnel → `127.0.0.1:8787`。Mac 只做开发。侧栏/拒绝页图标走 `/brand/…`（`apps/web/ui/public`）；Windows 上若 404，确认已拉到 v0.12.0.1+，冒烟见 `scripts/windows/README.md`。
