@@ -138,7 +138,7 @@ When the user's request matches an available skill, invoke it via the Skill tool
 powershell -ExecutionPolicy Bypass -File scripts\windows\release.ps1
 ```
 
-  要连 `:8787` 一起切时加 `-Restart`（只停监听 8787 的进程，不动 cloudflared，不杀全部 `node.exe`）。树里还没有这个脚本时，先手 `git pull origin main`。环境变量在 git 工作树外：`WB_DATA_DIR`、`WB_PUBLIC=1`、`WB_DEV_DISPLAY_LOGIN=false`。密钥用网页开工板填，不进仓库。Cloudflare Named Tunnel 只在杭州跑，指 `http://127.0.0.1:8787`。Mac 必须停掉 `cloudflared tunnel run beian`，否则公网仍是开发机。不要用 `./scripts/dev-start.sh` 当杭州生产启动（zsh）。细节见 `scripts/windows/README.md`。
+  脚本先停监听 8787 的进程树再 pull（2–5 分钟公网空白）。不动 cloudflared，不杀全部 `node.exe`。树里还没有这个脚本时，先手 `git pull origin main`。PowerShell 环境变量用 `$env:WB_DATA_DIR`（不要 `set`）。密钥用网页开工板填，不进仓库。Cloudflare Named Tunnel 只在杭州跑，指 `http://127.0.0.1:8787`。Mac 必须停掉 `cloudflared tunnel run beian`，否则公网仍是开发机。不要用 `./scripts/dev-start.sh` 当杭州生产启动（zsh）。细节见 `scripts/windows/README.md`。
 
 - 杭州 Grok 禁止：在生产机 `/ship` 新功能、改产品代码当开发机用、把生产隧道指到 Mac、对照跑着时 pull/重启。
 - Mac Grok 禁止：把 `www.jianghua.site` 当本机开发入口、合完 PR 就报「已上线」、用户没说「杭州 pull」就指挥杭州改代码或停隧道。
