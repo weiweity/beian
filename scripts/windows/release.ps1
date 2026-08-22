@@ -174,9 +174,18 @@ npm run build -w beian-ui
 if ($LASTEXITCODE -ne 0) { throw "npm run build -w beian-ui 失败 exit=$LASTEXITCODE" }
 
 Write-Host "start beian-server WB_DATA_DIR=$($env:WB_DATA_DIR)"
-$windowStyle = "Normal"
-if ($env:GITHUB_ACTIONS -eq "true") { $windowStyle = "Hidden" }
-Start-Process -FilePath "npm.cmd" -ArgumentList "run","start","-w","beian-server" -WorkingDirectory $Root -WindowStyle $windowStyle
+# cmd start detaches from the GitHub Actions job object (Start-Process children get killed when the job ends).
+$bat = Join-Path $env:TEMP "beian-start-prod.cmd"
+@(
+  "@echo off",
+  "cd /d `"$Root`"",
+  "set WB_DATA_DIR=$($env:WB_DATA_DIR)",
+  "set WB_PUBLIC=1",
+  "set WB_DEV_DISPLAY_LOGIN=false"
+) + $(if ($env:WB_PYTHON) { @("set WB_PYTHON=$($env:WB_PYTHON)") } else { @() }) + @(
+  "call npm.cmd run start -w beian-server"
+) | Set-Content -Path $bat -Encoding ASCII
+cmd.exe /c "start `"beian-server`" /MIN `"$bat`""
 $ok = $false
 for ($i = 0; $i -lt 20; $i++) {
   Start-Sleep -Seconds 2
