@@ -14,7 +14,7 @@
 - 不得读取或打印真实密钥。
 - 不得自行改 DNS、发布飞书版本、购买云、映射公网端口。
 - 公网/Tunnel 后禁止显示名裸登录。
-- Mac 绿灯不等于 Windows 已验收。
+- Mac 绿灯不等于 Windows 已验收。杭州生产怎么升版见文末「Deploy Configuration」。合 GitHub 不会自动升杭州。
 - 对照失败或已完成的单不能签字；干净签字单不能再对红；对红后优先读非空 `hits_v2`（空数组回退第一轮）。
 - 飞书授权失败回到飞书，不要把远程验收人送到本机 `:8787`。JSON 404 不是 Vite 挂了；只有 HTML 或空 Content-Type 才当开发页没转到 8787。
 
@@ -61,7 +61,10 @@ When the user's request matches an available skill, invoke it via the Skill tool
 - 架构 → /plan-eng-review
 - 完整审查 → /autoplan
 - 缺陷 → /investigate
-- 发 PR → /ship
+- 发 PR → /ship（只在 Mac 开发机。杭州生产机禁止 /ship 产品功能。）
+- 合 main → /land-and-deploy（只合 GitHub。不重启杭州、不改 DNS。）
+- 杭州上线 → 用户明确说「杭州 pull」之后，在杭州那台 Grok Build 执行 `scripts/windows/release.ps1`；Mac 对话只出清单。
+- 配置发布 → /setup-deploy
 - 写 issue → /spec
 
 ## Design System
@@ -109,3 +112,35 @@ When the user's request matches an available skill, invoke it via the Skill tool
 - 注释写约束、原因和失败语义，不复述代码；名称必须体现产品边界，如 worker、snapshot、human decision。
 - 沿用已有术语、路径和错误格式；发现 `frontend/`、FastAPI、Hono 三套说法并存时，不得再发明第四套。
 - 人工终审不可抽象成机器过审；账单 `charge_status` 必须保持 `unknown`，除非已有可核验的供应商扣费事实。
+
+## Deploy Configuration (configured by /setup-deploy)
+
+- Platform: 杭州 Windows（UU 远程「人事-台式」）+ Cloudflare Named Tunnel。不是 Fly / Vercel / GitHub Actions。
+- Production URL: https://www.jianghua.site
+- Deploy workflow: none（仓库无 `.github/workflows`。禁止合 `main` 自动升杭州。）
+- Deploy status command: 无平台 CLI。杭州本机 `curl -sS http://127.0.0.1:8787/api/health`（环回才是杭州进程）。公网 health 仅在 Named Tunnel 跑在杭州时有效。
+- Merge method: squash
+- Project type: web app（Hono `:8787`）
+- Post-deploy health check: `https://www.jianghua.site/api/health`（隧道必须在杭州；Mac 上的 cloudflared 不当生产）。`/api/health` 的 `version` 目前写死在 `apps/web/server/src/index.ts`，不能当发版证据；以杭州工作树 `VERSION` 文件和 merge SHA 为准。
+
+### 机器分工
+
+- Mac：开发。入口 `http://127.0.0.1:8787`。跑 `/ship` 和 `/land-and-deploy`（后者只合 GitHub）。
+- 杭州 Windows「人事-台式」：生产。入口 `https://www.jianghua.site` → 本机 `:8787`。这台已装 Grok Build，且能访问 GitHub 仓库 `weiweity/beian`。杭州 Grok 只跑 `scripts/windows/release.ps1` 和开工板探测。
+- 远程：UU 远程用来看着人事-台式。发布命令在杭州 Grok 或 Git Bash 执行。Mac 对话不能 SSH 进杭州，也不能把 UU 当成自动部署后端。
+
+### Custom deploy hooks
+
+- Pre-merge: `/ship` 已跑 `npm test` 与 ui build。Mac `/land-and-deploy` 只合 GitHub。
+- Deploy trigger: **人工，在杭州那台 Windows 上**。看板没有「对照中」再动手。用户明确说「杭州 pull」后，在杭州 Grok 或 PowerShell 执行：
+
+```
+powershell -ExecutionPolicy Bypass -File scripts\windows\release.ps1
+```
+
+  脚本先停监听 8787 的进程树再 pull（2–5 分钟公网空白）。不动 cloudflared，不杀全部 `node.exe`。树里还没有这个脚本时，先手 `git pull origin main`。PowerShell 环境变量用 `$env:WB_DATA_DIR`（不要 `set`）。密钥用网页开工板填，不进仓库。Cloudflare Named Tunnel 只在杭州跑，指 `http://127.0.0.1:8787`。Mac 必须停掉 `cloudflared tunnel run beian`，否则公网仍是开发机。不要用 `./scripts/dev-start.sh` 当杭州生产启动（zsh）。细节见 `scripts/windows/README.md`。
+
+- 杭州 Grok 禁止：在生产机 `/ship` 新功能、改产品代码当开发机用、把生产隧道指到 Mac、对照跑着时 pull/重启。
+- Mac Grok 禁止：把 `www.jianghua.site` 当本机开发入口、合完 PR 就报「已上线」、用户没说「杭州 pull」就指挥杭州改代码或停隧道。
+- Deploy status: 杭州环回 health `ok: true`。公网再用 `/canary https://www.jianghua.site`，先确认隧道不在 Mac。
+- Health check: `https://www.jianghua.site/api/health` 与开工板「全部检测」（必须打到杭州）。细节见 `scripts/windows/README.md`。
