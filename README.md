@@ -97,4 +97,4 @@ docker buildx build --platform linux/amd64 -t beian:review-amd64 --load .
 
 ## 生产
 
-杭州 Windows + Cloudflare Named Tunnel → `127.0.0.1:8787`。Mac 只做开发。侧栏/拒绝页图标走 `/brand/…`（`apps/web/ui/public`）；Windows 上若 404，确认已拉到 v0.12.0.1+，冒烟见 `scripts/windows/README.md`。
+杭州 Windows + Cloudflare Named Tunnel → `127.0.0.1:8787`。Mac 只做开发。合进 GitHub **不会**自动升杭州。用户说「杭州 pull」之后，在杭州跑 `scripts/windows/release.ps1`（对照/打样在跑会停住；`-Restart` 只停占用 8787 的 Node，不动 cloudflared）。侧栏/拒绝页图标走 `/brand/…`（`apps/web/ui/public`）；Windows 上若 404，确认已拉到 v0.12.0.1+，冒烟见 `scripts/windows/README.md`。
