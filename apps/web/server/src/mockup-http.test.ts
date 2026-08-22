@@ -115,7 +115,7 @@ describe("mockup post", { concurrency: false }, () => {
     try {
       const sess = issueSession("籽烨", "reviewer", "ou_mockup_post_412", "feishu");
       const fd = new FormData();
-      fd.set("file", new File([Buffer.from("%PDF-1.4\n")], "art.pdf", { type: "application/pdf" }));
+      fd.set("file", new File([Buffer.from("%PDF-1.4\n")], "art.ai", { type: "application/postscript" }));
       const res = await app.request("/api/mockups", {
         method: "POST",
         headers: { authorization: `Bearer ${sess.token}` },
@@ -131,10 +131,87 @@ describe("mockup post", { concurrency: false }, () => {
     }
   });
 
+  it("returns 412 when Illustrator is missing for .ai", async () => {
+    const prevBin = process.env.BLENDER_EXECUTABLE;
+    const prevAi = process.env.ILLUSTRATOR_EXECUTABLE;
+    process.env.BLENDER_EXECUTABLE = process.execPath;
+    delete process.env.ILLUSTRATOR_EXECUTABLE;
+    try {
+      const sess = issueSession("籽烨", "reviewer", "ou_mockup_post_ai412", "feishu");
+      const fd = new FormData();
+      fd.set("file", new File([Buffer.from("%PDF-1.4\n")], "art.ai", { type: "application/postscript" }));
+      const res = await app.request("/api/mockups", {
+        method: "POST",
+        headers: { authorization: `Bearer ${sess.token}` },
+        body: fd,
+      });
+      assert.equal(res.status, 412);
+      const body = (await res.json()) as { detail?: string };
+      assert.match(String(body.detail || ""), /Illustrator/);
+    } finally {
+      if (prevBin !== undefined) process.env.BLENDER_EXECUTABLE = prevBin;
+      else delete process.env.BLENDER_EXECUTABLE;
+      if (prevAi !== undefined) process.env.ILLUSTRATOR_EXECUTABLE = prevAi;
+      else delete process.env.ILLUSTRATOR_EXECUTABLE;
+    }
+  });
+
+  it("rejects a post with no file", async () => {
+    const prevBin = process.env.BLENDER_EXECUTABLE;
+    const prevAi = process.env.ILLUSTRATOR_EXECUTABLE;
+    process.env.BLENDER_EXECUTABLE = process.execPath;
+    process.env.ILLUSTRATOR_EXECUTABLE = process.execPath;
+    try {
+      const sess = issueSession("籽烨", "reviewer", "ou_mockup_post_nofile", "feishu");
+      const fd = new FormData();
+      fd.set("note", "no-file");
+      const res = await app.request("/api/mockups", {
+        method: "POST",
+        headers: { authorization: `Bearer ${sess.token}` },
+        body: fd,
+      });
+      assert.equal(res.status, 400);
+      const body = (await res.json()) as { detail?: string };
+      assert.match(String(body.detail || ""), /\.ai/);
+    } finally {
+      if (prevBin !== undefined) process.env.BLENDER_EXECUTABLE = prevBin;
+      else delete process.env.BLENDER_EXECUTABLE;
+      if (prevAi !== undefined) process.env.ILLUSTRATOR_EXECUTABLE = prevAi;
+      else delete process.env.ILLUSTRATOR_EXECUTABLE;
+    }
+  });
+
+  it("rejects PDF", async () => {
+    const prevBin = process.env.BLENDER_EXECUTABLE;
+    const prevAi = process.env.ILLUSTRATOR_EXECUTABLE;
+    process.env.BLENDER_EXECUTABLE = process.execPath;
+    process.env.ILLUSTRATOR_EXECUTABLE = process.execPath;
+    try {
+      const sess = issueSession("籽烨", "reviewer", "ou_mockup_post_pdf", "feishu");
+      const fd = new FormData();
+      fd.set("file", new File([Buffer.from("%PDF-1.4\n")], "art.pdf", { type: "application/pdf" }));
+      const res = await app.request("/api/mockups", {
+        method: "POST",
+        headers: { authorization: `Bearer ${sess.token}` },
+        body: fd,
+      });
+      assert.equal(res.status, 400);
+      const body = (await res.json()) as { detail?: string };
+      assert.match(String(body.detail || ""), /\.ai/);
+    } finally {
+      if (prevBin !== undefined) process.env.BLENDER_EXECUTABLE = prevBin;
+      else delete process.env.BLENDER_EXECUTABLE;
+      if (prevAi !== undefined) process.env.ILLUSTRATOR_EXECUTABLE = prevAi;
+      else delete process.env.ILLUSTRATOR_EXECUTABLE;
+    }
+  });
+
   it("returns queued or running before the pack worker finishes", async () => {
     const { setJobsTestHooks, resetJobsTestHooks } = await import("./jobs.js");
     const prevBin = process.env.BLENDER_EXECUTABLE;
+    const prevAi = process.env.ILLUSTRATOR_EXECUTABLE;
     process.env.BLENDER_EXECUTABLE = process.execPath;
+    process.env.ILLUSTRATOR_EXECUTABLE = process.execPath;
     setJobsTestHooks({
       runPack: () =>
         new Promise(() => {
@@ -144,7 +221,7 @@ describe("mockup post", { concurrency: false }, () => {
     try {
       const sess = issueSession("籽烨", "reviewer", "ou_mockup_post_ok", "feishu");
       const fd = new FormData();
-      fd.set("file", new File([Buffer.from("%PDF-1.4\n")], "art.pdf", { type: "application/pdf" }));
+      fd.set("file", new File([Buffer.from("%PDF-1.4\n")], "art.ai", { type: "application/postscript" }));
       const started = Date.now();
       const res = await app.request("/api/mockups", {
         method: "POST",
@@ -162,6 +239,8 @@ describe("mockup post", { concurrency: false }, () => {
       resetJobsTestHooks();
       if (prevBin !== undefined) process.env.BLENDER_EXECUTABLE = prevBin;
       else delete process.env.BLENDER_EXECUTABLE;
+      if (prevAi !== undefined) process.env.ILLUSTRATOR_EXECUTABLE = prevAi;
+      else delete process.env.ILLUSTRATOR_EXECUTABLE;
     }
   });
 });
