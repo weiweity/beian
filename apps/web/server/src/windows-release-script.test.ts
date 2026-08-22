@@ -65,8 +65,9 @@ describe("windows release.ps1 contract", () => {
     assert.match(script, /health\.version=\$\(\$health\.version\) 但 VERSION=\$ver，拒绝 SMOKE ok/);
     assert.match(script, /logo 不是 PNG/);
     assert.match(script, /0x89/);
-    assert.match(script, /Start-Process -FilePath "npm\.cmd"/);
-    assert.match(script, /"run","start","-w","beian-server"/);
+    assert.match(script, /start `"beian-server`"/);
+    assert.match(script, /npm\.cmd run start -w beian-server/);
+    assert.match(script, /job object/);
     assert.ok(indexOf(/@rollup\/rollup-win32-x64-msvc/) < indexOf(/npm run build -w beian-ui/));
   });
 
@@ -76,7 +77,6 @@ describe("windows release.ps1 contract", () => {
     assert.match(script, /Invoke-Git fetch origin/);
     assert.match(script, /Invoke-Git pull --ff-only origin main/);
     assert.doesNotMatch(script, /Write-Host.*GITHUB_TOKEN/);
-    assert.match(script, /GITHUB_ACTIONS/);
-    assert.match(script, /WindowStyle \$windowStyle/);
+    assert.match(script, /GITHUB_TOKEN/);
   });
 });
