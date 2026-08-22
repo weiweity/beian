@@ -1,4 +1,5 @@
-# Hangzhou production CD. Always stop :8787, then pull/build/start.
+﻿# Hangzhou production CD. Always stop :8787, then pull/build/start.
+# Encoding: UTF-8 with BOM so Windows PowerShell 5 (GBK) can parse this file.
 #   powershell -ExecutionPolicy Bypass -File scripts\windows\release.ps1
 # -Restart is accepted and ignored: live pull-while-serving is gone (emptyOutDir 404).
 # Does not touch cloudflared. Does not kill all node.exe (Grok Build uses Node).
@@ -147,6 +148,18 @@ Write-Host "tree $sha VERSION=$ver"
 
 npm install
 if ($LASTEXITCODE -ne 0) { throw "npm install 失败 exit=$LASTEXITCODE" }
+
+# Mac lockfile does not drop the Windows Rollup native optional. Vite build needs it.
+$rollupWin = @(
+  (Join-Path $Root "node_modules\@rollup\rollup-win32-x64-msvc"),
+  (Join-Path $Root "apps\web\ui\node_modules\@rollup\rollup-win32-x64-msvc")
+) | Where-Object { Test-Path $_ }
+if (-not $rollupWin) {
+  Write-Host "install @rollup/rollup-win32-x64-msvc for Vite build"
+  npm install -w beian-ui --no-save --no-package-lock "@rollup/rollup-win32-x64-msvc@4.62.4"
+  if ($LASTEXITCODE -ne 0) { throw "Windows Rollup optional 安装失败 exit=$LASTEXITCODE" }
+}
+
 npm run build -w beian-ui
 if ($LASTEXITCODE -ne 0) { throw "npm run build -w beian-ui 失败 exit=$LASTEXITCODE" }
 

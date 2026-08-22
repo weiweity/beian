@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.12.0.3] - 2026-08-22
+
+### Fixed
+
+- 杭州下次升版时，中文 Windows 的 PowerShell 5 能直接跑 `release.ps1`（文件带 UTF-8 BOM）。`npm install` 之后若缺 Windows 的 Rollup 原生包会先补上再编 UI，避免 8787 已停、页面编不过。
+
 ## [0.12.0.2] - 2026-08-22
 
 ### Added

@@ -36,7 +36,7 @@ cmd.exe 才用 `set WB_DATA_DIR=...`。PowerShell 里写 `set` 不会进子进�
 powershell -ExecutionPolicy Bypass -File scripts\windows\release.ps1
 ```
 
-脚本会：查 health（对照/打样/Illustrator 在跑或排队就失败）→ 校验 `$env:WB_DATA_DIR` 不在仓库内 → **先** `taskkill /T /F /PID` 只杀监听 8787 的那棵树（不杀全部 node.exe，不动 cloudflared）→ 再 `git pull --ff-only` + `npm install` + 编 UI + 启动。公网会空 2–5 分钟。health 不通且 8787 仍在听，或还有 python/blender，会失败，不会当空闲。
+脚本会：查 health（对照/打样/Illustrator 在跑或排队就失败）→ 校验 `$env:WB_DATA_DIR` 不在仓库内 → **先** `taskkill /T /F /PID` 只杀监听 8787 的那棵树（不杀全部 node.exe，不动 cloudflared）→ 再 `git pull --ff-only` + `npm install` + 补 Windows 的 Rollup 可选包 + 编 UI + 启动。公网会空 2–5 分钟。health 不通且 8787 仍在听，或还有 python/blender，会失败，不会当空闲。文件是 UTF-8 BOM，给中文 Windows 的 PowerShell 5 用。
 
 `-Restart` 现在多余，行为一样。Mac 禁止 `cloudflared tunnel run beian`。
 
