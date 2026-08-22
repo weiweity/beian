@@ -24,6 +24,35 @@ set WB_DEV_DISPLAY_LOGIN=false
 
 代码读取 `WB_DATA_DIR`。公网模式（`WB_PUBLIC=1`）若仍指向仓库内 `backend\data`，进程会拒绝启动。
 
+## CD（只在杭州本机）
+
+合进 GitHub `main` **不会**自动升这台机。发布入口是仓库里的脚本，人在杭州执行。脚本随仓库走：第一次拿到它仍用手 `git pull origin main`，之后升版用本脚本。
+
+仓库根目录 PowerShell：
+
+```
+powershell -ExecutionPolicy Bypass -File scripts\windows\release.ps1
+```
+
+有对照、打样或 Illustrator 栅格在跑会直接失败。成功则 `git pull --ff-only` + `npm install` + 编 UI。`-Restart` 在停 8787 前会再查一次槽位。然后你停掉**占用 8787 的那个 Node**（不要在任务管理器里杀全部 node.exe，Grok Build 也是 Node），再：
+
+```
+set WB_DATA_DIR=C:\supply\data
+set WB_PUBLIC=1
+set WB_DEV_DISPLAY_LOGIN=false
+npm run start -w beian-server
+```
+
+若本机已设好上述环境变量，可让脚本连 8787 一起切：
+
+```
+powershell -ExecutionPolicy Bypass -File scripts\windows\release.ps1 -Restart
+```
+
+`-Restart` 只停监听 `8787` 的进程，不动 `cloudflared`。Mac 禁止 `cloudflared tunnel run beian`。
+
+不要用 GitHub Actions / SSH 远程触发这台机。对照中重启会杀掉作业。
+
 ## 升到本版之前
 
 看板没有「对照中」再 pull / 重启。对照跑着时不要直接切版本。
