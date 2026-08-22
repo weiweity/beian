@@ -70,7 +70,7 @@ import {
 type Env = { Variables: { session: Session } };
 
 const app = new Hono<Env>();
-const VERSION = "0.12.0.2";
+const VERSION = "0.12.0.3";
 
 app.use("/api/*", async (c, next) => {
   const tok = c.req.header("authorization") || (getCookie(c, COOKIE) ? `Bearer ${getCookie(c, COOKIE)}` : "");
