@@ -70,7 +70,7 @@ import {
 type Env = { Variables: { session: Session } };
 
 const app = new Hono<Env>();
-const VERSION = "0.12.0.3";
+const VERSION = "0.12.1.0";
 
 app.use("/api/*", async (c, next) => {
   const tok = c.req.header("authorization") || (getCookie(c, COOKIE) ? `Bearer ${getCookie(c, COOKIE)}` : "");
@@ -499,23 +499,20 @@ app.post("/api/mockups", async (c) => {
   const s = need(c, "create");
   try {
     assertBlenderReady();
+    assertIllustratorReady();
   } catch (e) {
     boom(e);
   }
   const body = await c.req.parseBody();
   const file = body.file || body.pdf || body.source;
-  if (!(file instanceof File)) throw new HTTPException(400, { message: "需要平面 PDF 或 AI" });
-  if (/\.ai$/i.test(file.name)) {
-    try {
-      assertIllustratorReady();
-    } catch (e) {
-      boom(e);
-    }
+  if (!(file instanceof File)) throw new HTTPException(400, { message: "需要 .ai 稿件" });
+  if (!/\.ai$/i.test(file.name)) {
+    throw new HTTPException(400, { message: "只收 .ai 稿件。" });
   }
   const id = newTid();
   const dir = join(DATA_DIR, "mockups", id);
   mkdirSync(dir, { recursive: true });
-  const src = join(dir, file.name.replace(/[^a-zA-Z0-9._-]/g, "_") || "art.pdf");
+  const src = join(dir, file.name.replace(/[^a-zA-Z0-9._-]/g, "_") || "art.ai");
   const buf = Buffer.from(await file.arrayBuffer());
   if (buf.length > maxUploadBytes()) {
     throw new HTTPException(400, { message: `文件超过 ${Math.round(maxUploadBytes() / 1024 / 1024)} MB` });

@@ -47,8 +47,9 @@ export function MockupPage() {
   }, [job?.id, jobWaiting, message]);
 
   async function run() {
+    if (busy) return;
     if (!file) {
-      message.warning("先选平面 PDF 或 AI");
+      message.warning("先选 .ai 稿件");
       return;
     }
     const fd = new FormData();
@@ -104,11 +105,12 @@ export function MockupPage() {
         <UploadWell
           icon="/brand/ui/well-pdf.svg"
           title="平面稿"
-          hint="把平面 PDF / AI 拖到这里"
-          accept=".pdf,.ai"
+          hint="把 .ai 拖到这里"
+          accept=".ai"
           fileName={file?.name}
           disabled={busy}
           onFile={setFile}
+          onReject={() => message.warning("只收 .ai 稿件。")}
         >
           <span className="upload-well-btn">选取平面稿</span>
         </UploadWell>

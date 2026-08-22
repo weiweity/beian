@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Alert, App } from "antd";
+import { App } from "antd";
 import { api } from "../api";
 import { UploadWell } from "../chrome/UploadWell";
 import { WaitCard } from "../chrome/WaitCard";
@@ -99,6 +99,7 @@ export function NewTaskPage({ onCreated, onBack }: Props) {
           accept=".xlsx"
           fileName={excel?.name}
           onFile={setExcel}
+          onReject={() => message.warning("Excel 只要 .xlsx。")}
         >
           <span className="upload-well-btn">选取 Excel</span>
         </UploadWell>
@@ -109,16 +110,13 @@ export function NewTaskPage({ onCreated, onBack }: Props) {
           accept=".pdf"
           fileName={pdf?.name}
           onFile={setPdf}
+          onReject={() => message.warning("包装稿只要 PDF。")}
         >
           <span className="upload-well-btn">选取 PDF</span>
         </UploadWell>
       </div>
 
-      <Alert
-        type="info"
-        showIcon
-        title="OCR 认不清会写成「待人工确认」，不会自动过审。一次只传一对。"
-      />
+      <p className="new-ocr-hint">OCR 认不清会写成「待人工确认」，不会自动过审。一次只传一对。</p>
 
       <div className="step-row">
         <article className="step-card">
