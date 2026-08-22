@@ -28,7 +28,7 @@ cmd.exe 才用 `set WB_DATA_DIR=...`。PowerShell 里写 `set` 不会进子进�
 
 ## CD（只在杭州本机）
 
-合进 GitHub `main` **不会**自动升这台机。发布入口是仓库里的脚本，人在杭州执行。脚本随仓库走：第一次拿到它仍用手 `git pull origin main`，之后升版用本脚本。
+合进 GitHub `main` 后，本机 **GitHub Actions self-hosted runner**（标签 `hangzhou`）跑下面的脚本。没有 runner 时仍可在杭州手工执行。脚本随仓库走。
 
 看板没有对照中。仓库根目录 PowerShell（不要并行跑）：
 
@@ -40,7 +40,7 @@ powershell -ExecutionPolicy Bypass -File scripts\windows\release.ps1
 
 `-Restart` 现在多余，行为一样。Mac 禁止 `cloudflared tunnel run beian`。
 
-不要用 GitHub Actions / SSH 远程触发这台机。
+不要用 GitHub-hosted runner（`ubuntu-latest` / `windows-latest`）升这台机。不要 SSH。self-hosted 只打标签 `hangzhou`。
 
 ## 升到本版之前
 

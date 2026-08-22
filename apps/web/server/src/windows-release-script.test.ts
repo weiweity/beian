@@ -69,4 +69,14 @@ describe("windows release.ps1 contract", () => {
     assert.match(script, /"run","start","-w","beian-server"/);
     assert.ok(indexOf(/@rollup\/rollup-win32-x64-msvc/) < indexOf(/npm run build -w beian-ui/));
   });
+
+  it("uses GITHUB_TOKEN for git when Actions provides it, never prints the token", () => {
+    assert.match(script, /function Invoke-Git/);
+    assert.match(script, /http.extraheader=AUTHORIZATION: bearer/);
+    assert.match(script, /Invoke-Git fetch origin/);
+    assert.match(script, /Invoke-Git pull --ff-only origin main/);
+    assert.doesNotMatch(script, /Write-Host.*GITHUB_TOKEN/);
+    assert.match(script, /GITHUB_ACTIONS/);
+    assert.match(script, /WindowStyle \$windowStyle/);
+  });
 });

@@ -1,0 +1,32 @@
+# Hangzhou Windows production only.
+# Does not checkout into Actions _work: release.ps1 runs against D:\beian.
+# Does not start or stop cloudflared. Does not kill all node.exe.
+name: hangzhou-release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: hangzhou-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: [self-hosted, hangzhou]
+    timeout-minutes: 40
+    env:
+      WB_DATA_DIR: C:\supply\data
+      WB_PUBLIC: "1"
+      WB_DEV_DISPLAY_LOGIN: "false"
+      WB_PYTHON: D:\beian\apps\web\backend\.venv\Scripts\python.exe
+      GIT_TERMINAL_PROMPT: "0"
+    steps:
+      - name: Drain, pull, build, restart :8787
+        shell: powershell
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File D:\beian\scripts\windows\release.ps1
