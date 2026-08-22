@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- 杭州 self-hosted GitHub Actions：合 `main` 后自动跑 `release.ps1`。对照在跑会失败。不动 cloudflared，不杀全部 node.exe。
+
 ## [0.12.1.0] - 2026-08-22
 
 ### Changed

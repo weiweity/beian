@@ -19,6 +19,16 @@ function Assert-GitOk([string]$What) {
   if ($LASTEXITCODE -ne 0) { throw "$What 失败 exit=$LASTEXITCODE" }
 }
 
+# Actions runner may not have Git Credential Manager. Never print GITHUB_TOKEN.
+function Invoke-Git {
+  param([Parameter(ValueFromRemainingArguments = $true)][string[]]$GitArgs)
+  if ($env:GITHUB_TOKEN) {
+    & git -c "http.extraheader=AUTHORIZATION: bearer $($env:GITHUB_TOKEN)" @GitArgs
+  } else {
+    & git @GitArgs
+  }
+}
+
 function Get-Health {
   try {
     return Invoke-RestMethod -Uri "http://127.0.0.1:8787/api/health" -TimeoutSec 8
@@ -136,11 +146,11 @@ if ($pid8787) {
 $health = Get-Health
 if ($health) { Assert-SlotsIdle $health "after-stop" }
 
-git fetch origin
+Invoke-Git fetch origin
 Assert-GitOk "git fetch"
-git checkout main
+Invoke-Git checkout main
 Assert-GitOk "git checkout main"
-git pull --ff-only origin main
+Invoke-Git pull --ff-only origin main
 Assert-GitOk "git pull --ff-only"
 $sha = (git rev-parse --short HEAD).Trim()
 $ver = (Get-Content -Raw VERSION).Trim()
@@ -164,7 +174,9 @@ npm run build -w beian-ui
 if ($LASTEXITCODE -ne 0) { throw "npm run build -w beian-ui 失败 exit=$LASTEXITCODE" }
 
 Write-Host "start beian-server WB_DATA_DIR=$($env:WB_DATA_DIR)"
-Start-Process -FilePath "npm.cmd" -ArgumentList "run","start","-w","beian-server" -WorkingDirectory $Root -WindowStyle Normal
+$windowStyle = "Normal"
+if ($env:GITHUB_ACTIONS -eq "true") { $windowStyle = "Hidden" }
+Start-Process -FilePath "npm.cmd" -ArgumentList "run","start","-w","beian-server" -WorkingDirectory $Root -WindowStyle $windowStyle
 $ok = $false
 for ($i = 0; $i -lt 20; $i++) {
   Start-Sleep -Seconds 2
