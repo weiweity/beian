@@ -1,7 +1,8 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { execFile, execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { join, resolve } from "node:path";
 import { DATA_DIR, PYTHON_APP } from "./config.js";
+import { whichLark } from "./larkBin.js";
 import { httpsJson } from "./outbound.js";
 
 export type FieldKind = "text" | "secret" | "toggle" | "path";
@@ -89,9 +90,9 @@ export const CATALOG: SettingField[] = [
   {
     group: "飞书推送",
     key: "FEISHU_ENABLED",
-    label: "启用 lark-cli 推送",
+    label: "启用飞书推送",
     kind: "toggle",
-    help: "签字后给指定人发消息。本机要装 lark-cli。",
+    help: "签字后给指定人发消息。优先用本机 lark-cli；没有则用已填的飞书应用凭证直发。",
     default: "false",
   },
   {
@@ -364,7 +365,7 @@ export function publicView() {
       { id: "python", label: "对照 Python" },
       { id: "blender", label: "Blender" },
       { id: "illustrator", label: "Illustrator" },
-      { id: "lark", label: "lark-cli 推送" },
+      { id: "lark", label: "飞书推送" },
     ],
     derived: {
       redirect_uri: feishuRedirect(),
@@ -479,16 +480,6 @@ function runCmd(
   });
 }
 
-function which(cmd: string): string | null {
-  try {
-    const bin = process.platform === "win32" ? "where" : "which";
-    const out = execFileSync(bin, [cmd], { encoding: "utf8" }).trim().split(/\r?\n/)[0];
-    return out && existsSync(out) ? out : null;
-  } catch {
-    return null;
-  }
-}
-
 async function probeFeishu(): Promise<ProbeResult> {
   const id = "feishu";
   const appId = getSetting("FEISHU_APP_ID");
@@ -552,13 +543,23 @@ function probeIllustrator(): ProbeResult {
 
 function probeLark(): ProbeResult {
   const id = "lark";
-  const bin = which("lark-cli");
-  if (!bin) return { id, ok: false, message: "本机找不到 lark-cli" };
+  const bin = whichLark();
+  const appReady = Boolean(getSetting("FEISHU_APP_ID").trim() && getSetting("FEISHU_APP_SECRET").trim());
+  if (!bin && !appReady) {
+    return { id, ok: false, message: "本机没有 lark-cli，飞书应用凭证也不全。填登录凭证后可点发一条测试。" };
+  }
+  if (!bin) {
+    return {
+      id,
+      ok: true,
+      message: "未装 lark-cli，将用飞书应用发给当前登录。点发一条测试确认她能收到。",
+    };
+  }
   const enabled = /^(1|true|yes|on)$/i.test(getSetting("FEISHU_ENABLED"));
   const oid = getSetting("FEISHU_OPEN_ID");
-  if (!enabled) return { id, ok: true, message: `已安装，推送未开（${bin}）` };
-  if (!oid) return { id, ok: false, message: "已安装，但还没填推送对象" };
-  return { id, ok: true, message: `已安装，将推给 ${oid.slice(0, 8)}…` };
+  if (!enabled) return { id, ok: true, message: `已找到 lark-cli。点发一条测试会打开推送。` };
+  if (!oid) return { id, ok: false, message: "已找到 lark-cli，但还没填推送对象。点发一条测试会发给当前登录。" };
+  return { id, ok: true, message: `已找到 lark-cli，将推给 ${oid.slice(0, 8)}…` };
 }
 
 async function probeMinimax(): Promise<ProbeResult> {

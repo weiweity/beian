@@ -22,6 +22,8 @@ describe("setupBoard copy", () => {
     assert.match(idleRowMessage("minimax", "wizard"), /模型列表/);
     assert.match(idleRowMessage("minimax", "wizard"), /\/v1\/models/);
     assert.doesNotMatch(idleRowMessage("minimax", "wizard"), /^通$|^不通$/);
+    assert.match(idleRowMessage("blender", "scan"), /魏炜/);
+    assert.match(idleRowMessage("lark", "push"), /发一条测试/);
   });
 
   it("wizard pages are numbered steps, MiniMax names the models-list probe", () => {

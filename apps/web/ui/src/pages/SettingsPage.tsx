@@ -181,11 +181,17 @@ export function SettingsPage({
     setProbes((prev) => ({ ...prev, [id]: { pending: true } }));
     try {
       const r = await api.probe(id);
-      setProbes((prev) => ({ ...prev, [id]: r }));
+      setProbes((prev) => {
+        const next = { ...prev, [id]: r };
+        if (r.id && r.id !== id) next[r.id] = r;
+        return next;
+      });
     } catch (err: unknown) {
+      const fail = { id, ok: false, message: probeErrorMessage(err) };
       setProbes((prev) => ({
         ...prev,
-        [id]: { id, ok: false, message: probeErrorMessage(err) },
+        [id]: fail,
+        ...(id === "lark_send" ? { lark: { ...fail, id: "lark" } } : {}),
       }));
     }
   }
@@ -202,7 +208,7 @@ export function SettingsPage({
 
   async function scanPc() {
     if (!canAdmin) {
-      message.error("扫描这台电脑需要管理员");
+      message.error("扫描这台电脑需要管理员魏炜。刷新页面后再试。");
       return;
     }
     setScanBusy(true);
@@ -337,7 +343,7 @@ export function SettingsPage({
             ) : group === "开工板" ? (
               <div className="setup-actions">
                 <Button onClick={() => void scanPc()} loading={scanBusy} disabled={!canAdmin}>
-                  扫描这台电脑
+                  {canAdmin ? "扫描这台电脑" : "扫描需管理员"}
                 </Button>
                 <Button type="primary" onClick={() => void probeGroup()} loading={Boolean(probeBusy)}>
                   {probeBusy || "全部检测"}
@@ -365,6 +371,7 @@ export function SettingsPage({
               onPush={() => void probe("lark_send")}
               displayName={displayName}
               openId={openId}
+              canAdmin={canAdmin}
             />
           ) : null}
 
@@ -466,6 +473,7 @@ function SetupBoard({
   onPush,
   displayName,
   openId,
+  canAdmin,
 }: {
   probes: Record<string, ProbeResult | { pending: true }>;
   probeBusy: string;
@@ -480,6 +488,7 @@ function SetupBoard({
   onPush: () => void;
   displayName: string | null;
   openId: string;
+  canAdmin: boolean;
 }) {
   const done = BOARD_ROWS.map((row) => probes[row.id]).filter(
     (r): r is ProbeResult => Boolean(r) && !("pending" in r),
@@ -552,8 +561,10 @@ function SetupBoard({
                       <span className="setup-btn-full">再测一次</span>
                       <span className="setup-btn-short">再测</span>
                     </>
-                  ) : (
+                  ) : canAdmin ? (
                     "扫描这台电脑"
+                  ) : (
+                    "需管理员"
                   )}
                 </button>
               ) : null}

@@ -459,14 +459,21 @@ app.post("/api/settings/probe", async (c) => {
   if (id === "lark_send") {
     const to = (s.open_id || "").trim();
     if (!to) {
-      return c.json({ id, ok: false, message: "显示名登录没有 open_id，发不了测试" });
+      return c.json({ id: "lark", ok: false, message: "显示名登录没有 open_id，发不了测试" });
     }
-    const r = await sendText("【审稿台】推送测试。发给当前登录。", to);
-    return c.json({
-      id,
-      ok: Boolean(r.ok),
-      message: r.ok ? `已发给当前登录 ${to.slice(0, 8)}…` : r.reason || "发送失败",
-    });
+    const r = await sendText("【审稿台】推送测试。发给当前登录。", to, { force: true });
+    if (r.ok) {
+      const patch: Record<string, string> = { FEISHU_ENABLED: "true" };
+      if (!getSetting("FEISHU_OPEN_ID").trim()) patch.FEISHU_OPEN_ID = to;
+      saveSettings(patch);
+      const via = r.via === "cli" ? "lark-cli" : "飞书应用";
+      return c.json({
+        id: "lark",
+        ok: true,
+        message: `已用${via}发给当前登录 ${s.display_name || to.slice(0, 8)}`,
+      });
+    }
+    return c.json({ id: "lark", ok: false, message: r.reason || "发送失败" });
   }
   return c.json(await runProbe(id));
 });
@@ -479,7 +486,11 @@ app.post("/api/settings/scan", (c) => {
     hits: result.hits,
     timedOut: result.timedOut,
     roots: result.roots,
-    message: result.timedOut ? "扫描超时，已找到的留下。没有全盘搜。" : `白名单 ${result.roots.length} 个目录`,
+    message: result.timedOut
+      ? "扫描超时，已找到的留下。没有全盘搜。"
+      : result.hits.length
+        ? `白名单 ${result.roots.length} 个目录，也搜了 PATH。点采用才写入。`
+        : `没扫到 Blender / Illustrator。搜过：${result.roots.join("、") || "无"}；也搜了 PATH。`,
   });
 });
 

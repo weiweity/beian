@@ -33,8 +33,9 @@ describe("settings http", () => {
       body: JSON.stringify({ id: "lark_send" }),
     });
     assert.equal(res.status, 200);
-    const body = (await res.json()) as { ok: boolean; message: string };
+    const body = (await res.json()) as { id: string; ok: boolean; message: string };
     assert.equal(body.ok, false);
+    assert.equal(body.id, "lark");
     assert.match(body.message, /open_id/);
   });
 });

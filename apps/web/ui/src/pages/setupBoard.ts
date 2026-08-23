@@ -62,10 +62,10 @@ export const WIZARD: Record<string, WizardGuide> = {
 };
 
 export const HOST_INTRO =
-  "这是杭州 Windows 上的 exe，不是云账号。扫到路径要点采用才写入。找不到就人话列出搜过的目录。";
+  "这是杭州 Windows 上的 exe，不是云账号。只有管理员魏炜能扫、能采用。扫到路径要点采用才写入。找不到就人话列出搜过的目录和 PATH。";
 
 export const PUSH_INTRO =
-  "开工板「发一条测试」发给当前登录。籽烨作为审稿接收人，只在这一页单独测。开工板绿不等于她已收到。";
+  "「发一条测试」发给当前登录。不必先装 lark-cli：已填的飞书应用凭证可以直接发。籽烨作为审稿接收人，只在这一页单独测。开工板绿不等于她已收到。";
 
 export function shortGroupLabel(title: string): string {
   if (title === "费用账单") return "费用";
@@ -114,7 +114,8 @@ export function progressSpoken(probes: Record<string, ProbeResult | { pending: t
 
 export function idleRowMessage(id: string, kind: (typeof BOARD_ROWS)[number]["kind"]): string {
   if (id === "minimax") return "模型列表 GET /v1/models，不是对话";
-  if (kind === "scan") return "路径还没确认";
+  if (kind === "scan") return "路径还没确认。管理员魏炜点扫描，再点采用。";
+  if (kind === "push") return "点发一条测试，用飞书应用发给当前登录";
   return "点全部检测或这一行";
 }
 
