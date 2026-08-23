@@ -117,6 +117,10 @@ describe("windows release.ps1 contract", () => {
     assert.match(script, /pip install -r apps\/web\/backend\/requirements.txt/);
     assert.match(script, /pip install 失败/);
     assert.match(script, /--disable-pip-version-check/);
+    assert.match(script, /\$env:WB_PYTHON/);
+    assert.match(script, /apps\\web\\backend\\.venv\\Scripts\\python\.exe/);
+    assert.match(script, /& \$py -m pip install -r \$req/);
+    assert.match(script, /找不到 Python/);
     assert.ok(indexOf(/npm run build -w beian-ui/) < indexOf(/pip install -r apps\/web\/backend\/requirements.txt/));
     assert.ok(indexOf(/pip install -r apps\/web\/backend\/requirements.txt/) < indexOf(/start beian-server/));
   });

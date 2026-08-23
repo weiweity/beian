@@ -780,7 +780,7 @@ describe("jobs dispatcher", () => {
 
   it("rework fail does not write disk v2 pngs into pages_v2", async () => {
     const id = tid(92);
-    const dir = join(process.env.WB_DATA_DIR || "", "uploads", id, "pages", "v2");
+    const dir = join(process.env.WB_DATA_DIR || "", "uploads", id, "pages");
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "page_01.png"), "png");
     setJobsTestHooks({
@@ -809,12 +809,13 @@ describe("jobs dispatcher", () => {
     assert.equal(t.status, "pending_review");
     assert.equal(t.job_status, "failed");
     assert.equal(t.job_error, "对红中断了");
+    assert.equal(t.pages, undefined);
     assert.equal(t.pages_v2, undefined);
   });
 
   it("job_error from a long stderr JSON is truncated, not dropped", async () => {
     const id = tid(93);
-    const long = "对照字段对不上而且说明写得很长还要再补一些字好超过八十字限制一二三四五六七八九十";
+    const long = "对照阶段失败" + "x".repeat(80);
     setJobsTestHooks({
       runCompare: async () => ({
         code: 1,
@@ -828,7 +829,9 @@ describe("jobs dispatcher", () => {
     await new Promise((r) => setTimeout(r, 30));
     const t = loadTask(id);
     assert.equal(t.job_error, long.slice(0, 80));
-    assert.ok((t.job_error || "").length <= 80);
+    assert.equal((t.job_error || "").length, 80);
+    assert.notEqual(t.job_error, long);
+    assert.notEqual(t.job_error, "对照中断");
   });
 
   it("stderr JSON with a token URL is not shown as job_error", async () => {
