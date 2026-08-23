@@ -6,6 +6,12 @@
 
 - 杭州 self-hosted GitHub Actions：合 `main` 后自动跑 `release.ps1`。对照在跑会失败。不动 cloudflared，不杀全部 node.exe。
 
+## [0.12.8.0] - 2026-08-24
+
+### Fixed
+
+- 杭州升产失败时不再假回滚：回到停机前的 SHA，缺依赖或缺前端就在旧树上重装重编，再拉起 8787。Actions 超时/取消也会 `schtasks /Run`。`npm` 前清掉 `GITHUB_TOKEN`。锁文件没变则跳过 `npm ci`。
+
 ## [0.12.7.0] - 2026-08-23
 
 ### Added

@@ -1,11 +1,11 @@
-﻿# Hangzhou production CD. Git hygiene while :8787 is up; refuse to stop if dirty/ahead; otherwise stop, then pull/build/start.
+﻿# Hangzhou production CD. Git hygiene while :8787 is up; refuse to stop if dirty/ahead; otherwise stop, then merge/build/start.
 # Encoding: UTF-8 with BOM so Windows PowerShell 5 (GBK) can parse this file.
 #   powershell -ExecutionPolicy Bypass -File scripts\windows\release.ps1
 # -Restart is accepted and ignored: live pull-while-serving is gone (emptyOutDir 404).
 # Does not touch cloudflared. Does not kill all node.exe (Grok Build uses Node).
 # Kills only the LISTENING 8787 process tree via taskkill /T /F /PID.
 # Discard npm-dirty package-lock.json and refuse other tracked edits BEFORE stopping.
-# If pull/build/start fails and :8787 is down, schtasks /Run the last start task.
+# If merge/build/start fails: git reset --hard to the pre-stop SHA, npm ci/build if the tree was wiped, then schtasks /Run.
 
 param(
   [switch]$Restart
@@ -22,12 +22,19 @@ function Assert-GitOk([string]$What) {
 }
 
 # Actions runner may not have Git Credential Manager. Never print GITHUB_TOKEN.
+# Use $args (not an advanced function) so PS5 does not eat --ff-only as a named parameter.
 function Invoke-Git {
-  param([Parameter(ValueFromRemainingArguments = $true)][string[]]$GitArgs)
+  $GitArgs = @($args)
   if ($env:GITHUB_TOKEN) {
     & git -c "http.extraheader=AUTHORIZATION: bearer $($env:GITHUB_TOKEN)" @GitArgs
   } else {
     & git @GitArgs
+  }
+}
+
+function Clear-GithubToken {
+  if ($env:GITHUB_TOKEN) {
+    Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
   }
 }
 
@@ -136,6 +143,39 @@ function Restore-BeianListener([string]$Why) {
   Write-Host "拉回后 health 仍空。公网可能 502。不要动 cloudflared。"
 }
 
+# CD rollback of THIS upgrade only (the SHA we captured before taskkill).
+# Not an operator git reset --hard of unknown local dirt.
+function Restore-BeianUpgrade([string]$Why, [string]$PreSha, [bool]$DidCi, [bool]$DidBuild) {
+  if ($PreSha) {
+    $now = (git rev-parse HEAD).Trim()
+    if ($now -ne $PreSha) {
+      Write-Host "$Why : git reset --hard to pre-stop SHA (CD rollback of this upgrade only)"
+      git reset --hard $PreSha
+      if ($LASTEXITCODE -ne 0) {
+        Write-Host "git reset --hard 回停机前 SHA 失败 exit=$LASTEXITCODE。公网可能 502。不要动 cloudflared。"
+      }
+    }
+  }
+  Clear-GithubToken
+  $nm = Join-Path $Root "node_modules"
+  if ($DidCi -or -not (Test-Path $nm)) {
+    Write-Host "$Why : npm ci on restored tree"
+    npm ci
+    if ($LASTEXITCODE -ne 0) {
+      Write-Host "restore npm ci 失败 exit=$LASTEXITCODE。公网可能 502。不要动 cloudflared。"
+    }
+  }
+  $distIndex = Join-Path $Root "apps\web\ui\dist\index.html"
+  if ($DidBuild -or -not (Test-Path $distIndex)) {
+    Write-Host "$Why : rebuild UI on restored tree"
+    npm run build -w beian-ui
+    if ($LASTEXITCODE -ne 0) {
+      Write-Host "restore UI build 失败 exit=$LASTEXITCODE。公网可能 502。不要动 cloudflared。"
+    }
+  }
+  Restore-BeianListener $Why
+}
+
 if ($Restart) {
   Write-Host "-Restart 已隐含：脚本总是先停 8787 再 pull"
 }
@@ -170,6 +210,11 @@ if ($ahead -ne "0") {
   throw "本地 main 比 origin/main 多 $ahead 个 commit，拒绝停 8787"
 }
 
+$preSha = (git rev-parse HEAD).Trim()
+Write-Host "pre-stop SHA=$preSha"
+$didCi = $false
+$didBuild = $false
+
 $pid8787 = Get-ListenerPid 8787
 if ($pid8787) {
   Write-Host "stop :8787 tree pid=$pid8787 (taskkill /T /F /PID, not all node.exe)"
@@ -192,14 +237,23 @@ $health = Get-Health
 if ($health) { Assert-SlotsIdle $health "after-stop" }
 
 try {
-  Invoke-Git pull --ff-only origin main
-  Assert-GitOk "git pull --ff-only"
+  Invoke-Git merge --ff-only origin/main
+  Assert-GitOk "git merge --ff-only"
   $sha = (git rev-parse --short HEAD).Trim()
   $ver = (Get-Content -Raw VERSION).Trim()
   Write-Host "tree $sha VERSION=$ver"
 
-  npm ci
-  if ($LASTEXITCODE -ne 0) { throw "npm ci 失败 exit=$LASTEXITCODE" }
+  Clear-GithubToken
+  git diff --quiet $preSha HEAD -- package-lock.json package.json apps/web/ui/package.json apps/web/server/package.json
+  $lockChanged = ($LASTEXITCODE -ne 0)
+  $needCi = $lockChanged -or -not (Test-Path (Join-Path $Root "node_modules"))
+  if ($needCi) {
+    $didCi = $true
+    npm ci
+    if ($LASTEXITCODE -ne 0) { throw "npm ci 失败 exit=$LASTEXITCODE" }
+  } else {
+    Write-Host "lockfile unchanged, skip npm ci"
+  }
 
   # Mac lockfile does not drop the Windows Rollup native optional. Vite build needs it.
   $rollupWin = @(
@@ -212,6 +266,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Windows Rollup optional 安装失败 exit=$LASTEXITCODE" }
   }
 
+  $didBuild = $true
   npm run build -w beian-ui
   if ($LASTEXITCODE -ne 0) { throw "npm run build -w beian-ui 失败 exit=$LASTEXITCODE" }
 
@@ -260,6 +315,6 @@ try {
   Write-Host "不要动 cloudflared。Mac 不要 run beian。不要并行跑本脚本。"
   Write-Host "公网核对: curl https://www.jianghua.site/api/health  （version 应等于本机）"
 } catch {
-  Restore-BeianListener "升版失败"
+  Restore-BeianUpgrade "升版失败" $preSha $didCi $didBuild
   throw
 }
