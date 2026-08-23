@@ -2,9 +2,12 @@
 
 ## [Unreleased]
 
-### Added
+## [0.12.10.0] - 2026-08-24
 
-- 杭州 self-hosted GitHub Actions：合 `main` 后自动跑 `release.ps1`。对照在跑会失败。不动 cloudflared，不杀全部 node.exe。
+### Fixed
+
+- 打样能过缺库秒退：对照用的 Python 补上 `pypdf`，杭州升版会装进同一个解释器。
+- 对照失败后核对页仍能看到已经出的图，并显示短错误，不再只写「对照中断」。
 
 ## [0.12.9.0] - 2026-08-24
 
