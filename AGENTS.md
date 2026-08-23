@@ -138,7 +138,7 @@ When the user's request matches an available skill, invoke it via the Skill tool
 - Pre-merge: `/ship` 已跑 `npm test` 与 ui build。Mac `/land-and-deploy` 只合 GitHub。
 - Deploy trigger: **合进 `main` 后由杭州 self-hosted runner 跑 `release.ps1`**。对照/打样/Illustrator 在跑会失败并保持旧进程。日常 Mac 只合 `main`、等 Actions 绿。杭州手工补跑同一脚本只在 runner 灰或对照挡住时由杭州自己执行，Mac 不要主动贴：
 
-  脚本先 `fetch`、丢掉 npm 改脏的 `package-lock.json`；若还有别的本地改动则**不停** 8787。通过后才停监听 8787 的进程树再 pull（2–5 分钟公网空白）。`npm ci` 不再改锁文件。pull/编/起失败且 8787 没听时，用已有 `beian-server-8787` 计划任务把旧进程拉回来。不动 cloudflared，不杀全部 `node.exe`。PowerShell 环境变量用 `$env:WB_DATA_DIR`（不要 `set`）。密钥用网页开工板填，不进仓库。Cloudflare Named Tunnel 只在杭州跑，指 `http://127.0.0.1:8787`。Mac 必须停掉 `cloudflared tunnel run beian`。不要用 `./scripts/dev-start.sh` 当杭州生产启动（zsh）。细节见 `scripts/windows/README.md`。
+  脚本先 `fetch`、丢掉 npm 改脏的 `package-lock.json`；若还有别的本地改动则**不停** 8787。通过后才停监听 8787 的进程树再 `merge --ff-only`（2–5 分钟公网空白）。锁文件没变则跳过 `npm ci`。Git 之后清掉 `GITHUB_TOKEN` 再跑 npm。merge/编/起失败时回到停机前 SHA 再装/编，然后 `schtasks /Run beian-server-8787`。Actions `if: failure()` 也会 `/Run`（超时/取消时 catch 不会跑）。不动 cloudflared，不杀全部 `node.exe`。PowerShell 环境变量用 `$env:WB_DATA_DIR`（不要 `set`）。密钥用网页开工板填，不进仓库。Cloudflare Named Tunnel 只在杭州跑，指 `http://127.0.0.1:8787`。Mac 必须停掉 `cloudflared tunnel run beian`。不要用 `./scripts/dev-start.sh` 当杭州生产启动（zsh）。细节见 `scripts/windows/README.md`。
 
 - 杭州 Grok 禁止：在生产机 `/ship` 新功能、改产品代码当开发机用、把生产隧道指到 Mac、对照跑着时 pull/重启、`git reset --hard`。发版后若只脏 `package-lock.json`，杭州自己 `git checkout -- package-lock.json`。
 - Mac Grok 禁止：

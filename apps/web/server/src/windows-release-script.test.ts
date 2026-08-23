@@ -23,7 +23,7 @@ describe("windows release.ps1 contract", () => {
     assert.match(script, /Hangzhou production CD/);
     assert.match(script, /live pull-while-serving is gone/);
     assert.ok(indexOf(/Invoke-Git fetch origin/) < indexOf(/taskkill\.exe \/T \/F \/PID/));
-    assert.ok(indexOf(/taskkill\.exe \/T \/F \/PID/) < indexOf(/Invoke-Git pull --ff-only origin main/));
+    assert.ok(indexOf(/taskkill\.exe \/T \/F \/PID/) < indexOf(/Invoke-Git merge --ff-only origin\/main/));
   });
 
   it("resets npm-dirty lockfile and refuses other tracked dirt before stopping 8787", () => {
@@ -40,13 +40,17 @@ describe("windows release.ps1 contract", () => {
   it("uses npm ci so the lockfile stays clean, then optional Windows Rollup", () => {
     assert.match(script, /npm ci/);
     assert.match(script, /npm ci 失败/);
+    assert.match(script, /lockfile unchanged, skip npm ci/);
     assert.doesNotMatch(script, /throw "npm install 失败/);
-    assert.ok(indexOf(/npm ci/) < indexOf(/@rollup\/rollup-win32-x64-msvc/));
+    assert.ok(indexOf(/function Clear-GithubToken/) < indexOf(/\$didCi = \$true/));
+    assert.match(script, /\$didCi = \$true/);
     assert.match(script, /--no-save --no-package-lock/);
+    assert.match(script, /Remove-Item Env:GITHUB_TOKEN/);
   });
 
   it("restarts the last schtasks listener if upgrade fails after stop", () => {
     assert.match(script, /function Restore-BeianListener/);
+    assert.match(script, /function Restore-BeianUpgrade/);
     assert.match(script, /cmd\.exe \/c "schtasks \/Run \/TN beian-server-8787"/);
     assert.match(script, /拉回失败 schtasks exit=/);
     assert.match(script, /拉回后 health 仍空/);
@@ -54,11 +58,13 @@ describe("windows release.ps1 contract", () => {
     assert.match(script, /:8787 没听，schtasks \/Run beian-server-8787/);
     assert.match(script, /:8787 仍在听，不重复拉起/);
     assert.match(script, /公网可能 502/);
-    assert.match(script, /Restore-BeianListener "升版失败"/);
-    assert.match(script, /} catch \{\s*Restore-BeianListener "升版失败"\s*throw/s);
-    assert.ok(indexOf(/npm ci/) < indexOf(/Restore-BeianListener "升版失败"/));
-    assert.ok(indexOf(/npm run build -w beian-ui/) < indexOf(/Restore-BeianListener "升版失败"/));
-    assert.ok(indexOf(/Invoke-Git pull --ff-only origin main/) < indexOf(/Restore-BeianListener "升版失败"/));
+    assert.match(script, /pre-stop SHA=/);
+    assert.match(script, /git reset --hard \$PreSha/);
+    assert.match(script, /Restore-BeianUpgrade "升版失败"/);
+    assert.match(script, /} catch \{\s*Restore-BeianUpgrade "升版失败" \$preSha \$didCi \$didBuild\s*throw/s);
+    assert.ok(indexOf(/npm ci/) < indexOf(/Restore-BeianUpgrade "升版失败"/));
+    assert.ok(indexOf(/npm run build -w beian-ui/) < indexOf(/Restore-BeianUpgrade "升版失败"/));
+    assert.ok(indexOf(/Invoke-Git merge --ff-only origin\/main/) < indexOf(/Restore-BeianUpgrade "升版失败"/));
   });
 
   it("does not use PowerShell automatic \$PID", () => {
@@ -104,7 +110,7 @@ describe("windows release.ps1 contract", () => {
     assert.match(script, /schtasks \/Run \/TN \$task/);
     assert.match(script, /npm\.cmd run start -w beian-server/);
     assert.match(script, /job process tree/);
-    assert.ok(indexOf(/@rollup\/rollup-win32-x64-msvc/) < indexOf(/npm run build -w beian-ui/));
+    assert.ok(indexOf(/install @rollup\/rollup-win32-x64-msvc/) < indexOf(/\$didBuild = \$true/));
   });
 
   it("Actions runner drops dirty lockfile before invoking on-disk release.ps1", () => {
@@ -116,17 +122,20 @@ describe("windows release.ps1 contract", () => {
     assert.match(yml, /powershell\.exe -NoProfile -ExecutionPolicy Bypass -File D:\\beian\\scripts\\windows\\release\.ps1/);
     assert.match(yml, /^\s+shell: cmd\s*$/m);
     assert.doesNotMatch(yml, /^\s+shell: powershell\s*$/m);
+    assert.match(yml, /if: failure\(\)/);
+    assert.match(yml, /schtasks \/Run \/TN beian-server-8787/);
     const lockIdx = yml.search(/^[^#\n]*git -C D:\\beian checkout -- package-lock\.json/m);
     const errIdx = yml.indexOf("if errorlevel 1 exit /b 1");
     const runIdx = yml.indexOf("D:\\beian\\scripts\\windows\\release.ps1");
-    assert.ok(lockIdx >= 0 && errIdx > lockIdx && runIdx > errIdx);
+    const failIdx = yml.indexOf("if: failure()");
+    assert.ok(lockIdx >= 0 && errIdx > lockIdx && runIdx > errIdx && failIdx > runIdx);
   });
 
   it("uses GITHUB_TOKEN for git when Actions provides it, never prints the token", () => {
     assert.match(script, /function Invoke-Git/);
     assert.match(script, /http.extraheader=AUTHORIZATION: bearer/);
     assert.match(script, /Invoke-Git fetch origin/);
-    assert.match(script, /Invoke-Git pull --ff-only origin main/);
+    assert.match(script, /Invoke-Git merge --ff-only origin\/main/);
     assert.doesNotMatch(script, /Write-Host.*GITHUB_TOKEN/);
     assert.match(script, /GITHUB_TOKEN/);
   });

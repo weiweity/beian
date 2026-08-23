@@ -36,3 +36,10 @@ jobs:
           git -C D:\beian checkout -- package-lock.json
           if errorlevel 1 exit /b 1
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File D:\beian\scripts\windows\release.ps1
+      - name: Start last 8787 if release died after stop
+        if: failure()
+        shell: cmd
+        run: |
+          rem Job killed or script threw after :8787 was stopped. Do not touch cloudflared.
+          rem Do not kill node.exe. Extra /Run while 8787 is up fails bind and exits.
+          schtasks /Run /TN beian-server-8787
