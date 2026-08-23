@@ -14,7 +14,7 @@
 - 不得读取或打印真实密钥。
 - 不得自行改 DNS、发布飞书版本、购买云、映射公网端口。
 - 公网/Tunnel 后禁止显示名裸登录。
-- Mac 绿灯不等于 Windows 已验收。杭州生产怎么升版见文末「Deploy Configuration」。合 GitHub 不会自动升杭州。
+- Mac 绿灯不等于 Windows 已验收。杭州生产怎么升版见文末「Deploy Configuration」。合 `main` 后 runner 自动跑 `release.ps1`；Actions 红或公网 health 对不上 VERSION 时不要报已上线。
 - 对照失败或已完成的单不能签字；干净签字单不能再对红；对红后优先读非空 `hits_v2`（空数组回退第一轮）。
 - 飞书授权失败回到飞书，不要把远程验收人送到本机 `:8787`。JSON 404 不是 Vite 挂了；只有 HTML 或空 Content-Type 才当开发页没转到 8787。
 
@@ -138,7 +138,7 @@ When the user's request matches an available skill, invoke it via the Skill tool
 powershell -ExecutionPolicy Bypass -File scripts\windows\release.ps1
 ```
 
-  脚本先停监听 8787 的进程树再 pull（2–5 分钟公网空白）。不动 cloudflared，不杀全部 `node.exe`。PowerShell 环境变量用 `$env:WB_DATA_DIR`（不要 `set`）。密钥用网页开工板填，不进仓库。Cloudflare Named Tunnel 只在杭州跑，指 `http://127.0.0.1:8787`。Mac 必须停掉 `cloudflared tunnel run beian`。不要用 `./scripts/dev-start.sh` 当杭州生产启动（zsh）。细节见 `scripts/windows/README.md`。
+  脚本先 `fetch`、丢掉 npm 改脏的 `package-lock.json`；若还有别的本地改动则**不停** 8787。通过后才停监听 8787 的进程树再 pull（2–5 分钟公网空白）。`npm ci` 不再改锁文件。pull/编/起失败且 8787 没听时，用已有 `beian-server-8787` 计划任务把旧进程拉回来。不动 cloudflared，不杀全部 `node.exe`。PowerShell 环境变量用 `$env:WB_DATA_DIR`（不要 `set`）。密钥用网页开工板填，不进仓库。Cloudflare Named Tunnel 只在杭州跑，指 `http://127.0.0.1:8787`。Mac 必须停掉 `cloudflared tunnel run beian`。不要用 `./scripts/dev-start.sh` 当杭州生产启动（zsh）。细节见 `scripts/windows/README.md`。
 
 - 杭州 Grok 禁止：在生产机 `/ship` 新功能、改产品代码当开发机用、把生产隧道指到 Mac、对照跑着时 pull/重启。
 - Mac Grok 禁止：把 `www.jianghua.site` 当本机开发入口、合完 PR 立刻报「已上线」（等杭州 Actions 绿、公网 health 对上 VERSION）、指挥杭州停隧道或改产品代码。

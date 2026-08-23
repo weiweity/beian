@@ -6,6 +6,10 @@
 
 - 杭州 self-hosted GitHub Actions：合 `main` 后自动跑 `release.ps1`。对照在跑会失败。不动 cloudflared，不杀全部 node.exe。
 
+### Fixed
+
+- 杭州 `release.ps1` 停 8787 之前丢掉 npm 改脏的 `package-lock.json`，其他本地改动则拒绝停机。安装改走 `npm ci`。pull/编/起失败且 8787 没听时，把上一版计划任务拉回来，避免公网一直 502。
+
 ## [0.12.2.0] - 2026-08-23
 
 ### Added

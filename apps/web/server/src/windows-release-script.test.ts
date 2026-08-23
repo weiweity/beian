@@ -22,7 +22,34 @@ describe("windows release.ps1 contract", () => {
     assert.match(script, /UTF-8 with BOM/);
     assert.match(script, /Hangzhou production CD/);
     assert.match(script, /live pull-while-serving is gone/);
+    assert.ok(indexOf(/Invoke-Git fetch origin/) < indexOf(/taskkill\.exe \/T \/F \/PID/));
     assert.ok(indexOf(/taskkill\.exe \/T \/F \/PID/) < indexOf(/Invoke-Git pull --ff-only origin main/));
+  });
+
+  it("resets npm-dirty lockfile and refuses other tracked dirt before stopping 8787", () => {
+    assert.ok(indexOf(/Invoke-Git checkout -- package-lock.json/) < indexOf(/taskkill\.exe \/T \/F \/PID/));
+    assert.ok(indexOf(/工作树有未提交改动，拒绝停 8787/) < indexOf(/taskkill\.exe \/T \/F \/PID/));
+    assert.ok(indexOf(/本地 main 比 origin\/main 多/) < indexOf(/taskkill\.exe \/T \/F \/PID/));
+    assert.match(script, /status --porcelain --untracked-files=no/);
+    assert.match(script, /origin\/main\.\.HEAD/);
+  });
+
+  it("uses npm ci so the lockfile stays clean, then optional Windows Rollup", () => {
+    assert.match(script, /npm ci/);
+    assert.match(script, /npm ci 失败/);
+    assert.doesNotMatch(script, /throw "npm install 失败/);
+    assert.ok(indexOf(/npm ci/) < indexOf(/@rollup\/rollup-win32-x64-msvc/));
+    assert.match(script, /--no-save --no-package-lock/);
+  });
+
+  it("restarts the last schtasks listener if upgrade fails after stop", () => {
+    assert.match(script, /function Restore-BeianListener/);
+    assert.match(script, /升版失败/);
+    assert.match(script, /:8787 没听，schtasks \/Run beian-server-8787/);
+    assert.match(script, /:8787 仍在听，不重复拉起/);
+    assert.match(script, /公网可能 502/);
+    assert.match(script, /Restore-BeianListener "升版失败"/);
+    assert.ok(indexOf(/Invoke-Git pull --ff-only origin main/) < indexOf(/Restore-BeianListener "升版失败"/));
   });
 
   it("does not use PowerShell automatic \$PID", () => {
