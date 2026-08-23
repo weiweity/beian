@@ -915,6 +915,9 @@ html[data-theme="dark"] .workspace {
 .setup-row.is-bad p {
   color: var(--danger);
 }
+.setup-row.is-wait {
+  background: color-mix(in srgb, var(--warn) 10%, var(--surface));
+}
 .setup-row.is-wait p {
   color: var(--warn);
 }
@@ -966,6 +969,10 @@ html[data-theme="dark"] .workspace {
   font-size: 14px;
   font-weight: 500;
   cursor: pointer;
+}
+.setup-btn:disabled {
+  opacity: 0.55;
+  cursor: wait;
 }
 .setup-btn:focus-visible {
   outline: 2px solid var(--focus);
@@ -1066,6 +1073,23 @@ html[data-theme="dark"] .workspace {
 .wizard-steps p {
   margin: 2px 0 0;
   font-size: 16px;
+  line-height: 1.45;
+  color: var(--ink);
+}
+.secrets-fold {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin: 0 0 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--accent-soft);
+}
+.secrets-fold p {
+  margin: 0;
+  font-size: 15px;
   line-height: 1.45;
   color: var(--ink);
 }

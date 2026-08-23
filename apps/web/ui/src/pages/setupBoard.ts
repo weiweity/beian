@@ -43,6 +43,14 @@ export const WIZARD: Record<string, WizardGuide> = {
       "保存后点「用飞书走一遍授权」，或回开工板复测这一行。",
     ],
   },
+  飞书推送: {
+    intro: "点发一条测试。不必装 lark-cli，也不必手填开关、open_id、bot。发给当前登录的飞书。",
+    steps: [
+      "没有飞书身份时，按钮会直接带你去飞书授权。授权回来再点一次。",
+      "点发一条测试。用已填的飞书应用发给当前登录。成功会自动打开推送并记下你的 open_id。",
+      "手机飞书应收到「审稿台推送测试」。没有则去开放平台给应用开通发消息，并先跟这个机器人说过一句话。",
+    ],
+  },
   "百度 OCR": {
     intro: "做不到静默授权。绿的意思是对照真正会调用的识别接口通了。",
     steps: [
@@ -62,10 +70,26 @@ export const WIZARD: Record<string, WizardGuide> = {
 };
 
 export const HOST_INTRO =
-  "这是杭州 Windows 上的 exe，不是云账号。扫到路径要点采用才写入。找不到就人话列出搜过的目录。";
+  "这是杭州 Windows 上的 exe，不是云账号。只有管理员魏炜能扫、能采用。扫到路径要点采用才写入。找不到就人话列出搜过的目录和 PATH。";
 
 export const PUSH_INTRO =
-  "开工板「发一条测试」发给当前登录。籽烨作为审稿接收人，只在这一页单独测。开工板绿不等于她已收到。";
+  "点发一条测试即可。不必装 lark-cli，不必手填开关、open_id、bot。开工板绿不等于籽烨已收到；她作为审稿接收人可在本页再测一次。";
+
+export function settingsGroupPath(group: string): string {
+  return "/?tab=settings&group=" + encodeURIComponent(group);
+}
+
+export function feishuLoginHref(nextGroup = "开工板"): string {
+  return `/api/auth/feishu/login?next=${encodeURIComponent(settingsGroupPath(nextGroup))}`;
+}
+
+export function feishuAppReady(
+  groups: { fields: { key: string; set: boolean }[] }[] | undefined,
+): boolean {
+  if (!groups) return false;
+  const fields = groups.flatMap((g) => g.fields);
+  return Boolean(fields.find((f) => f.key === "FEISHU_APP_ID")?.set && fields.find((f) => f.key === "FEISHU_APP_SECRET")?.set);
+}
 
 export function shortGroupLabel(title: string): string {
   if (title === "费用账单") return "费用";
@@ -91,12 +115,66 @@ export function firstBadRow(probes: Record<string, ProbeResult | { pending: true
   });
 }
 
-export function statusWord(r: ProbeResult | { pending: true } | undefined): { cls: string; text: string } {
+export function statusWord(
+  r: ProbeResult | { pending: true } | undefined,
+  mode?: "send",
+): { cls: string; text: string } {
   if (!r) return { cls: "is-idle", text: "未测" };
-  if ("pending" in r) return { cls: "is-wait", text: "检测中" };
+  if ("pending" in r) return { cls: "is-wait", text: mode === "send" ? "发送中" : "检测中" };
+  if (r.ok && /未启用/.test(r.message)) return { cls: "is-ok", text: "未用" };
   if (r.ok) return { cls: "is-ok", text: "可用" };
   if (/超时/.test(r.message)) return { cls: "is-wait", text: "超时" };
   return { cls: "is-bad", text: "还缺" };
+}
+
+export function isPending(r: ProbeResult | { pending: true } | undefined): r is { pending: true } {
+  return Boolean(r && "pending" in r);
+}
+
+export function rowDetail(
+  row: (typeof BOARD_ROWS)[number],
+  r: ProbeResult | { pending: true } | undefined,
+  who: string,
+  sending = false,
+): string {
+  if (sending && row.kind === "push") return "正在发给当前登录的飞书，请稍等。";
+  if (isPending(r)) {
+    if (row.kind === "scan") return "正在扫这台电脑…";
+    return "正在检测，请稍等。";
+  }
+  if (r) {
+    if (row.id === "lark" && r.ok) return `能发给当前登录 · ${who}`;
+    return r.message;
+  }
+  return idleRowMessage(row.id, row.kind);
+}
+
+export function foldCatalogReason(
+  group: string,
+  fields: { key: string; set: boolean; last4: string; value: string }[],
+  probe?: ProbeResult | { pending: true },
+): string | null {
+  const probeOk = Boolean(probe && !("pending" in probe) && probe.ok);
+  if (group === "飞书推送") {
+    return "接收人和发送身份由「发一条测试」自动写入。点开才改。";
+  }
+  if (group === "百度 OCR") {
+    const ak = fields.find((f) => f.key === "BAIDU_OCR_API_KEY");
+    if (ak?.set || probeOk) {
+      return `对照识别已可用${ak?.last4 ? `（Key ${ak.last4}）` : ""}。密钥默认收起。`;
+    }
+  }
+  if (group === "MiniMax（可选）") {
+    const enabled = fields.find((f) => f.key === "MINIMAX_ENABLED");
+    const key = fields.find((f) => f.key === "MINIMAX_API_KEY");
+    if (enabled?.value === "false" || (probe && !("pending" in probe) && /未启用/.test(probe.message))) {
+      return "语义复核未开，不影响主对照。密钥默认收起。";
+    }
+    if (key?.set || probeOk) {
+      return `模型列表已测通${key?.last4 ? `（Key ${key.last4}）` : ""}。密钥默认收起。`;
+    }
+  }
+  return null;
 }
 
 export function progressSpoken(probes: Record<string, ProbeResult | { pending: true }>, probeBusy: string): string {
@@ -114,7 +192,8 @@ export function progressSpoken(probes: Record<string, ProbeResult | { pending: t
 
 export function idleRowMessage(id: string, kind: (typeof BOARD_ROWS)[number]["kind"]): string {
   if (id === "minimax") return "模型列表 GET /v1/models，不是对话";
-  if (kind === "scan") return "路径还没确认";
+  if (kind === "scan") return "路径还没确认。管理员魏炜点扫描，再点采用。";
+  if (kind === "push") return "点发一条测试。没有飞书身份会先带你去授权，不必手填 open_id。";
   return "点全部检测或这一行";
 }
 

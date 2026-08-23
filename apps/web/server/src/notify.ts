@@ -1,4 +1,6 @@
-import { execFileSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
+import { whichLark } from "./larkBin.js";
+import { httpsJson } from "./outbound.js";
 import { getSetting, publicBase } from "./settings.js";
 
 type TaskLike = {
@@ -9,37 +11,77 @@ type TaskLike = {
   hits?: Array<{ field?: string; status?: string; decision?: string }>;
 };
 
-function whichLark(): string | null {
-  const names = process.platform === "win32" ? ["lark-cli.cmd", "lark-cli.exe", "lark-cli"] : ["lark-cli"];
-  const finder = process.platform === "win32" ? "where" : "which";
-  for (const name of names) {
-    try {
-      const out = execFileSync(finder, [name], { encoding: "utf8" }).trim().split(/\r?\n/)[0];
-      if (out) return out;
-    } catch {
-      /* next */
-    }
-  }
-  return null;
+function clipText(text: string): string {
+  return text.length <= 3500 ? text : `${text.slice(0, 3400)}\n…(截断)`;
 }
 
-export function sendText(
-  text: string,
-  to?: string,
-): Promise<{ ok: boolean; skipped?: boolean; reason?: string }> {
-  if (!/^(1|true|yes|on)$/i.test(getSetting("FEISHU_ENABLED"))) {
-    return Promise.resolve({ ok: false, skipped: true, reason: "FEISHU_ENABLED=false" });
+function feishuErr(json: unknown): string {
+  const o = json && typeof json === "object" ? (json as Record<string, unknown>) : {};
+  const err = o.error && typeof o.error === "object" ? (o.error as Record<string, unknown>) : {};
+  const msg = String(err.message || o.msg || o.message || "").trim();
+  const code = err.code ?? o.code;
+  if (/scope|99991679|99991663/i.test(`${code} ${msg}`)) {
+    return "飞书应用还没开通发消息权限。去开放平台给这应用加 IM，再让对方先跟机器人说过一句话。";
   }
-  const openId = (to || getSetting("FEISHU_OPEN_ID") || "").trim();
-  if (!openId) return Promise.resolve({ ok: false, skipped: true, reason: "missing FEISHU_OPEN_ID" });
-  const bin = whichLark();
-  if (!bin) return Promise.resolve({ ok: false, reason: "lark-cli not found" });
+  return msg ? `飞书返回：${msg}`.slice(0, 200) : "用飞书应用发消息失败";
+}
+
+async function sendViaApp(
+  openId: string,
+  text: string,
+): Promise<{ ok: boolean; reason?: string }> {
+  const appId = getSetting("FEISHU_APP_ID").trim();
+  const secret = getSetting("FEISHU_APP_SECRET").trim();
+  if (!appId || !secret) return { ok: false, reason: "还没填飞书 App ID 或 Secret" };
+  let token = "";
+  try {
+    const tok = await httpsJson("https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ app_id: appId, app_secret: secret }),
+    });
+    const body = (tok.json || {}) as { code?: number; tenant_access_token?: string; msg?: string };
+    if (body.code !== 0 || !body.tenant_access_token) {
+      return { ok: false, reason: feishuErr(tok.json) };
+    }
+    token = body.tenant_access_token;
+  } catch (err) {
+    return { ok: false, reason: err instanceof Error ? err.message : "连不上飞书拿 token" };
+  }
+  try {
+    const sent = await httpsJson("https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=open_id", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        receive_id: openId,
+        msg_type: "text",
+        content: JSON.stringify({ text }),
+      }),
+      timeoutMs: 20_000,
+    });
+    const body = (sent.json || {}) as { code?: number; msg?: string };
+    if (sent.status >= 200 && sent.status < 300 && (body.code === 0 || body.code === undefined)) {
+      return { ok: true };
+    }
+    return { ok: false, reason: feishuErr(sent.json) };
+  } catch (err) {
+    return { ok: false, reason: err instanceof Error ? err.message : "连不上飞书发消息" };
+  }
+}
+
+function sendViaCli(
+  bin: string,
+  openId: string,
+  text: string,
+): Promise<{ ok: boolean; reason?: string }> {
   const asWho = getSetting("FEISHU_AS") || "bot";
-  const body = text.length <= 3500 ? text : `${text.slice(0, 3400)}\n…(截断)`;
   return new Promise((resolve) => {
     const child = spawn(
       bin,
-      ["im", "+messages-send", "--as", asWho, "--user-id", openId, "--text", body, "--json"],
+      ["im", "+messages-send", "--as", asWho, "--user-id", openId, "--text", text, "--json"],
       {
         env: {
           ...process.env,
@@ -71,6 +113,30 @@ export function sendText(
       resolve({ ok: false, reason: `lark-cli exit ${code}` });
     });
   });
+}
+
+export async function sendText(
+  text: string,
+  to?: string,
+  opts: { force?: boolean } = {},
+): Promise<{ ok: boolean; skipped?: boolean; reason?: string; via?: "cli" | "app" }> {
+  if (!opts.force && !/^(1|true|yes|on)$/i.test(getSetting("FEISHU_ENABLED"))) {
+    return { ok: false, skipped: true, reason: "FEISHU_ENABLED=false" };
+  }
+  const openId = (to || getSetting("FEISHU_OPEN_ID") || "").trim();
+  if (!openId) return { ok: false, skipped: true, reason: "missing FEISHU_OPEN_ID" };
+  const body = clipText(text);
+  const bin = whichLark();
+  if (bin) {
+    const cli = await sendViaCli(bin, openId, body);
+    if (cli.ok) return { ok: true, via: "cli" };
+    const app = await sendViaApp(openId, body);
+    if (app.ok) return { ok: true, via: "app" };
+    return { ok: false, reason: cli.reason || app.reason };
+  }
+  const app = await sendViaApp(openId, body);
+  if (app.ok) return { ok: true, via: "app" };
+  return { ok: false, reason: app.reason || "本机没有 lark-cli，用飞书应用发也失败了" };
 }
 
 export async function notifyTaskComplete(task: TaskLike, actor: string): Promise<void> {
