@@ -33,4 +33,10 @@ describe("brand static", () => {
     const res = await app.request("/brand/not-a-real-file.png");
     assert.equal(res.status, 404);
   });
+
+  it("caches brand files for a day", async () => {
+    const res = await app.request("/brand/logo-mark.png");
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get("cache-control") || "", /max-age=86400/);
+  });
 });

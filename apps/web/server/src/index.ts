@@ -3,8 +3,11 @@ import { join } from "node:path";
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono, type Context } from "hono";
+import { compress } from "hono/compress";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import { HTTPException } from "hono/http-exception";
+import { cacheHeaderFor, REDIRECT_CACHE } from "./cacheHeaders.js";
+import { spaIndexAction } from "./spaIndex.js";
 import { COOKIE, DATA_DIR, HOST, PORT, REPO_ROOT, UI_DIST, UI_PUBLIC, cookieSecure } from "./config.js";
 import { billingSnapshot, loadVendorBills, resetBillingCache } from "./billing.js";
 import { notifyTaskComplete, sendText } from "./notify.js";
@@ -70,7 +73,9 @@ import {
 type Env = { Variables: { session: Session } };
 
 const app = new Hono<Env>();
-const VERSION = "0.12.5.0";
+const VERSION = "0.12.6.0";
+
+app.use(compress());
 
 app.use("/api/*", async (c, next) => {
   const tok = c.req.header("authorization") || (getCookie(c, COOKIE) ? `Bearer ${getCookie(c, COOKIE)}` : "");
@@ -558,14 +563,34 @@ app.get("/api/mockups/:id/files/:key", (c) => {
 // root = ui/public, so /brand/logo-mark.png → ui/public/brand/logo-mark.png.
 // Do not regex-strip /brand from UI_BRAND: Windows join uses `\brand`, the
 // replace is a no-op, and serveStatic looks in public\brand\brand\… (404).
+app.use("/brand/*", async (c, next) => {
+  await next();
+  if (c.res.status === 200) c.header("Cache-Control", cacheHeaderFor("/brand/") || "");
+});
 app.use("/brand/*", serveStatic({ root: UI_PUBLIC }));
+app.use("/assets/*", async (c, next) => {
+  await next();
+  if (c.res.status === 200) c.header("Cache-Control", cacheHeaderFor("/assets/") || "");
+});
 app.use("/assets/*", serveStatic({ root: UI_DIST }));
 
 app.get("/", (c) => {
+  const host = c.req.header("host") || "";
+  const action = spaIndexAction({
+    feishuError: c.req.query("feishu_error") || "",
+    hasSession: Boolean(getSession(getCookie(c, COOKIE))),
+    displayLogin: displayLoginAllowed(host),
+    oauthReady: oauthReady(),
+  });
+  if (action === "feishu") {
+    c.header("Cache-Control", REDIRECT_CACHE);
+    return c.redirect("/api/auth/feishu/login", 302);
+  }
   const index = join(UI_DIST, "index.html");
   if (!existsSync(index)) {
     throw new HTTPException(503, { message: "审稿台前端未构建。请在 apps/web/ui 执行 npm run build。" });
   }
+  c.header("Cache-Control", cacheHeaderFor("/") || "no-cache");
   return c.html(readFileSync(index, "utf8"));
 });
 
