@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
@@ -22,7 +22,7 @@ const {
 function wipeJobDisk() {
   const root = process.env.WB_DATA_DIR || "";
   if (!root.includes("beian-jobs-")) return;
-  for (const sub of ["tasks", "mockups"]) {
+  for (const sub of ["tasks", "mockups", "uploads"]) {
     const dir = join(root, sub);
     if (!existsSync(dir)) continue;
     for (const name of readdirSync(dir)) {
@@ -726,6 +726,129 @@ describe("jobs dispatcher", () => {
     assert.equal(loadMockup(tid(81))?.id, tid(81));
     rmSync(join(process.env.WB_DATA_DIR || "", "mockups", tid(81), "job.json"));
     assert.equal(loadMockup(tid(81)), undefined);
+  });
+
+  it("compare fail keeps disk pages and stderr JSON error", async () => {
+    const id = tid(90);
+    const dir = join(process.env.WB_DATA_DIR || "", "uploads", id, "pages");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "page_01.png"), "png");
+    setJobsTestHooks({
+      runCompare: async () => ({
+        code: 1,
+        stdout: "",
+        stderr: "STAGE match\n" + JSON.stringify({ ok: false, error: "对照阶段失败" }) + "\n",
+        timedOut: false,
+      }),
+    });
+    queuedCompare(id, "2026-08-24T01:00:00.000Z");
+    enqueue({ kind: "compare", id });
+    await new Promise((r) => setTimeout(r, 30));
+    const t = loadTask(id);
+    assert.equal(t.status, "compare_failed");
+    assert.equal(t.job_error, "对照阶段失败");
+    const page = t.pages?.[0] as { name?: string; page?: number; url?: string } | undefined;
+    assert.equal(page?.name, "page_01.png");
+    assert.equal(page?.page, 1);
+    assert.equal(page?.url, `/api/tasks/${id}/pages/page_01.png`);
+  });
+
+  it("mockup stderr JSON error is job_error not 打样中断", async () => {
+    const { saveMockup, loadMockup } = await import("./mockup.js");
+    setJobsTestHooks({
+      runPack: async () => ({
+        code: 2,
+        stdout: "",
+        stderr: JSON.stringify({ ok: false, error: "缺少 pypdf" }) + "\n",
+        timedOut: false,
+      }),
+    });
+    saveMockup({
+      id: tid(91),
+      status: "queued",
+      created_at: "2026-08-24T01:01:00.000Z",
+      files: [],
+      job_kind: "mockup",
+      job_status: "queued",
+    });
+    enqueue({ kind: "mockup", id: tid(91) });
+    for (let i = 0; i < 50 && loadMockup(tid(91))?.job_status !== "failed"; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    assert.equal(loadMockup(tid(91))?.job_error, "缺少 pypdf");
+  });
+
+  it("rework fail does not write disk v2 pngs into pages_v2", async () => {
+    const id = tid(92);
+    const dir = join(process.env.WB_DATA_DIR || "", "uploads", id, "pages", "v2");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "page_01.png"), "png");
+    setJobsTestHooks({
+      runRework: async () => ({
+        code: 1,
+        stdout: "",
+        stderr: JSON.stringify({ ok: false, error: "对红中断了" }) + "\n",
+        timedOut: false,
+      }),
+    });
+    saveTask({
+      id,
+      title: "x",
+      type: "excel_pdf",
+      status: "comparing",
+      status_before_job: "pending_review",
+      owner: "籽烨",
+      hits: [{ id: "h1", status: "疑点", decision: "confirm" }],
+      job_kind: "rework",
+      job_status: "queued",
+      created_at: "2026-08-24T01:02:00.000Z",
+    });
+    enqueue({ kind: "rework", id });
+    await new Promise((r) => setTimeout(r, 30));
+    const t = loadTask(id);
+    assert.equal(t.status, "pending_review");
+    assert.equal(t.job_status, "failed");
+    assert.equal(t.job_error, "对红中断了");
+    assert.equal(t.pages_v2, undefined);
+  });
+
+  it("job_error from a long stderr JSON is truncated, not dropped", async () => {
+    const id = tid(93);
+    const long = "对照字段对不上而且说明写得很长还要再补一些字好超过八十字限制一二三四五六七八九十";
+    setJobsTestHooks({
+      runCompare: async () => ({
+        code: 1,
+        stdout: "",
+        stderr: JSON.stringify({ ok: false, error: long }) + "\n",
+        timedOut: false,
+      }),
+    });
+    queuedCompare(id, "2026-08-24T01:03:00.000Z");
+    enqueue({ kind: "compare", id });
+    await new Promise((r) => setTimeout(r, 30));
+    const t = loadTask(id);
+    assert.equal(t.job_error, long.slice(0, 80));
+    assert.ok((t.job_error || "").length <= 80);
+  });
+
+  it("stderr JSON with a token URL is not shown as job_error", async () => {
+    const id = tid(94);
+    setJobsTestHooks({
+      runCompare: async () => ({
+        code: 1,
+        stdout: "",
+        stderr:
+          JSON.stringify({
+            ok: false,
+            error: "Client error for url https://aip.baidubce.com/oauth/2.0/token?client_secret=x",
+          }) + "\n",
+        timedOut: false,
+      }),
+    });
+    queuedCompare(id, "2026-08-24T01:04:00.000Z");
+    enqueue({ kind: "compare", id });
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal(loadTask(id).job_error, "对照中断");
   });
 });
 
