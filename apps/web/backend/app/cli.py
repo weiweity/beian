@@ -24,7 +24,8 @@ def _ok(payload: dict) -> int:
 
 
 def _err(msg: str, code: int = 2) -> int:
-    print(json.dumps({"ok": False, "error": msg}, ensure_ascii=False), file=sys.stderr)
+    text = str(msg).strip()[:80]
+    print(json.dumps({"ok": False, "error": text}, ensure_ascii=False), file=sys.stderr)
     return code
 
 
@@ -38,7 +39,7 @@ def cmd_probe(args: argparse.Namespace) -> int:
     target = (args.target or "").strip()
     if target == "python":
         missing: list[str] = []
-        for name in ("fitz", "openpyxl"):
+        for name in ("fitz", "openpyxl", "pypdf"):
             try:
                 __import__(name)
             except Exception:
@@ -198,13 +199,16 @@ def main() -> int:
     pr.add_argument("--target", required=True, choices=("python", "baidu"))
 
     args = p.parse_args()
-    if args.cmd == "compare":
-        return cmd_compare(args)
-    if args.cmd == "rework":
-        return cmd_rework(args)
-    if args.cmd == "probe":
-        return cmd_probe(args)
-    return _err("未知命令")
+    try:
+        if args.cmd == "compare":
+            return cmd_compare(args)
+        if args.cmd == "rework":
+            return cmd_rework(args)
+        if args.cmd == "probe":
+            return cmd_probe(args)
+        return _err("未知命令")
+    except Exception as exc:  # noqa: BLE001 — 对照失败必须给 jobs.ts 一行 JSON
+        return _err(str(exc).strip() or type(exc).__name__)
 
 
 if __name__ == "__main__":

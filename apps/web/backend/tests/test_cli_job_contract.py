@@ -202,3 +202,44 @@ def test_emit_stage_writes_stderr(capsys):
     emit_stage("ocr")
     err = capsys.readouterr().err
     assert "STAGE ocr" in err
+
+
+def test_compare_crash_writes_stderr_json(monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr("app.main.save_task", _forbid_save)
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("对照阶段失败")
+
+    monkeypatch.setattr("app.main.run_excel_pdf_job", _boom)
+    excel = tmp_path / "a.xlsx"
+    pdf = tmp_path / "a.pdf"
+    excel.write_bytes(b"PK")
+    pdf.write_bytes(b"%PDF-1.4\n")
+    data = tmp_path / "data"
+    data.mkdir()
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "beian-review-worker",
+            "compare",
+            "--tid",
+            TID,
+            "--excel",
+            str(excel),
+            "--pdf",
+            str(pdf),
+            "--product-name",
+            "某某精华",
+            "--data-dir",
+            str(data),
+        ],
+    )
+    from app.cli import main
+
+    code = main()
+    assert code == 2
+    err_lines = [ln.strip() for ln in capsys.readouterr().err.splitlines() if ln.strip()]
+    payload = json.loads(err_lines[-1])
+    assert payload["ok"] is False
+    assert payload["error"] == "对照阶段失败"
