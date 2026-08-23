@@ -61,3 +61,6 @@ dist/
 .context/
 .gstack/
 .claude/
+
+# Operator leftovers — never commit
+docs/designs/hangzhou-production-cutover.md

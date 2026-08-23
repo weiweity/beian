@@ -11,7 +11,7 @@
 - 不重写审核引擎和 3D 流水线，在迁入代码上改。
 - 不重写 3D 流水线。打样台只调用 `workers/packaging`，缺 Blender 要写清失败。
 - 不得提交 `.env`、`.env.baidu`、`.env.secrets`、`backend/data` 运行时文件、稿件、Vite 缓存、`.claude/`。
-- 不得 `git add -A`。工作区常有未跟踪的 `docs/designs/hangzhou-production-cutover.md`（禁止进仓）和推迟的 `docs/designs/login-and-permissions.md`。发版只按文件名 add。
+- 不得 `git add -A`。`docs/designs/hangzhou-production-cutover.md` 禁止进仓（已 gitignore）。推迟的 `docs/designs/login-and-permissions.md` 未 ignore，发版只按文件名 add。
 - 不得读取或打印真实密钥。
 - 不得自行改 DNS、发布飞书版本、购买云、映射公网端口。
 - 公网/Tunnel 后禁止显示名裸登录。
@@ -71,9 +71,9 @@ When the user's request matches an available skill, invoke it via the Skill tool
 
 ## 易忘约定（防记忆漂移）
 
-升 VERSION 时：`VERSION` 文件、`package.json`（三位）、`apps/web/server/src/index.ts` 里的 `VERSION` 常量必须一起改。4 位号，本线功能发版走 PATCH（`0.12.x.0`），不要随手跳 `0.13`。开放 PR 的 VERSION 若落后于 `main`，不合；先 `/ship` 重占号。
+升 VERSION 时：`VERSION` 文件和 `apps/web/server/src/index.ts` 里的 `VERSION` 常量必须同号。`package.json` 只写三位（npm 不认第四位）：MICRO（`0.12.8.0` → `0.12.8.1`）三位不动；PATCH/MINOR/MAJOR 才改三位。4 位号，本线功能发版走 PATCH（`0.12.x.0`），不要随手跳 `0.13`。开放 PR 的 VERSION 若落后于 `main`，不合；先 `/ship` 重占号。
 
-魏炜飞书真名或花名「魏炜」才是杭州机箱管理员，能扫 Blender / Illustrator（含 PATH）。不要凭显示名「管理员」提权。升版后旧 cookie 仍是审核员，要重新走飞书登录。伸美其他人默认审稿员：能进审稿台，不能扫本机 exe。本周不做品牌登录闪屏、申请权限工单（office-hours D1=A）。
+魏炜飞书真名或花名「魏炜」才是杭州机箱管理员，能扫 Blender / Illustrator（含 PATH）。不要凭显示名「管理员」提权。升版后旧 cookie 仍是审核员，要重新走飞书登录。伸美其他人默认审稿员：能进审稿台，不能扫本机 exe。2026-08-24 当周不做品牌登录闪屏、申请权限工单（office-hours D1=A）。
 
 飞书推送不必装 lark-cli。点「发一条测试」用已填的飞书应用发给**当前登录**；成功才打开 `FEISHU_ENABLED` 并在空时写入 `FEISHU_OPEN_ID`。`lark_send` 需要 `create` 权限（只读访客 403）。开工板绿 ≠ 籽烨已收到；她当审稿接收人要在「飞书推送」页自己再测。不要把开关 / open_id / bot 当主路径让人手填。探测 id `lark_send` 的 pending/结果必须画在行 `lark`，否则按钮看起来没反应。
 
