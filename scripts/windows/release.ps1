@@ -270,6 +270,17 @@ try {
   npm run build -w beian-ui
   if ($LASTEXITCODE -ne 0) { throw "npm run build -w beian-ui 失败 exit=$LASTEXITCODE" }
 
+  $py = $env:WB_PYTHON
+  if (-not $py) {
+    $py = Join-Path $Root "apps\web\backend\.venv\Scripts\python.exe"
+  }
+  $req = Join-Path $Root "apps\web\backend\requirements.txt"
+  if (-not (Test-Path $py)) { throw "找不到 Python：$py。打样和对照共用这个解释器。" }
+  if (-not (Test-Path $req)) { throw "找不到 $req" }
+  Write-Host "pip install -r apps/web/backend/requirements.txt"
+  & $py -m pip install -r $req --disable-pip-version-check
+  if ($LASTEXITCODE -ne 0) { throw "pip install 失败 exit=$LASTEXITCODE" }
+
   Write-Host "start beian-server WB_DATA_DIR=$($env:WB_DATA_DIR)"
   # GitHub Actions kills the job process tree. schtasks /Run is outside that tree.
   $bat = Join-Path $env:TEMP "beian-start-prod.cmd"

@@ -113,6 +113,14 @@ describe("windows release.ps1 contract", () => {
     assert.ok(indexOf(/install @rollup\/rollup-win32-x64-msvc/) < indexOf(/\$didBuild = \$true/));
   });
 
+  it("pip installs backend requirements into WB_PYTHON before start", () => {
+    assert.match(script, /pip install -r apps\/web\/backend\/requirements.txt/);
+    assert.match(script, /pip install 失败/);
+    assert.match(script, /--disable-pip-version-check/);
+    assert.ok(indexOf(/npm run build -w beian-ui/) < indexOf(/pip install -r apps\/web\/backend\/requirements.txt/));
+    assert.ok(indexOf(/pip install -r apps\/web\/backend\/requirements.txt/) < indexOf(/start beian-server/));
+  });
+
   it("Actions runner drops dirty lockfile before invoking on-disk release.ps1", () => {
     const ymlPath = join(dirname(fileURLToPath(import.meta.url)), "../../../../.github/workflows/hangzhou-release.yml");
     const yml = readFileSync(ymlPath, "utf8");
