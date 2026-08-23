@@ -78,9 +78,10 @@ function readGlassContrast(o: Record<string, unknown>): number {
   return GLASS_CONTRAST_DEFAULT;
 }
 
-/** 旧开关：false → 实心，true / 缺省 → 毛玻璃。glassStyle 优先。 */
+/** 旧开关：false → 实心，true / 缺省 → 毛玻璃。合法 glassStyle 优先；非法字符串不掉进旧布尔。 */
 function readGlassStyle(o: Record<string, unknown>): GlassStyle {
   if (GLASS_STYLES.has(o.glassStyle as GlassStyle)) return o.glassStyle as GlassStyle;
+  if (typeof o.glassStyle === "string") return APPEARANCE_DEFAULT.glassStyle;
   if (typeof o.glassSidebar === "boolean") return o.glassSidebar ? "frost" : "solid";
   return APPEARANCE_DEFAULT.glassStyle;
 }

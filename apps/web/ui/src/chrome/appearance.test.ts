@@ -79,7 +79,7 @@ describe("parseAppearance", () => {
 
   it("rejects unknown glassStyle and falls back", () => {
     assert.equal(parseAppearance({ glassStyle: "neon" }).glassStyle, "frost");
-    assert.equal(parseAppearance({ glassStyle: "neon", glassSidebar: false }).glassStyle, "solid");
+    assert.equal(parseAppearance({ glassStyle: "neon", glassSidebar: false }).glassStyle, "frost");
   });
 
   it("clamps typed px", () => {
