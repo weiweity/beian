@@ -11,6 +11,7 @@
 - 不重写审核引擎和 3D 流水线，在迁入代码上改。
 - 不重写 3D 流水线。打样台只调用 `workers/packaging`，缺 Blender 要写清失败。
 - 不得提交 `.env`、`.env.baidu`、`.env.secrets`、`backend/data` 运行时文件、稿件、Vite 缓存、`.claude/`。
+- 不得 `git add -A`。工作区常有未跟踪的 `docs/designs/hangzhou-production-cutover.md`（禁止进仓）和推迟的 `docs/designs/login-and-permissions.md`。发版只按文件名 add。
 - 不得读取或打印真实密钥。
 - 不得自行改 DNS、发布飞书版本、购买云、映射公网端口。
 - 公网/Tunnel 后禁止显示名裸登录。
@@ -61,11 +62,24 @@ When the user's request matches an available skill, invoke it via the Skill tool
 - 架构 → /plan-eng-review
 - 完整审查 → /autoplan
 - 缺陷 → /investigate
-- 发 PR → /ship（只在 Mac 开发机。杭州生产机禁止 /ship 产品功能。）
+- 发 PR → /ship（只在 Mac 开发机。杭州生产机禁止 /ship 产品功能。）没听到用户说 `/ship` 或「开始 ship」不要出 PR。用户说「先不进入 ship」就只改代码。
 - 合 main → /land-and-deploy（只合 GitHub。不重启杭州、不改 DNS。）
 - 杭州上线 → 合 `main` 后等 `hangzhou-release` 变绿，再等约 20 秒，公网 health 的 version 等于刚合进去的 VERSION。不要报已上线。不要给杭州贴 pull / rebuild / 重启 8787 的升级提示词，除非 runner 灰掉或对照挡住发版。
+- 用户贴的 `www.jianghua.site` / 开工板截图是杭州当前 VERSION，不是你工作区未合的分支。没 land 绿之前不要拿公网画面证明「已经改好了」。
 - 配置发布 → /setup-deploy
 - 写 issue → /spec
+
+## 易忘约定（防记忆漂移）
+
+升 VERSION 时：`VERSION` 文件、`package.json`（三位）、`apps/web/server/src/index.ts` 里的 `VERSION` 常量必须一起改。4 位号，本线功能发版走 PATCH（`0.12.x.0`），不要随手跳 `0.13`。开放 PR 的 VERSION 若落后于 `main`，不合；先 `/ship` 重占号。
+
+魏炜飞书真名或花名「魏炜」才是杭州机箱管理员，能扫 Blender / Illustrator（含 PATH）。不要凭显示名「管理员」提权。升版后旧 cookie 仍是审核员，要重新走飞书登录。伸美其他人默认审稿员：能进审稿台，不能扫本机 exe。本周不做品牌登录闪屏、申请权限工单（office-hours D1=A）。
+
+飞书推送不必装 lark-cli。点「发一条测试」用已填的飞书应用发给**当前登录**；成功才打开 `FEISHU_ENABLED` 并在空时写入 `FEISHU_OPEN_ID`。`lark_send` 需要 `create` 权限（只读访客 403）。开工板绿 ≠ 籽烨已收到；她当审稿接收人要在「飞书推送」页自己再测。不要把开关 / open_id / bot 当主路径让人手填。探测 id `lark_send` 的 pending/结果必须画在行 `lark`，否则按钮看起来没反应。
+
+MiniMax 未开语义复核是「未用」，不是「可用」；探测是 `GET /v1/models`，不是对话也不是余额。百度 OCR 绿 = 对照同款识别接口通了，不是静默授权。已通的密钥默认折叠，点开才改。
+
+开工板是线性进度 + 7 行清单，不要画成圆环仪表，不要用「通 / 不通」当状态字。界面单测只测纯函数，不引入 RTL。
 
 ## Design System
 
