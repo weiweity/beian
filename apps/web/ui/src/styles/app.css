@@ -71,6 +71,7 @@ html[data-theme="dark"] .shell {
   width: var(--sidebar);
   pointer-events: none;
   z-index: 0;
+  overflow: hidden;
   background:
     linear-gradient(
       180deg,
@@ -88,6 +89,7 @@ html[data-theme="dark"] .shell {
   z-index: 1;
 }
 
+html[data-glass-style="solid"] .sidebar-glass,
 html[data-glass-sidebar="off"] .sidebar-glass {
   background: var(--accent-mist);
   backdrop-filter: none;
@@ -106,8 +108,126 @@ html[data-theme="dark"] .sidebar-glass {
   box-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.12);
 }
 
+html[data-theme="dark"][data-glass-style="solid"] .sidebar-glass,
 html[data-theme="dark"][data-glass-sidebar="off"] .sidebar-glass {
   background: var(--accent-mist);
+}
+
+/* iOS 27 Liquid Glass 近似：更透、折射环境紫雾、高光边、暗边。不是 Apple 组件。 */
+html[data-glass-style="liquid"] .sidebar-glass {
+  background:
+    linear-gradient(
+      165deg,
+      rgba(255, 255, 255, 0.42) 0%,
+      rgba(255, 255, 255, 0.08) 18%,
+      transparent 46%
+    ),
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--accent-mist) 24%, transparent),
+      color-mix(in srgb, var(--accent-mist) 8%, transparent)
+    ),
+    rgba(255, 255, 255, calc(var(--glass-alpha) * 0.42));
+  box-shadow:
+    inset 0 1.5px 0 rgba(255, 255, 255, 0.84),
+    inset 0 -1px 0 rgba(40, 24, 56, 0.22),
+    inset -1.5px 0 0 rgba(40, 24, 56, 0.28),
+    inset 1px 0 0 rgba(255, 255, 255, 0.32);
+  backdrop-filter: blur(40px) saturate(240%);
+  -webkit-backdrop-filter: blur(40px) saturate(240%);
+}
+
+html[data-glass-style="liquid"] .sidebar-glass::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(120% 46% at 10% -10%, rgba(255, 255, 255, 0.58), transparent 54%),
+    linear-gradient(
+      90deg,
+      transparent 68%,
+      rgba(176, 208, 255, 0.16) 88%,
+      rgba(255, 176, 214, 0.1) 100%
+    );
+}
+
+html[data-glass-style="liquid"] .sidebar-glass::after {
+  content: "";
+  position: absolute;
+  top: 7%;
+  right: 0;
+  width: 1.5px;
+  height: 86%;
+  pointer-events: none;
+  background: linear-gradient(
+    180deg,
+    transparent,
+    rgba(186, 214, 255, 0.42),
+    rgba(255, 188, 220, 0.26),
+    rgba(40, 24, 56, 0.16)
+  );
+}
+
+html[data-theme="dark"][data-glass-style="liquid"] .sidebar-glass {
+  background:
+    linear-gradient(165deg, rgba(255, 255, 255, 0.16) 0%, transparent 38%),
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--accent-mist) 42%, transparent),
+      color-mix(in srgb, var(--accent-mist) 16%, transparent)
+    ),
+    rgba(42, 32, 52, calc(var(--glass-alpha) * 0.5));
+  box-shadow:
+    inset 0 1.5px 0 rgba(255, 255, 255, 0.22),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.38),
+    inset -1.5px 0 0 rgba(0, 0, 0, 0.42),
+    inset 1px 0 0 rgba(255, 255, 255, 0.12);
+}
+
+html[data-theme="dark"][data-glass-style="liquid"] .sidebar-glass::before {
+  background:
+    radial-gradient(120% 46% at 10% -10%, rgba(255, 255, 255, 0.16), transparent 54%),
+    linear-gradient(90deg, transparent 70%, rgba(168, 140, 196, 0.2) 100%);
+}
+
+html[data-glass-style="liquid"] .brand-collapse {
+  border-color: rgba(255, 255, 255, 0.55);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.46), rgba(255, 255, 255, 0.14)),
+    rgba(255, 255, 255, calc(var(--glass-alpha) * 0.42));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.72),
+    inset 0 -1px 0 rgba(40, 24, 56, 0.16);
+}
+
+html[data-glass-style="liquid"] .brand-collapse:hover {
+  background: var(--hover-gray);
+}
+
+html[data-theme="dark"][data-glass-style="liquid"] .brand-collapse {
+  border-color: rgba(255, 255, 255, 0.22);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(42, 32, 52, 0.35)),
+    rgba(42, 32, 52, calc(var(--glass-alpha) * 0.5));
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  html[data-glass-style="frost"] .sidebar-glass,
+  html[data-glass-style="liquid"] .sidebar-glass {
+    backdrop-filter: blur(12px) saturate(140%);
+    -webkit-backdrop-filter: blur(12px) saturate(140%);
+  }
+
+  html[data-glass-style="liquid"] .sidebar-glass {
+    background:
+      linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--accent-mist) 70%, transparent),
+        color-mix(in srgb, var(--accent-mist) 48%, transparent)
+      ),
+      rgba(255, 255, 255, 0.78);
+  }
 }
 
 .sidebar.is-collapsed {
