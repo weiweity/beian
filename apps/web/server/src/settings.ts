@@ -92,7 +92,7 @@ export const CATALOG: SettingField[] = [
     key: "FEISHU_ENABLED",
     label: "启用飞书推送",
     kind: "toggle",
-    help: "签字后给指定人发消息。优先用本机 lark-cli；没有则用已填的飞书应用凭证直发。",
+    help: "发一条测试成功后自动打开。不必手开。没有 lark-cli 就用已填的飞书应用直发。",
     default: "false",
   },
   {
@@ -100,14 +100,14 @@ export const CATALOG: SettingField[] = [
     key: "FEISHU_OPEN_ID",
     label: "推送对象 open_id",
     kind: "text",
-    help: "收「待设计改稿」的那个人。",
+    help: "发一条测试会写入当前登录。不必手填。籽烨来这一页测一次就会记成她。",
   },
   {
     group: "飞书推送",
     key: "FEISHU_AS",
     label: "以谁发送",
     kind: "text",
-    help: "一般填 bot。",
+    help: "一般不用改。有 lark-cli 才用得到，默认 bot。",
     default: "bot",
   },
   {

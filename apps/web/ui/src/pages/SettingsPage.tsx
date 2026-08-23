@@ -13,15 +13,17 @@ import {
   BOARD_ROWS,
   HOST_INTRO,
   PROBE_BY_GROUP,
-  PUSH_INTRO,
-  SETUP_NEXT,
   SETUP_RETURN,
   VIRTUAL,
   WIZARD,
+  feishuAppReady,
+  feishuLoginHref,
   firstBadRow,
-  idleRowMessage,
+  foldCatalogReason,
+  isPending,
   probeErrorMessage,
   progressSpoken,
+  rowDetail,
   setupHeadline,
   shortGroupLabel,
   statusWord,
@@ -67,6 +69,7 @@ export function SettingsPage({
   const [pick, setPick] = useState<Record<string, string>>({});
   const [billing, setBilling] = useState<BillingView | null>(null);
   const [billBusy, setBillBusy] = useState(false);
+  const [openSecrets, setOpenSecrets] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -178,22 +181,61 @@ export function SettingsPage({
   }
 
   async function probe(id: string) {
-    setProbes((prev) => ({ ...prev, [id]: { pending: true } }));
+    const rowId = id === "lark_send" ? "lark" : id;
+    setProbes((prev) => ({ ...prev, [id]: { pending: true }, [rowId]: { pending: true } }));
     try {
       const r = await api.probe(id);
       setProbes((prev) => {
         const next = { ...prev, [id]: r };
-        if (r.id && r.id !== id) next[r.id] = r;
+        if (r.id) next[r.id] = r;
+        if (rowId !== id) next[rowId] = { ...r, id: rowId };
         return next;
       });
+      return r;
     } catch (err: unknown) {
-      const fail = { id, ok: false, message: probeErrorMessage(err) };
-      setProbes((prev) => ({
-        ...prev,
-        [id]: fail,
-        ...(id === "lark_send" ? { lark: { ...fail, id: "lark" } } : {}),
-      }));
+      const fail = { id: rowId, ok: false as const, message: probeErrorMessage(err) };
+      setProbes((prev) => ({ ...prev, [id]: fail, [rowId]: fail }));
+      return fail;
     }
+  }
+
+  async function sendPushTest() {
+    const back = group === "飞书推送" ? "飞书推送" : "开工板";
+    if (!openId) {
+      if (feishuAppReady(view?.groups)) {
+        message.loading("没有飞书身份。正在带你去授权…", 1.2);
+        window.location.assign(feishuLoginHref(back));
+        return;
+      }
+      message.warning("还没填飞书 App ID / Secret。先走登录向导，再授权。");
+      setGroup("飞书登录");
+      return;
+    }
+    const hide = message.loading("正在发给你的飞书…", 0);
+    try {
+      const r = await probe("lark_send");
+      if (r.ok) {
+        message.success(r.message);
+        try {
+          const next = await api.settings();
+          setView(next);
+        } catch {
+          /* 发送结果已经在行上 */
+        }
+      } else {
+        message.error(r.message);
+        if (/App ID|Secret|凭证/.test(r.message)) setGroup("飞书登录");
+      }
+    } finally {
+      hide();
+    }
+  }
+
+  async function probeRow(id: string) {
+    const r = await probe(id);
+    if (r.ok) message.success(r.message);
+    else message.error(r.message);
+    return r;
   }
 
   async function probeGroup() {
@@ -291,6 +333,11 @@ export function SettingsPage({
     .filter((p): p is { id: string; label: string } => Boolean(p));
   const wizard = WIZARD[group];
   const showBack = Boolean(wizard) || group === "飞书推送" || group === "本机依赖";
+  const foldReason = catalogGroup
+    ? foldCatalogReason(group, catalogGroup.fields, probes[PROBE_BY_GROUP[group]?.[0] || ""])
+    : null;
+  const hideWizard = Boolean(foldReason && group !== "飞书推送");
+  const sendingPush = isPending(probes.lark_send);
 
   return (
     <section className="settings-page">
@@ -350,7 +397,9 @@ export function SettingsPage({
                 </Button>
               </div>
             ) : groupProbes.length ? (
-              <Button onClick={() => void probeGroup()}>检测连通</Button>
+              <Button onClick={() => void probeGroup()} loading={Boolean(probeBusy)}>
+                {probeBusy || "检测连通"}
+              </Button>
             ) : null}
           </div>
 
@@ -365,10 +414,11 @@ export function SettingsPage({
               pick={pick}
               onPick={(kind, path) => setPick((p) => ({ ...p, [kind]: path }))}
               onAdopt={(kind, path) => void adopt(kind, path)}
-              onProbe={(id) => void probe(id)}
+              onProbe={(id) => void probeRow(id)}
               onWizard={(row) => openWizard(row)}
               onScan={() => void scanPc()}
-              onPush={() => void probe("lark_send")}
+              onPush={() => void sendPushTest()}
+              scanBusy={scanBusy}
               displayName={displayName}
               openId={openId}
               canAdmin={canAdmin}
@@ -377,9 +427,8 @@ export function SettingsPage({
 
           {group === "费用账单" ? <BillingPane billing={billing} /> : null}
 
-          {wizard ? <WizardSteps guide={wizard} /> : null}
+          {wizard && !hideWizard ? <WizardSteps guide={wizard} /> : null}
           {group === "本机依赖" ? <p className="wizard-intro">{HOST_INTRO}</p> : null}
-          {group === "飞书推送" ? <p className="wizard-intro">{PUSH_INTRO}</p> : null}
 
           {groupProbes.map((p) => {
             const r = probes[p.id];
@@ -393,18 +442,13 @@ export function SettingsPage({
           })}
 
           {group === "飞书登录" ? (
-            <Button
-              className="wizard-cta"
-              onClick={() => {
-                window.location.assign(`/api/auth/feishu/login?next=${encodeURIComponent(SETUP_NEXT)}`);
-              }}
-            >
+            <Button className="wizard-cta" onClick={() => window.location.assign(feishuLoginHref("开工板"))}>
               用飞书走一遍授权
             </Button>
           ) : null}
           {group === "飞书推送" ? (
-            <Button className="wizard-cta" onClick={() => void probe("lark_send")}>
-              给当前登录发一条测试
+            <Button type="primary" className="wizard-cta" loading={sendingPush} onClick={() => void sendPushTest()}>
+              {openId ? "给当前登录发一条测试" : feishuAppReady(view?.groups) ? "先用飞书授权，再发测试" : "先填飞书登录凭证"}
             </Button>
           ) : null}
           {showBack ? (
@@ -414,17 +458,17 @@ export function SettingsPage({
           ) : null}
 
           {!VIRTUAL.has(group) ? (
-            <Form layout="vertical" requiredMark={false} className="settings-form" disabled={!canWrite}>
-              {(catalogGroup?.fields || []).map((f) => (
-                <FieldItem
-                  key={f.key}
-                  field={f}
-                  value={draft[f.key] ?? ""}
-                  onChange={(v) => setField(f.key, v)}
-                  locked={Boolean(f.adminOnly) && !canAdmin}
-                />
-              ))}
-            </Form>
+            <CatalogFields
+              group={group}
+              fields={catalogGroup?.fields || []}
+              draft={draft}
+              canWrite={canWrite}
+              canAdmin={canAdmin}
+              probe={probes[PROBE_BY_GROUP[group]?.[0] || ""]}
+              opened={Boolean(openSecrets[group])}
+              onToggle={() => setOpenSecrets((p) => ({ ...p, [group]: !p[group] }))}
+              onChange={setField}
+            />
           ) : null}
         </div>
       </div>
@@ -474,6 +518,7 @@ function SetupBoard({
   displayName,
   openId,
   canAdmin,
+  scanBusy,
 }: {
   probes: Record<string, ProbeResult | { pending: true }>;
   probeBusy: string;
@@ -489,6 +534,7 @@ function SetupBoard({
   displayName: string | null;
   openId: string;
   canAdmin: boolean;
+  scanBusy: boolean;
 }) {
   const done = BOARD_ROWS.map((row) => probes[row.id]).filter(
     (r): r is ProbeResult => Boolean(r) && !("pending" in r),
@@ -496,6 +542,7 @@ function SetupBoard({
   const ok = done.filter((r) => r.ok).length;
   const firstBad = firstBadRow(probes);
   const who = displayName || "当前登录";
+  const sending = isPending(probes.lark_send);
   return (
     <div className="setup-board">
       <p className="setup-hint">测的是杭州这台 Windows，不是你眼前这台 Mac。</p>
@@ -519,27 +566,28 @@ function SetupBoard({
       <div className="setup-group">
         {BOARD_ROWS.map((row) => {
           const r = probes[row.id];
-          const st = statusWord(r);
-          const msg =
-            r && !("pending" in r)
-              ? row.id === "lark" && r.ok
-                ? `能发给当前登录 · ${who}`
-                : r.message
-              : idleRowMessage(row.id, row.kind);
+          const pending = isPending(r);
+          const st = statusWord(r, row.kind === "push" && sending ? "send" : undefined);
+          const msg = rowDetail(row, r, who, sending);
+          const busy = pending || (row.kind === "scan" && scanBusy) || (row.kind === "push" && sending);
           return (
             <div key={row.id} className={`setup-row ${st.cls}`} role="group" aria-label={`${row.title} ${st.text}`}>
               <div className="setup-status">{st.text}</div>
               <div>
                 <h3>{row.title}</h3>
-                <p>{msg}</p>
+                <p aria-live="polite">{msg}</p>
               </div>
               {row.kind === "wizard" ? (
                 <button
                   type="button"
                   className={st.cls === "is-bad" ? "setup-btn danger" : "setup-btn ghost"}
+                  disabled={busy}
+                  aria-busy={busy}
                   onClick={() => (st.cls === "is-ok" ? onProbe(row.id) : onWizard(row))}
                 >
-                  {st.cls === "is-ok" ? (
+                  {busy ? (
+                    "检测中…"
+                  ) : st.cls === "is-ok" ? (
                     <>
                       <span className="setup-btn-full">再测一次</span>
                       <span className="setup-btn-short">再测</span>
@@ -550,13 +598,21 @@ function SetupBoard({
                 </button>
               ) : null}
               {row.kind === "push" ? (
-                <button type="button" className="setup-btn" onClick={onPush}>
-                  发一条测试
+                <button type="button" className="setup-btn" onClick={onPush} disabled={busy} aria-busy={busy}>
+                  {sending ? "发送中…" : pending ? "检测中…" : "发一条测试"}
                 </button>
               ) : null}
               {row.kind === "scan" ? (
-                <button type="button" className="setup-btn" onClick={st.cls === "is-ok" ? () => onProbe(row.id) : onScan}>
-                  {st.cls === "is-ok" ? (
+                <button
+                  type="button"
+                  className="setup-btn"
+                  disabled={busy}
+                  aria-busy={busy}
+                  onClick={st.cls === "is-ok" ? () => onProbe(row.id) : onScan}
+                >
+                  {busy ? (
+                    scanBusy && !pending ? "扫描中…" : "检测中…"
+                  ) : st.cls === "is-ok" ? (
                     <>
                       <span className="setup-btn-full">再测一次</span>
                       <span className="setup-btn-short">再测</span>
@@ -569,9 +625,15 @@ function SetupBoard({
                 </button>
               ) : null}
               {row.kind === "retry" ? (
-                <button type="button" className="setup-btn ghost" onClick={() => onProbe(row.id)}>
-                  <span className="setup-btn-full">再测一次</span>
-                  <span className="setup-btn-short">再测</span>
+                <button type="button" className="setup-btn ghost" disabled={busy} aria-busy={busy} onClick={() => onProbe(row.id)}>
+                  {busy ? (
+                    "检测中…"
+                  ) : (
+                    <>
+                      <span className="setup-btn-full">再测一次</span>
+                      <span className="setup-btn-short">再测</span>
+                    </>
+                  )}
                 </button>
               ) : null}
             </div>
@@ -605,6 +667,54 @@ function SetupBoard({
           ))}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function CatalogFields({
+  group,
+  fields,
+  draft,
+  canWrite,
+  canAdmin,
+  probe,
+  opened,
+  onToggle,
+  onChange,
+}: {
+  group: string;
+  fields: SettingFieldView[];
+  draft: Record<string, string>;
+  canWrite: boolean;
+  canAdmin: boolean;
+  probe?: ProbeResult | { pending: true };
+  opened: boolean;
+  onToggle: () => void;
+  onChange: (key: string, value: string) => void;
+}) {
+  const reason = foldCatalogReason(group, fields, probe);
+  const folded = Boolean(reason) && !opened;
+  return (
+    <div className="settings-catalog">
+      {reason ? (
+        <div className="secrets-fold">
+          <p>{reason}</p>
+          <Button onClick={onToggle}>{folded ? (group === "飞书推送" ? "点开改接收人" : "点开改密钥") : "收起"}</Button>
+        </div>
+      ) : null}
+      {folded ? null : (
+        <Form layout="vertical" requiredMark={false} className="settings-form" disabled={!canWrite}>
+          {fields.map((f) => (
+            <FieldItem
+              key={f.key}
+              field={f}
+              value={draft[f.key] ?? ""}
+              onChange={(v) => onChange(f.key, v)}
+              locked={Boolean(f.adminOnly) && !canAdmin}
+            />
+          ))}
+        </Form>
+      )}
     </div>
   );
 }
