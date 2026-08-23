@@ -10,7 +10,7 @@
 
 ### Changed
 
-- `AGENTS.md` 写上开工板和发版易忘约定：公网画面不是未合分支、未叫 ship 不出 PR、飞书推送不必装 lark-cli、魏炜才是管理员。MICRO 升版不改 `package.json` 三位。禁止进仓的杭州切流稿写入 `.gitignore`。
+- 代理按 `AGENTS.md`「易忘约定」开工：公网画面不是未合分支、没叫 `/ship` 不出 PR、飞书推送不必装 lark-cli、魏炜才是管理员。MICRO 升版不改 `package.json` 三位。禁止进仓的杭州切流稿写入 `.gitignore`。
 
 ## [0.12.8.0] - 2026-08-24
 

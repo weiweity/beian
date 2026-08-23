@@ -30,7 +30,7 @@ HTTP 是 TypeScript。对照规则和 Blender 仍是 Python。见 `docs/adr-002-
 | `docs/designs/` | 对红循环、两张台、作业模块（对照/对红/打样入队） |
 | `CHANGELOG.md` | 已发布版本 |
 | `TODOS.md` | 未做项 |
-| `AGENTS.md` | 给代理的硬约束、加长作业合同（CLI `--help` / 禁止新 FastAPI 路由） |
+| `AGENTS.md` | 给代理的硬约束、加长作业合同、易忘约定（MICRO 不改 `package.json` 三位；禁止 `git add -A`） |
 | `scripts/windows/README.md` | 杭州 Windows 生产备忘 |
 
 ## 本机启动
@@ -93,7 +93,7 @@ docker buildx build --platform linux/amd64 -t beian:review-amd64 --load .
 
 ## 不要提交
 
-密钥、`.venv`、任务 JSON、上传稿、`.ai/.pdf/.xlsx` 样本、`settings.json`、`settings.secrets.json`、Vite 缓存（`.vite/`）、`.claude/`。见 `.gitignore`。
+密钥、`.venv`、任务 JSON、上传稿、`.ai/.pdf/.xlsx` 样本、`settings.json`、`settings.secrets.json`、Vite 缓存（`.vite/`）、`.claude/`、`docs/designs/hangzhou-production-cutover.md`。见 `.gitignore`。不要 `git add -A`。
 
 ## 生产
 
