@@ -128,6 +128,36 @@ describe("feishu authorize", () => {
     );
     assert.equal(sess.display_name, "天元（魏炜）");
     assert.equal(sess.avatar_url, "https://img.example/a.png");
+    assert.equal(sess.role, "admin");
+  });
+
+  it("promotes 魏炜 to admin even if users.json still says reviewer", () => {
+    const dir = process.env.WB_DATA_DIR as string;
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "users.json"),
+      JSON.stringify({
+        users: [{ name: "魏炜", role: "reviewer", open_id: "ou_weiwei_old" }],
+      }) + "\n",
+    );
+    const sess = auth.sessionFromFeishu("ou_weiwei_old", "魏炜", "tenant_shenmei", "tenant_shenmei");
+    assert.equal(sess.role, "admin");
+    const again = auth.getSession(sess.token);
+    assert.equal(again?.role, "admin");
+  });
+
+  it("syncs 魏炜 admin onto an already-issued reviewer session", () => {
+    const issued = auth.issueSession("天元（魏炜）", "reviewer", "ou_weiwei_sync", "feishu");
+    const dir = process.env.WB_DATA_DIR as string;
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "users.json"),
+      JSON.stringify({
+        users: [{ name: "魏炜", role: "reviewer", open_id: "ou_weiwei_sync" }],
+      }) + "\n",
+    );
+    const sess = auth.getSession(issued.token);
+    assert.equal(sess?.role, "admin");
   });
 
   it("does not grant admin by Feishu display name", () => {
@@ -148,5 +178,12 @@ describe("feishu authorize", () => {
     );
     assert.equal(sess.role, "reviewer");
     assert.equal(sess.open_id, "ou_named_admin_xx");
+  });
+
+  it("isWeiWei matches legal or nickname 魏炜 only", () => {
+    assert.equal(auth.isWeiWei("魏炜", "天元"), true);
+    assert.equal(auth.isWeiWei("刘籽烨", "天元"), false);
+    assert.equal(auth.isWeiWei("管理员", ""), false);
+    assert.equal(auth.isWeiWei("伸美品牌", "魏炜"), true);
   });
 });
