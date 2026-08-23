@@ -6,6 +6,12 @@
 
 - 杭州 self-hosted GitHub Actions：合 `main` 后自动跑 `release.ps1`。对照在跑会失败。不动 cloudflared，不杀全部 node.exe。
 
+## [0.12.8.1] - 2026-08-24
+
+### Changed
+
+- 代理按 `AGENTS.md`「易忘约定」开工：公网画面不是未合分支、没叫 `/ship` 不出 PR、飞书推送不必装 lark-cli、魏炜才是管理员。MICRO 升版不改 `package.json` 三位。禁止进仓的杭州切流稿写入 `.gitignore`。
+
 ## [0.12.8.0] - 2026-08-24
 
 ### Fixed
