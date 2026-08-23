@@ -6,6 +6,12 @@
 
 - 杭州 self-hosted GitHub Actions：合 `main` 后自动跑 `release.ps1`。对照在跑会失败。不动 cloudflared，不杀全部 node.exe。
 
+## [0.12.3.1] - 2026-08-23
+
+### Fixed
+
+- 杭州 runner 的 PowerShell 执行策略 Restricted 时，GitHub Actions 生成的临时 `.ps1` 会 1 秒红。workflow 改走 `cmd`，再用 `-ExecutionPolicy Bypass` 跑 `release.ps1`。
+
 ## [0.12.3.0] - 2026-08-23
 
 ### Fixed
