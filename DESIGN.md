@@ -2,7 +2,7 @@
 
 来源：Figma「审稿室 · iOS 27」锁定稿（2026-08-20）。  
 稿：https://www.figma.com/design/BL3PGUjLGLPb9iUZMzRhD6  
-页：`Web · 锁定稿`（封面 `87:1448`）。`iPad` 页是探索，**不是**实现依据。  
+页：`Web · 锁定稿`（封面 `87:1448`）。侧栏材质对照：`Web · 侧栏材质对照`（`98:1432`）。`iPad` 页是探索，**不是**实现依据。  
 资产：`apps/web/ui/public/brand/logo-mark.png`（侧栏）、`apps/web/ui/public/brand/shine-mage.png`（拒绝页整标）、`apps/web/ui/public/brand/ui/*.svg`（侧栏/上传/等待，从锁定稿导出）。
 
 实现入口：`apps/web/ui`。不要再画飞书顶栏。不要重写审核引擎和 3D 流水线。
@@ -22,7 +22,7 @@
 - **Direction:** iOS 27 Liquid Glass 网站。白底、浅雾、淡紫点缀。侧栏是玻璃，主区是工作台。
 - **Decoration level:** restrained。紫只做选中框、主按钮、钉、等待强调。不要铺成品牌墙。
 - **Mood:** 干净、可扫、字够大、苹果味。机器圈疑点，人写结论。
-- **Reference:** 官方库 iOS and iPadOS 27（Liquid Glass / Button / Progress）。网站不是原生壳，玻璃用 `backdrop-filter` + 半透明白近似，不要假装能嵌入 Apple 组件。
+- **Reference:** 官方库 iOS and iPadOS 26（Figma kit：Liquid Glass / Sidebar）。iOS 27 收口：更透、折射、高光边、暗边。网站不是原生壳，玻璃用 `backdrop-filter` + 半透明白近似，不要假装能嵌入 Apple 组件。
 - **不要：** 飞书顶栏、Ant 默认蓝、旧主色 `#722ED1`、深紫中台侧栏、纸台印泥、「AI 已过审」。
 
 ## Information Architecture
@@ -34,7 +34,7 @@
 | 审稿台 | 看板（审核单）→ 新建双井 → **核对页**（专属，一对一） |
 | 打样台 | 上传平面稿；跑的时候用等待卡 |
 | 历史记录 | 审稿 + 打样混排。在设置之上 |
-| 设置 | 外观 / 开工板 / 费用 / 密钥。永远在侧栏最后一项。外观只写本机 `localStorage`：主题、字号 px、半透明侧栏、侧栏雾面对比度滑条、核对页差异标记 |
+| 设置 | 外观 / 开工板 / 费用 / 密钥。永远在侧栏最后一项。外观只写本机 `localStorage`：主题、字号 px、侧栏材质（实心 / 毛玻璃 / 液态玻璃）、侧栏雾面对比度滑条、核对页差异标记 |
 
 核对页是审稿台的工作页，不是新台签。点看板卡片进入。
 
@@ -70,7 +70,7 @@ Figma 变量集 `审稿室`（Light）：
 - **Hover 灰:** `#E2E2E8`（侧栏项 Hover）。
 - **飞书头像底（无图时）:** `#3370FF`。
 - **Dark mode:** 默认浅色。设置 · 外观可改浅色 / 深色 / 跟随系统。深色不是灰黑中台：页底 `#141018` 紫黑，主台 `#221B28`，字 `#F6F1F8`（品牌 purple-soft），点缀仍是 `#805898` 提到 `#C9A3D6`。字重 500，避免细灰字。只写 `localStorage`。
-- **外观控件（iOS 27）:** 离散项用 Segmented（主题、差异标记）；连续项用苹果滑条（侧栏对比度、字号）+ 可手写 px。对比度只调半透明侧栏雾面：低更透、高更实。关掉半透明后滑条无效。
+- **外观控件（iOS 27）:** 离散项用 Segmented（主题、侧栏材质、差异标记）；连续项用苹果滑条（侧栏对比度、字号）+ 可手写 px。对比度只调毛玻璃和液态玻璃的雾面：低更透、高更实。实心时滑条无效。旧 `glassSidebar` 布尔会迁：关→实心，开→毛玻璃。
 
 Ant Design 6 只当零件箱：
 
@@ -100,7 +100,7 @@ controlHeight           40
 
 - **Approach:** iOS 27 分栏：侧栏贴窗口左边，主区连成同一块工作台。不是两张漂浮卡。页底淡紫雾；`.workspace` 一块圆角 28 的窗口（`--stage`）。aside / main 之间只有一根 0.5px `--hairline`（`ink` 10%），只要隔开。
 - **滚动:** 壳 `100dvh` `overflow: hidden`。侧栏不 sticky、不跟页滚。只有 `.stage`（设置页是内部 `.settings-main`）滚动。`backdrop-filter` 只留在侧栏，避免双滚动卡顿。
-- **展开侧栏:** 280px。玻璃层宽度锁在 280px，折叠只裁切窗口（iOS 27 sidebar 贴边）。工作台窗口底透明，让壳上的紫雾透进侧栏；主区 `.stage` 仍是白紫台。Liquid Glass：`blur(24px) saturate(180%)`，灰紫雾 `purple-mist` 叠 `rgba(255,255,255, var(--glass-alpha))`。外观「对比度」0–100 无极调 alpha（55 对准锁定稿 0.55）。可关半透明，改成实心灰紫，不是白底。词标 `SHINE MAGE` 一行 nowrap，展开时宽度够了再淡入，避免先露出 SHINE。
+- **展开侧栏:** 280px。玻璃层宽度锁在 280px，折叠只裁切窗口（iOS 27 sidebar 贴边）。工作台窗口底透明，让壳上的紫雾透进侧栏；主区 `.stage` 仍是白紫台。三档材质：实心 = 不透灰紫 `purple-mist`；毛玻璃 = 现在的雾面 `blur(24px) saturate(180%)` 叠 `rgba(255,255,255, var(--glass-alpha))`；液态玻璃 = iOS 26 kit Sidebar / Liquid Glass 的网站近似，并按 iOS 27 收口（更透、折射环境紫雾、`blur(40px) saturate(240%)`、高光边、暗边、右侧色散细线）。外观「对比度」0–100 无极调 alpha（55 对准锁定稿 0.55）；液态玻璃 CSS 再乘 0.42，看起来更透。对照稿：Figma `Web · 锁定稿` → `Web · 侧栏材质对照`。词标 `SHINE MAGE` 一行 nowrap，展开时宽度够了再淡入，避免先露出 SHINE。
 - **折叠侧栏:** 76px。图标 44pt 热区，垂直居中。
 - **折叠顶身份:** 默认 `logo-mark`；悬停变成展开按钮（sidebar.right）。同一 44pt，280ms Gentle 交叉淡入。不要把折叠按钮和 logo 做成两个热区。
 - **展开顶品牌:** 左 `logo-mark` 36px +「SHINE MAGE」13px tracking 0.6px；右独立折叠按钮（sidebar.left）44 玻璃圆。
@@ -202,4 +202,5 @@ controlHeight           40
 | 2026-08-20 | 主区淡白板块 | Figma Body/Main 是白台，雾只做页底；壳 100dvh 隔离滚动 |
 | 2026-08-20 | 空审核单不闪三栏 | 初次点审稿台、加载中都不画「没有单」列 |
 | 2026-08-20 | 设置 · 外观 | 主题/字号/玻璃侧栏/对比度/差异标记；参考 Codex 行式控件 |
+| 2026-08-23 | 侧栏三档材质 | 实心 / 毛玻璃 / 液态玻璃。现网半透明=毛玻璃；液态玻璃对照 iOS 26 kit + iOS 27 高光边/暗边。网站近似，不嵌 Apple 组件 |
 | 2026-08-20 | 外观连续量 | 对比度=侧栏雾面滑条；字号=可手写 px；深色走品牌紫雾 |
