@@ -22,7 +22,7 @@ describe("windows release.ps1 contract", () => {
     assert.match(script, /UTF-8 with BOM/);
     assert.match(script, /Hangzhou production CD/);
     assert.match(script, /live pull-while-serving is gone/);
-    assert.ok(indexOf(/taskkill\.exe \/T \/F \/PID/) < indexOf(/git pull --ff-only origin main/));
+    assert.ok(indexOf(/taskkill\.exe \/T \/F \/PID/) < indexOf(/Invoke-Git pull --ff-only origin main/));
   });
 
   it("does not use PowerShell automatic \$PID", () => {

@@ -1,10 +1,11 @@
 export type ThemeChoice = "light" | "dark" | "system";
 export type DiffMarkers = "color" | "underline" | "off";
+export type GlassStyle = "solid" | "frost" | "liquid";
 
 export type Appearance = {
   theme: ThemeChoice;
   fontPx: number;
-  glassSidebar: boolean;
+  glassStyle: GlassStyle;
   glassContrast: number;
   diffMarkers: DiffMarkers;
 };
@@ -14,14 +15,19 @@ export const FONT_PX_MIN = 13;
 export const FONT_PX_MAX = 28;
 export const FONT_PX_DEFAULT = 16;
 export const GLASS_CONTRAST_DEFAULT = 55;
+const GLASS_STYLES = new Set<GlassStyle>(["solid", "frost", "liquid"]);
 
 export const APPEARANCE_DEFAULT: Appearance = {
   theme: "light",
   fontPx: FONT_PX_DEFAULT,
-  glassSidebar: true,
+  glassStyle: "frost",
   glassContrast: GLASS_CONTRAST_DEFAULT,
   diffMarkers: "color",
 };
+
+export function isGlassOn(style: GlassStyle): boolean {
+  return style !== "solid";
+}
 
 const THEMES = new Set<ThemeChoice>(["light", "dark", "system"]);
 const DIFFS = new Set<DiffMarkers>(["color", "underline", "off"]);
@@ -72,13 +78,21 @@ function readGlassContrast(o: Record<string, unknown>): number {
   return GLASS_CONTRAST_DEFAULT;
 }
 
+/** 旧开关：false → 实心，true / 缺省 → 毛玻璃。合法 glassStyle 优先；非法字符串不掉进旧布尔。 */
+function readGlassStyle(o: Record<string, unknown>): GlassStyle {
+  if (GLASS_STYLES.has(o.glassStyle as GlassStyle)) return o.glassStyle as GlassStyle;
+  if (typeof o.glassStyle === "string") return APPEARANCE_DEFAULT.glassStyle;
+  if (typeof o.glassSidebar === "boolean") return o.glassSidebar ? "frost" : "solid";
+  return APPEARANCE_DEFAULT.glassStyle;
+}
+
 export function parseAppearance(raw: unknown): Appearance {
   if (!raw || typeof raw !== "object") return { ...APPEARANCE_DEFAULT };
   const o = raw as Record<string, unknown>;
   return {
     theme: THEMES.has(o.theme as ThemeChoice) ? (o.theme as ThemeChoice) : APPEARANCE_DEFAULT.theme,
     fontPx: readFontPx(o),
-    glassSidebar: typeof o.glassSidebar === "boolean" ? o.glassSidebar : APPEARANCE_DEFAULT.glassSidebar,
+    glassStyle: readGlassStyle(o),
     glassContrast: readGlassContrast(o),
     diffMarkers: DIFFS.has(o.diffMarkers as DiffMarkers)
       ? (o.diffMarkers as DiffMarkers)
@@ -124,7 +138,8 @@ export function applyAppearance(
   const contrast = clampGlassContrast(prefs.glassContrast);
   const alpha = glassAlpha(contrast);
   root.dataset.theme = theme;
-  root.dataset.glassSidebar = prefs.glassSidebar ? "on" : "off";
+  root.dataset.glassStyle = prefs.glassStyle;
+  root.dataset.glassSidebar = isGlassOn(prefs.glassStyle) ? "on" : "off";
   root.dataset.diff = prefs.diffMarkers;
   root.style.setProperty("--ui-font-px", String(scale.ui));
   root.style.setProperty("--ui-font", `${scale.ui}px`);
