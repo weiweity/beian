@@ -467,10 +467,21 @@ describe("review http", () => {
   it("health includes job queue snapshot", async () => {
     const res = await app.request("/api/health");
     assert.equal(res.status, 200);
-    const body = (await res.json()) as { version?: string; jobs?: { ocr?: { running: number; queued: number } } };
+    const body = (await res.json()) as {
+      version?: string;
+      jobs?: {
+        ocr?: { running: number; queued: number };
+        blender?: { running: number; queued: number };
+        illustrator?: { running: number; queued: number };
+      };
+    };
     assert.match(String(body.version), /^\d+\.\d+\.\d+\.\d+$/);
     assert.equal(typeof body.jobs?.ocr?.running, "number");
     assert.equal(typeof body.jobs?.ocr?.queued, "number");
+    assert.equal(typeof body.jobs?.blender?.running, "number");
+    assert.equal(typeof body.jobs?.blender?.queued, "number");
+    assert.equal(typeof body.jobs?.illustrator?.running, "number");
+    assert.equal(typeof body.jobs?.illustrator?.queued, "number");
   });
 
   it("upload returns comparing before the worker finishes", async () => {

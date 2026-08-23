@@ -31,14 +31,18 @@ export type MockupJob = {
 
 const cache = new Map<string, MockupJob>();
 
-function mockupRoot() {
+export function resetMockupCache(): void {
+  cache.clear();
+}
+
+function mockupRoot(create = true) {
   const d = join(DATA_DIR, "mockups");
-  mkdirSync(d, { recursive: true });
+  if (create) mkdirSync(d, { recursive: true });
   return d;
 }
 
-function jobPath(id: string) {
-  return join(mockupRoot(), id, "job.json");
+function jobPath(id: string, create = true) {
+  return join(mockupRoot(create), id, "job.json");
 }
 
 export function findBlender(): string | null {
@@ -62,15 +66,19 @@ export function saveMockup(job: MockupJob): void {
 
 export function loadMockup(id: string): MockupJob | undefined {
   if (!isTid(id)) return undefined;
+  const p = jobPath(id, false);
+  if (!existsSync(p)) {
+    cache.delete(id);
+    return undefined;
+  }
   const hit = cache.get(id);
   if (hit) return hit;
-  const p = jobPath(id);
-  if (!existsSync(p)) return undefined;
   try {
     const job = JSON.parse(readFileSync(p, "utf8")) as MockupJob;
     cache.set(id, job);
     return job;
   } catch {
+    cache.delete(id);
     return undefined;
   }
 }
