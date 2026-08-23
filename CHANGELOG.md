@@ -6,6 +6,16 @@
 
 - 杭州 self-hosted GitHub Actions：合 `main` 后自动跑 `release.ps1`。对照在跑会失败。不动 cloudflared，不杀全部 node.exe。
 
+## [0.12.2.0] - 2026-08-23
+
+### Added
+
+- 设置 · 外观侧栏材质三档：实心、毛玻璃、液态玻璃。液态玻璃更透，能看见壳上的紫雾，带高光边和暗边。旧的「半透明侧栏」开关会迁到毛玻璃；关掉的迁到实心。
+
+### Fixed
+
+- 杭州 `release.ps1` 的合同测试跟着 `Invoke-Git pull` 走，不再找已经不存在的裸 `git pull` 字样。
+
 ## [0.12.1.0] - 2026-08-22
 
 ### Changed
