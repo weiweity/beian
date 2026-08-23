@@ -98,6 +98,15 @@ describe("windows release.ps1 contract", () => {
     assert.ok(indexOf(/@rollup\/rollup-win32-x64-msvc/) < indexOf(/npm run build -w beian-ui/));
   });
 
+  it("Actions runner drops dirty lockfile before invoking on-disk release.ps1", () => {
+    const ymlPath = join(dirname(fileURLToPath(import.meta.url)), "../../../../.github/workflows/hangzhou-release.yml");
+    const yml = readFileSync(ymlPath, "utf8");
+    assert.match(yml, /git -C D:\\beian checkout -- package-lock\.json/);
+    const lockIdx = yml.indexOf("git -C D:\\beian checkout -- package-lock.json");
+    const runIdx = yml.indexOf("D:\\beian\\scripts\\windows\\release.ps1");
+    assert.ok(lockIdx >= 0 && runIdx > lockIdx);
+  });
+
   it("uses GITHUB_TOKEN for git when Actions provides it, never prints the token", () => {
     assert.match(script, /function Invoke-Git/);
     assert.match(script, /http.extraheader=AUTHORIZATION: bearer/);

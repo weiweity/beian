@@ -8,7 +8,7 @@
 
 ### Fixed
 
-- 杭州 `release.ps1` 停 8787 之前丢掉 npm 改脏的 `package-lock.json`，其他本地改动则拒绝停机。安装改走 `npm ci`。pull/编/起失败且 8787 没听时，把上一版计划任务拉回来，避免公网一直 502。
+- 杭州 `release.ps1` 停 8787 之前丢掉 npm 改脏的 `package-lock.json`，其他本地改动则拒绝停机。安装改走 `npm ci`。pull/编/起失败且 8787 没听时，把上一版计划任务拉回来，避免公网一直 502。self-hosted workflow 调磁盘上的旧脚本前也会先丢掉脏 lockfile，避免这单自己升产再 502。
 
 ## [0.12.2.0] - 2026-08-23
 
