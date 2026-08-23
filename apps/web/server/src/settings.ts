@@ -467,7 +467,7 @@ function runCmd(
       {
         timeout: timeoutMs,
         windowsHide: true,
-        env: { ...process.env, PYTHONPATH: PYTHON_APP, WB_DATA_DIR: storeDir() },
+        env: { ...process.env, PYTHONPATH: PYTHON_APP, WB_DATA_DIR: storeDir(), PYTHONUTF8: "1" },
       },
       (err, stdout, stderr) => {
         const code = err && "code" in err && typeof err.code === "number" ? err.code : err ? 1 : 0;

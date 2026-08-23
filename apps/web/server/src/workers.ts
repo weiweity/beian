@@ -77,7 +77,7 @@ export function runPython(opts: RunPythonOpts): Promise<RunPythonResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(pythonExecutable(), opts.args, {
       cwd,
-      env: { ...process.env, PYTHONPATH: PYTHON_APP, WB_DATA_DIR: DATA_DIR },
+      env: { ...process.env, PYTHONPATH: PYTHON_APP, WB_DATA_DIR: DATA_DIR, PYTHONUTF8: "1" },
       detached: process.platform !== "win32",
       stdio: ["ignore", "pipe", "pipe"],
     });

@@ -15,8 +15,15 @@ import time
 from typing import Any
 
 from PIL import Image
-from pypdf import PdfReader, PdfWriter
-from pypdf.generic import ArrayObject, NameObject
+
+try:
+    from pypdf import PdfReader, PdfWriter
+    from pypdf.generic import ArrayObject, NameObject
+except ImportError:
+    if __name__ == "__main__":
+        print(json.dumps({"ok": False, "error": "缺少 pypdf"}, ensure_ascii=False), file=sys.stderr)
+        raise SystemExit(2)
+    raise
 
 
 PIPELINE_VERSION = "1.2.0"
@@ -626,9 +633,17 @@ def main() -> int:
     return 0 if success else 1
 
 
+def _err_json(msg: object) -> None:
+    text = str(msg).strip()[:80] or "打样中断"
+    print(json.dumps({"ok": False, "error": text}, ensure_ascii=False), file=sys.stderr)
+
+
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except PipelineError as error:
-        print(f"PIPELINE_ERROR: {error}", file=sys.stderr)
+        _err_json(error)
+        raise SystemExit(2)
+    except Exception as error:
+        _err_json(error)
         raise SystemExit(2)

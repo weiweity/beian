@@ -1,3 +1,4 @@
+import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { DATA_DIR } from "./config.js";
 import { compareBookkeeping } from "./billing.js";
@@ -427,6 +428,7 @@ function markOcrFailed(task: Task, publicMsg: string): void {
   task.job_error = publicMsg;
   task.job_finished_at = task.job_finished_at || nowIso();
   delete task.job_pid;
+  attachRenderedPages(task);
   saveTask(task);
   void fireTaskNotify(task, false);
   (hooks.bookkeeping || compareBookkeeping)(false, { task_id: task.id, actor: taskOwner(task) });
@@ -575,8 +577,43 @@ function publicJobError(msg: string): string | null {
   const s = msg.trim();
   if (!s) return null;
   if (/save_task|--help|JSON|stdout|stderr|python -m/i.test(s)) return null;
-  if (s.length > 80) return null;
-  return s;
+  if (/https?:\/\/|access_token|client_secret|client_id|api[_-]?key/i.test(s)) return null;
+  return s.length > 80 ? s.slice(0, 80) : s;
+}
+
+type PagePng = { url: string; name: string; page: number };
+
+function listPagePngs(dir: string, urlPrefix: string): PagePng[] {
+  if (!existsSync(dir)) return [];
+  let names: string[] = [];
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return [];
+  }
+  return names
+    .filter((name) => /^page_\d+\.png$/i.test(name))
+    .sort()
+    .map((name) => {
+      const n = Number((/^page_(\d+)\.png$/i.exec(name) || [])[1] || 0);
+      return { name, page: n, url: `${urlPrefix}/${name}` };
+    });
+}
+
+function attachRenderedPages(task: Task): void {
+  if (task.job_kind === "rework") return;
+  const root = join(DATA_DIR, "uploads", task.id, "pages");
+  const api = `/api/tasks/${task.id}/pages`;
+  if (!Array.isArray(task.pages) || task.pages.length === 0) {
+    const flat = listPagePngs(root, api);
+    const sideA = listPagePngs(join(root, "a"), `${api}/a`);
+    const pages = flat.length ? flat : sideA;
+    if (pages.length) task.pages = pages;
+  }
+  if (!Array.isArray(task.pages_b) || task.pages_b.length === 0) {
+    const sideB = listPagePngs(join(root, "b"), `${api}/b`);
+    if (sideB.length) task.pages_b = sideB;
+  }
 }
 
 async function fireTaskNotify(task: Task, ok: boolean): Promise<void> {
@@ -648,6 +685,7 @@ function reclaimTask(task: Task): void {
     task.job_error = "对照中断";
     task.error = "对照中断";
     task.job_finished_at = nowIso();
+    attachRenderedPages(task);
     saveTask(task);
     return;
   }
@@ -665,6 +703,7 @@ function reclaimTask(task: Task): void {
       task.error = "超时";
     }
     delete task.job_pid;
+    attachRenderedPages(task);
     saveTask(task);
     return;
   }
@@ -685,6 +724,7 @@ function reclaimTask(task: Task): void {
     task.error = "对照中断";
   }
   delete task.job_pid;
+  attachRenderedPages(task);
   saveTask(task);
 }
 
