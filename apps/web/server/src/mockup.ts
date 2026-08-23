@@ -35,14 +35,14 @@ export function resetMockupCache(): void {
   cache.clear();
 }
 
-function mockupRoot() {
+function mockupRoot(create = true) {
   const d = join(DATA_DIR, "mockups");
-  mkdirSync(d, { recursive: true });
+  if (create) mkdirSync(d, { recursive: true });
   return d;
 }
 
-function jobPath(id: string) {
-  return join(mockupRoot(), id, "job.json");
+function jobPath(id: string, create = true) {
+  return join(mockupRoot(create), id, "job.json");
 }
 
 export function findBlender(): string | null {
@@ -66,7 +66,7 @@ export function saveMockup(job: MockupJob): void {
 
 export function loadMockup(id: string): MockupJob | undefined {
   if (!isTid(id)) return undefined;
-  const p = jobPath(id);
+  const p = jobPath(id, false);
   if (!existsSync(p)) {
     cache.delete(id);
     return undefined;

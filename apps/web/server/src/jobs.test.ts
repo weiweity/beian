@@ -21,6 +21,7 @@ const {
 
 function wipeJobDisk() {
   const root = process.env.WB_DATA_DIR || "";
+  if (!root.includes("beian-jobs-")) return;
   for (const sub of ["tasks", "mockups"]) {
     const dir = join(root, sub);
     if (!existsSync(dir)) continue;
@@ -710,6 +711,21 @@ describe("jobs dispatcher", () => {
     assert.equal(job?.job_status, "failed");
     assert.equal(job?.job_error, "COM 被拒绝或文件打不开");
     assert.equal(job?.job_kind, "mockup");
+  });
+
+  it("loadMockup misses after job.json is deleted without clearing the cache first", async () => {
+    const { saveMockup, loadMockup } = await import("./mockup.js");
+    saveMockup({
+      id: tid(81),
+      status: "queued",
+      created_at: "2026-08-21T09:00:00.000Z",
+      files: [],
+      job_kind: "mockup",
+      job_status: "queued",
+    });
+    assert.equal(loadMockup(tid(81))?.id, tid(81));
+    rmSync(join(process.env.WB_DATA_DIR || "", "mockups", tid(81), "job.json"));
+    assert.equal(loadMockup(tid(81)), undefined);
   });
 });
 
