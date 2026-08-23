@@ -110,12 +110,16 @@ describe("windows release.ps1 contract", () => {
   it("Actions runner drops dirty lockfile before invoking on-disk release.ps1", () => {
     const ymlPath = join(dirname(fileURLToPath(import.meta.url)), "../../../../.github/workflows/hangzhou-release.yml");
     const yml = readFileSync(ymlPath, "utf8");
+    assert.match(yml, /shell: cmd/);
     assert.match(yml, /^[^#\n]*git -C D:\\beian checkout -- package-lock\.json/m);
-    assert.match(yml, /throw "git checkout -- package-lock.json 失败/);
+    assert.match(yml, /if errorlevel 1 exit \/b 1/);
+    assert.match(yml, /powershell\.exe -NoProfile -ExecutionPolicy Bypass -File D:\\beian\\scripts\\windows\\release\.ps1/);
+    assert.match(yml, /^\s+shell: cmd\s*$/m);
+    assert.doesNotMatch(yml, /^\s+shell: powershell\s*$/m);
     const lockIdx = yml.search(/^[^#\n]*git -C D:\\beian checkout -- package-lock\.json/m);
-    const throwIdx = yml.indexOf('throw "git checkout -- package-lock.json 失败');
+    const errIdx = yml.indexOf("if errorlevel 1 exit /b 1");
     const runIdx = yml.indexOf("D:\\beian\\scripts\\windows\\release.ps1");
-    assert.ok(lockIdx >= 0 && throwIdx > lockIdx && runIdx > throwIdx);
+    assert.ok(lockIdx >= 0 && errIdx > lockIdx && runIdx > errIdx);
   });
 
   it("uses GITHUB_TOKEN for git when Actions provides it, never prints the token", () => {

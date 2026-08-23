@@ -27,10 +27,12 @@ jobs:
       GIT_TERMINAL_PROMPT: "0"
     steps:
       - name: Drain, pull, build, restart :8787
-        shell: powershell
+        # cmd wrapper: Actions powershell shell dotsources a temp .ps1 under the
+        # runner execution policy. Hangzhou Restricted blocked that (0.12.3.0 land,
+        # 1s red) before release.ps1 could Bypass.
+        shell: cmd
         run: |
-          # On-disk release.ps1 lags origin until pull. Always drop npm-dirty
-          # lockfile first so a stale script can still ff-only.
+          rem On-disk script lags origin until pull. Drop npm-dirty lockfile first.
           git -C D:\beian checkout -- package-lock.json
-          if ($LASTEXITCODE -ne 0) { throw "git checkout -- package-lock.json 失败 exit=$LASTEXITCODE" }
+          if errorlevel 1 exit /b 1
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File D:\beian\scripts\windows\release.ps1
