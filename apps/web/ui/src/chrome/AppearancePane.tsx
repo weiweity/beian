@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
-import { Segmented, Switch } from "antd";
+import { Segmented } from "antd";
 import { useAppearance } from "./AppearanceRoot";
 import {
   FONT_PX_MAX,
   FONT_PX_MIN,
   clampFontPx,
   clampGlassContrast,
+  isGlassOn,
   type DiffMarkers,
+  type GlassStyle,
   type ThemeChoice,
 } from "./appearance";
 
@@ -114,21 +116,28 @@ export function AppearancePane() {
         </div>
       </div>
 
-      <div className="appear-row">
+      <div className="appear-row appear-row-stack">
         <div>
-          <div className="appear-label">半透明侧栏</div>
-          <p className="appear-help">开着是 Liquid Glass。关掉变成实心底，滚动更轻。</p>
+          <div className="appear-label">侧栏材质</div>
+          <p className="appear-help">
+            毛玻璃是雾面对照锁定稿。液态玻璃按 iOS 27：折射壳上的紫雾，加高光边和暗边。实心不透、滚动更轻。
+          </p>
         </div>
-        <Switch
-          checked={prefs.glassSidebar}
-          onChange={(on) => setPrefs({ ...prefs, glassSidebar: on })}
+        <Segmented
+          value={prefs.glassStyle}
+          onChange={(v) => setPrefs({ ...prefs, glassStyle: v as GlassStyle })}
+          options={[
+            { label: "实心", value: "solid" },
+            { label: "毛玻璃", value: "frost" },
+            { label: "液态玻璃", value: "liquid" },
+          ]}
         />
       </div>
 
-      <div className={prefs.glassSidebar ? "appear-row appear-row-stack" : "appear-row appear-row-stack is-dim"}>
+      <div className={isGlassOn(prefs.glassStyle) ? "appear-row appear-row-stack" : "appear-row appear-row-stack is-dim"}>
         <div>
           <div className="appear-label">对比度</div>
-          <p className="appear-help">只调侧栏雾面。低更透、高更实。关掉半透明后无效。</p>
+          <p className="appear-help">只调毛玻璃和液态玻璃的雾面。低更透、高更实。实心时无效。</p>
         </div>
         <div className="appear-control">
           <span className="appear-ends">透</span>
@@ -136,7 +145,7 @@ export function AppearancePane() {
             min={0}
             max={100}
             value={prefs.glassContrast}
-            disabled={!prefs.glassSidebar}
+            disabled={!isGlassOn(prefs.glassStyle)}
             ariaLabel="侧栏玻璃对比度"
             onChange={(n) => setPrefs({ ...prefs, glassContrast: clampGlassContrast(n) })}
           />

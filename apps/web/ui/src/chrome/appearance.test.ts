@@ -7,6 +7,7 @@ import {
   clampFontPx,
   clampGlassContrast,
   glassAlpha,
+  isGlassOn,
   loadAppearance,
   parseAppearance,
   resolveTheme,
@@ -38,14 +39,14 @@ describe("parseAppearance", () => {
     const next = parseAppearance({
       theme: "dark",
       fontPx: 18,
-      glassSidebar: false,
+      glassStyle: "liquid",
       glassContrast: 70,
       diffMarkers: "underline",
     });
     assert.deepEqual(next, {
       theme: "dark",
       fontPx: 18,
-      glassSidebar: false,
+      glassStyle: "liquid",
       glassContrast: 70,
       diffMarkers: "underline",
     });
@@ -61,6 +62,24 @@ describe("parseAppearance", () => {
     });
     assert.equal(next.fontPx, 18);
     assert.equal(next.glassContrast, 80);
+    assert.equal(next.glassStyle, "frost");
+  });
+
+  it("migrates old glassSidebar boolean", () => {
+    assert.equal(parseAppearance({ glassSidebar: false }).glassStyle, "solid");
+    assert.equal(parseAppearance({ glassSidebar: true }).glassStyle, "frost");
+  });
+
+  it("glassStyle wins over legacy glassSidebar", () => {
+    assert.equal(parseAppearance({ glassStyle: "liquid", glassSidebar: false }).glassStyle, "liquid");
+    assert.equal(parseAppearance({ glassStyle: "solid", glassSidebar: true }).glassStyle, "solid");
+    assert.equal(parseAppearance({ glassStyle: "frost" }).glassStyle, "frost");
+    assert.equal(parseAppearance({ glassStyle: "solid" }).glassStyle, "solid");
+  });
+
+  it("rejects unknown glassStyle and falls back", () => {
+    assert.equal(parseAppearance({ glassStyle: "neon" }).glassStyle, "frost");
+    assert.equal(parseAppearance({ glassStyle: "neon", glassSidebar: false }).glassStyle, "frost");
   });
 
   it("clamps typed px", () => {
@@ -110,7 +129,7 @@ describe("applyAppearance", () => {
       {
         theme: "system",
         fontPx: 20,
-        glassSidebar: true,
+        glassStyle: "frost",
         glassContrast: 40,
         diffMarkers: "off",
       },
@@ -118,6 +137,7 @@ describe("applyAppearance", () => {
       root,
     );
     assert.equal(root.dataset.theme, "dark");
+    assert.equal(root.dataset.glassStyle, "frost");
     assert.equal(root.dataset.glassSidebar, "on");
     assert.equal(root.dataset.diff, "off");
     assert.equal(root.css["--ui-font"], "20px");
@@ -128,8 +148,24 @@ describe("applyAppearance", () => {
 
   it("turns glass off in dataset", () => {
     const root = fakeRoot();
-    applyAppearance({ ...APPEARANCE_DEFAULT, glassSidebar: false }, false, root);
+    applyAppearance({ ...APPEARANCE_DEFAULT, glassStyle: "solid" }, false, root);
+    assert.equal(root.dataset.glassStyle, "solid");
     assert.equal(root.dataset.glassSidebar, "off");
+  });
+
+  it("marks liquid glass in dataset", () => {
+    const root = fakeRoot();
+    applyAppearance({ ...APPEARANCE_DEFAULT, glassStyle: "liquid" }, false, root);
+    assert.equal(root.dataset.glassStyle, "liquid");
+    assert.equal(root.dataset.glassSidebar, "on");
+  });
+});
+
+describe("isGlassOn", () => {
+  it("is off only for solid", () => {
+    assert.equal(isGlassOn("solid"), false);
+    assert.equal(isGlassOn("frost"), true);
+    assert.equal(isGlassOn("liquid"), true);
   });
 });
 
@@ -167,9 +203,12 @@ describe("loadAppearance / saveAppearance", () => {
     g.localStorage = ls;
     try {
       assert.deepEqual(loadAppearance(), APPEARANCE_DEFAULT);
-      saveAppearance({ ...APPEARANCE_DEFAULT, fontPx: 18, theme: "dark" });
+      saveAppearance({ ...APPEARANCE_DEFAULT, fontPx: 18, theme: "dark", glassStyle: "liquid" });
       assert.equal(loadAppearance().fontPx, 18);
       assert.equal(loadAppearance().theme, "dark");
+      assert.equal(loadAppearance().glassStyle, "liquid");
+      mem.set(APPEARANCE_KEY, JSON.stringify({ glassSidebar: false }));
+      assert.equal(loadAppearance().glassStyle, "solid");
       mem.set(APPEARANCE_KEY, "{not json");
       assert.deepEqual(loadAppearance(), APPEARANCE_DEFAULT);
       mem.set(APPEARANCE_KEY, '"just a string"');
