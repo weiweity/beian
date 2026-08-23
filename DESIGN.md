@@ -2,7 +2,7 @@
 
 来源：Figma「审稿室 · iOS 27」锁定稿（2026-08-20）。  
 稿：https://www.figma.com/design/BL3PGUjLGLPb9iUZMzRhD6  
-页：`Web · 锁定稿`（封面 `87:1448`）。侧栏材质对照：`Web · 侧栏材质对照`（`98:1432`）。`iPad` 页是探索，**不是**实现依据。  
+页：`Web · 锁定稿`（封面 `87:1448`）。侧栏材质对照：`Web · 侧栏材质对照`（`98:1432`）。`iPad` 页是探索，**不是**实现依据。
 资产：`apps/web/ui/public/brand/logo-mark.png`（侧栏）、`apps/web/ui/public/brand/shine-mage.png`（拒绝页整标）、`apps/web/ui/public/brand/ui/*.svg`（侧栏/上传/等待，从锁定稿导出）。
 
 实现入口：`apps/web/ui`。不要再画飞书顶栏。不要重写审核引擎和 3D 流水线。
@@ -100,7 +100,7 @@ controlHeight           40
 
 - **Approach:** iOS 27 分栏：侧栏贴窗口左边，主区连成同一块工作台。不是两张漂浮卡。页底淡紫雾；`.workspace` 一块圆角 28 的窗口（`--stage`）。aside / main 之间只有一根 0.5px `--hairline`（`ink` 10%），只要隔开。
 - **滚动:** 壳 `100dvh` `overflow: hidden`。侧栏不 sticky、不跟页滚。只有 `.stage`（设置页是内部 `.settings-main`）滚动。`backdrop-filter` 只留在侧栏，避免双滚动卡顿。
-- **展开侧栏:** 280px。玻璃层宽度锁在 280px，折叠只裁切窗口（iOS 27 sidebar 贴边）。工作台窗口底透明，让壳上的紫雾透进侧栏；主区 `.stage` 仍是白紫台。三档材质：实心 = 不透灰紫 `purple-mist`；毛玻璃 = 现在的雾面 `blur(24px) saturate(180%)` 叠 `rgba(255,255,255, var(--glass-alpha))`；液态玻璃 = iOS 26 kit Sidebar / Liquid Glass 的网站近似，并按 iOS 27 收口（更透、折射环境紫雾、`blur(40px) saturate(240%)`、高光边、暗边、右侧色散细线）。外观「对比度」0–100 无极调 alpha（55 对准锁定稿 0.55）；液态玻璃 CSS 再乘 0.42，看起来更透。对照稿：Figma `Web · 锁定稿` → `Web · 侧栏材质对照`。词标 `SHINE MAGE` 一行 nowrap，展开时宽度够了再淡入，避免先露出 SHINE。
+- **展开侧栏:** 280px。玻璃层宽度锁在 280px，折叠只裁切窗口（iOS 27 sidebar 贴边）。工作台窗口底透明，让壳上的紫雾透进侧栏；主区 `.stage` 仍是白紫台。三档材质：实心 = 不透灰紫 `purple-mist`；毛玻璃 = 现在的雾面 `blur(24px) saturate(180%)` 叠 `rgba(255,255,255, var(--glass-alpha))`；液态玻璃 = iOS 26 kit Sidebar / Liquid Glass 的网站近似，并按 iOS 27 收口（更透、折射环境紫雾、`blur(40px) saturate(240%)`、高光边、暗边、右侧色散细线）。外观「对比度」0–100 无极调 alpha（55 对准锁定稿 0.55）；液态玻璃 CSS 再乘 0.42，看起来更透。系统开「减少透明度」时，毛玻璃和液态玻璃降到 `blur(12px) saturate(140%)`，液态玻璃底更实。对照稿：Figma `Web · 锁定稿` → `Web · 侧栏材质对照`。词标 `SHINE MAGE` 一行 nowrap，展开时宽度够了再淡入，避免先露出 SHINE。
 - **折叠侧栏:** 76px。图标 44pt 热区，垂直居中。
 - **折叠顶身份:** 默认 `logo-mark`；悬停变成展开按钮（sidebar.right）。同一 44pt，280ms Gentle 交叉淡入。不要把折叠按钮和 logo 做成两个热区。
 - **展开顶品牌:** 左 `logo-mark` 36px +「SHINE MAGE」13px tracking 0.6px；右独立折叠按钮（sidebar.left）44 玻璃圆。

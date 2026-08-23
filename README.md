@@ -70,7 +70,7 @@ docker buildx build --platform linux/amd64 -t beian:review-amd64 --load .
 
 ## 给别人用：设置页
 
-登录后点侧栏「设置」。飞书、百度 OCR、MiniMax、Python、Blender 都在这里填。开工板看登录/审稿/打样能不能干活；费用账单进页再拉，不轮询。
+登录后点侧栏「设置」。飞书、百度 OCR、MiniMax、Python、Blender 都在这里填。开工板看登录/审稿/打样能不能干活；费用账单进页再拉，不轮询。外观（主题、字号、侧栏材质：实心 / 毛玻璃 / 液态玻璃）只写这台浏览器，不进密钥文件。
 
 - 密钥只写到本机数据目录（默认 `apps/web/backend/data/settings.secrets.json`，0600，不进 git；可用 `WB_DATA_DIR` 改）
 - 界面只显示是否已填
