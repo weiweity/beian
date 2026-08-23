@@ -27,7 +27,10 @@ describe("windows release.ps1 contract", () => {
   });
 
   it("resets npm-dirty lockfile and refuses other tracked dirt before stopping 8787", () => {
+    assert.ok(indexOf(/Invoke-Git checkout -- package-lock.json/) < indexOf(/工作树有未提交改动，拒绝停 8787/));
     assert.ok(indexOf(/Invoke-Git checkout -- package-lock.json/) < indexOf(/taskkill\.exe \/T \/F \/PID/));
+    assert.ok(indexOf(/Invoke-Git checkout main/) < indexOf(/工作树有未提交改动，拒绝停 8787/));
+    assert.ok(indexOf(/Invoke-Git checkout main/) < indexOf(/taskkill\.exe \/T \/F \/PID/));
     assert.ok(indexOf(/工作树有未提交改动，拒绝停 8787/) < indexOf(/taskkill\.exe \/T \/F \/PID/));
     assert.ok(indexOf(/本地 main 比 origin\/main 多/) < indexOf(/taskkill\.exe \/T \/F \/PID/));
     assert.match(script, /status --porcelain --untracked-files=no/);
@@ -44,11 +47,17 @@ describe("windows release.ps1 contract", () => {
 
   it("restarts the last schtasks listener if upgrade fails after stop", () => {
     assert.match(script, /function Restore-BeianListener/);
-    assert.match(script, /升版失败/);
+    assert.match(script, /cmd\.exe \/c "schtasks \/Run \/TN beian-server-8787"/);
+    assert.match(script, /拉回失败 schtasks exit=/);
+    assert.match(script, /拉回后 health 仍空/);
+    assert.match(script, /已拉回 :8787/);
     assert.match(script, /:8787 没听，schtasks \/Run beian-server-8787/);
     assert.match(script, /:8787 仍在听，不重复拉起/);
     assert.match(script, /公网可能 502/);
     assert.match(script, /Restore-BeianListener "升版失败"/);
+    assert.match(script, /} catch \{\s*Restore-BeianListener "升版失败"\s*throw/s);
+    assert.ok(indexOf(/npm ci/) < indexOf(/Restore-BeianListener "升版失败"/));
+    assert.ok(indexOf(/npm run build -w beian-ui/) < indexOf(/Restore-BeianListener "升版失败"/));
     assert.ok(indexOf(/Invoke-Git pull --ff-only origin main/) < indexOf(/Restore-BeianListener "升版失败"/));
   });
 
@@ -101,10 +110,12 @@ describe("windows release.ps1 contract", () => {
   it("Actions runner drops dirty lockfile before invoking on-disk release.ps1", () => {
     const ymlPath = join(dirname(fileURLToPath(import.meta.url)), "../../../../.github/workflows/hangzhou-release.yml");
     const yml = readFileSync(ymlPath, "utf8");
-    assert.match(yml, /git -C D:\\beian checkout -- package-lock\.json/);
-    const lockIdx = yml.indexOf("git -C D:\\beian checkout -- package-lock.json");
+    assert.match(yml, /^[^#\n]*git -C D:\\beian checkout -- package-lock\.json/m);
+    assert.match(yml, /throw "git checkout -- package-lock.json 失败/);
+    const lockIdx = yml.search(/^[^#\n]*git -C D:\\beian checkout -- package-lock\.json/m);
+    const throwIdx = yml.indexOf('throw "git checkout -- package-lock.json 失败');
     const runIdx = yml.indexOf("D:\\beian\\scripts\\windows\\release.ps1");
-    assert.ok(lockIdx >= 0 && runIdx > lockIdx);
+    assert.ok(lockIdx >= 0 && throwIdx > lockIdx && runIdx > throwIdx);
   });
 
   it("uses GITHUB_TOKEN for git when Actions provides it, never prints the token", () => {

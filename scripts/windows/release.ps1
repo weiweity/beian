@@ -1,4 +1,4 @@
-﻿# Hangzhou production CD. Always stop :8787, then pull/build/start.
+﻿# Hangzhou production CD. Git hygiene while :8787 is up; refuse to stop if dirty/ahead; otherwise stop, then pull/build/start.
 # Encoding: UTF-8 with BOM so Windows PowerShell 5 (GBK) can parse this file.
 #   powershell -ExecutionPolicy Bypass -File scripts\windows\release.ps1
 # -Restart is accepted and ignored: live pull-while-serving is gone (emptyOutDir 404).
