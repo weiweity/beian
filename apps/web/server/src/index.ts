@@ -48,6 +48,7 @@ import {
 import {
   assertBlenderReady,
   assertCanAccessMockup,
+  deleteMockup,
   fileOf,
   getJob,
   listJobsFor,
@@ -59,6 +60,7 @@ import {
   activeHits,
   assertCanAccessTask,
   assertTid,
+  deleteTask,
   isHitDecision,
   isReviewableStatus,
   isReworkableTask,
@@ -229,6 +231,18 @@ app.get("/api/tasks/:tid", (c) => {
     const task = loadTask(c.req.param("tid"));
     assertCanAccessTask(task, { name: s.display_name, admin: s.role === "admin" });
     return c.json(publicTask(task, { name: s.display_name, admin: s.role === "admin" }));
+  } catch (e) {
+    boom(e);
+  }
+});
+
+app.delete("/api/tasks/:tid", (c) => {
+  const s = need(c, "create");
+  try {
+    const task = loadTask(c.req.param("tid"));
+    assertCanAccessTask(task, { name: s.display_name, admin: s.role === "admin" });
+    deleteTask(task.id);
+    return c.json({ ok: true });
   } catch (e) {
     boom(e);
   }
@@ -535,7 +549,8 @@ app.post("/api/mockups", async (c) => {
     throw new HTTPException(400, { message: `文件超过 ${Math.round(maxUploadBytes() / 1024 / 1024)} MB` });
   }
   writeFileSync(src, buf);
-  const job = queueMockup({ id, sourcePath: src, displayName: s.display_name });
+  const title = String(body.title || body.product_name || "").trim();
+  const job = queueMockup({ id, sourcePath: src, displayName: s.display_name, title });
   try {
     enqueue({ kind: "mockup", id });
   } catch (err) {
@@ -550,6 +565,19 @@ app.get("/api/mockups/:id", (c) => {
   if (!job) throw new HTTPException(404, { message: "没有这单打样" });
   assertCanAccessMockup(job, { name: s.display_name, admin: s.role === "admin" });
   return c.json(decorateQueueAhead([publicMockup(job)])[0]);
+});
+
+app.delete("/api/mockups/:id", (c) => {
+  const s = need(c, "create");
+  try {
+    const job = getJob(assertTid(c.req.param("id")));
+    if (!job) throw new HTTPException(404, { message: "没有这单打样" });
+    assertCanAccessMockup(job, { name: s.display_name, admin: s.role === "admin" });
+    deleteMockup(job.id);
+    return c.json({ ok: true });
+  } catch (e) {
+    boom(e);
+  }
 });
 
 app.get("/api/mockups/:id/files/:key", (c) => {

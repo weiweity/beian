@@ -115,6 +115,7 @@ export function App() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [apiBroken, setApiBroken] = useState<string | null>(null);
   const [taskId, setTaskId] = useState<string | null>(null);
+  const [mockupId, setMockupId] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState(readCollapsed);
 
   const refreshMe = useCallback(async () => {
@@ -224,6 +225,7 @@ export function App() {
     if (key === "mockup") {
       setView("mockup");
       setTaskId(null);
+      setMockupId(null);
       collapsePhoneSheet();
       return;
     }
@@ -293,7 +295,7 @@ export function App() {
         ) : null}
         {view === "mockup" ? (
           <Suspense fallback={<PaneFallback label="打开打样台…" />}>
-            <MockupPage />
+            <MockupPage openId={mockupId} />
           </Suspense>
         ) : null}
         {view === "history" ? (
@@ -303,7 +305,10 @@ export function App() {
                 setTaskId(id);
                 setView("review");
               }}
-              onOpenMockup={() => setView("mockup")}
+              onOpenMockup={(id) => {
+                setMockupId(id);
+                setView("mockup");
+              }}
             />
           </Suspense>
         ) : null}

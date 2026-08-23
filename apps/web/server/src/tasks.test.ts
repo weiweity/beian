@@ -6,7 +6,7 @@ import { describe, it, before } from "node:test";
 
 process.env.WB_DATA_DIR = mkdtempSync(join(tmpdir(), "beian-ts-"));
 
-const { activeHits, hasReworkPages, isHitDecision, isReviewableStatus, isReworkableStatus, isReworkableTask, listTasks, saveTask } = await import("./tasks.js");
+const { activeHits, boardColumn, deleteTask, hasReworkPages, isHitDecision, isReviewableStatus, isReworkableStatus, isReworkableTask, listTasks, loadTask, saveTask } = await import("./tasks.js");
 
 describe("listTasks", () => {
   before(() => {
@@ -42,6 +42,25 @@ describe("listTasks", () => {
 
   it("搜不到为空", () => {
     assert.deepEqual(listTasks("没有这个品"), []);
+  });
+
+  it("对照失败不进对照中列", () => {
+    assert.equal(boardColumn("compare_failed"), "failed");
+    assert.equal(boardColumn("comparing", "failed"), "failed");
+    assert.equal(boardColumn("comparing", "running"), "comparing");
+  });
+
+  it("deleteTask removes the json", () => {
+    saveTask({
+      id: "cccccccccccc",
+      title: "删我",
+      product_name: "删我",
+      type: "excel_pdf",
+      status: "compare_failed",
+      created_at: "2026-08-19T08:00:00Z",
+    });
+    deleteTask("cccccccccccc");
+    assert.throws(() => loadTask("cccccccccccc"), /任务不存在/);
   });
 });
 

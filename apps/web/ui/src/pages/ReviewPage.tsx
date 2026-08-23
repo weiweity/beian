@@ -73,6 +73,7 @@ function statusLead(task: TaskDetail | null, pageIdx: number, pages: TaskPage[])
   if (!task) return "核对页";
   if (task.status === "completed") return `核对页 · 第 ${pageNo} 页 · 已签字`;
   if (isReviewable(task.status)) return `核对页 · 点字段，图上定位。第 ${pageNo} 页 · 待她判`;
+  if (task.status === "compare_failed") return `核对页 · 第 ${pageNo} 页 · 对照中断`;
   return `核对页 · 第 ${pageNo} 页`;
 }
 
@@ -233,7 +234,13 @@ export function ReviewPage({ taskId, onBack }: Props) {
     if (idx >= 0) setPageIdx(idx);
   }
 
-  if (!task && !error) return <WaitCard job="对照" />;
+  if (!task && !error) {
+    return (
+      <div className="desk-empty">
+        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="打开核对页…" />
+      </div>
+    );
+  }
   if (waiting && task) {
     return (
       <WaitCard
@@ -342,7 +349,15 @@ export function ReviewPage({ taskId, onBack }: Props) {
               })}
             </div>
           ) : (
-            <Empty description="这一页还没有图" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ padding: 48 }} />
+            <Empty
+              description={
+                task?.status === "compare_failed" || task?.job_status === "failed"
+                  ? "对照中断，这一页没有图。看上面的原因，或回看板重传一对。"
+                  : "这一页还没有图"
+              }
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+              style={{ padding: 48 }}
+            />
           )}
           <p className="page-lead" style={{ padding: "0 16px 12px" }}>
             紫框 已命中 · 黄框 待核对 · 点右侧字段，图上跟到这一条
@@ -401,7 +416,11 @@ export function ReviewPage({ taskId, onBack }: Props) {
               />
             </>
           ) : (
-            <p className="page-lead">没有机审条目。仍请翻页看一遍。</p>
+            <p className="page-lead">
+              {task?.status === "compare_failed" || task?.job_status === "failed"
+                ? "对照没跑完，没有机审条目。"
+                : "没有机审条目。仍请翻页看一遍。"}
+            </p>
           )}
 
           <p className="field-label" style={{ margin: "8px 0 0" }}>

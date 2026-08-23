@@ -464,6 +464,35 @@ describe("review http", () => {
     assert.equal(res.status, 403);
   });
 
+  it("owner can delete a task; stranger cannot", async () => {
+    saveTask({
+      id: "191919191919",
+      title: "待删",
+      product_name: "待删",
+      type: "excel_pdf",
+      status: "compare_failed",
+      owner: "魏炜",
+      job_status: "failed",
+      job_error: "对照中断",
+    });
+    const other = issueSession("路人", "reviewer", "ou_del_stranger", "feishu");
+    const denied = await app.request("/api/tasks/191919191919", {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${other.token}` },
+    });
+    assert.equal(denied.status, 403);
+    const owner = issueSession("魏炜", "admin", "ou_del_owner", "feishu");
+    const ok = await app.request("/api/tasks/191919191919", {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${owner.token}` },
+    });
+    assert.equal(ok.status, 200);
+    const gone = await app.request("/api/tasks/191919191919", {
+      headers: { authorization: `Bearer ${owner.token}` },
+    });
+    assert.equal(gone.status, 404);
+  });
+
   it("health includes job queue snapshot", async () => {
     const res = await app.request("/api/health");
     assert.equal(res.status, 200);

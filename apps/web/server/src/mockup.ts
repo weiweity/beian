@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { DATA_DIR, PACKAGING } from "./config.js";
@@ -8,6 +8,7 @@ import { isTid, replaceFile } from "./tasks.js";
 export type MockupJob = {
   id: string;
   status: "queued" | "running" | "done" | "failed";
+  title?: string;
   error?: string;
   created_at: string;
   files: { key: string; path?: string; name: string }[];
@@ -127,6 +128,7 @@ export function publicMockup(job: MockupJob) {
   return {
     id: job.id,
     status: job.status,
+    title: job.title || "",
     error: job.error || job.job_error,
     created_at: job.created_at,
     owner: job.owner,
@@ -198,10 +200,19 @@ export function assertBlenderReady(): string {
   return blender;
 }
 
+export function deleteMockup(id: string): void {
+  if (!isTid(id)) throw Object.assign(new Error("无效任务 id"), { status: 400 });
+  const dir = join(mockupRoot(false), id);
+  if (!existsSync(dir)) throw Object.assign(new Error("没有这单打样"), { status: 404 });
+  cache.delete(id);
+  rmSync(dir, { recursive: true, force: true });
+}
+
 export function queueMockup(opts: {
   id: string;
   sourcePath: string;
   displayName: string;
+  title?: string;
 }): MockupJob {
   const blender = assertBlenderReady();
   const template = join(PACKAGING, "templates/flower_box_47_5x47_5x177_5.json");
@@ -218,7 +229,7 @@ export function queueMockup(opts: {
       {
         code: opts.id.slice(0, 8),
         slug: "pack",
-        display_name: opts.displayName.slice(0, 40),
+        display_name: (opts.title || opts.displayName).slice(0, 40),
         source_ai: opts.sourcePath,
         template,
       },
@@ -229,6 +240,7 @@ export function queueMockup(opts: {
   const job: MockupJob = {
     id: opts.id,
     status: "queued",
+    title: (opts.title || "").trim().slice(0, 80),
     created_at: new Date().toISOString(),
     files: [],
     owner: opts.displayName,

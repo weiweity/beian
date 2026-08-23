@@ -3,6 +3,7 @@ import { App } from "antd";
 import { api } from "../api";
 import { UploadWell } from "../chrome/UploadWell";
 import { WaitCard } from "../chrome/WaitCard";
+import { stemFromFilename } from "./stemName";
 
 type Props = { onCreated: (id: string) => void; onBack: () => void };
 
@@ -41,7 +42,23 @@ export function NewTaskPage({ onCreated, onBack }: Props) {
     }
   }
 
-  if (submitting) return <WaitCard job="对照" />;
+  function takeExcel(file: File | null) {
+    setExcel(file);
+    if (file) {
+      message.success("已选 Excel 确认单");
+      if (!productName.trim()) setProductName(stemFromFilename(file.name));
+    }
+  }
+
+  function takePdf(file: File | null) {
+    setPdf(file);
+    if (file) {
+      message.success("已选包装 PDF");
+      if (!productName.trim()) setProductName(stemFromFilename(file.name));
+    }
+  }
+
+  if (submitting) return <WaitCard job="对照" jobStatus="queued" />;
 
   return (
     <section className="new-form">
@@ -65,7 +82,7 @@ export function NewTaskPage({ onCreated, onBack }: Props) {
           品名
           <input
             maxLength={80}
-            placeholder="包装上的中文品名"
+            placeholder="选 Excel 后自动填，可改"
             value={productName}
             onChange={(e) => setProductName(e.target.value)}
           />
@@ -98,7 +115,8 @@ export function NewTaskPage({ onCreated, onBack }: Props) {
           hint="把 .xlsx 拖进来，或点选取"
           accept=".xlsx"
           fileName={excel?.name}
-          onFile={setExcel}
+          fileBytes={excel?.size}
+          onFile={takeExcel}
           onReject={() => message.warning("Excel 只要 .xlsx。")}
         >
           <span className="upload-well-btn">选取 Excel</span>
@@ -109,7 +127,8 @@ export function NewTaskPage({ onCreated, onBack }: Props) {
           hint="花盒或膜袋展开图"
           accept=".pdf"
           fileName={pdf?.name}
-          onFile={setPdf}
+          fileBytes={pdf?.size}
+          onFile={takePdf}
           onReject={() => message.warning("包装稿只要 PDF。")}
         >
           <span className="upload-well-btn">选取 PDF</span>

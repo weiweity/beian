@@ -89,6 +89,35 @@ describe("mockup get", () => {
     });
     assert.equal(res.status, 404);
   });
+
+  it("owner can delete a mockup; stranger cannot", async () => {
+    saveMockup({
+      id: "dddddddddddd",
+      status: "failed",
+      title: "喷雾",
+      created_at: "2026-08-20T00:00:02Z",
+      files: [],
+      owner: "魏炜",
+      job_kind: "mockup",
+      job_status: "failed",
+    });
+    const stranger = issueSession("路人", "reviewer", "ou_mockup_del_no", "feishu");
+    const denied = await app.request("/api/mockups/dddddddddddd", {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${stranger.token}` },
+    });
+    assert.equal(denied.status, 403);
+    const owner = issueSession("魏炜", "admin", "ou_mockup_del_ok", "feishu");
+    const ok = await app.request("/api/mockups/dddddddddddd", {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${owner.token}` },
+    });
+    assert.equal(ok.status, 200);
+    const gone = await app.request("/api/mockups/dddddddddddd", {
+      headers: { authorization: `Bearer ${owner.token}` },
+    });
+    assert.equal(gone.status, 404);
+  });
 });
 
 describe("publicMockup", () => {

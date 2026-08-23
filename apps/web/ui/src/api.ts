@@ -72,7 +72,7 @@ export type TaskSummary = {
   summary?: unknown;
   owner?: string;
   completed_by?: string;
-  board?: "comparing" | "review" | "done";
+  board?: "comparing" | "failed" | "review" | "done";
   error?: string;
   round?: number;
   job_kind?: string;
@@ -156,6 +156,8 @@ export const api = {
   createMockup: (fd: FormData) => request<MockupJob>("/api/mockups", { method: "POST", body: fd }),
   mockups: () => request<MockupJob[]>("/api/mockups"),
   mockup: (id: string) => request<MockupJob>(`/api/mockups/${id}`),
+  deleteTask: (id: string) => request<{ ok: boolean }>(`/api/tasks/${id}`, { method: "DELETE" }),
+  deleteMockup: (id: string) => request<{ ok: boolean }>(`/api/mockups/${id}`, { method: "DELETE" }),
   loginDisplay: (display_name: string) =>
     request<{ token?: string }>("/api/auth/login", {
       method: "POST",
@@ -258,8 +260,10 @@ export type ProbeResult = { id: string; ok: boolean; message: string };
 export type MockupJob = {
   id: string;
   status: "queued" | "running" | "done" | "failed";
+  title?: string;
   error?: string;
   created_at?: string;
+  owner?: string;
   files: { key: string; name: string }[];
   job_kind?: string;
   job_status?: string;

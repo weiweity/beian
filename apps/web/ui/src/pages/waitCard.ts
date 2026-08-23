@@ -48,9 +48,11 @@ function formatEta(etaS: number): string {
   return `大约还要 ${s} 秒`;
 }
 
-/** job_status 为 queued|running，或看板 status 仍是 comparing。 */
+/** 作业还在 queued|running 才等。status 仍是 comparing 但 job 已失败，直接进核对页。 */
 export function shouldShowWaitCard(t: WaitCardTask | null): boolean {
   if (!t) return false;
+  if (t.job_status === "failed" || t.job_status === "succeeded") return false;
+  if (t.status === "compare_failed" || t.status === "failed" || t.status === "done") return false;
   if (t.job_status === "queued" || t.job_status === "running") return true;
   return t.status === "comparing";
 }

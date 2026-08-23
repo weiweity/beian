@@ -9,6 +9,7 @@ type Props = {
 };
 
 type Layout = "board" | "table";
+type Col = "comparing" | "failed" | "review" | "done";
 
 function statusLabel(row: TaskSummary) {
   if (row.status === "completed") return { text: "已签字", color: "default" as const };
@@ -20,10 +21,11 @@ function statusLabel(row: TaskSummary) {
   return { text: row.status, color: "default" as const };
 }
 
-function columnOf(row: TaskSummary): "comparing" | "review" | "done" {
+function columnOf(row: TaskSummary): Col {
   if (row.board) return row.board;
   if (row.status === "completed") return "done";
   if (row.status === "pending_review" || row.status === "in_review") return "review";
+  if (row.status === "compare_failed" || row.job_status === "failed") return "failed";
   return "comparing";
 }
 
@@ -58,9 +60,7 @@ export function TasksPage({ onCreate, onOpen }: Props) {
     };
   }, [submitted, reload]);
 
-  const live = rows.some(
-    (r) => r.board === "comparing" || r.job_status === "queued" || r.job_status === "running",
-  );
+  const live = rows.some((r) => columnOf(r) === "comparing");
 
   useEffect(() => {
     if (!live) return;
@@ -84,6 +84,7 @@ export function TasksPage({ onCreate, onOpen }: Props) {
   const board = useMemo(
     () => ({
       comparing: rows.filter((r) => columnOf(r) === "comparing"),
+      failed: rows.filter((r) => columnOf(r) === "failed"),
       review: rows.filter((r) => columnOf(r) === "review"),
       done: rows.filter((r) => columnOf(r) === "done"),
     }),
@@ -159,8 +160,9 @@ export function TasksPage({ onCreate, onOpen }: Props) {
           </Empty>
         </div>
       ) : layout === "board" ? (
-        <div className="review-board">
-          <BoardCol title="对照中" hint="机器还在跑或对照失败" rows={board.comparing} onOpen={onOpen} />
+        <div className="review-board is-four">
+          <BoardCol title="对照中" hint="机器还在跑" rows={board.comparing} onOpen={onOpen} />
+          <BoardCol title="对照失败" hint="中断了，点开看原因" rows={board.failed} onOpen={onOpen} />
           <BoardCol title="待她判" hint="要人写结论" rows={board.review} onOpen={onOpen} />
           <BoardCol title="已签字" hint="结论已记下" rows={board.done} onOpen={onOpen} />
         </div>
