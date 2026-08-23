@@ -83,10 +83,14 @@ When the user's request matches an available skill, invoke it via the Skill tool
 
 ## Testing
 
-- 服务端：`npm run test -w beian-server`（`node:test`，`apps/web/server/src/*.test.ts`）
-- 界面：`npm run test -w beian-ui`（`node:test`，`authGate` / `nav` / `appearance` / `tasksBoard` / `waitCard`）
-- 对照 worker：`cd apps/web/backend && .venv/bin/python -m pytest -q`
-- 全量：仓库根目录 `npm test`（server + ui + pytest）
+三层。`npm test` 只等于 L0。不要在杭州跑单测。不要单测打外网、OCR、Blender、Illustrator COM。
+
+- L0 单测（Mac，`/ship` 必绿）：仓库根目录 `npm test`
+  - 服务端：`npm run test -w beian-server`（`node:test`，`apps/web/server/src/*.test.ts`）
+  - 界面：`npm run test -w beian-ui`（`node:test`，`src/**/*.test.ts` 自动发现；纯函数，不引入 RTL）
+  - 对照 worker：`cd apps/web/backend && .venv/bin/python -m pytest -q`（默认 CLI 契约。FastAPI 遗留在 `tests/legacy_fastapi/`，不挡合并）
+- L1 冒烟（杭州 `hangzhou-release`）：`release.ps1` 查 health.ok、version==VERSION、`jobs.illustrator`、logo PNG。不跑 `npm test`
+- L2 金标（人核定后）：`apps/web/backend/scripts/run_eval.py`。未核定的 `data/gold` 不进默认 `npm test`
 - 类型：`npm run typecheck -w beian-server` 与 `npm run build -w beian-ui`
 - 新逻辑要有行为测试（含失败路径）。不要把密钥写进测试。
 

@@ -46,7 +46,7 @@ HTTP 是 TypeScript。对照规则和 Blender 仍是 Python。见 `docs/adr-002-
 
 不要再跑 `uvicorn app.main:app` 当入口。
 
-测服务端、界面和对照 worker：仓库根目录 `npm test`。只要服务端：`npm run test -w beian-server`。只要界面：`npm run test -w beian-ui`。
+测服务端、界面和对照 CLI：仓库根目录 `npm test`（Mac；不打外网）。杭州生产只做 health/logo 冒烟，不跑单测。只要服务端：`npm run test -w beian-server`。只要界面：`npm run test -w beian-ui`。
 
 ## Docker（审稿台/对照 worker）
 
