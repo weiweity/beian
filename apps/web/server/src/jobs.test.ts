@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
@@ -18,6 +18,17 @@ const {
   setJobsTestHooks,
   tryStart,
 } = await import("./jobs.js");
+
+function wipeJobDisk() {
+  const root = process.env.WB_DATA_DIR || "";
+  for (const sub of ["tasks", "mockups"]) {
+    const dir = join(root, sub);
+    if (!existsSync(dir)) continue;
+    for (const name of readdirSync(dir)) {
+      rmSync(join(dir, name), { recursive: true, force: true });
+    }
+  }
+}
 
 function tid(n: number): string {
   return n.toString(16).padStart(12, "0");
@@ -39,6 +50,7 @@ function queuedCompare(id: string, createdAt: string) {
 
 afterEach(() => {
   resetJobsTestHooks();
+  wipeJobDisk();
 });
 
 describe("jobs dispatcher", () => {
