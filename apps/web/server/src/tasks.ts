@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DATA_DIR } from "./config.js";
 
@@ -177,7 +177,7 @@ export function listTasks(q = "", mineName = "", admin = false): Record<string, 
     owner: t.owner || t.created_by || t.actor,
     completed_by: t.completed_by,
     round: t.round || 1,
-    board: boardColumn(t.status),
+    board: boardColumn(t.status, t.job_status),
     error: typeof t.error === "string" ? t.error : t.job_error || "",
     job_kind: t.job_kind,
     job_status: t.job_status,
@@ -221,12 +221,24 @@ export function isHitDecision(value: unknown): value is HitDecision {
   return typeof value === "string" && (HIT_DECISIONS as readonly string[]).includes(value);
 }
 
-export type BoardColumn = "comparing" | "review" | "done";
+export type BoardColumn = "comparing" | "failed" | "review" | "done";
 
-export function boardColumn(status: string): BoardColumn {
+export function boardColumn(status: string, jobStatus?: string): BoardColumn {
   if (status === "completed") return "done";
   if (status === "pending_review" || status === "in_review") return "review";
+  if (status === "compare_failed" || jobStatus === "failed") return "failed";
   return "comparing";
+}
+
+export function deleteTask(tid: string): void {
+  const task = loadTask(tid);
+  if (task.job_status === "queued" || task.job_status === "running") {
+    throw Object.assign(new Error("对照还在跑，不能删。等结束或失败后再删。"), { status: 409 });
+  }
+  const p = join(tasksDir(), `${task.id}.json`);
+  unlinkSync(p);
+  const uploads = join(DATA_DIR, "uploads", task.id);
+  if (existsSync(uploads)) rmSync(uploads, { recursive: true, force: true });
 }
 
 export function nowIso(): string {

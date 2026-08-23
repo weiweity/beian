@@ -31,7 +31,8 @@ describe("board columns", () => {
     assert.equal(boardColumn("in_review"), "review");
     assert.equal(boardColumn("completed"), "done");
     assert.equal(boardColumn("comparing"), "comparing");
-    assert.equal(boardColumn("compare_failed"), "comparing");
+    assert.equal(boardColumn("compare_failed"), "failed");
+    assert.equal(boardColumn("comparing", "failed"), "failed");
   });
 });
 

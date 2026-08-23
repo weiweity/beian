@@ -1,5 +1,6 @@
 import type { ChangeEvent, DragEvent, ReactNode } from "react";
 import { fileMatchesAccept } from "./fileAccept";
+import { formatBytes } from "../pages/stemName";
 
 type Props = {
   icon: string;
@@ -7,6 +8,7 @@ type Props = {
   hint: string;
   accept: string;
   fileName?: string;
+  fileBytes?: number;
   disabled?: boolean;
   onFile: (file: File | null) => void;
   onReject?: (file: File) => void;
@@ -19,6 +21,7 @@ export function UploadWell({
   hint,
   accept,
   fileName,
+  fileBytes,
   disabled,
   onFile,
   onReject,
@@ -52,7 +55,15 @@ export function UploadWell({
       <input type="file" accept={accept} disabled={disabled} onChange={onChange} />
       <img className="upload-well-icon" src={icon} alt="" width={36} height={36} />
       <strong className="upload-well-title">{title}</strong>
-      <span className="upload-well-hint">{fileName || hint}</span>
+      {fileName ? (
+        <span className="upload-filechip">
+          <span className="upload-filechip-name">{fileName}</span>
+          {fileBytes != null ? <span className="upload-filechip-size">{formatBytes(fileBytes)}</span> : null}
+          <span className="upload-filechip-ok">已选 · 点此更换</span>
+        </span>
+      ) : (
+        <span className="upload-well-hint">{hint}</span>
+      )}
       {children}
     </label>
   );

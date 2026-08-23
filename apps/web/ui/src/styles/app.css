@@ -757,6 +757,10 @@ html[data-theme="dark"] .workspace {
   align-items: start;
 }
 
+.review-board.is-four {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
 .review-col {
   background: var(--col);
   border: 1px solid var(--line);
@@ -806,6 +810,10 @@ html[data-theme="dark"] .workspace {
 
 .review-card:hover {
   background: var(--accent-soft);
+}
+
+.review-card.is-on {
+  box-shadow: 0 0 0 2px var(--accent-soft);
 }
 
 .review-card-name {
@@ -1575,6 +1583,27 @@ html[data-theme="dark"] .apple-slider::-moz-range-thumb {
   background: var(--accent-soft);
 }
 
+.upload-filechip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+}
+
+.upload-filechip-name {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--ink);
+  word-break: break-all;
+}
+
+.upload-filechip-size,
+.upload-filechip-ok {
+  font-size: 13px;
+  color: var(--accent);
+}
+
 .upload-well-btn {
   display: inline-flex;
   align-items: center;
@@ -1658,11 +1687,12 @@ html[data-theme="dark"] .apple-slider::-moz-range-thumb {
   inset: 0;
   width: 200px;
   height: 200px;
-  animation: fox-spin 8s linear infinite;
+  transform-origin: 50% 50%;
+  animation: fox-orbit 4.2s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite;
 }
 
 .fox-orbit.is-pack {
-  animation-duration: 6s;
+  animation-duration: 5.2s;
 }
 
 .fox-body {
@@ -1670,6 +1700,7 @@ html[data-theme="dark"] .apple-slider::-moz-range-thumb {
   top: 26px;
   width: 148px;
   height: 148px;
+  animation: fox-breathe 2.8s ease-in-out infinite;
 }
 
 .fox-face {
@@ -1713,14 +1744,14 @@ html[data-theme="dark"] .apple-slider::-moz-range-thumb {
 .wait-bar-fill {
   display: block;
   height: 100%;
-  width: 40%;
+  width: 36%;
   border-radius: inherit;
   background: var(--accent);
-  animation: wait-fill 40s linear forwards;
+  animation: wait-slide 1.6s ease-in-out infinite;
 }
 
 .wait-bar-fill.is-slow {
-  animation-duration: 240s;
+  animation-duration: 2.2s;
 }
 
 .wait-steps {
@@ -1743,18 +1774,42 @@ html[data-theme="dark"] .apple-slider::-moz-range-thumb {
   color: var(--accent);
 }
 
-@keyframes fox-spin {
-  to {
-    transform: rotate(360deg);
+@keyframes fox-orbit {
+  0% {
+    transform: rotate(0deg) scale(1);
+  }
+  40% {
+    transform: rotate(168deg) scale(1.05);
+  }
+  100% {
+    transform: rotate(360deg) scale(1);
   }
 }
 
-@keyframes wait-fill {
-  from {
-    width: 8%;
+@keyframes fox-breathe {
+  0%,
+  100% {
+    transform: translateY(0);
   }
-  to {
-    width: 92%;
+  50% {
+    transform: translateY(-5px);
+  }
+}
+
+@keyframes wait-slide {
+  0% {
+    transform: translateX(-130%);
+  }
+  100% {
+    transform: translateX(280%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fox-orbit,
+  .fox-body,
+  .wait-bar-fill {
+    animation: none;
   }
 }
 
@@ -1912,6 +1967,7 @@ html[data-diff="off"] .pin {
 
 @media (max-width: 1024px) {
   .review-board,
+  .review-board.is-four,
   .upload-row,
   .step-row,
   .review-desk {
