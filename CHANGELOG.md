@@ -6,6 +6,17 @@
 
 - 杭州 self-hosted GitHub Actions：合 `main` 后自动跑 `release.ps1`。对照在跑会失败。不动 cloudflared，不杀全部 node.exe。
 
+## [0.12.7.0] - 2026-08-23
+
+### Added
+
+- 魏炜飞书登录即为杭州机箱管理员，扫描 Blender / Illustrator 会搜 PATH。
+- 飞书推送不必装 lark-cli：用已填的飞书应用发给当前登录。点「发一条测试」会自动打开推送并记下 open_id。没有飞书身份会先带去授权。
+
+### Changed
+
+- 开工板「发一条测试」有发送中、行内说明和 toast。百度 OCR、MiniMax 已通的密钥默认收起，点开才改。MiniMax 未开语义复核显示「未用」，不再画成「可用」。
+
 ## [0.12.6.0] - 2026-08-23
 
 ### Changed
