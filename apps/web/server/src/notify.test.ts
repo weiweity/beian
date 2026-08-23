@@ -24,4 +24,16 @@ describe("sendText", () => {
     assert.equal(r.ok, false);
     assert.equal(r.skipped, true);
   });
+
+  it("force without lark-cli or app credentials fails closed", async () => {
+    saveSettings({
+      FEISHU_ENABLED: "false",
+      FEISHU_OPEN_ID: "ou_force",
+      FEISHU_APP_ID: "",
+      FEISHU_APP_SECRET: "",
+    });
+    const r = await sendText("hi", "ou_force", { force: true });
+    assert.equal(r.ok, false);
+    assert.match(String(r.reason || ""), /App ID|Secret|lark-cli|飞书应用/);
+  });
 });

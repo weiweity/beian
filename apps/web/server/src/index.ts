@@ -457,6 +457,7 @@ app.post("/api/settings/probe", async (c) => {
   const id = String(body.id || "").trim();
   if (!id) throw new HTTPException(400, { message: "缺少探测 id" });
   if (id === "lark_send") {
+    need(c, "create");
     const to = (s.open_id || "").trim();
     if (!to) {
       return c.json({ id: "lark", ok: false, message: "显示名登录没有 open_id，发不了测试" });
