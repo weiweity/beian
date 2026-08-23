@@ -29,4 +29,8 @@ jobs:
       - name: Drain, pull, build, restart :8787
         shell: powershell
         run: |
+          # On-disk release.ps1 lags origin until pull. Always drop npm-dirty
+          # lockfile first so a stale script can still ff-only.
+          git -C D:\beian checkout -- package-lock.json
+          if ($LASTEXITCODE -ne 0) { throw "git checkout -- package-lock.json 失败 exit=$LASTEXITCODE" }
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File D:\beian\scripts\windows\release.ps1
