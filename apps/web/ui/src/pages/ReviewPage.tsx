@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Alert, App, Button, Empty, Input, Space, Tag } from "antd";
-import { api, type Decision, type FieldHit, type TaskDetail, type TaskPage } from "../api";
+import { ApiError, api, type Decision, type FieldHit, type TaskDetail, type TaskPage } from "../api";
 import { WaitCard } from "../chrome/WaitCard";
 import { shouldShowWaitCard } from "./waitCard";
 
@@ -136,7 +136,12 @@ export function ReviewPage({ taskId, onBack }: Props) {
           }
           message.success("已对照第二份 PDF。请核对上一轮有错的字段。");
         })
-        .catch(() => undefined);
+        .catch((err: unknown) => {
+          if (err instanceof ApiError && err.status === 404) {
+            setError("这单已经不在了");
+            setTask(null);
+          }
+        });
     }, 2500);
     return () => window.clearInterval(id);
   }, [taskId, waiting]);

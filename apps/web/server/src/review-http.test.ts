@@ -493,6 +493,26 @@ describe("review http", () => {
     assert.equal(gone.status, 404);
   });
 
+  it("refuses to delete a running compare", async () => {
+    saveTask({
+      id: "202020202020",
+      title: "跑着",
+      product_name: "跑着",
+      type: "excel_pdf",
+      status: "comparing",
+      owner: "魏炜",
+      job_status: "running",
+    });
+    const owner = issueSession("魏炜", "admin", "ou_del_running", "feishu");
+    const res = await app.request("/api/tasks/202020202020", {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${owner.token}` },
+    });
+    assert.equal(res.status, 409);
+    const body = (await res.json()) as { detail?: string };
+    assert.match(String(body.detail || ""), /还在跑/);
+  });
+
   it("health includes job queue snapshot", async () => {
     const res = await app.request("/api/health");
     assert.equal(res.status, 200);

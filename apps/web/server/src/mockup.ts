@@ -201,11 +201,18 @@ export function assertBlenderReady(): string {
 }
 
 export function deleteMockup(id: string): void {
-  if (!isTid(id)) throw Object.assign(new Error("无效任务 id"), { status: 400 });
-  const dir = join(mockupRoot(false), id);
-  if (!existsSync(dir)) throw Object.assign(new Error("没有这单打样"), { status: 404 });
-  cache.delete(id);
-  rmSync(dir, { recursive: true, force: true });
+  const job = loadMockup(id);
+  if (!job) throw Object.assign(new Error("没有这单打样"), { status: 404 });
+  if (
+    job.status === "queued" ||
+    job.status === "running" ||
+    job.job_status === "queued" ||
+    job.job_status === "running"
+  ) {
+    throw Object.assign(new Error("打样还在跑，不能删。等结束或失败后再删。"), { status: 409 });
+  }
+  cache.delete(job.id);
+  rmSync(join(mockupRoot(false), job.id), { recursive: true, force: true });
 }
 
 export function queueMockup(opts: {

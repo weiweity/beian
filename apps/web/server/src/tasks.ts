@@ -231,11 +231,13 @@ export function boardColumn(status: string, jobStatus?: string): BoardColumn {
 }
 
 export function deleteTask(tid: string): void {
-  const id = assertTid(tid);
-  const p = join(tasksDir(), `${id}.json`);
-  if (!existsSync(p)) throw Object.assign(new Error("任务不存在"), { status: 404 });
+  const task = loadTask(tid);
+  if (task.job_status === "queued" || task.job_status === "running") {
+    throw Object.assign(new Error("对照还在跑，不能删。等结束或失败后再删。"), { status: 409 });
+  }
+  const p = join(tasksDir(), `${task.id}.json`);
   unlinkSync(p);
-  const uploads = join(DATA_DIR, "uploads", id);
+  const uploads = join(DATA_DIR, "uploads", task.id);
   if (existsSync(uploads)) rmSync(uploads, { recursive: true, force: true });
 }
 

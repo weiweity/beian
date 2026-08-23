@@ -62,6 +62,20 @@ describe("listTasks", () => {
     deleteTask("cccccccccccc");
     assert.throws(() => loadTask("cccccccccccc"), /任务不存在/);
   });
+
+  it("deleteTask refuses a running compare", () => {
+    saveTask({
+      id: "dddddddddddd",
+      title: "跑着",
+      product_name: "跑着",
+      type: "excel_pdf",
+      status: "comparing",
+      job_status: "running",
+      created_at: "2026-08-19T08:01:00Z",
+    });
+    assert.throws(() => deleteTask("dddddddddddd"), /还在跑/);
+    assert.equal(loadTask("dddddddddddd").id, "dddddddddddd");
+  });
 });
 
 describe("review gates", () => {

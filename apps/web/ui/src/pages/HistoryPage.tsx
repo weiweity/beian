@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, App, Button, Empty, Popconfirm, Table, Tag } from "antd";
 import { api, ApiError, type MockupJob, type TaskSummary } from "../api";
 
@@ -84,9 +84,12 @@ export function HistoryPage({ onOpenTask, onOpenMockup }: Props) {
   const [jobs, setJobs] = useState<MockupJob[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const loadGen = useRef(0);
 
   function load() {
+    const g = ++loadGen.current;
     return Promise.all([api.tasks(), api.mockups().catch(() => [] as MockupJob[])]).then(([t, m]) => {
+      if (g !== loadGen.current) return;
       setTasks(t);
       setJobs(m);
     });
@@ -179,6 +182,7 @@ export function HistoryPage({ onOpenTask, onOpenMockup }: Props) {
                     type="link"
                     danger
                     size="small"
+                    disabled={row.color === "processing"}
                     loading={busy === row.id}
                     onClick={(e) => e.stopPropagation()}
                   >

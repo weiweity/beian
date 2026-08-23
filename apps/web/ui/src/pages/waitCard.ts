@@ -52,7 +52,14 @@ function formatEta(etaS: number): string {
 export function shouldShowWaitCard(t: WaitCardTask | null): boolean {
   if (!t) return false;
   if (t.job_status === "failed" || t.job_status === "succeeded") return false;
-  if (t.status === "compare_failed" || t.status === "failed" || t.status === "done") return false;
+  if (
+    t.status === "compare_failed" ||
+    t.status === "failed" ||
+    t.status === "done" ||
+    t.status === "completed"
+  ) {
+    return false;
+  }
   if (t.job_status === "queued" || t.job_status === "running") return true;
   return t.status === "comparing";
 }

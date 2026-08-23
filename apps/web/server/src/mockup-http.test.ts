@@ -118,6 +118,25 @@ describe("mockup get", () => {
     });
     assert.equal(gone.status, 404);
   });
+
+  it("refuses to delete a running mockup", async () => {
+    saveMockup({
+      id: "eeeeeeeeeeee",
+      status: "running",
+      title: "跑着",
+      created_at: "2026-08-20T00:00:03Z",
+      files: [],
+      owner: "魏炜",
+      job_kind: "mockup",
+      job_status: "running",
+    });
+    const owner = issueSession("魏炜", "admin", "ou_mockup_del_run", "feishu");
+    const res = await app.request("/api/mockups/eeeeeeeeeeee", {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${owner.token}` },
+    });
+    assert.equal(res.status, 409);
+  });
 });
 
 describe("publicMockup", () => {
