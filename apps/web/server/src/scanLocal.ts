@@ -1,6 +1,6 @@
+import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
-import { homedir } from "node:os";
 import { PYTHON_APP } from "./config.js";
 
 export type ScanKind = "blender" | "illustrator" | "python";
@@ -79,10 +79,31 @@ function walk(root: string, depth: number, deadline: number, out: ScanHit[]): vo
   }
 }
 
-/** 白名单目录浅扫。不执行找到的文件。 */
+function pathHits(): ScanHit[] {
+  const names =
+    process.platform === "win32" ? ["blender.exe", "blender", "illustrator.exe"] : ["blender"];
+  const finder = process.platform === "win32" ? "where" : "which";
+  const hits: ScanHit[] = [];
+  for (const name of names) {
+    try {
+      const out = execFileSync(finder, [name], { encoding: "utf8", timeout: 3000 });
+      for (const line of out.split(/\r?\n/)) {
+        const full = line.trim();
+        if (!full || !isFile(full)) continue;
+        const hit = classify(basename(full), full);
+        if (hit && !hits.some((h) => h.path === hit.path)) hits.push(hit);
+      }
+    } catch {
+      /* not on PATH */
+    }
+  }
+  return hits;
+}
+
+/** 白名单目录浅扫，再补 PATH。不执行找到的文件。 */
 export function scanLocalApps(now = Date.now()): { hits: ScanHit[]; timedOut: boolean; roots: string[] } {
   const roots = dirs().filter((d) => existsSync(d));
-  const hits: ScanHit[] = [];
+  const hits: ScanHit[] = pathHits();
   const deadline = now + SCAN_MS;
   for (const root of roots) {
     walk(root, 4, deadline, hits);

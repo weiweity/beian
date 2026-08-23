@@ -132,6 +132,26 @@ function provisionUser(name: string, openId: string): User {
   return row;
 }
 
+/** 杭州机箱管理员是魏炜。不要凭飞书显示名「管理员」提权。 */
+export function isWeiWei(legal: string, nickname = ""): boolean {
+  return legal.trim() === "魏炜" || nickname.trim() === "魏炜";
+}
+
+function persistAdmin(openId: string, legal: string): User | undefined {
+  const list = users();
+  const i = list.findIndex((u) => (u.open_id || "").trim() === openId);
+  if (i < 0) return undefined;
+  list[i] = {
+    ...list[i],
+    role: "admin",
+    open_id: openId,
+    name: (list[i].name || legal || "魏炜").slice(0, 40),
+    note: list[i].note || "杭州机箱管理员",
+  };
+  writeUsers(list);
+  return list[i];
+}
+
 function allowOpenIds(): Set<string> {
   return new Set(
     (getSetting("FEISHU_ALLOW_OPEN_IDS") || "")
@@ -223,6 +243,9 @@ export function sessionFromFeishu(
   }
   const legal = (feishuName || String(user?.name || "")).trim();
   const label = formatAccountLabel(legal, opts.nickname || "");
+  if (user && isWeiWei(legal, opts.nickname || "") && user.role !== "admin") {
+    user = persistAdmin(openId, legal) || user;
+  }
   const role = ((user?.role || "reviewer") as Role) in PERMS ? ((user?.role || "reviewer") as Role) : "reviewer";
   return issueSession(label, role, openId, "feishu", { avatar_url: opts.avatar_url || "" });
 }
@@ -235,6 +258,19 @@ export function getSession(token: string | undefined | null): Session | null {
   if (s.expires_at < Date.now() / 1000) {
     sessions.delete(t);
     return null;
+  }
+  if (s.open_id) {
+    const row = users().find((u) => (u.open_id || "").trim() === s.open_id);
+    if (row && isWeiWei(row.name || "") && row.role !== "admin") {
+      persistAdmin(s.open_id, row.name || "魏炜");
+      if (s.role !== "admin") {
+        s.role = "admin";
+        saveSessions();
+      }
+    } else if (row && (row.role as Role) in PERMS && row.role !== s.role) {
+      s.role = row.role as Role;
+      saveSessions();
+    }
   }
   return s;
 }

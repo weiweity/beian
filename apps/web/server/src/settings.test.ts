@@ -65,4 +65,13 @@ describe("settings mask", () => {
     assert.equal(r.message.trim() === "通" || r.message.trim() === "不通", false);
     assert.match(r.message, /路径|扫描/);
   });
+
+  it("lark probe does not require lark-cli when app credentials exist", async () => {
+    saveSettings({ FEISHU_APP_ID: "cli_probe_app", FEISHU_APP_SECRET: "probe-secret" });
+    const r = await runProbe("lark");
+    assert.equal(r.message.trim() === "通" || r.message.trim() === "不通", false);
+    assert.equal(r.message.includes("本机找不到 lark-cli") && !r.ok, false);
+    if (!r.ok) assert.match(r.message, /凭证|lark-cli|测试/);
+    else assert.match(r.message, /飞书应用|lark-cli|发一条测试/);
+  });
 });
