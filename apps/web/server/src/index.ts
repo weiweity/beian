@@ -3,8 +3,11 @@ import { join } from "node:path";
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono, type Context } from "hono";
+import { compress } from "hono/compress";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import { HTTPException } from "hono/http-exception";
+import { cacheHeaderFor, REDIRECT_CACHE } from "./cacheHeaders.js";
+import { spaIndexAction } from "./spaIndex.js";
 import { COOKIE, DATA_DIR, HOST, PORT, REPO_ROOT, UI_DIST, UI_PUBLIC, cookieSecure } from "./config.js";
 import { billingSnapshot, loadVendorBills, resetBillingCache } from "./billing.js";
 import { notifyTaskComplete, sendText } from "./notify.js";
@@ -70,7 +73,9 @@ import {
 type Env = { Variables: { session: Session } };
 
 const app = new Hono<Env>();
-const VERSION = "0.12.4.0";
+const VERSION = "0.12.8.0";
+
+app.use(compress());
 
 app.use("/api/*", async (c, next) => {
   const tok = c.req.header("authorization") || (getCookie(c, COOKIE) ? `Bearer ${getCookie(c, COOKIE)}` : "");
@@ -452,16 +457,24 @@ app.post("/api/settings/probe", async (c) => {
   const id = String(body.id || "").trim();
   if (!id) throw new HTTPException(400, { message: "缺少探测 id" });
   if (id === "lark_send") {
+    need(c, "create");
     const to = (s.open_id || "").trim();
     if (!to) {
-      return c.json({ id, ok: false, message: "显示名登录没有 open_id，发不了测试" });
+      return c.json({ id: "lark", ok: false, message: "显示名登录没有 open_id，发不了测试" });
     }
-    const r = await sendText("【审稿台】推送测试。发给当前登录。", to);
-    return c.json({
-      id,
-      ok: Boolean(r.ok),
-      message: r.ok ? `已发给当前登录 ${to.slice(0, 8)}…` : r.reason || "发送失败",
-    });
+    const r = await sendText("【审稿台】推送测试。发给当前登录。", to, { force: true });
+    if (r.ok) {
+      const patch: Record<string, string> = { FEISHU_ENABLED: "true" };
+      if (!getSetting("FEISHU_OPEN_ID").trim()) patch.FEISHU_OPEN_ID = to;
+      saveSettings(patch);
+      const via = r.via === "cli" ? "lark-cli" : "飞书应用";
+      return c.json({
+        id: "lark",
+        ok: true,
+        message: `已用${via}发给当前登录 ${s.display_name || to.slice(0, 8)}`,
+      });
+    }
+    return c.json({ id: "lark", ok: false, message: r.reason || "发送失败" });
   }
   return c.json(await runProbe(id));
 });
@@ -474,7 +487,11 @@ app.post("/api/settings/scan", (c) => {
     hits: result.hits,
     timedOut: result.timedOut,
     roots: result.roots,
-    message: result.timedOut ? "扫描超时，已找到的留下。没有全盘搜。" : `白名单 ${result.roots.length} 个目录`,
+    message: result.timedOut
+      ? "扫描超时，已找到的留下。没有全盘搜。"
+      : result.hits.length
+        ? `白名单 ${result.roots.length} 个目录，也搜了 PATH。点采用才写入。`
+        : `没扫到 Blender / Illustrator。搜过：${result.roots.join("、") || "无"}；也搜了 PATH。`,
   });
 });
 
@@ -558,14 +575,34 @@ app.get("/api/mockups/:id/files/:key", (c) => {
 // root = ui/public, so /brand/logo-mark.png → ui/public/brand/logo-mark.png.
 // Do not regex-strip /brand from UI_BRAND: Windows join uses `\brand`, the
 // replace is a no-op, and serveStatic looks in public\brand\brand\… (404).
+app.use("/brand/*", async (c, next) => {
+  await next();
+  if (c.res.status === 200) c.header("Cache-Control", cacheHeaderFor("/brand/") || "");
+});
 app.use("/brand/*", serveStatic({ root: UI_PUBLIC }));
+app.use("/assets/*", async (c, next) => {
+  await next();
+  if (c.res.status === 200) c.header("Cache-Control", cacheHeaderFor("/assets/") || "");
+});
 app.use("/assets/*", serveStatic({ root: UI_DIST }));
 
 app.get("/", (c) => {
+  const host = c.req.header("host") || "";
+  const action = spaIndexAction({
+    feishuError: c.req.query("feishu_error") || "",
+    hasSession: Boolean(getSession(getCookie(c, COOKIE))),
+    displayLogin: displayLoginAllowed(host),
+    oauthReady: oauthReady(),
+  });
+  if (action === "feishu") {
+    c.header("Cache-Control", REDIRECT_CACHE);
+    return c.redirect("/api/auth/feishu/login", 302);
+  }
   const index = join(UI_DIST, "index.html");
   if (!existsSync(index)) {
     throw new HTTPException(503, { message: "审稿台前端未构建。请在 apps/web/ui 执行 npm run build。" });
   }
+  c.header("Cache-Control", cacheHeaderFor("/") || "no-cache");
   return c.html(readFileSync(index, "utf8"));
 });
 

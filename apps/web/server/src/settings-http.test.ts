@@ -25,6 +25,16 @@ describe("settings http", () => {
     assert.match(String(body.detail || ""), /管理员/);
   });
 
+  it("viewer cannot send lark test", async () => {
+    const sess = issueSession("只看", "viewer", "ou_viewer_lark", "feishu");
+    const res = await app.request("/api/settings/probe", {
+      method: "POST",
+      headers: { authorization: `Bearer ${sess.token}`, "content-type": "application/json" },
+      body: JSON.stringify({ id: "lark_send" }),
+    });
+    assert.equal(res.status, 403);
+  });
+
   it("display login cannot send lark test without open_id", async () => {
     const sess = issueSession("管理员", "admin", "", "display");
     const res = await app.request("/api/settings/probe", {
@@ -33,8 +43,9 @@ describe("settings http", () => {
       body: JSON.stringify({ id: "lark_send" }),
     });
     assert.equal(res.status, 200);
-    const body = (await res.json()) as { ok: boolean; message: string };
+    const body = (await res.json()) as { id: string; ok: boolean; message: string };
     assert.equal(body.ok, false);
+    assert.equal(body.id, "lark");
     assert.match(body.message, /open_id/);
   });
 });

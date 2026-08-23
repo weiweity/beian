@@ -6,6 +6,7 @@ import {
   collectOutputs,
   loadAllMockups,
   loadMockup,
+  resetMockupCache,
   saveMockup,
   type MockupJob,
 } from "./mockup.js";
@@ -84,6 +85,7 @@ export function resetJobsTestHooks(): void {
   live.ocr = null;
   live.blender = null;
   live.illustrator = null;
+  resetMockupCache();
 }
 
 export function queueSnapshot(): {

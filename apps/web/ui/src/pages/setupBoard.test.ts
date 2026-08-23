@@ -4,9 +4,14 @@ import type { ProbeResult } from "../api";
 import {
   BOARD_ROWS,
   WIZARD,
+  feishuAppReady,
+  feishuLoginHref,
+  foldCatalogReason,
   idleRowMessage,
   probeErrorMessage,
   progressSpoken,
+  rowDetail,
+  settingsGroupPath,
   setupHeadline,
   shortGroupLabel,
   statusWord,
@@ -22,10 +27,14 @@ describe("setupBoard copy", () => {
     assert.match(idleRowMessage("minimax", "wizard"), /模型列表/);
     assert.match(idleRowMessage("minimax", "wizard"), /\/v1\/models/);
     assert.doesNotMatch(idleRowMessage("minimax", "wizard"), /^通$|^不通$/);
+    assert.match(idleRowMessage("blender", "scan"), /魏炜/);
+    assert.match(idleRowMessage("lark", "push"), /发一条测试/);
   });
 
   it("wizard pages are numbered steps, MiniMax names the models-list probe", () => {
     assert.equal(WIZARD["飞书登录"].steps.length, 3);
+    assert.equal(WIZARD["飞书推送"].steps.length, 3);
+    assert.match(WIZARD["飞书推送"].intro, /不必装 lark-cli/);
     assert.equal(WIZARD["百度 OCR"].steps.length, 3);
     assert.equal(WIZARD["MiniMax（可选）"].steps.length, 3);
     assert.match(WIZARD["飞书登录"].steps[1], /\/api\/auth\/feishu\/callback/);
@@ -41,7 +50,9 @@ describe("setupBoard copy", () => {
   it("status words are 可用/还缺/未测/超时, never 通/不通", () => {
     assert.deepEqual(statusWord(undefined), { cls: "is-idle", text: "未测" });
     assert.deepEqual(statusWord({ pending: true }), { cls: "is-wait", text: "检测中" });
+    assert.deepEqual(statusWord({ pending: true }, "send"), { cls: "is-wait", text: "发送中" });
     assert.equal(statusWord({ id: "x", ok: true, message: "模型列表 GET /v1/models 通了" }).text, "可用");
+    assert.equal(statusWord({ id: "minimax", ok: true, message: "未启用（不影响主对照）" }).text, "未用");
     assert.equal(statusWord({ id: "x", ok: false, message: "Key 无效" }).text, "还缺");
     assert.equal(statusWord({ id: "x", ok: false, message: "12 秒超时" }).text, "超时");
     assert.notEqual(statusWord({ id: "x", ok: false, message: "不通" }).text, "不通");
@@ -81,5 +92,48 @@ describe("setupBoard copy", () => {
     assert.equal(shortGroupLabel("费用账单"), "费用");
     assert.equal(shortGroupLabel("MiniMax（可选）"), "MiniMax");
     assert.equal(shortGroupLabel("本机依赖"), "本机");
+  });
+
+  it("folds baidu and minimax keys when already filled", () => {
+    const baidu = foldCatalogReason(
+      "百度 OCR",
+      [{ key: "BAIDU_OCR_API_KEY", set: true, last4: "…abcd", value: "" }],
+      { id: "baidu", ok: true, message: "对照用的识别接口通了" },
+    );
+    assert.match(String(baidu), /收起/);
+    const mini = foldCatalogReason(
+      "MiniMax（可选）",
+      [{ key: "MINIMAX_ENABLED", set: true, last4: "", value: "false" }],
+      { id: "minimax", ok: true, message: "未启用（不影响主对照）" },
+    );
+    assert.match(String(mini), /不影响主对照/);
+    const push = foldCatalogReason("飞书推送", [], undefined);
+    assert.match(String(push), /发一条测试/);
+    assert.equal(
+      foldCatalogReason("百度 OCR", [{ key: "BAIDU_OCR_API_KEY", set: false, last4: "", value: "" }], undefined),
+      null,
+    );
+  });
+
+  it("send-in-progress copy is 发送中, not idle", () => {
+    const row = BOARD_ROWS.find((r) => r.id === "lark");
+    assert.ok(row);
+    assert.match(rowDetail(row, { pending: true }, "天元（魏炜）", true), /正在发给/);
+    assert.match(idleRowMessage("lark", "push"), /授权|open_id/);
+    assert.match(WIZARD["飞书推送"].intro, /不必手填开关、open_id、bot/);
+    assert.equal(settingsGroupPath("飞书推送"), "/?tab=settings&group=" + encodeURIComponent("飞书推送"));
+    assert.match(feishuLoginHref("飞书推送"), /^\/api\/auth\/feishu\/login\?next=/);
+    assert.equal(feishuAppReady(undefined), false);
+    assert.equal(
+      feishuAppReady([
+        {
+          fields: [
+            { key: "FEISHU_APP_ID", set: true },
+            { key: "FEISHU_APP_SECRET", set: true },
+          ],
+        },
+      ]),
+      true,
+    );
   });
 });
