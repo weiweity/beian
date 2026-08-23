@@ -15,7 +15,12 @@ describe("shouldShowWaitCard", () => {
 
   it("shows while status is comparing even without job_status", () => {
     assert.equal(shouldShowWaitCard({ status: "comparing" }), true);
-    assert.equal(shouldShowWaitCard({ status: "comparing", job_status: "failed" }), true);
+  });
+
+  it("does not wait when comparing was already interrupted", () => {
+    assert.equal(shouldShowWaitCard({ status: "comparing", job_status: "failed" }), false);
+    assert.equal(shouldShowWaitCard({ status: "compare_failed" }), false);
+    assert.equal(shouldShowWaitCard({ status: "completed", job_status: "running" }), false);
   });
 
   it("hides after the job is done or failed back to review", () => {

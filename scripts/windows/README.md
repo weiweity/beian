@@ -26,6 +26,8 @@ cmd.exe 才用 `set WB_DATA_DIR=...`。PowerShell 里写 `set` 不会进子进�
 
 代码读取 `WB_DATA_DIR`。公网模式（`WB_PUBLIC=1`）若仍指向仓库内 `backend\data`，进程会拒绝启动。
 
+Clash 开系统代理时，备案域名和 `127.0.0.1` 必须直连。self-hosted runner 若走 `127.0.0.1:7897` 会被拒绝（`Runner connect error`），设 DIRECT 或关掉 Clash 再听 job。控制台里「所提供的模式无法找到文件」乱码，是 cmd/PowerShell 在 GBK 下找不到通配文件，不是 8787 挂了。
+
 ## CD（只在杭州本机）
 
 合进 GitHub `main` 后，本机 **GitHub Actions self-hosted runner**（标签 `hangzhou`）跑下面的脚本。没有 runner 时仍可在杭州手工执行。脚本随仓库走。

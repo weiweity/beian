@@ -1,26 +1,61 @@
-import { useEffect, useRef, useState } from "react";
-import { Alert, App, Button, Empty, Space, Typography } from "antd";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Alert, App, Button, Empty, Space, Tag, Typography } from "antd";
 import { api, type MockupJob } from "../api";
 import { UploadWell } from "../chrome/UploadWell";
 import { WaitCard } from "../chrome/WaitCard";
 import { shouldShowWaitCard } from "./waitCard";
+import { stemFromFilename } from "./stemName";
 import "@google/model-viewer";
 
-function mockupWaiting(job: MockupJob | null): boolean {
-  if (!job) return false;
-  if (job.status === "queued" || job.status === "running") return true;
-  return shouldShowWaitCard(job);
+type Props = { openId?: string | null };
+
+function mockLabel(row: MockupJob) {
+  if (row.status === "done") return { text: "已出图", color: "success" as const };
+  if (row.status === "failed") return { text: row.error || row.job_error || "打样中断", color: "error" as const };
+  if (row.status === "queued" || row.status === "running") return { text: "打样中", color: "processing" as const };
+  return { text: row.status, color: "default" as const };
 }
 
-export function MockupPage() {
+function mockCol(row: MockupJob): "running" | "failed" | "done" {
+  if (row.status === "done") return "done";
+  if (row.status === "failed" || row.job_status === "failed") return "failed";
+  return "running";
+}
+
+function mockTitle(row: MockupJob) {
+  return row.title || row.files[0]?.name || row.id.slice(0, 8);
+}
+
+export function MockupPage({ openId }: Props) {
   const { message } = App.useApp();
   const [file, setFile] = useState<File | null>(null);
+  const [productName, setProductName] = useState("");
   const [busy, setBusy] = useState(false);
   const [job, setJob] = useState<MockupJob | null>(null);
+  const [rows, setRows] = useState<MockupJob[]>([]);
   const announced = useRef("");
 
-  const jobWaiting = mockupWaiting(job);
+  const jobWaiting = Boolean(job) && shouldShowWaitCard(job);
   const waiting = busy || jobWaiting;
+
+  function refreshList() {
+    return api.mockups().then(setRows).catch(() => undefined);
+  }
+
+  useEffect(() => {
+    void refreshList();
+  }, []);
+
+  useEffect(() => {
+    if (!openId) return;
+    void api
+      .mockup(openId)
+      .then((next) => {
+        setJob(next);
+        announced.current = `${next.id}:${next.status}`;
+      })
+      .catch(() => undefined);
+  }, [openId]);
 
   useEffect(() => {
     if (!job?.id || !jobWaiting) return;
@@ -31,7 +66,8 @@ export function MockupPage() {
         .then((next) => {
           if (cancelled) return;
           setJob(next);
-          if (next.status === "queued" || next.status === "running" || shouldShowWaitCard(next)) return;
+          void refreshList();
+          if (shouldShowWaitCard(next)) return;
           const key = `${next.id}:${next.status}`;
           if (announced.current === key) return;
           announced.current = key;
@@ -46,6 +82,14 @@ export function MockupPage() {
     };
   }, [job?.id, jobWaiting, message]);
 
+  function takeFile(next: File | null) {
+    setFile(next);
+    if (next) {
+      message.success("已选平面稿");
+      if (!productName.trim()) setProductName(stemFromFilename(next.name));
+    }
+  }
+
   async function run() {
     if (busy) return;
     if (!file) {
@@ -54,13 +98,15 @@ export function MockupPage() {
     }
     const fd = new FormData();
     fd.append("file", file);
+    fd.append("title", productName.trim() || stemFromFilename(file.name));
     setBusy(true);
     setJob(null);
     announced.current = "";
     try {
       const next = await api.createMockup(fd);
       setJob(next);
-      if (next.status === "queued" || next.status === "running" || shouldShowWaitCard(next)) return;
+      void refreshList();
+      if (shouldShowWaitCard(next)) return;
       announced.current = `${next.id}:${next.status}`;
       if (next.status === "failed") message.error(next.error || next.job_error || "打样失败");
       else if (next.status === "done") message.success("打样完成。白底图给备案，GLB 可本机打开截图。");
@@ -71,11 +117,20 @@ export function MockupPage() {
     }
   }
 
+  const board = useMemo(
+    () => ({
+      running: rows.filter((r) => mockCol(r) === "running"),
+      failed: rows.filter((r) => mockCol(r) === "failed"),
+      done: rows.filter((r) => mockCol(r) === "done"),
+    }),
+    [rows],
+  );
+
   if (waiting) {
     return (
       <WaitCard
         job="打样"
-        jobStatus={job?.job_status || (job?.status === "queued" || job?.status === "running" ? job.status : undefined)}
+        jobStatus={job?.job_status || (job?.status === "queued" || job?.status === "running" ? job.status : "queued")}
         queueAhead={job?.queue_ahead}
         stageLabel={job?.job_stage_label}
         etaS={job?.job_eta_s}
@@ -101,6 +156,18 @@ export function MockupPage() {
         title="本机要有 Blender。流水线仍是仓库里的 Python worker，网页只负责交文件。"
       />
 
+      <div className="new-meta">
+        <label className="new-meta-name">
+          品名
+          <input
+            maxLength={80}
+            placeholder="选平面稿后自动填，可改"
+            value={productName}
+            onChange={(e) => setProductName(e.target.value)}
+          />
+        </label>
+      </div>
+
       <div className="upload-row" style={{ gridTemplateColumns: "1fr" }}>
         <UploadWell
           icon="/brand/ui/well-pdf.svg"
@@ -108,21 +175,34 @@ export function MockupPage() {
           hint="把 .ai 拖到这里"
           accept=".ai"
           fileName={file?.name}
+          fileBytes={file?.size}
           disabled={busy}
-          onFile={setFile}
+          onFile={takeFile}
           onReject={() => message.warning("只收 .ai 稿件。")}
         >
-          <span className="upload-well-btn">选取平面稿</span>
+          <span className="upload-well-btn">{file ? "更换平面稿" : "选取平面稿"}</span>
         </UploadWell>
       </div>
 
+      {rows.length > 0 ? (
+        <div className="review-board" style={{ marginTop: 20 }}>
+          <MockCol title="打样中" hint="本机还在跑" rows={board.running} currentId={job?.id} onOpen={setJob} />
+          <MockCol title="打样失败" hint="中断了，点开看原因" rows={board.failed} currentId={job?.id} onOpen={setJob} />
+          <MockCol title="已出图" hint="白底和 GLB" rows={board.done} currentId={job?.id} onOpen={setJob} />
+        </div>
+      ) : (
+        <p className="page-lead" style={{ marginTop: 16 }}>
+          还没有打样单。选平面稿后点开始打样。
+        </p>
+      )}
+
       {job?.status === "failed" ? (
-        <Alert type="error" showIcon title={job.error || job.job_error || "失败"} />
+        <Alert type="error" showIcon style={{ marginTop: 16 }} title={job.error || job.job_error || "失败"} />
       ) : null}
 
       {job?.status === "done" ? (
-        <div>
-          <Typography.Title level={5}>产物</Typography.Title>
+        <div style={{ marginTop: 16 }}>
+          <Typography.Title level={5}>{mockTitle(job)}</Typography.Title>
           <Space wrap>
             {(job.files || []).map((f) => (
               <Button key={f.key} href={`/api/mockups/${job.id}/files/${f.key}`}>
@@ -162,5 +242,49 @@ export function MockupPage() {
         </div>
       ) : null}
     </section>
+  );
+}
+
+function MockCol({
+  title,
+  hint,
+  rows,
+  currentId,
+  onOpen,
+}: {
+  title: string;
+  hint: string;
+  rows: MockupJob[];
+  currentId?: string;
+  onOpen: (job: MockupJob) => void;
+}) {
+  return (
+    <div className="review-col">
+      <div className="review-col-head">
+        <strong>{title}</strong>
+        <span>{rows.length}</span>
+      </div>
+      <p className="review-col-hint">{hint}</p>
+      <div className="review-col-list">
+        {rows.length === 0 ? <div className="review-col-empty">没有单</div> : null}
+        {rows.map((row) => {
+          const s = mockLabel(row);
+          return (
+            <button
+              key={row.id}
+              type="button"
+              className={row.id === currentId ? "review-card is-on" : "review-card"}
+              onClick={() => onOpen(row)}
+            >
+              <div className="review-card-name">{mockTitle(row)}</div>
+              <div className="review-card-meta">
+                <Tag color={s.color}>{s.text}</Tag>
+                {row.owner ? <span>{row.owner}</span> : null}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }
