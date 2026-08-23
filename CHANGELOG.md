@@ -6,6 +6,12 @@
 
 - 杭州 self-hosted GitHub Actions：合 `main` 后自动跑 `release.ps1`。对照在跑会失败。不动 cloudflared，不杀全部 node.exe。
 
+## [0.12.8.1] - 2026-08-24
+
+### Changed
+
+- `AGENTS.md` 写上开工板和发版易忘约定：公网画面不是未合分支、未叫 ship 不出 PR、飞书推送不必装 lark-cli、魏炜才是管理员。
+
 ## [0.12.8.0] - 2026-08-24
 
 ### Fixed
