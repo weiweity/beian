@@ -1,13 +1,24 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { lazy, Suspense, useCallback, useEffect, useState, type ReactNode } from "react";
 import { ApiError, api, type Me } from "./api";
 import { authFailureAction, shouldAutoRedirectToFeishu } from "./authGate";
 import { Sidebar, type NavKey } from "./chrome/Sidebar";
-import { HistoryPage } from "./pages/HistoryPage";
-import { MockupPage } from "./pages/MockupPage";
 import { NewTaskPage } from "./pages/NewTaskPage";
 import { ReviewPage } from "./pages/ReviewPage";
-import { SettingsPage } from "./pages/SettingsPage";
 import { TasksPage } from "./pages/TasksPage";
+
+const HistoryPage = lazy(() =>
+  import("./pages/HistoryPage").then((m) => ({ default: m.HistoryPage })),
+);
+const MockupPage = lazy(() =>
+  import("./pages/MockupPage").then((m) => ({ default: m.MockupPage })),
+);
+const SettingsPage = lazy(() =>
+  import("./pages/SettingsPage").then((m) => ({ default: m.SettingsPage })),
+);
+
+function PaneFallback({ label }: { label: string }) {
+  return <p className="boot">{label}</p>;
+}
 
 type View = "tasks" | "new" | "review" | "mockup" | "history" | "settings";
 
@@ -271,22 +282,30 @@ export function App() {
         />
         <main className={view === "settings" ? "stage stage-flush" : "stage"}>
         {view === "settings" ? (
-          <SettingsPage
-            canWrite={Boolean(me.perms.includes("create"))}
-            canAdmin={me.role === "admin"}
-            openId={me.open_id || ""}
-            displayName={me.display_name}
-          />
+          <Suspense fallback={<PaneFallback label="打开设置…" />}>
+            <SettingsPage
+              canWrite={Boolean(me.perms.includes("create"))}
+              canAdmin={me.role === "admin"}
+              openId={me.open_id || ""}
+              displayName={me.display_name}
+            />
+          </Suspense>
         ) : null}
-        {view === "mockup" ? <MockupPage /> : null}
+        {view === "mockup" ? (
+          <Suspense fallback={<PaneFallback label="打开打样台…" />}>
+            <MockupPage />
+          </Suspense>
+        ) : null}
         {view === "history" ? (
-          <HistoryPage
-            onOpenTask={(id) => {
-              setTaskId(id);
-              setView("review");
-            }}
-            onOpenMockup={() => setView("mockup")}
-          />
+          <Suspense fallback={<PaneFallback label="打开历史记录…" />}>
+            <HistoryPage
+              onOpenTask={(id) => {
+                setTaskId(id);
+                setView("review");
+              }}
+              onOpenMockup={() => setView("mockup")}
+            />
+          </Suspense>
         ) : null}
         {view === "tasks" ? (
           <TasksPage

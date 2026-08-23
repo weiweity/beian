@@ -6,6 +6,16 @@
 
 - 杭州 self-hosted GitHub Actions：合 `main` 后自动跑 `release.ps1`。对照在跑会失败。不动 cloudflared，不杀全部 node.exe。
 
+## [0.12.6.0] - 2026-08-23
+
+### Changed
+
+- 打开审稿台不再先下一整包打样 3D。主脚本大约 900KB，点打样台才加载 model-viewer。未登录从公网进来会先去飞书，不必等 SPA。源站给 JS gzip；带 hash 的 `/assets` 可长期缓存，HTML 每次重验。
+
+### Fixed
+
+- 公网未登录的 302 带 `private, no-store`，避免边缘把跳登录缓存给已登录的人。
+
 ## [0.12.5.0] - 2026-08-23
 
 ### Changed
