@@ -251,7 +251,10 @@ app.delete("/api/tasks/:tid", (c) => {
 app.post("/api/tasks/upload", async (c) => {
   const s = need(c, "create");
   const body = await c.req.parseBody({ all: true });
-  const product = String(body.product_name || "").trim();
+  const product = String(body.product_name || "")
+    .replace(/[\u0000-\u001f]/g, "")
+    .trim()
+    .slice(0, 80);
   if (!product) throw new HTTPException(400, { message: "品名必填" });
   const excel = body.excel;
   const pdf = body.pdf;

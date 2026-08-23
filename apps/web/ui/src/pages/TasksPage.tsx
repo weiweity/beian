@@ -16,7 +16,9 @@ function statusLabel(row: TaskSummary) {
   if (row.status === "in_review" || row.status === "pending_review") {
     return { text: "待她判", color: "warning" as const };
   }
-  if (row.status === "compare_failed") return { text: "对照失败", color: "error" as const };
+  if (row.status === "compare_failed" || row.job_status === "failed") {
+    return { text: "对照失败", color: "error" as const };
+  }
   if (row.status === "comparing") return { text: "正在对照", color: "processing" as const };
   return { text: row.status, color: "default" as const };
 }
