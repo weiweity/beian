@@ -6,6 +6,12 @@
 
 - 杭州 self-hosted GitHub Actions：合 `main` 后自动跑 `release.ps1`。对照在跑会失败。不动 cloudflared，不杀全部 node.exe。
 
+## [0.12.3.0] - 2026-08-23
+
+### Fixed
+
+- 合进 `main` 自动升杭州时，不再因为 Windows `npm` 改脏的 `package-lock.json` 把公网打成 502。脚本先丢掉锁文件再停 8787；还有别的本地改动就保持旧站。安装改走 `npm ci`。pull 或编译失败且 8787 没听时，把上一版计划任务拉回来。workflow 调磁盘上的旧脚本前也会先丢掉脏 lockfile。
+
 ## [0.12.2.0] - 2026-08-23
 
 ### Added

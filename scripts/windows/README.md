@@ -36,7 +36,7 @@ cmd.exe 才用 `set WB_DATA_DIR=...`。PowerShell 里写 `set` 不会进子进�
 powershell -ExecutionPolicy Bypass -File scripts\windows\release.ps1
 ```
 
-脚本会：查 health（对照/打样/Illustrator 在跑或排队就失败）→ 校验 `$env:WB_DATA_DIR` 不在仓库内 → **先** `taskkill /T /F /PID` 只杀监听 8787 的那棵树（不杀全部 node.exe，不动 cloudflared）→ 再 `Invoke-Git pull --ff-only origin main` + `npm install` + 补 Windows 的 Rollup 可选包 + 编 UI + 启动。有 `$env:GITHUB_TOKEN` 时 `Invoke-Git` 用它拉码，不会把 token 打到日志。公网会空 2–5 分钟。health 不通且 8787 仍在听，或还有 python/blender，会失败，不会当空闲。文件是 UTF-8 BOM，给中文 Windows 的 PowerShell 5 用。
+脚本会：查 health（对照/打样/Illustrator 在跑或排队就失败）→ 校验 `$env:WB_DATA_DIR` 不在仓库内 → `git fetch` 并把 `package-lock.json` 复位到 HEAD（丢掉 npm 改脏的锁文件）→ 还有别的已跟踪改动、或本地 main 比 origin 多 commit，**先失败、不停 8787** → **再** `taskkill /T /F /PID` 只杀监听 8787 的那棵树（不杀全部 node.exe，不动 cloudflared）→ `Invoke-Git pull --ff-only origin main` + `npm ci` + 补 Windows 的 Rollup 可选包 + 编 UI + 启动。pull/编/起失败且 8787 没听时，会 `schtasks /Run beian-server-8787` 把上一版拉回来，避免公网一直 502。有 `$env:GITHUB_TOKEN` 时 `Invoke-Git` 用它拉码，不会把 token 打到日志。顺利时公网会空 2–5 分钟。health 不通且 8787 仍在听，或还有 python/blender，会失败，不会当空闲。文件是 UTF-8 BOM，给中文 Windows 的 PowerShell 5 用。
 
 `-Restart` 现在多余，行为一样。Mac 禁止 `cloudflared tunnel run beian`。
 
