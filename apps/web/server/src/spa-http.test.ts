@@ -40,6 +40,26 @@ describe("GET / spa gate", () => {
     assert.match(res.headers.get("cache-control") || "", /no-cache/);
   });
 
+  it("keeps desk paths on the same SPA gate", async () => {
+    const sess = issueSession("刘籽烨", "reviewer", "ou_spa_desk", "feishu");
+    for (const path of ["/new", "/settings", "/review", "/history", "/mockup", "/mockup/aabbccddeeff", "/review/aabbccddeeff"]) {
+      const res = await app.request(path, {
+        headers: { host: "www.jianghua.site", cookie: `${COOKIE}=${sess.token}` },
+      });
+      assert.equal(res.status, 200, path);
+    }
+  });
+
+  it("sends anonymous visitors on a desk path to Feishu with next", async () => {
+    const res = await app.request("/review/aabbccddeeff", { headers: { host: "www.jianghua.site" } });
+    assert.equal(res.status, 302);
+    assert.match(res.headers.get("location") || "", /\/api\/auth\/feishu\/login\?next=/);
+    assert.match(res.headers.get("location") || "", /review%2Faabbccddeeff/);
+    const mock = await app.request("/mockup/aabbccddeeff", { headers: { host: "www.jianghua.site" } });
+    assert.equal(mock.status, 302);
+    assert.match(mock.headers.get("location") || "", /mockup%2Faabbccddeeff/);
+  });
+
   it("does not redirect when Feishu is not configured", async () => {
     const id = process.env.FEISHU_APP_ID;
     const secret = process.env.FEISHU_APP_SECRET;

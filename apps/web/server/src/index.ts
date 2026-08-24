@@ -8,7 +8,7 @@ import { compress } from "hono/compress";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import { HTTPException } from "hono/http-exception";
 import { cacheHeaderFor, REDIRECT_CACHE } from "./cacheHeaders.js";
-import { spaIndexAction } from "./spaIndex.js";
+import { isSpaPath, spaIndexAction } from "./spaIndex.js";
 import { COOKIE, DATA_DIR, HOST, PORT, REPO_ROOT, UI_DIST, UI_PUBLIC, cookieSecure } from "./config.js";
 import { billingSnapshot, loadVendorBills, resetBillingCache } from "./billing.js";
 import { notifyTaskComplete, sendText } from "./notify.js";
@@ -41,6 +41,7 @@ import {
   logout as dropSession,
   hasPerm,
   oauthReady,
+  sanitizeNext,
   lockAllowedTenant,
   sessionFromFeishu,
   type Role,
@@ -78,7 +79,7 @@ import {
 type Env = { Variables: { session: Session } };
 
 const app = new Hono<Env>();
-const VERSION = "0.12.16.0";
+const VERSION = "0.12.17.0";
 
 app.use(compress());
 
@@ -626,7 +627,9 @@ app.get("/api/mockups/:id/files/:key", (c) => {
     ? "model/gltf-binary"
     : lower.endsWith(".png")
       ? "image/png"
-      : "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+      : lower.endsWith(".pdf")
+        ? "application/pdf"
+        : "application/vnd.openxmlformats-officedocument.presentationml.presentation";
   if (type === "image/png" && !pngMagicAt(f.path)) {
     throw new HTTPException(415, { message: "这张白底图坏了，不是 PNG。回到打样台重新打。" });
   }
@@ -659,7 +662,7 @@ app.use("/assets/*", async (c, next) => {
 });
 app.use("/assets/*", serveStatic({ root: UI_DIST }));
 
-app.get("/", (c) => {
+function spaHtml(c: Context) {
   const host = c.req.header("host") || "";
   const action = spaIndexAction({
     feishuError: c.req.query("feishu_error") || "",
@@ -669,7 +672,9 @@ app.get("/", (c) => {
   });
   if (action === "feishu") {
     c.header("Cache-Control", REDIRECT_CACHE);
-    return c.redirect("/api/auth/feishu/login", 302);
+    const next = sanitizeNext(c.req.path);
+    const q = isSpaPath(next) && next !== "/" ? `?next=${encodeURIComponent(next)}` : "";
+    return c.redirect(`/api/auth/feishu/login${q}`, 302);
   }
   const index = join(UI_DIST, "index.html");
   if (!existsSync(index)) {
@@ -677,7 +682,16 @@ app.get("/", (c) => {
   }
   c.header("Cache-Control", cacheHeaderFor("/") || "no-cache");
   return c.html(readFileSync(index, "utf8"));
-});
+}
+
+app.get("/", spaHtml);
+app.get("/new", spaHtml);
+app.get("/history", spaHtml);
+app.get("/settings", spaHtml);
+app.get("/review", spaHtml);
+app.get("/review/:id", spaHtml);
+app.get("/mockup", spaHtml);
+app.get("/mockup/:id", spaHtml);
 
 export { app };
 

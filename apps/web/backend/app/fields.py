@@ -32,6 +32,9 @@ SOFT_FIELDS = ("净含量", "条形码", "条码", "规格", "二维码")
 # 长字段：必须做多片段覆盖率，不能只命中一句就「一致」
 LONG_FIELD_GROUPS = ("成分表", "生产信息", "文案", "使用方法")
 
+# 稿上 OCR 列表上限。匹配算法不变，只加长给核对窗看的 hit/miss。
+COVERAGE_PHRASE_CAP = 36
+
 _UNIT_MAP = {
     "毫升": "ml",
     "ml": "ml",
@@ -514,7 +517,7 @@ def _phrase_in_ocr(phrase: str, n_ocr: str, n_ocr_u: str) -> bool:
 
 
 def coverage_against_ocr(excel_value: str, ocr_text: str) -> dict[str, Any]:
-    phrases = key_phrases(excel_value, max_n=36)
+    phrases = key_phrases(excel_value, max_n=COVERAGE_PHRASE_CAP)
     if not phrases:
         return {
             "coverage": 0.0,
@@ -537,8 +540,8 @@ def coverage_against_ocr(excel_value: str, ocr_text: str) -> dict[str, Any]:
         "coverage": (matched / total) if total else 0.0,
         "matched": matched,
         "total": total,
-        "hit_phrases": hits[:12],
-        "miss_phrases": misses[:12],
+        "hit_phrases": hits[:COVERAGE_PHRASE_CAP],
+        "miss_phrases": misses[:COVERAGE_PHRASE_CAP],
     }
 
 
@@ -840,7 +843,7 @@ def _dedupe_miss_phrases(misses: list[str]) -> list[str]:
         kept = [k for k in kept if normalize(k) not in nm or normalize(k) == nm]
         if not any(normalize(k) == nm for k in kept):
             kept.append(m)
-    return kept[:12]
+    return kept[:COVERAGE_PHRASE_CAP]
 
 
 def assign_doubt_bucket(hit: dict) -> str | None:
@@ -1002,8 +1005,8 @@ def match_field(
                 "coverage": m_cnt / total_p,
                 "matched": m_cnt,
                 "total": total_p,
-                "hit_phrases": merged_hit[:12],
-                "miss_phrases": miss_ph[:12],
+                "hit_phrases": merged_hit[:COVERAGE_PHRASE_CAP],
+                "miss_phrases": miss_ph[:COVERAGE_PHRASE_CAP],
             }
 
     # 条码：按「规格分支」评估（护肤品常 5片/1片 两码，花盒只印一码）
@@ -1617,8 +1620,8 @@ def match_field(
             "ratio": round(cov["coverage"], 3),
             "matched": cov["matched"],
             "total": cov["total"],
-            "miss": (cov.get("miss_phrases") or [])[:8],
-            "hit": (cov.get("hit_phrases") or [])[:8],
+            "miss": (cov.get("miss_phrases") or [])[:COVERAGE_PHRASE_CAP],
+            "hit": (cov.get("hit_phrases") or [])[:COVERAGE_PHRASE_CAP],
         }
         if cov.get("total")
         else None,

@@ -34,6 +34,14 @@ describe("mockupFailReason", () => {
     const text = mockupFailReason("Node不存在：");
     assert.match(text, /PPT/);
     assert.match(text, /白底/);
+    assert.match(text, /PDF/);
+    assert.doesNotMatch(text, /刀线/);
+  });
+
+  it("explains a missing presentation runtime the same way", () => {
+    const text = mockupFailReason("本机没有演示文稿运行时");
+    assert.match(text, /PPT/);
+    assert.match(text, /PDF/);
     assert.doesNotMatch(text, /刀线/);
   });
 

@@ -162,6 +162,10 @@ export async function notifyTaskComplete(task: TaskLike, actor: string): Promise
   }
 }
 
+export function jobOpenPath(kind: "compare" | "rework" | "mockup", tid: string): string {
+  return kind === "mockup" ? `/mockup/${tid}` : `/review/${tid}`;
+}
+
 export async function notifyJobFinished(opts: {
   tid: string;
   title: string;
@@ -171,7 +175,7 @@ export async function notifyJobFinished(opts: {
 }): Promise<{ ok: boolean; skipped?: boolean; reason?: string }> {
   const verb = opts.kind === "mockup" ? "打样" : opts.kind === "rework" ? "对红" : "对照";
   const name = opts.title || opts.tid;
-  const link = `${publicBase()}/?task=${opts.tid}`;
+  const link = `${publicBase()}${jobOpenPath(opts.kind, opts.tid)}`;
   const text = opts.ok
     ? opts.kind === "mockup"
       ? `${name} 打样完了，来看产物。\n打开：${link}`

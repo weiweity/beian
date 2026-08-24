@@ -12,8 +12,8 @@ export const DOCK_MIN_W = 320;
 export const DOCK_MIN_H = 280;
 export const DOCK_DEFAULT_W = 560;
 export const DOCK_DEFAULT_H = 520;
-/** 钉钉/飞书检视栏：浮在页头下面，不盖签字。 */
-export const DOCK_BELOW_HEAD = 72;
+/** 钉钉/飞书检视栏：portal 到 body 后相对视口。壳 20 + 主区 24 + 页头，不盖签字。 */
+export const DOCK_BELOW_HEAD = 104;
 
 export function readDockOpen(storage: Pick<Storage, "getItem"> | null): boolean {
   try {
@@ -99,11 +99,10 @@ export function writeDockBox(storage: Pick<Storage, "setItem"> | null, box: Dock
 export function clampDockPlace(place: DockPlace, room: { w: number; h: number }, box: DockBox): DockPlace {
   const maxRight = Math.max(8, Math.round(Number(room.w) || 800) - box.w - 8);
   const maxTop = Math.max(8, Math.round(Number(room.h) || 600) - box.h - 8);
-  const floor = maxTop >= DOCK_BELOW_HEAD ? DOCK_BELOW_HEAD : 8;
   const top = Number(place.top);
   const right = Number(place.right);
   return {
-    top: Math.min(maxTop, Math.max(floor, Number.isFinite(top) ? Math.round(top) : floor)),
+    top: Math.min(maxTop, Math.max(8, Number.isFinite(top) ? Math.round(top) : DOCK_BELOW_HEAD)),
     right: Math.min(maxRight, Math.max(8, Number.isFinite(right) ? Math.round(right) : 8)),
   };
 }

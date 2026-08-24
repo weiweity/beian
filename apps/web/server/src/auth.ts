@@ -326,6 +326,8 @@ export function sanitizeNext(raw: string): string {
   const s = (raw || "").trim();
   if (!s.startsWith("/")) return "/";
   if (s.startsWith("//") || s.includes("\\") || s.includes("://") || s.length > 200) return "/";
+  if (/[\u0000-\u001f]/.test(s)) return "/";
+  if (s === "/api" || s.startsWith("/api/")) return "/";
   return s;
 }
 

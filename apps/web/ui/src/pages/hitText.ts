@@ -7,7 +7,7 @@ export type HitText = {
   pdf?: string;
   found?: string;
   evidence?: string;
-  coverage?: { hit?: string[]; miss?: string[] };
+  coverage?: { hit?: string[]; miss?: string[]; ratio?: number; matched?: number; total?: number };
 };
 
 export function excelText(h: HitText): string {
@@ -15,11 +15,28 @@ export function excelText(h: HitText): string {
   return t || "—";
 }
 
-export function pdfText(h: HitText): string {
+export function isImageOnlyField(field?: string): boolean {
+  return Boolean(field && /品名|品牌|logo|标志|商标/i.test(field));
+}
+
+export function pdfText(h: HitText, field?: string): string {
   const direct = (h.pdf || "").trim() || (h.found || "").trim();
-  if (direct) return direct;
   const hits = (h.coverage?.hit || []).map((s) => String(s).trim()).filter(Boolean);
-  if (hits.length) return hits.join(" ");
+  const misses = (h.coverage?.miss || []).map((s) => String(s).trim()).filter(Boolean);
+  const matched = Number(h.coverage?.matched);
+  const total = Number(h.coverage?.total);
+  const found = direct || (hits.length ? hits.join(" ") : "");
+  const tally =
+    Number.isFinite(total) && total > 0
+      ? `稿上命中 ${Number.isFinite(matched) ? matched : hits.length}/${total} 项`
+      : "";
+  const imageNote = isImageOnlyField(field) && !found ? "稿上这一块多半是图，OCR 读不到字。" : "";
+  const parts: string[] = [];
+  if (imageNote) parts.push(imageNote);
+  if (found) parts.push(found);
+  if (tally) parts.push(tally);
+  if (misses.length) parts.push(`未在稿上读到：${misses.join(" ")}`);
+  if (parts.length) return parts.join("\n");
   const ev = (h.evidence || "").trim();
   if (ev) return ev;
   return "没读到";

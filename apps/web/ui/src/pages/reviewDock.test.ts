@@ -27,7 +27,7 @@ describe("reviewDock", () => {
     assert.equal(readDockOpen(null), true);
     assert.equal(readPinsOn(null), true);
     assert.equal(readBoxesOn(null), true);
-    assert.equal(readDockPlace(null).top, 72);
+    assert.equal(readDockPlace(null).top, 104);
     assert.equal(readDockOpen({ getItem: () => "shut" }), false);
     assert.equal(readPinsOn({ getItem: () => "off" }), false);
     assert.equal(readBoxesOn({ getItem: () => "off" }), false);
@@ -48,7 +48,7 @@ describe("reviewDock", () => {
     assert.equal(readDockOpen(store), false);
     assert.equal(readPinsOn(store), false);
     assert.equal(readBoxesOn(store), false);
-    assert.deepEqual(readDockPlace(store), { top: 72, right: 40 });
+    assert.deepEqual(readDockPlace(store), { top: 24, right: 40 });
     writeDockPlace(store, { top: 96, right: 40 });
     assert.deepEqual(readDockPlace(store), { top: 96, right: 40 });
     writeDockOpen(store, true);
@@ -91,7 +91,7 @@ describe("reviewDock", () => {
     assert.equal(parked.top, 292);
     assert.equal(parked.right, 8);
     const lifted = clampDockPlace({ top: 8, right: 8 }, { w: 1200, h: 900 }, { w: 400, h: 300 });
-    assert.equal(lifted.top, 72);
+    assert.equal(lifted.top, 8);
     const north = resizeDockHandle(
       { w: 400, h: 400 },
       { top: 80, right: 40 },
@@ -100,7 +100,7 @@ describe("reviewDock", () => {
       "n",
     );
     assert.equal(north.box.h, 420);
-    assert.equal(north.place.top, 72);
+    assert.equal(north.place.top, 60);
     const east = resizeDockHandle(
       { w: 400, h: 400 },
       { top: 80, right: 40 },
@@ -139,8 +139,11 @@ describe("reviewDock", () => {
     const short = clampDockPlace({ top: 4, right: 8 }, { w: 400, h: 300 }, { w: 320, h: 280 });
     assert.equal(short.top, 8);
     const nanTop = clampDockPlace({ top: Number.NaN, right: 8 }, room, { w: 400, h: 300 });
-    assert.equal(nanTop.top, 72);
-    assert.equal(readDockPlace({ getItem: () => "{" }).top, 72);
+    assert.equal(nanTop.top, 104);
+    assert.equal(readDockPlace({ getItem: () => "{" }).top, 104);
+    const overSide = clampDockPlace({ top: 80, right: 2000 }, { w: 1200, h: 800 }, { w: 400, h: 300 });
+    assert.equal(overSide.right, 792);
+    assert.equal(overSide.top, 80);
   });
 
   it("skips pack-sheet fields", () => {
