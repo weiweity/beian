@@ -1,22 +1,17 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, App, Button, Empty, Input, Space, Tag } from "antd";
 import { ApiError, api, type Decision, type FieldHit, type TaskDetail, type TaskPage } from "../api";
 import { WaitCard } from "../chrome/WaitCard";
+import { panBy, resetZoom, zoomAt, zoomToBox } from "./canvasZoom";
+import { excelText, pdfText } from "./hitText";
 import { hitOnPage, overlayFromBox, overlaysForHit, pickHitBox, resolvePageMetrics } from "./pinBox";
+import { DEFAULT_RIGHT, clampRight, readSplit, writeSplit } from "./reviewSplit";
 import { shouldShowWaitCard } from "./waitCard";
 
 type Props = {
   taskId: string | null;
   onBack: () => void;
 };
-
-function excelText(h: FieldHit) {
-  return h.excel || h.excel_value || h.expected || "—";
-}
-
-function pdfText(h: FieldHit) {
-  return h.pdf || h.found || "—";
-}
 
 function isReviewable(status?: string) {
   return status === "pending_review" || status === "in_review";
@@ -77,6 +72,16 @@ export function ReviewPage({ taskId, onBack }: Props) {
   const [busy, setBusy] = useState(false);
   const [useV2, setUseV2] = useState(false);
   const [nat, setNat] = useState<{ width: number; height: number } | null>(null);
+  const [zoom, setZoom] = useState(resetZoom);
+  const [splitRight, setSplitRight] = useState(DEFAULT_RIGHT);
+  const viewRef = useRef<HTMLDivElement>(null);
+  const deskRef = useRef<HTMLDivElement>(null);
+  const panDrag = useRef<{ x: number; y: number } | null>(null);
+  const splitDrag = useRef<{ x: number; right: number } | null>(null);
+  const splitRightRef = useRef(splitRight);
+  const pendingFit = useRef<number | null>(null);
+  const fitHitRef = useRef<(i: number) => void>(() => undefined);
+  splitRightRef.current = splitRight;
 
   useEffect(() => {
     if (!taskId) return;
@@ -153,7 +158,48 @@ export function ReviewPage({ taskId, onBack }: Props) {
 
   useEffect(() => {
     setNat(null);
+    setZoom(resetZoom());
   }, [page?.url]);
+
+  useEffect(() => {
+    const i = pendingFit.current;
+    if (i == null || !metrics) return;
+    const id = window.requestAnimationFrame(() => {
+      pendingFit.current = null;
+      fitHitRef.current(i);
+    });
+    return () => window.cancelAnimationFrame(id);
+  }, [metrics, pageIdx, page?.url]);
+
+  useEffect(() => {
+    if (waiting) return;
+    const desk = deskRef.current;
+    const storage = typeof localStorage === "undefined" ? null : localStorage;
+    const apply = () => {
+      const total = deskRef.current?.clientWidth || 0;
+      if (total > 0) setSplitRight(readSplit(storage, total));
+    };
+    apply();
+    if (!desk || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(apply);
+    ro.observe(desk);
+    return () => ro.disconnect();
+  }, [taskId, waiting]);
+
+  useEffect(() => {
+    const el = viewRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const rect = el.getBoundingClientRect();
+      const ox = e.clientX - rect.left;
+      const oy = e.clientY - rect.top;
+      const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+      setZoom((z) => zoomAt(z, z.scale * factor, ox, oy));
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [page?.url, waiting]);
 
   if (!taskId) {
     return (
@@ -223,11 +269,29 @@ export function ReviewPage({ taskId, onBack }: Props) {
     }
   }
 
+  function fitHit(i: number) {
+    const h = hits[i];
+    const el = viewRef.current;
+    if (!h || !metrics || !el) return;
+    const box = pickHitBox(h.bboxes, Number(h.page) || pageNo);
+    if (!box) {
+      setZoom(resetZoom());
+      return;
+    }
+    setZoom(zoomToBox(box, metrics, { width: el.clientWidth, height: el.clientHeight }));
+  }
+  fitHitRef.current = fitHit;
+
   function pickHit(i: number) {
     setActive(i);
     const p = Number(hits[i]?.page || 0);
     const idx = pages.findIndex((pg) => Number(pg.page) === p);
-    if (idx >= 0) setPageIdx(idx);
+    if (idx >= 0 && idx !== pageIdx) {
+      pendingFit.current = i;
+      setPageIdx(idx);
+      return;
+    }
+    window.requestAnimationFrame(() => fitHitRef.current(i));
   }
 
   if (!task && !error) {
@@ -262,7 +326,16 @@ export function ReviewPage({ taskId, onBack }: Props) {
             返回列表
           </button>
           {Array.isArray(task?.pages_v2) && task.pages_v2.length > 0 ? (
-            <button type="button" className="btn-ghost" onClick={() => setUseV2((v) => !v)}>
+            <button
+              type="button"
+              className="btn-ghost"
+              onClick={() => {
+                setUseV2((v) => !v);
+                setPageIdx(0);
+                setActive(0);
+                setZoom(resetZoom());
+              }}
+            >
               {useV2 ? "看这一版" : "看上一版"}
             </button>
           ) : (
@@ -318,46 +391,106 @@ export function ReviewPage({ taskId, onBack }: Props) {
         <Alert type="success" showIcon style={{ marginBottom: 16 }} title="已签字，不是系统过审" />
       ) : null}
 
-      <div className="review-desk">
+      <div className="review-desk" ref={deskRef} style={{ ["--review-right" as string]: `${splitRight}px` }}>
         <div className="canvas glass-pane">
           {page?.url ? (
-            <div style={{ position: "relative" }}>
-              <img
-                src={page.url}
-                alt=""
-                onLoad={(e) => {
-                  const img = e.currentTarget;
-                  if (img.naturalWidth > 1 && img.naturalHeight > 1) {
-                    setNat({ width: img.naturalWidth, height: img.naturalHeight });
-                  }
+            <div
+              className="canvas-view"
+              ref={viewRef}
+              onPointerDown={(e) => {
+                if (e.button !== 0) return;
+                panDrag.current = { x: e.clientX, y: e.clientY };
+                (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+              }}
+              onPointerMove={(e) => {
+                const d = panDrag.current;
+                if (!d) return;
+                const dx = e.clientX - d.x;
+                const dy = e.clientY - d.y;
+                panDrag.current = { x: e.clientX, y: e.clientY };
+                setZoom((z) => panBy(z, dx, dy));
+              }}
+              onPointerUp={() => {
+                panDrag.current = null;
+              }}
+              onPointerCancel={() => {
+                panDrag.current = null;
+              }}
+              onLostPointerCapture={() => {
+                panDrag.current = null;
+              }}
+            >
+              <div
+                className="canvas-zoom"
+                style={{
+                  transform: `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.scale})`,
                 }}
-              />
-              {pinHits.map(({ h, i }) => {
-                const overlays = overlaysForHit(h.bboxes, pageNo, metrics);
-                const preferred = pickHitBox(h.bboxes, pageNo);
-                const pin = preferred && metrics ? overlayFromBox(preferred, metrics) : null;
-                return (
-                  <Fragment key={h.id || i}>
-                    {overlays.map((ov, k) => (
-                      <span
-                        key={`${h.id || i}-box-${k}`}
-                        className={`hit-box ${ov.kind === "warn" ? "is-warn" : ""} ${i === active ? "is-on" : "is-dim"}`.trim()}
-                        style={{ left: ov.left, top: ov.top, width: ov.width, height: ov.height }}
-                      />
-                    ))}
-                    {pin ? (
-                      <button
-                        type="button"
-                        className={i === active ? "pin is-on" : "pin is-dim"}
-                        style={{ left: pin.pinLeft, top: pin.pinTop }}
-                        onClick={() => pickHit(i)}
-                      >
-                        {i + 1}
-                      </button>
-                    ) : null}
-                  </Fragment>
-                );
-              })}
+              >
+                <img
+                  src={page.url}
+                  alt=""
+                  onLoad={(e) => {
+                    const img = e.currentTarget;
+                    if (img.naturalWidth > 1 && img.naturalHeight > 1) {
+                      setNat({ width: img.naturalWidth, height: img.naturalHeight });
+                    }
+                  }}
+                />
+                {pinHits.map(({ h, i }) => {
+                  const overlays = overlaysForHit(h.bboxes, pageNo, metrics);
+                  const preferred = pickHitBox(h.bboxes, pageNo);
+                  const pin = preferred && metrics ? overlayFromBox(preferred, metrics) : null;
+                  return (
+                    <Fragment key={h.id || i}>
+                      {overlays.map((ov, k) => (
+                        <span
+                          key={`${h.id || i}-box-${k}`}
+                          className={`hit-box ${ov.kind === "warn" ? "is-warn" : ""} ${i === active ? "is-on" : "is-dim"}`.trim()}
+                          style={{ left: ov.left, top: ov.top, width: ov.width, height: ov.height }}
+                        />
+                      ))}
+                      {pin ? (
+                        <button
+                          type="button"
+                          className={i === active ? "pin is-on" : "pin is-dim"}
+                          style={{ left: pin.pinLeft, top: pin.pinTop }}
+                          onPointerDown={(e) => e.stopPropagation()}
+                          onClick={() => pickHit(i)}
+                        >
+                          {i + 1}
+                        </button>
+                      ) : null}
+                    </Fragment>
+                  );
+                })}
+              </div>
+              <div className="canvas-tools" onPointerDown={(e) => e.stopPropagation()}>
+                <button
+                  type="button"
+                  className="btn-ghost"
+                  onClick={() => {
+                    const el = viewRef.current;
+                    if (!el) return;
+                    setZoom((z) => zoomAt(z, z.scale * 1.2, el.clientWidth / 2, el.clientHeight / 2));
+                  }}
+                >
+                  放大
+                </button>
+                <button
+                  type="button"
+                  className="btn-ghost"
+                  onClick={() => {
+                    const el = viewRef.current;
+                    if (!el) return;
+                    setZoom((z) => zoomAt(z, z.scale / 1.2, el.clientWidth / 2, el.clientHeight / 2));
+                  }}
+                >
+                  缩小
+                </button>
+                <button type="button" className="btn-ghost" onClick={() => setZoom(resetZoom())}>
+                  复位
+                </button>
+              </div>
             </div>
           ) : (
             <Empty
@@ -371,9 +504,37 @@ export function ReviewPage({ taskId, onBack }: Props) {
             />
           )}
           <p className="page-lead" style={{ padding: "0 16px 12px" }}>
-            紫框 已命中 · 黄框 待核对 · 点右侧字段，图上跟到这一条
+            紫框 已命中 · 黄框 待核对 · 点右侧序号，图上放大这一条 · 滚轮缩放
           </p>
         </div>
+
+        <button
+          type="button"
+          className="review-split"
+          aria-label="拖动调整核对栏宽度"
+          onPointerDown={(e) => {
+            splitDrag.current = { x: e.clientX, right: splitRight };
+            (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+          }}
+          onPointerMove={(e) => {
+            const d = splitDrag.current;
+            const desk = deskRef.current;
+            if (!d || !desk) return;
+            const next = clampRight(d.right - (e.clientX - d.x), desk.clientWidth);
+            setSplitRight(next);
+          }}
+          onPointerUp={() => {
+            splitDrag.current = null;
+            writeSplit(typeof localStorage === "undefined" ? null : localStorage, splitRightRef.current);
+          }}
+          onPointerCancel={() => {
+            splitDrag.current = null;
+          }}
+          onLostPointerCapture={() => {
+            splitDrag.current = null;
+            writeSplit(typeof localStorage === "undefined" ? null : localStorage, splitRightRef.current);
+          }}
+        />
 
         <aside className="notes glass-pane">
           <p className="field-label" style={{ color: "var(--muted)", margin: 0 }}>
@@ -382,8 +543,9 @@ export function ReviewPage({ taskId, onBack }: Props) {
           {current ? (
             <>
               <div className="hit-now">
-                <strong style={{ fontSize: 18 }}>
-                  {active + 1} · {current.field || "字段"}
+                <strong style={{ fontSize: 18, display: "inline-flex", alignItems: "center", gap: 8 }}>
+                  <span className="hit-no">{active + 1}</span>
+                  {current.field || "字段"}
                 </strong>
                 {statusTag(current.status)}
               </div>
@@ -447,19 +609,24 @@ export function ReviewPage({ taskId, onBack }: Props) {
           <p className="field-label" style={{ margin: "8px 0 0" }}>
             疑点列表
           </p>
-          {hits.map((h, i) => (
-            <button
-              key={h.id || i}
-              type="button"
-              className={i === active ? "hit-card is-on" : "hit-card"}
-              onClick={() => pickHit(i)}
-            >
-              <div className="hit-now">
-                <strong>{h.field || "字段"}</strong>
-                {statusTag(h.status)}
-              </div>
-            </button>
-          ))}
+          <div className="hit-list">
+            {hits.map((h, i) => (
+              <button
+                key={h.id || i}
+                type="button"
+                className={i === active ? "hit-card is-on" : "hit-card"}
+                onClick={() => pickHit(i)}
+              >
+                <div className="hit-now">
+                  <strong style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                    <span className="hit-no">{i + 1}</span>
+                    {h.field || "字段"}
+                  </strong>
+                  {statusTag(h.status)}
+                </div>
+              </button>
+            ))}
+          </div>
 
           {task?.rework_check && task.rework_check.length > 0 ? (
             <>

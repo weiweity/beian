@@ -1,22 +1,14 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import { feishuReadyFromHealth, waitCardActiveSteps, waitCardCopy, type WaitKind } from "../pages/waitCard";
+import { WaitLoader } from "./WaitLoader";
 
 type Job = "对照" | "对红" | "打样";
 
-const VISUAL: Record<Job, { steps: string[]; orbit: string }> = {
-  对照: {
-    steps: ["读 Excel", "OCR 包装", "标疑点"],
-    orbit: "/brand/ui/fox-orbit.svg",
-  },
-  对红: {
-    steps: ["读 Excel", "OCR 包装", "标疑点"],
-    orbit: "/brand/ui/fox-orbit.svg",
-  },
-  打样: {
-    steps: ["读平面", "建盒", "渲染白底", "导出 GLB"],
-    orbit: "/brand/ui/fox-orbit-pack.svg",
-  },
+const STEPS: Record<Job, string[]> = {
+  对照: ["读 Excel", "OCR 包装", "标疑点"],
+  对红: ["读 Excel", "OCR 包装", "标疑点"],
+  打样: ["读平面", "建盒", "渲染白底", "导出 GLB"],
 };
 
 function waitKind(job: Job): WaitKind {
@@ -66,7 +58,7 @@ export function WaitCard({
     };
   }, [feishuReady]);
 
-  const visual = VISUAL[job];
+  const steps = STEPS[job];
   const kind = waitKind(job);
   const copy = waitCardCopy({
     kind,
@@ -80,17 +72,7 @@ export function WaitCard({
   return (
     <div className="wait-wrap">
       <div className="wait-card" role="status" aria-live="polite">
-        <div className="fox-ball">
-          <img
-            className={job === "打样" ? "fox-orbit is-pack" : "fox-orbit"}
-            src={visual.orbit}
-            alt=""
-            width={200}
-            height={200}
-          />
-          <img className="fox-body" src="/brand/ui/fox-body.svg" alt="" width={148} height={148} />
-          <img className="fox-face" src="/brand/logo-mark.png" alt="" width={88} height={88} />
-        </div>
+        <WaitLoader kind={kind} />
         <h2 className="wait-title">{copy.title}</h2>
         <p className="wait-eta">{copy.eta}</p>
         <p className="wait-hint">{hint ?? copy.hint}</p>
@@ -98,7 +80,7 @@ export function WaitCard({
           <span className={job === "打样" ? "wait-bar-fill is-slow" : "wait-bar-fill"} />
         </div>
         <div className="wait-steps">
-          {visual.steps.map((s, i) => (
+          {steps.map((s, i) => (
             <span key={s} className={i < stepsOn ? "wait-chip is-on" : "wait-chip"}>
               {s}
             </span>

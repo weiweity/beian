@@ -8,6 +8,7 @@ import {
   shouldShowWaitCard,
   waitCardActiveSteps,
   waitCardCopy,
+  waitLoaderLetters,
 } from "./waitCard.js";
 
 describe("shouldShowWaitCard", () => {
@@ -42,6 +43,14 @@ describe("shouldShowWaitCard", () => {
     assert.equal(shouldShowWaitCard({ status: "queued" }), false);
     assert.equal(shouldShowWaitCard({ status: "queued", job_status: "queued" }), true);
     assert.equal(shouldShowWaitCard({ status: "running", job_status: "running" }), true);
+  });
+});
+
+describe("waitLoaderLetters", () => {
+  it("splits job title into per-character spans", () => {
+    assert.deepEqual(waitLoaderLetters("compare"), ["对", "照", "中"]);
+    assert.deepEqual(waitLoaderLetters("rework"), ["对", "红", "中"]);
+    assert.deepEqual(waitLoaderLetters("mockup"), ["打", "样", "中"]);
   });
 });
 
