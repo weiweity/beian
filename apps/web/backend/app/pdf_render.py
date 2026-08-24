@@ -6,12 +6,12 @@ from pathlib import Path
 import pymupdf
 from PIL import Image
 
-# 审稿默认：高清，便于放大看小字/脚注
-DEFAULT_DPI = 260
-DEFAULT_MAX_SIDE = 3200
+# 审稿默认：高清，便于 6× CSS 放大看小字/脚注。不上矢量看图器。
+DEFAULT_DPI = 400
+DEFAULT_MAX_SIDE = 5600
 # 双 PDF / 内双页：小刀版要更高 DPI（物理尺寸小时 220 只有 ~1000px）
-COMPARE_DPI = 320
-COMPARE_MAX_SIDE = 4000
+COMPARE_DPI = 400
+COMPARE_MAX_SIDE = 5600
 # 仅预览/极速
 FAST_DPI = 200
 FAST_MAX_SIDE = 2400
