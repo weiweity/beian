@@ -1,11 +1,21 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Alert, App, Button, Empty, Input, Space, Tag } from "antd";
 import { ApiError, api, type Decision, type FieldHit, type TaskDetail, type TaskPage } from "../api";
 import { WaitCard } from "../chrome/WaitCard";
-import { panBy, resetZoom, zoomAt, zoomToBox } from "./canvasZoom";
+import { panBy, resetZoom, zoomAt, zoomCss, zoomToBox } from "./canvasZoom";
 import { excelText, pdfText } from "./hitText";
 import { hitOnPage, overlayFromBox, overlaysForHit, pickHitBox, resolvePageMetrics } from "./pinBox";
-import { readDockOpen, readPinsOn, writeDockOpen, writePinsOn } from "./reviewDock";
+import {
+  clampDockBox,
+  readDockBox,
+  readDockOpen,
+  readPinsOn,
+  resizeDockCorner,
+  writeDockBox,
+  writeDockOpen,
+  writePinsOn,
+  type DockBox,
+} from "./reviewDock";
 import { shouldShowWaitCard } from "./waitCard";
 
 function browserStore(): Storage | null {
@@ -81,9 +91,48 @@ export function ReviewPage({ taskId, onBack }: Props) {
   const [pinsOn, setPinsOn] = useState(() => readPinsOn(browserStore()));
   const viewRef = useRef<HTMLDivElement>(null);
   const deskRef = useRef<HTMLDivElement>(null);
+  const zoomElRef = useRef<HTMLDivElement>(null);
+  const dockRef = useRef<HTMLElement>(null);
+  const zoomRef = useRef(zoom);
+  const [dockBox, setDockBox] = useState<DockBox>(() => readDockBox(browserStore()));
   const panDrag = useRef<{ x: number; y: number } | null>(null);
+  const panRaf = useRef<number | null>(null);
+  const dockResize = useRef<{ x: number; y: number; box: DockBox } | null>(null);
   const pendingFit = useRef<number | null>(null);
   const fitHitRef = useRef<(i: number) => void>(() => undefined);
+
+  function paintZoom(next: typeof zoom) {
+    const el = zoomElRef.current;
+    if (el) el.style.transform = zoomCss(next);
+  }
+
+  function commitZoom(next: typeof zoom) {
+    zoomRef.current = next;
+    paintZoom(next);
+    setZoom(next);
+  }
+
+  useLayoutEffect(() => {
+    paintZoom(zoomRef.current);
+  });
+
+  function deskRoom() {
+    const el = deskRef.current;
+    return { w: el?.clientWidth || 800, h: el?.clientHeight || 600 };
+  }
+
+  function commitDock(box: DockBox) {
+    const next = clampDockBox(box, deskRoom());
+    setDockBox(next);
+    writeDockBox(browserStore(), next);
+  }
+
+  useEffect(() => {
+    setDockBox((cur) => clampDockBox(cur, deskRoom()));
+    const onWin = () => setDockBox((cur) => clampDockBox(cur, deskRoom()));
+    window.addEventListener("resize", onWin);
+    return () => window.removeEventListener("resize", onWin);
+  }, []);
 
   useEffect(() => {
     if (!taskId) return;
@@ -160,7 +209,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
 
   useEffect(() => {
     setNat(null);
-    setZoom(resetZoom());
+    commitZoom(resetZoom());
   }, [page?.url]);
 
   useEffect(() => {
@@ -182,7 +231,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
       const ox = e.clientX - rect.left;
       const oy = e.clientY - rect.top;
       const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
-      setZoom((z) => zoomAt(z, z.scale * factor, ox, oy));
+      commitZoom(zoomAt(zoomRef.current, zoomRef.current.scale * factor, ox, oy));
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
@@ -262,10 +311,10 @@ export function ReviewPage({ taskId, onBack }: Props) {
     if (!h || !metrics || !el) return;
     const box = pickHitBox(h.bboxes, Number(h.page) || pageNo);
     if (!box) {
-      setZoom(resetZoom());
+      commitZoom(resetZoom());
       return;
     }
-    setZoom(zoomToBox(box, metrics, { width: el.clientWidth, height: el.clientHeight }));
+    commitZoom(zoomToBox(box, metrics, { width: el.clientWidth, height: el.clientHeight }));
   }
   fitHitRef.current = fitHit;
 
@@ -320,7 +369,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
                 setUseV2((v) => !v);
                 setPageIdx(0);
                 setActive(0);
-                setZoom(resetZoom());
+                commitZoom(resetZoom());
               }}
             >
               {useV2 ? "看这一版" : "看上一版"}
@@ -356,10 +405,23 @@ export function ReviewPage({ taskId, onBack }: Props) {
                 </button>
               ))
             : null}
+          {reviewable ? (
+            <label className="review-conclusion">
+              <Input
+                aria-label="结论"
+                placeholder="结论，签字要用"
+                value={conclusion}
+                disabled={busy}
+                onChange={(e) => setConclusion(e.target.value)}
+              />
+            </label>
+          ) : signed && conclusion ? (
+            <span className="review-conclusion-done">{conclusion}</span>
+          ) : null}
           <button
             type="button"
             className="btn-primary"
-            disabled={!reviewable || busy}
+            disabled={!reviewable || busy || !conclusion.trim()}
             onClick={() => void signOff()}
           >
             {hits.some((h) => h.decision === "issue") ? "签字并待设计改稿" : "签字"}
@@ -384,38 +446,56 @@ export function ReviewPage({ taskId, onBack }: Props) {
             <div
               className="canvas-view"
               ref={viewRef}
+              onDragStart={(e) => e.preventDefault()}
               onPointerDown={(e) => {
                 if (e.button !== 0) return;
+                e.preventDefault();
                 panDrag.current = { x: e.clientX, y: e.clientY };
+                e.currentTarget.classList.add("is-panning");
                 (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
               }}
               onPointerMove={(e) => {
                 const d = panDrag.current;
                 if (!d) return;
+                e.preventDefault();
                 const dx = e.clientX - d.x;
                 const dy = e.clientY - d.y;
-                panDrag.current = { x: e.clientX, y: e.clientY };
-                setZoom((z) => panBy(z, dx, dy));
+                d.x = e.clientX;
+                d.y = e.clientY;
+                const next = panBy(zoomRef.current, dx, dy);
+                zoomRef.current = next;
+                if (panRaf.current == null) {
+                  panRaf.current = window.requestAnimationFrame(() => {
+                    panRaf.current = null;
+                    paintZoom(zoomRef.current);
+                  });
+                }
               }}
-              onPointerUp={() => {
+              onPointerUp={(e) => {
+                e.currentTarget.classList.remove("is-panning");
+                if (panRaf.current != null) {
+                  window.cancelAnimationFrame(panRaf.current);
+                  panRaf.current = null;
+                }
+                paintZoom(zoomRef.current);
+                setZoom(zoomRef.current);
                 panDrag.current = null;
               }}
-              onPointerCancel={() => {
+              onPointerCancel={(e) => {
+                e.currentTarget.classList.remove("is-panning");
                 panDrag.current = null;
               }}
-              onLostPointerCapture={() => {
+              onLostPointerCapture={(e) => {
+                e.currentTarget.classList.remove("is-panning");
                 panDrag.current = null;
               }}
             >
-              <div
-                className="canvas-zoom"
-                style={{
-                  transform: `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.scale})`,
-                }}
-              >
+              <div className="canvas-zoom" ref={zoomElRef} style={{ transform: zoomCss(zoom) }}>
                 <img
                   src={page.url}
                   alt=""
+                  draggable={false}
+                  onDragStart={(e) => e.preventDefault()}
                   onLoad={(e) => {
                     const img = e.currentTarget;
                     if (img.naturalWidth > 1 && img.naturalHeight > 1) {
@@ -423,35 +503,33 @@ export function ReviewPage({ taskId, onBack }: Props) {
                     }
                   }}
                 />
-                {pinsOn
-                  ? pinHits.map(({ h, i }) => {
-                      const overlays = overlaysForHit(h.bboxes, pageNo, metrics);
-                      const preferred = pickHitBox(h.bboxes, pageNo);
-                      const pin = preferred && metrics ? overlayFromBox(preferred, metrics) : null;
-                      return (
-                        <Fragment key={h.id || i}>
-                          {overlays.map((ov, k) => (
-                            <span
-                              key={`${h.id || i}-box-${k}`}
-                              className={`hit-box ${ov.kind === "warn" ? "is-warn" : ""} ${i === active ? "is-on" : "is-dim"}`.trim()}
-                              style={{ left: ov.left, top: ov.top, width: ov.width, height: ov.height }}
-                            />
-                          ))}
-                          {pin ? (
-                            <button
-                              type="button"
-                              className={i === active ? "pin is-on" : "pin is-dim"}
-                              style={{ left: pin.pinLeft, top: pin.pinTop }}
-                              onPointerDown={(e) => e.stopPropagation()}
-                              onClick={() => pickHit(i)}
-                            >
-                              {i + 1}
-                            </button>
-                          ) : null}
-                        </Fragment>
-                      );
-                    })
-                  : null}
+                {pinHits.map(({ h, i }) => {
+                  const overlays = overlaysForHit(h.bboxes, pageNo, metrics);
+                  const preferred = pickHitBox(h.bboxes, pageNo);
+                  const pin = preferred && metrics ? overlayFromBox(preferred, metrics) : null;
+                  return (
+                    <Fragment key={h.id || i}>
+                      {overlays.map((ov, k) => (
+                        <span
+                          key={`${h.id || i}-box-${k}`}
+                          className={`hit-box ${ov.kind === "warn" ? "is-warn" : ""} ${i === active ? "is-on" : "is-dim"}`.trim()}
+                          style={{ left: ov.left, top: ov.top, width: ov.width, height: ov.height }}
+                        />
+                      ))}
+                      {pinsOn && pin ? (
+                        <button
+                          type="button"
+                          className={i === active ? "pin is-on" : "pin is-dim"}
+                          style={{ left: pin.pinLeft, top: pin.pinTop }}
+                          onPointerDown={(e) => e.stopPropagation()}
+                          onClick={() => pickHit(i)}
+                        >
+                          {i + 1}
+                        </button>
+                      ) : null}
+                    </Fragment>
+                  );
+                })}
               </div>
               <div className="canvas-tools" onPointerDown={(e) => e.stopPropagation()}>
                 <button
@@ -460,7 +538,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
                   onClick={() => {
                     const el = viewRef.current;
                     if (!el) return;
-                    setZoom((z) => zoomAt(z, z.scale * 1.2, el.clientWidth / 2, el.clientHeight / 2));
+                    commitZoom(zoomAt(zoomRef.current, zoomRef.current.scale * 1.2, el.clientWidth / 2, el.clientHeight / 2));
                   }}
                 >
                   放大
@@ -471,12 +549,12 @@ export function ReviewPage({ taskId, onBack }: Props) {
                   onClick={() => {
                     const el = viewRef.current;
                     if (!el) return;
-                    setZoom((z) => zoomAt(z, z.scale / 1.2, el.clientWidth / 2, el.clientHeight / 2));
+                    commitZoom(zoomAt(zoomRef.current, zoomRef.current.scale / 1.2, el.clientWidth / 2, el.clientHeight / 2));
                   }}
                 >
                   缩小
                 </button>
-                <button type="button" className="btn-ghost" onClick={() => setZoom(resetZoom())}>
+                <button type="button" className="btn-ghost" onClick={() => commitZoom(resetZoom())}>
                   复位
                 </button>
                 <button
@@ -504,12 +582,17 @@ export function ReviewPage({ taskId, onBack }: Props) {
             />
           )}
           <p className="page-lead" style={{ padding: "0 16px 12px" }}>
-            紫框 已命中 · 黄框 待核对 · 点核对窗序号，图上放大这一条 · 滚轮缩放
+            紫框 已命中 · 黄框 待核对 · 隐藏钉只藏编号 · 拖动画布 · 滚轮缩放
           </p>
         </div>
 
         {dockOpen ? (
-          <aside className="notes glass-pane is-float">
+          <aside
+            ref={dockRef}
+            className="notes glass-pane is-float"
+            style={{ width: dockBox.w, height: dockBox.h }}
+            onPointerDown={(e) => e.stopPropagation()}
+          >
             <div className="notes-toolbar">
               <p className="field-label" style={{ color: "var(--muted)", margin: 0 }}>
                 当前字段
@@ -617,28 +700,55 @@ export function ReviewPage({ taskId, onBack }: Props) {
                 </div>
               </div>
             </div>
-            <div className="notes-foot">
-              {task?.rework_check && task.rework_check.length > 0 ? (
-                <>
-                  <p className="field-label">对红</p>
-                  {task.rework_check.map((row) => (
-                    <div key={row.field} className="hit-card">
-                      <strong>{row.field}</strong>
-                      <div>上一版：{row.v1_status}</div>
-                      <div>这一版：{row.v2_status}</div>
-                    </div>
-                  ))}
-                </>
-              ) : null}
-              <p className="field-label">写下结论</p>
-              <Input.TextArea
-                rows={3}
-                value={conclusion}
-                disabled={!reviewable}
-                onChange={(e) => setConclusion(e.target.value)}
-                placeholder="人话结论，不是系统过审"
-              />
-            </div>
+            {task?.rework_check && task.rework_check.length > 0 ? (
+              <div className="notes-foot">
+                <p className="field-label">对红</p>
+                {task.rework_check.map((row) => (
+                  <div key={row.field} className="hit-card">
+                    <strong>{row.field}</strong>
+                    <div>上一版：{row.v1_status}</div>
+                    <div>这一版：{row.v2_status}</div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            <button
+              type="button"
+              className="notes-resize"
+              aria-label="缩放核对窗"
+              onPointerDown={(e) => {
+                if (e.button !== 0) return;
+                e.preventDefault();
+                e.stopPropagation();
+                dockResize.current = { x: e.clientX, y: e.clientY, box: dockBox };
+                (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+              }}
+              onPointerMove={(e) => {
+                const start = dockResize.current;
+                if (!start) return;
+                const next = resizeDockCorner(
+                  start.box,
+                  { dx: e.clientX - start.x, dy: e.clientY - start.y },
+                  deskRoom(),
+                );
+                const el = dockRef.current;
+                if (el) {
+                  el.style.width = `${next.w}px`;
+                  el.style.height = `${next.h}px`;
+                }
+              }}
+              onPointerUp={(e) => {
+                const start = dockResize.current;
+                dockResize.current = null;
+                if (!start) return;
+                commitDock(
+                  resizeDockCorner(start.box, { dx: e.clientX - start.x, dy: e.clientY - start.y }, deskRoom()),
+                );
+              }}
+              onPointerCancel={() => {
+                dockResize.current = null;
+              }}
+            />
           </aside>
         ) : (
           <button

@@ -29,6 +29,10 @@ export function panBy(state: ZoomState, dx: number, dy: number): ZoomState {
   return { scale: state.scale, x: state.x + dx, y: state.y + dy };
 }
 
+export function zoomCss(state: ZoomState): string {
+  return `translate(${state.x}px, ${state.y}px) scale(${state.scale})`;
+}
+
 export type PixelBox = { left: number; top: number; width: number; height: number };
 
 /** Fit a page-pixel box into the visible canvas (~62% of the view). */
