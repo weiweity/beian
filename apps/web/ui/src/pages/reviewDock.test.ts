@@ -27,7 +27,7 @@ describe("reviewDock", () => {
     assert.equal(readDockOpen(null), true);
     assert.equal(readPinsOn(null), true);
     assert.equal(readBoxesOn(null), true);
-    assert.equal(readDockPlace(null).top, 8);
+    assert.equal(readDockPlace(null).top, 72);
     assert.equal(readDockOpen({ getItem: () => "shut" }), false);
     assert.equal(readPinsOn({ getItem: () => "off" }), false);
     assert.equal(readBoxesOn({ getItem: () => "off" }), false);
@@ -48,7 +48,9 @@ describe("reviewDock", () => {
     assert.equal(readDockOpen(store), false);
     assert.equal(readPinsOn(store), false);
     assert.equal(readBoxesOn(store), false);
-    assert.deepEqual(readDockPlace(store), { top: 24, right: 40 });
+    assert.deepEqual(readDockPlace(store), { top: 72, right: 40 });
+    writeDockPlace(store, { top: 96, right: 40 });
+    assert.deepEqual(readDockPlace(store), { top: 96, right: 40 });
     writeDockOpen(store, true);
     writePinsOn(store, true);
     writeBoxesOn(store, true);
@@ -88,6 +90,57 @@ describe("reviewDock", () => {
     const parked = clampDockPlace({ top: 9000, right: -4 }, { w: 800, h: 600 }, { w: 400, h: 300 });
     assert.equal(parked.top, 292);
     assert.equal(parked.right, 8);
+    const lifted = clampDockPlace({ top: 8, right: 8 }, { w: 1200, h: 900 }, { w: 400, h: 300 });
+    assert.equal(lifted.top, 72);
+    const north = resizeDockHandle(
+      { w: 400, h: 400 },
+      { top: 80, right: 40 },
+      { dx: 0, dy: -20 },
+      { w: 1200, h: 900 },
+      "n",
+    );
+    assert.equal(north.box.h, 420);
+    assert.equal(north.place.top, 72);
+    const east = resizeDockHandle(
+      { w: 400, h: 400 },
+      { top: 80, right: 40 },
+      { dx: 30, dy: 0 },
+      { w: 1200, h: 900 },
+      "e",
+    );
+    assert.equal(east.box.w, 430);
+    assert.equal(east.place.right, 10);
+  });
+
+  it("resizes the remaining six handles and floors a short room to 8", () => {
+    const room = { w: 1200, h: 900 };
+    const start = { w: 400, h: 400 };
+    const place = { top: 80, right: 40 };
+    const south = resizeDockHandle(start, place, { dx: 0, dy: 30 }, room, "s");
+    assert.equal(south.box.h, 430);
+    assert.equal(south.place.top, 80);
+    assert.equal(south.place.right, 40);
+    const west = resizeDockHandle(start, place, { dx: -20, dy: 0 }, room, "w");
+    assert.equal(west.box.w, 420);
+    assert.equal(west.place.right, 40);
+    const nw = resizeDockHandle(start, place, { dx: 20, dy: 20 }, room, "nw");
+    assert.equal(nw.box.w, 380);
+    assert.equal(nw.box.h, 380);
+    assert.equal(nw.place.top, 100);
+    assert.equal(nw.place.right, 40);
+    const ne = resizeDockHandle(start, place, { dx: 20, dy: 20 }, room, "ne");
+    assert.equal(ne.box.w, 420);
+    assert.equal(ne.box.h, 380);
+    assert.equal(ne.place.top, 100);
+    assert.equal(ne.place.right, 20);
+    const sw = resizeDockHandle(start, place, { dx: -40, dy: 20 }, room);
+    assert.equal(sw.box.w, 440);
+    assert.equal(sw.box.h, 420);
+    const short = clampDockPlace({ top: 4, right: 8 }, { w: 400, h: 300 }, { w: 320, h: 280 });
+    assert.equal(short.top, 8);
+    const nanTop = clampDockPlace({ top: Number.NaN, right: 8 }, room, { w: 400, h: 300 });
+    assert.equal(nanTop.top, 72);
+    assert.equal(readDockPlace({ getItem: () => "{" }).top, 72);
   });
 
   it("skips pack-sheet fields", () => {
