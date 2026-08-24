@@ -99,7 +99,7 @@ export type FieldHit = {
   note?: string;
   decision?: string;
   bboxes?: Array<Record<string, unknown>>;
-  coverage?: { miss?: string[]; hit?: string[]; ratio?: number };
+  coverage?: { miss?: string[]; hit?: string[]; ratio?: number; matched?: number; total?: number };
   evidence?: string;
 };
 

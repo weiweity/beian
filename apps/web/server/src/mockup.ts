@@ -157,14 +157,16 @@ export function collectOutputs(root: string): MockupJob["files"] {
     if (!existsSync(dir)) return;
     for (const name of readdirSync(dir, { withFileTypes: true })) {
       const p = join(dir, name.name);
-      if (name.isDirectory()) walk(p);
-      else if (/\.(glb|png|pptx)$/i.test(name.name)) {
+      if (name.isDirectory()) {
+        if (!name.name.startsWith(".")) walk(p);
+      } else if (/\.(glb|png|pptx|pdf)$/i.test(name.name)) {
         const lower = name.name.toLowerCase();
         let key = "";
         if (lower.endsWith(".glb")) key = "glb";
         else if (lower.endsWith(".pptx")) key = "ppt";
-        else if (lower.includes("front_right")) key = "white_a";
-        else if (lower.includes("back_left")) key = "white_b";
+        else if (lower.endsWith(".pdf") && lower.includes("white_sheet")) key = "sheet";
+        else if (lower.endsWith(".png") && lower.includes("front_right")) key = "white_a";
+        else if (lower.endsWith(".png") && lower.includes("back_left")) key = "white_b";
         else continue;
         if (found.some((f) => f.key === key)) continue;
         found.push({ key, path: p, name: basename(p) });

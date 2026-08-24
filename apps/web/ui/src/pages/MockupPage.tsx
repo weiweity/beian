@@ -299,6 +299,7 @@ export function MockupJobPage({ jobId, onBack }: JobProps) {
   const whiteB = (job.files || []).find((f) => f.key === "white_b");
   const hasGlb = (job.files || []).some((f) => f.key === "glb");
   const hasPpt = (job.files || []).some((f) => f.key === "ppt");
+  const hasSheet = (job.files || []).some((f) => f.key === "sheet");
 
   return (
     <section className="mockup-sheet">
@@ -307,9 +308,16 @@ export function MockupJobPage({ jobId, onBack }: JobProps) {
           <h1 className="page-title">{mockTitle(job)}</h1>
           <p className="page-lead">打样单。白底是正面+侧面、反面+侧面；GLB 全屏转一转再截图。</p>
         </div>
-        <button type="button" className="btn-ghost" onClick={onBack}>
-          返回打样台
-        </button>
+        <div style={{ display: "grid", gap: 8, justifyItems: "end" }}>
+          <button type="button" className="btn-ghost" onClick={onBack}>
+            返回打样台
+          </button>
+          {hasSheet ? (
+            <a className="btn-ghost" href={fileHref(job.id, "sheet", true)} download>
+              下载 PDF
+            </a>
+          ) : null}
+        </div>
       </header>
 
       {job.status === "failed" ? (
@@ -318,54 +326,52 @@ export function MockupJobPage({ jobId, onBack }: JobProps) {
 
       <div className="mockup-sheet-photos">
         {whiteA ? (
-          <WhiteShot jobId={job.id} fileKey="white_a" alt="正面与侧面白底" caption="正面 + 侧面" />
-        ) : null}
+          <WhiteShot jobId={job.id} fileKey="white_a" alt="正面与侧面白底" caption="正面 + 侧面" downloadName={whiteA.name} />
+        ) : (
+          <figure className="mockup-sheet-photo">
+            <p className="page-lead">还没有正面+侧面。</p>
+          </figure>
+        )}
         {whiteB ? (
-          <WhiteShot jobId={job.id} fileKey="white_b" alt="反面与侧面白底" caption="反面 + 侧面" />
-        ) : null}
-      </div>
-
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
-        {whiteA ? (
-          <a className="btn-ghost" href={fileHref(job.id, "white_a", true)} download={whiteA.name}>
-            下载正面+侧面
-          </a>
-        ) : null}
-        {whiteB ? (
-          <a className="btn-ghost" href={fileHref(job.id, "white_b", true)} download={whiteB.name}>
-            下载反面+侧面
-          </a>
-        ) : null}
-        {hasPpt ? (
-          <a className="btn-ghost" href={fileHref(job.id, "ppt", true)} download>
-            下载 PPT
-          </a>
-        ) : job.status === "done" ? (
-          <span className="page-lead">本机没有 Node 时 PPT 会跳过，白底和 GLB 仍能出。</span>
-        ) : null}
+          <WhiteShot jobId={job.id} fileKey="white_b" alt="反面与侧面白底" caption="反面 + 侧面" downloadName={whiteB.name} />
+        ) : (
+          <figure className="mockup-sheet-photo">
+            <p className="page-lead">还没有反面+侧面。</p>
+          </figure>
+        )}
         {hasGlb ? (
-          <a className="btn-ghost" href={fileHref(job.id, "glb", true)} download>
-            下载 GLB
-          </a>
-        ) : null}
+          <figure className="mockup-sheet-photo mockup-sheet-glb-wrap">
+            <div className="mockup-sheet-glb" ref={glbBox}>
+              <a className="btn-ghost" href={fileHref(job.id, "glb", true)} download>
+                下载 GLB
+              </a>
+              <button
+                type="button"
+                className="btn-ghost mockup-sheet-glb-fs"
+                onClick={() => {
+                  const el = glbBox.current;
+                  if (el && el.requestFullscreen) void el.requestFullscreen();
+                }}
+              >
+                全屏截图
+              </button>
+              <model-viewer src={fileHref(job.id, "glb")} camera-controls />
+            </div>
+            <figcaption>GLB</figcaption>
+          </figure>
+        ) : (
+          <figure className="mockup-sheet-photo">
+            <Empty description={job.status === "done" ? "没有 GLB。看上面的失败原因。" : "GLB 还没出"} />
+          </figure>
+        )}
       </div>
 
-      {hasGlb ? (
-        <div className="mockup-sheet-glb" ref={glbBox}>
-          <button
-            type="button"
-            className="btn-ghost"
-            onClick={() => {
-              const el = glbBox.current;
-              if (el && el.requestFullscreen) void el.requestFullscreen();
-            }}
-          >
-            全屏截图
-          </button>
-          <model-viewer src={fileHref(job.id, "glb")} camera-controls />
-        </div>
+      {hasPpt ? (
+        <a className="btn-ghost" href={fileHref(job.id, "ppt", true)} download>
+          下载 PPT
+        </a>
       ) : job.status === "done" ? (
-        <Empty description="没有 GLB。看上面的失败原因。" />
+        <p className="page-lead">{hasSheet ? "PPT 没写成。白底、GLB 和 PDF 仍可用。" : "PPT 没写成。白底和 GLB 仍可用。"}</p>
       ) : null}
     </section>
   );
@@ -376,15 +382,20 @@ function WhiteShot({
   fileKey,
   alt,
   caption,
+  downloadName,
 }: {
   jobId: string;
   fileKey: "white_a" | "white_b";
   alt: string;
   caption: string;
+  downloadName?: string;
 }) {
   const [bad, setBad] = useState(false);
   return (
     <figure className="mockup-sheet-photo">
+      <a className="btn-ghost" href={fileHref(jobId, fileKey, true)} download={downloadName}>
+        下载
+      </a>
       {bad ? (
         <p className="page-lead">这张白底图坏了，回到打样台重新打。</p>
       ) : (

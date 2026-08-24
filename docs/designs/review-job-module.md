@@ -104,7 +104,7 @@ Python `cli.py` **不再** `save_task`。对照/对红 CLI 只把结果 JSON 打
 
 打样持久化：`DATA_DIR/mockups/{id}/job.json`。内存 Map 只作热缓存，开机以磁盘为准。
 
-打样写回：`runPackaging` 退出码 0 → 现有 `collectOutputs` 填 `files`（只公开 key/name；白底只收 `front_right` / `back_left`，不要把 `ai-raster` 或 PPT 质检 PNG 算进去），`status=done`，`job_status=succeeded`。非 0 或超时 → `status=failed`，`job_status=failed`，`job_error` 截 800 字。不读 packaging 的内部目录当 HTTP 合同。
+打样写回：`runPackaging` 退出码 0 → 现有 `collectOutputs` 填 `files`（只公开 key/name；白底只收 `front_right` / `back_left`，不要把 `ai-raster` 或 PPT 质检 PNG 算进去；另收 `glb` / `ppt` / `sheet`），`status=done`，`job_status=succeeded`。非 0 或超时 → `status=failed`，`job_status=failed`，`job_error` 截 800 字。不读 packaging 的内部目录当 HTTP 合同。
 
 ### HTTP 合同（不新增 `/api/jobs`）
 
@@ -117,7 +117,7 @@ GET 必须走 `publicTask` / `publicMockup`，剥掉 `job_pid`、磁盘 `path`�
 | GET | `/api/tasks` / `/api/tasks/:tid` | 多返回公开作业字段。`board` 仍只看 `task.status`。 |
 | POST | `/api/mockups` | 本机没有 Blender → **当场 412**（不入队、不事后飞书）。有 Blender → 入队，忙则 `queued`，不再 409。 |
 | GET | `/api/mockups` / `/:id` | 读 `job.json`。无 `path`。mockup `status` 仍用现有 `queued\|running\|done\|failed`，不要改成 succeeded。 |
-| GET | `/api/mockups/:id/files/:key` | 只给白底 `front_right`/`back_left`、GLB、PPT。预览 inline，`?download=1` 才附件。`ai-raster`/PPT 质检图或坏 PNG → 415。流式读盘，不一次塞进内存。 |
+| GET | `/api/mockups/:id/files/:key` | 只给白底 `front_right`/`back_left`、GLB、PPT、打样单 PDF（`sheet`）。预览 inline，`?download=1` 才附件。`ai-raster`/PPT 质检图或坏 PNG → 415。流式读盘，不一次塞进内存。缺 PPT 或 PDF 时 404，不要假装能下。 |
 | GET | `/api/health` | 可选。8/31 验收不看。 |
 
 鉴权、设置、账单、飞书登录、页图、`decision` 不变。`complete` 签字门忽略工艺说明 / 颜色要求 / 版本号的 pending（只认字段名开头，避免「执行标准版本号」被误杀）。不迁 FastAPI 的 gold / backup / ai-review / report.pdf / presets。
@@ -171,13 +171,13 @@ Windows 上 spawn 必须进 Job Object，Node 退出时杀掉子进程树。做�
 ### Worker
 
 - 对照 / 对红：`python -m app.cli compare|rework`，最后一行结果 JSON，过程中 `STAGE render_pdf|ocr|match`。不搬 `fields.py`。确认单底部工艺说明 / 颜色要求 / 版本号走 `skip_sheet_field`（字段名开头），不进机审。
-- 打样：`workers/packaging`。POST 时已确认 Blender；跑到一半消失 → failed，写清。stderr 打 `STAGE render_pdf|blender|export`（出图/打样/导出）。入队后 `job_stage` 从 `render_pdf` 开始，不是 `blender`。平面出图用 pymupdf（对照同一 Python），不靠 qlmanage。先读刀线/刀版还原切面；没有刀线才回退已登记 JSON，不能硬套方盒。PATH 里没有 Node 或 ppt 依赖时跳过 PPT（stderr `PPT 跳过`），白底图和 GLB 仍 `done`/`succeeded`，不要把整单判成「Node不存在」。
+- 打样：`workers/packaging`。POST 时已确认 Blender；跑到一半消失 → failed，写清。stderr 打 `STAGE render_pdf|blender|export`（出图/打样/导出）。入队后 `job_stage` 从 `render_pdf` 开始，不是 `blender`。平面出图用 pymupdf（对照同一 Python），不靠 qlmanage。先读刀线/刀版还原切面；密折痕先密后疏试间距；没有刀线才回退已登记 JSON，不能硬套方盒。PPT 先用两张白底写 OOXML，不依赖 Node；写不出才试演示文稿运行时（stderr `PPT 跳过`）。两张白底合成一页 PDF。缺 PPT/PDF 时白底图和 GLB 仍 `done`/`succeeded`，不要把整单判成「Node不存在」。
 - 超时：对照 180s、打样 420s（已有）。超时 = failed，回收槽。
 - 取消：不做。
 
 ### 通知
 
-- 对照 / 对红作业成功或失败各一条飞书。收件人 = 现有 `FEISHU_OPEN_ID`（籽烨），不是 `task.owner`。
+- 对照 / 对红作业成功或失败各一条飞书。收件人 = 现有 `FEISHU_OPEN_ID`（籽烨），不是 `task.owner`。深链对照 `/review/:id`，打样 `/mockup/:id`，不要拼 `/?task=`。
 - 打样飞书：模块里做得到，8/31 演示不作为验收。
 - 签字 `complete` 仍发现有文案。
 - 幂等键：`{tid}:{job_kind}:{job_started_at}`（离开 queued 时写死）。**先写 `notify_job_id` 再 `sendText`**。发送失败保留键、打日志：至多一次，不补发。
@@ -189,7 +189,7 @@ Windows 上 spawn 必须进 Job Object，Node 退出时杀掉子进程树。做�
 
 - `NewTaskPage`：POST 立即返回后进入核对页；核对页见 `job_status in {queued,running}` 或 `status===comparing` 就上 WaitCard。
 - `ReviewPage`：对红 POST 返回 queued 时不要 toast「已对照第二份 PDF」；WaitCard 增加「对红」文案。
-- `MockupPage` / `MockupJobPage`：打样台只交稿和列单。点进度或已出图进打样单；进行中是 WaitCard，完成看白底（正面+侧面、反面+侧面）和 GLB。不要死等 POST；打样单里轮询 GET `/api/mockups/:id`。`status=done|failed` 不当等待卡。
+- `MockupPage` / `MockupJobPage`：打样台只交稿和列单。点进度或已出图进打样单；进行中是 WaitCard，完成一屏三图：正面+侧面、反面+侧面、GLB；每张右上角下载；「返回打样台」下面下载 PDF。不要死等 POST；打样单里轮询 GET `/api/mockups/:id`。`status=done|failed` 不当等待卡。地址 `/mockup` 与 `/mockup/:id`。
 - `WaitCard`：吃 `job_stage` / `job_stage_label`、`job_eta_s`、`queue_ahead`。queued 显示「前面还有 N 单」。
 - `TasksPage`：任一 `board==comparing` 时轮询 `/api/tasks`，否则排队卡片会停在旧状态。卡片用 `liveJobLine` 写阶段和大约还要，不要百分比。
 - 侧栏：`liveNavPulse` 看 `/api/health` 的 jobs 槽；审稿台/打样台作业在跑时有圆点。离开核对页再回看板，仍能看到阶段。
@@ -216,7 +216,7 @@ Windows 上 spawn 必须进 Job Object，Node 退出时杀掉子进程树。做�
 - 同一 notify 键不重发
 - 无 Blender 的 mockup POST = 412
 - 有 Blender 时忙不 409，是 queued
-- 打样文件：白底只认 `front_right`/`back_left`；`ai-raster`/PPT 质检图或坏 PNG → 415；`?download=1` 才附件
+- 打样文件：白底只认 `front_right`/`back_left`；另收 `glb` / `ppt` / `sheet`；`ai-raster`/PPT 质检图或坏 PNG → 415；`?download=1` 才附件
 - saveTask 在目标文件已存在时 replace 成功（Windows 语义）
 
 杀进程的手工脚本可留 Windows；状态机必须单测。

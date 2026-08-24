@@ -1,7 +1,8 @@
 import { lazy, Suspense, useCallback, useEffect, useState, type ReactNode } from "react";
 import { ApiError, api, type Me } from "./api";
-import { authFailureAction, shouldAutoRedirectToFeishu } from "./authGate";
+import { authFailureAction, feishuLoginHref, shouldAutoRedirectToFeishu } from "./authGate";
 import { Sidebar, type NavKey } from "./chrome/Sidebar";
+import { hrefOf, parsePath, type AppView } from "./appRoute";
 import { liveNavPulse } from "./pages/waitCard";
 import { NewTaskPage } from "./pages/NewTaskPage";
 import { ReviewPage } from "./pages/ReviewPage";
@@ -21,7 +22,7 @@ function PaneFallback({ label }: { label: string }) {
   return <p className="boot">{label}</p>;
 }
 
-type View = "tasks" | "new" | "review" | "mockup" | "history" | "settings";
+type View = AppView;
 
 const AUTH_HINT = "wb_login_hint";
 const SIDEBAR_KEY = "wb_sidebar";
@@ -67,32 +68,21 @@ function navOf(view: View): NavKey {
 
 const TASK_DEEPLINK = /^[0-9a-f]{12}$/i;
 const TASK_STASH = "wb_open_task";
+const MOCK_STASH = "wb_open_mockup";
 
-function readTaskDeeplink(search: string): string | null {
-  const raw = new URLSearchParams(search).get("task") || "";
-  return TASK_DEEPLINK.test(raw) ? raw.toLowerCase() : null;
-}
-
-function stripTaskQuery(href: string): string {
-  const url = new URL(href);
-  url.searchParams.delete("task");
-  const qs = url.searchParams.toString();
-  return `${url.pathname}${qs ? `?${qs}` : ""}${url.hash}`;
-}
-
-function stashTaskDeeplink(tid: string) {
+function stashTid(key: string, tid: string) {
   try {
-    sessionStorage.setItem(TASK_STASH, tid);
+    sessionStorage.setItem(key, tid);
   } catch {
     /* ignore */
   }
 }
 
-function takeStashedTask(): string | null {
+function takeStashedTid(key: string): string | null {
   try {
-    const raw = sessionStorage.getItem(TASK_STASH) || "";
+    const raw = sessionStorage.getItem(key) || "";
     if (!TASK_DEEPLINK.test(raw)) return null;
-    sessionStorage.removeItem(TASK_STASH);
+    sessionStorage.removeItem(key);
     return raw.toLowerCase();
   } catch {
     return null;
@@ -110,13 +100,20 @@ function readCollapsed() {
   return window.matchMedia("(max-width: 1024px)").matches;
 }
 
+function bootRoute() {
+  if (typeof window === "undefined") return { view: "tasks" as View, taskId: null as string | null, mockupId: null as string | null };
+  const r = parsePath(window.location.pathname, window.location.search, window.location.hash);
+  return { view: r.view, taskId: r.taskId ?? null, mockupId: r.mockupId ?? null };
+}
+
 export function App() {
   const [me, setMe] = useState<Me | null>(null);
-  const [view, setView] = useState<View>("tasks");
+  const boot = bootRoute();
+  const [view, setView] = useState<View>(boot.view);
   const [authError, setAuthError] = useState<string | null>(null);
   const [apiBroken, setApiBroken] = useState<string | null>(null);
-  const [taskId, setTaskId] = useState<string | null>(null);
-  const [mockupId, setMockupId] = useState<string | null>(null);
+  const [taskId, setTaskId] = useState<string | null>(boot.taskId);
+  const [mockupId, setMockupId] = useState<string | null>(boot.mockupId);
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const [livePulse, setLivePulse] = useState({ review: false, mockup: false });
 
@@ -126,10 +123,8 @@ export function App() {
       setMe(next);
       setApiBroken(null);
       if (next.logged_in) {
-        const tab = new URLSearchParams(window.location.search).get("tab");
-        setView((cur) =>
-          cur === "tasks" && (window.location.hash === "#settings" || tab === "settings") ? "settings" : cur,
-        );
+        const r = parsePath(window.location.pathname, window.location.search, window.location.hash);
+        setView((cur) => (cur === "tasks" && r.view === "settings" ? "settings" : cur));
         setAuthError(null);
       } else {
         setTaskId(null);
@@ -143,8 +138,9 @@ export function App() {
 
   useEffect(() => {
     const err = new URLSearchParams(window.location.search).get("feishu_error") || "";
-    const tid = readTaskDeeplink(window.location.search);
-    if (tid) stashTaskDeeplink(tid);
+    const boot = parsePath(window.location.pathname, window.location.search, window.location.hash);
+    if (boot.taskId) stashTid(TASK_STASH, boot.taskId);
+    if (boot.mockupId) stashTid(MOCK_STASH, boot.mockupId);
     if (err) {
       setAuthError(readAuthHint() || AUTH_FALLBACK[err] || "飞书授权未完成。");
       const url = new URL(window.location.href);
@@ -197,25 +193,45 @@ export function App() {
     ) {
       return;
     }
-    window.location.replace("/api/auth/feishu/login");
+    window.location.replace(feishuLoginHref(window.location.pathname));
   }, [me, loggedIn, authError, apiBroken]);
 
   useEffect(() => {
     if (!loggedIn) return;
-    const fromUrl = readTaskDeeplink(window.location.search);
-    const tid = fromUrl || takeStashedTask();
-    if (!tid) return;
-    if (fromUrl) {
-      window.history.replaceState({}, "", stripTaskQuery(window.location.href));
-      try {
-        sessionStorage.removeItem(TASK_STASH);
-      } catch {
-        /* ignore */
-      }
+    const stashed = takeStashedTid(TASK_STASH);
+    const stashedMock = takeStashedTid(MOCK_STASH);
+    const r = parsePath(window.location.pathname, window.location.search, window.location.hash);
+    if (stashed && r.view === "tasks") {
+      goRoute({ view: "review", taskId: stashed }, "replace");
+      return;
     }
-    setTaskId(tid);
-    setView("review");
+    if (stashedMock && r.view === "tasks") {
+      goRoute({ view: "mockup", mockupId: stashedMock }, "replace");
+      return;
+    }
+    setView(r.view);
+    setTaskId(r.taskId ?? null);
+    setMockupId(r.mockupId ?? null);
+    const href = hrefOf(r);
+    const pathNow = `${window.location.pathname.replace(/\/+$/, "") || "/"}${window.location.search}`;
+    const dirtyQuery =
+      window.location.search.includes("task=") ||
+      window.location.search.includes("mockup=") ||
+      window.location.search.includes("tab=") ||
+      window.location.hash === "#settings";
+    if (dirtyQuery || pathNow !== href) window.history.replaceState({}, "", href);
   }, [loggedIn]);
+
+  useEffect(() => {
+    function onPop() {
+      const r = parsePath(window.location.pathname, window.location.search, window.location.hash);
+      setView(r.view);
+      setTaskId(r.taskId ?? null);
+      setMockupId(r.mockupId ?? null);
+    }
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
 
   function toggleSidebar() {
     setCollapsed((cur) => {
@@ -231,7 +247,7 @@ export function App() {
 
   async function logout() {
     await api.logout();
-    window.location.replace("/api/auth/feishu/login");
+    window.location.replace(feishuLoginHref(window.location.pathname));
   }
 
   function collapsePhoneSheet() {
@@ -244,27 +260,39 @@ export function App() {
     }
   }
 
+  function goRoute(
+    r: { view: View; taskId?: string | null; mockupId?: string | null },
+    mode: "push" | "replace" = "push",
+  ) {
+    setView(r.view);
+    setTaskId(r.taskId ?? null);
+    setMockupId(r.mockupId ?? null);
+    const href = hrefOf(r);
+    const cur = `${window.location.pathname.replace(/\/+$/, "") || "/"}${window.location.search}`;
+    if (mode === "replace") {
+      window.history.replaceState({}, "", href);
+      return;
+    }
+    if (cur !== href) window.history.pushState({}, "", href);
+  }
+
   function go(key: NavKey) {
     if (key === "review") {
-      setView("tasks");
-      setTaskId(null);
+      goRoute({ view: "tasks" });
       collapsePhoneSheet();
       return;
     }
     if (key === "mockup") {
-      setView("mockup");
-      setTaskId(null);
-      setMockupId(null);
+      goRoute({ view: "mockup" });
       collapsePhoneSheet();
       return;
     }
     if (key === "history") {
-      setView("history");
-      setTaskId(null);
+      goRoute({ view: "history" });
       collapsePhoneSheet();
       return;
     }
-    setView("settings");
+    goRoute({ view: "settings" });
     collapsePhoneSheet();
   }
 
@@ -327,50 +355,35 @@ export function App() {
           <Suspense fallback={<PaneFallback label="打开打样台…" />}>
             <MockupDesk
               openId={mockupId}
-              onOpenJob={setMockupId}
-              onBack={() => setMockupId(null)}
+              onOpenJob={(id) => goRoute({ view: "mockup", mockupId: id })}
+              onBack={() => goRoute({ view: "mockup" })}
             />
           </Suspense>
         ) : null}
         {view === "history" ? (
           <Suspense fallback={<PaneFallback label="打开历史记录…" />}>
             <HistoryPage
-              onOpenTask={(id) => {
-                setTaskId(id);
-                setView("review");
-              }}
-              onOpenMockup={(id) => {
-                setMockupId(id);
-                setView("mockup");
-              }}
+              onOpenTask={(id) => goRoute({ view: "review", taskId: id })}
+              onOpenMockup={(id) => goRoute({ view: "mockup", mockupId: id })}
             />
           </Suspense>
         ) : null}
         {view === "tasks" ? (
           <TasksPage
-            onCreate={() => setView("new")}
-            onOpen={(id) => {
-              setTaskId(id);
-              setView("review");
-            }}
+            onCreate={() => goRoute({ view: "new" })}
+            onOpen={(id) => goRoute({ view: "review", taskId: id })}
           />
         ) : null}
         {view === "new" ? (
           <NewTaskPage
-            onCreated={(id) => {
-              setTaskId(id);
-              setView("review");
-            }}
-            onBack={() => setView("tasks")}
+            onCreated={(id) => goRoute({ view: "review", taskId: id })}
+            onBack={() => goRoute({ view: "tasks" })}
           />
         ) : null}
         {view === "review" ? (
           <ReviewPage
             taskId={taskId}
-            onBack={() => {
-              setView("tasks");
-              setTaskId(null);
-            }}
+            onBack={() => goRoute({ view: "tasks" })}
           />
         ) : null}
         </main>

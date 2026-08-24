@@ -1,6 +1,22 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { spaIndexAction } from "./spaIndex.js";
+import { isSpaPath, spaIndexAction } from "./spaIndex.js";
+
+describe("isSpaPath", () => {
+  it("allows desks and ids, rejects api and static", () => {
+    assert.equal(isSpaPath("/"), true);
+    assert.equal(isSpaPath("/new"), true);
+    assert.equal(isSpaPath("/history/"), true);
+    assert.equal(isSpaPath("/settings"), true);
+    assert.equal(isSpaPath("/review"), true);
+    assert.equal(isSpaPath("/review/aabbccddeeff"), true);
+    assert.equal(isSpaPath("/mockup"), true);
+    assert.equal(isSpaPath("/mockup/AABBCCDDEEFF"), true);
+    assert.equal(isSpaPath("/api/health"), false);
+    assert.equal(isSpaPath("/brand/logo-mark.png"), false);
+    assert.equal(isSpaPath("/review/not-an-id"), false);
+  });
+});
 
 describe("spaIndexAction", () => {
   it("keeps the Feishu error page on GET /", () => {

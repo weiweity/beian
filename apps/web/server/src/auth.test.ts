@@ -44,6 +44,9 @@ describe("feishu authorize", () => {
     assert.equal(auth.sanitizeNext("https://evil.example/"), "/");
     assert.equal(auth.sanitizeNext("//evil.example"), "/");
     assert.equal(auth.sanitizeNext("ok"), "/");
+    assert.equal(auth.sanitizeNext("/api/tasks"), "/");
+    assert.equal(auth.sanitizeNext("/review/aabbccddeeff"), "/review/aabbccddeeff");
+    assert.equal(auth.sanitizeNext("/\r\nLocation: https://evil.example"), "/");
   });
 
   it("beginOAuth stores next and consumeOAuth returns it once", () => {

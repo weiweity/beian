@@ -1,6 +1,26 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { authFailureAction, describeBrokenApi, shouldAutoRedirectToFeishu } from "./authGate.js";
+import { authFailureAction, describeBrokenApi, feishuLoginHref, shouldAutoRedirectToFeishu } from "./authGate.js";
+
+describe("feishuLoginHref", () => {
+  it("keeps root login without next", () => {
+    assert.equal(feishuLoginHref("/"), "/api/auth/feishu/login");
+    assert.equal(feishuLoginHref("/api/auth/feishu/login"), "/api/auth/feishu/login");
+    assert.equal(feishuLoginHref("https://evil.example/"), "/api/auth/feishu/login");
+  });
+
+  it("passes a desk path as next", () => {
+    assert.equal(
+      feishuLoginHref("/mockup/aabbccddeeff"),
+      "/api/auth/feishu/login?next=%2Fmockup%2Faabbccddeeff",
+    );
+    assert.equal(
+      feishuLoginHref("/review/aabbccddeeff/"),
+      "/api/auth/feishu/login?next=%2Freview%2Faabbccddeeff",
+    );
+    assert.equal(feishuLoginHref("/foo"), "/api/auth/feishu/login");
+  });
+});
 
 describe("shouldAutoRedirectToFeishu", () => {
   it("does not redirect when already on a proxied /api path", () => {
