@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { Alert, App, Button, Empty, Input, Space, Tag } from "antd";
 import { ApiError, api, type Decision, type FieldHit, type TaskDetail, type TaskPage } from "../api";
 import { WaitCard } from "../chrome/WaitCard";
+import { hitOnPage, overlayFromBox, overlaysForHit, pickHitBox, resolvePageMetrics } from "./pinBox";
 import { shouldShowWaitCard } from "./waitCard";
 
 type Props = {
@@ -43,18 +44,6 @@ function pageList(task: TaskDetail | null): TaskPage[] {
   return raw.filter((p) => p && (p.url || p.name));
 }
 
-function boxLeft(b: Record<string, unknown>, width: number) {
-  const x = Number(b.x ?? b.left ?? 0);
-  const w = Number(width || 1);
-  return `${(x / w) * 100}%`;
-}
-
-function boxTop(b: Record<string, unknown>, height: number) {
-  const y = Number(b.y ?? b.top ?? 0);
-  const h = Number(height || 1);
-  return `${(y / h) * 100}%`;
-}
-
 function buildList(productName: string, hits: FieldHit[]) {
   const issues = hits.filter((h) => h.decision === "issue");
   const lines = [
@@ -87,6 +76,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
   const [conclusion, setConclusion] = useState("");
   const [busy, setBusy] = useState(false);
   const [useV2, setUseV2] = useState(false);
+  const [nat, setNat] = useState<{ width: number; height: number } | null>(null);
 
   useEffect(() => {
     if (!taskId) return;
@@ -154,15 +144,16 @@ export function ReviewPage({ taskId, onBack }: Props) {
   const reworkable = isReworkable(task);
   const current = hits[active];
 
+  const pageNo = Number(page?.page || pageIdx + 1);
+  const metrics = resolvePageMetrics(page, nat);
   const pinHits = useMemo(() => {
-    return hits
-      .map((h, i) => ({ h, i }))
-      .filter(({ h }) => {
-        const p = Number(h.page || 0);
-        const cur = Number(page?.page || pageIdx + 1);
-        return !p || p === cur;
-      });
-  }, [hits, page, pageIdx]);
+    return hits.map((h, i) => ({ h, i })).filter(({ h }) => hitOnPage(h, pageNo));
+  }, [hits, pageNo]);
+  const currentBox = current ? pickHitBox(current.bboxes, Number(current.page) || pageNo) : null;
+
+  useEffect(() => {
+    setNat(null);
+  }, [page?.url]);
 
   if (!taskId) {
     return (
@@ -252,6 +243,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
         job={task.job_kind === "rework" ? "对红" : "对照"}
         jobStatus={task.job_status}
         queueAhead={task.queue_ahead}
+        stage={task.job_stage}
         stageLabel={task.job_stage_label}
         etaS={task.job_eta_s}
       />
@@ -330,26 +322,40 @@ export function ReviewPage({ taskId, onBack }: Props) {
         <div className="canvas glass-pane">
           {page?.url ? (
             <div style={{ position: "relative" }}>
-              <img src={page.url} alt="" />
+              <img
+                src={page.url}
+                alt=""
+                onLoad={(e) => {
+                  const img = e.currentTarget;
+                  if (img.naturalWidth > 1 && img.naturalHeight > 1) {
+                    setNat({ width: img.naturalWidth, height: img.naturalHeight });
+                  }
+                }}
+              />
               {pinHits.map(({ h, i }) => {
-                const box = (h.bboxes && h.bboxes[0]) || {};
-                const w = Number(page.width || 1);
-                const ht = Number(page.height || 1);
-                const hasBox = box && (box.x != null || box.left != null);
+                const overlays = overlaysForHit(h.bboxes, pageNo, metrics);
+                const preferred = pickHitBox(h.bboxes, pageNo);
+                const pin = preferred && metrics ? overlayFromBox(preferred, metrics) : null;
                 return (
-                  <button
-                    key={h.id || i}
-                    type="button"
-                    className={i === active ? "pin is-on" : "pin is-dim"}
-                    style={
-                      hasBox
-                        ? { left: boxLeft(box, w), top: boxTop(box, ht) }
-                        : { left: `${12 + (i % 8) * 28}px`, top: "12px" }
-                    }
-                    onClick={() => pickHit(i)}
-                  >
-                    {i + 1}
-                  </button>
+                  <Fragment key={h.id || i}>
+                    {overlays.map((ov, k) => (
+                      <span
+                        key={`${h.id || i}-box-${k}`}
+                        className={`hit-box ${ov.kind === "warn" ? "is-warn" : ""} ${i === active ? "is-on" : "is-dim"}`.trim()}
+                        style={{ left: ov.left, top: ov.top, width: ov.width, height: ov.height }}
+                      />
+                    ))}
+                    {pin ? (
+                      <button
+                        type="button"
+                        className={i === active ? "pin is-on" : "pin is-dim"}
+                        style={{ left: pin.pinLeft, top: pin.pinTop }}
+                        onClick={() => pickHit(i)}
+                      >
+                        {i + 1}
+                      </button>
+                    ) : null}
+                  </Fragment>
                 );
               })}
             </div>
@@ -389,7 +395,17 @@ export function ReviewPage({ taskId, onBack }: Props) {
                 <p className="pair-k">稿上 OCR</p>
                 <p className="pair-v mono">{pdfText(current)}</p>
               </div>
-              <p className="pair-k">包装定位 · 页 {current.page ?? "?"} · 点定位</p>
+              {Array.isArray(current.coverage?.miss) && current.coverage.miss.length > 0 ? (
+                <div className="pair">
+                  <p className="pair-k">稿上没读到</p>
+                  <p className="pair-v mono">{current.coverage.miss.join("、")}</p>
+                </div>
+              ) : null}
+              <p className="pair-k">
+                {currentBox
+                  ? `包装定位 · 页 ${current.page ?? "?"} · 点定位`
+                  : "包装定位 · 这一条没有图上位置"}
+              </p>
               {reviewable && current.id ? (
                 <Space wrap>
                   <Button size="small" onClick={() => void decide(current, "confirm")}>

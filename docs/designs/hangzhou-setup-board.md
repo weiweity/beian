@@ -25,7 +25,7 @@ Related: `DESIGN.md`（设置 = 外观 / 开工板 / 费用 / 密钥）、`docs/
 
 - 计算：产品入口应是杭州 `:8787`。当前 `www.jianghua.site` 经常是 Mac 隧道，合 GitHub 不会升杭州。
 - 配置：魏炜在设置里粘贴 App ID / Secret / OCR Key / MiniMax Key / Blender 路径。籽烨飞书登录后传 Excel/PDF。
-- 打样：平面稿 PDF/AI 进 `workers/packaging`；缺 Blender 会 412。Illustrator COM、qlmanage 替换写在章程 8/31 不做。
+- 打样：平面稿 PDF/AI 进 `workers/packaging`；缺 Blender 会 412。平面 PDF 出图已用 pymupdf，杭州不靠 qlmanage。Illustrator COM 仍写在章程 8/31 不做。
 - 探测：开工板对 feishu / baidu / python / blender / lark / minimax 调 probe。「通了」没有说通的是哪一种接口。
 
 ## Target User & Narrowest Wedge

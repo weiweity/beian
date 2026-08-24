@@ -26,7 +26,7 @@ except ImportError:
     raise
 
 
-PIPELINE_VERSION = "1.2.0"
+PIPELINE_VERSION = "1.2.1"
 ROOT = Path(__file__).resolve().parent
 BLENDER_SCRIPT = ROOT / "blender" / "render_job.py"
 PPT_SCRIPT = ROOT / "ppt" / "build_product_ppt.mjs"
@@ -130,26 +130,62 @@ def make_layer_pdf(source: Path, output: Path, enabled_names: set[str]) -> None:
         writer.write(stream)
 
 
+def emit_stage(name: str) -> None:
+    print(f"STAGE {name}", file=sys.stderr, flush=True)
+
+
 def render_pdf_thumbnail(source: Path, output_dir: Path, width_px: int) -> Path:
+    """pymupdf 先（杭州 Windows）；macOS 上 qlmanage 兜底。"""
     output_dir.mkdir(parents=True, exist_ok=True)
-    command = [
-        "/usr/bin/qlmanage",
-        "-t",
-        "-s",
-        str(width_px),
-        "-o",
-        str(output_dir),
-        str(source),
-    ]
-    process = subprocess.run(command, capture_output=True, text=True)
-    if process.returncode != 0:
-        raise PipelineError(
-            f"Quick Look渲染失败：{source}\n{process.stdout}\n{process.stderr}"
-        )
-    candidates = sorted(output_dir.glob("*.png"), key=lambda item: item.stat().st_mtime)
-    if not candidates:
-        raise PipelineError(f"Quick Look没有生成PNG：{source}")
-    return candidates[-1]
+    pymupdf_error: Exception | None = None
+    try:
+        import pymupdf
+
+        doc = pymupdf.open(str(source))
+        try:
+            if doc.page_count < 1:
+                raise PipelineError("平面没有页")
+            page = doc[0]
+            page.set_cropbox(page.mediabox)
+            width = float(page.mediabox.width)
+            height = float(page.mediabox.height)
+            if width <= 1 or height <= 1:
+                raise PipelineError("平面页宽异常")
+            zoom = float(width_px) / width
+            pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), alpha=False)
+            out = output_dir / f"{source.stem}.png"
+            pix.save(str(out))
+            return out
+        finally:
+            doc.close()
+    except PipelineError:
+        raise
+    except Exception as err:
+        pymupdf_error = err
+
+    ql = Path("/usr/bin/qlmanage")
+    if ql.is_file():
+        command = [
+            str(ql),
+            "-t",
+            "-s",
+            str(width_px),
+            "-o",
+            str(output_dir),
+            str(source),
+        ]
+        process = subprocess.run(command, capture_output=True, text=True)
+        if process.returncode == 0:
+            named = output_dir / f"{source.stem}.png"
+            if named.is_file():
+                return named
+            candidates = sorted(output_dir.glob(f"{source.stem}*.png"), key=lambda item: item.stat().st_mtime)
+            if candidates:
+                return candidates[-1]
+        raise PipelineError("Quick Look渲染失败")
+    if pymupdf_error is not None:
+        raise PipelineError("渲染平面失败")
+    raise PipelineError("渲染平面失败")
 
 
 def scaled_box(box: list[int] | tuple[int, ...], scale: float) -> tuple[int, ...]:
@@ -560,6 +596,7 @@ def main() -> int:
     generate_ppt = bool(manifest.get("generate_ppt", True)) and not args.no_ppt
     illustrator_config = manifest.get("illustrator", {"enabled": True})
 
+    emit_stage("render_pdf")
     jobs = [
         preflight_product(
             product,
@@ -574,6 +611,7 @@ def main() -> int:
 
     blender_jobs = [job for job in jobs if not job.get("cache_hit")]
     if blender_jobs:
+        emit_stage("blender")
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
             futures = {
                 pool.submit(run_blender_job, job, blender_executable): job["code"]
@@ -596,6 +634,7 @@ def main() -> int:
             or args.force_illustrator
         ]
         if ppt_jobs:
+            emit_stage("export")
             mark_presentation_operation(len(ppt_jobs), runtime)
             with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
                 futures = {

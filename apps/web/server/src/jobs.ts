@@ -268,8 +268,8 @@ function claimMockup(job: MockupJob): void {
   job.job_status = "running";
   job.status = "running";
   job.job_started_at = nowIso();
-  job.job_stage = "blender";
-  job.job_stage_label = STAGE_LABEL.blender;
+  job.job_stage = "render_pdf";
+  job.job_stage_label = STAGE_LABEL.render_pdf;
   job.job_eta_s = 240;
   job.job_error = undefined;
   delete job.job_pid;

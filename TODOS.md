@@ -56,7 +56,10 @@
 ## P3 — 9 月以后
 
 - [x] 3D Worker 接线（打样台调用 pipeline；缺 Blender 会失败而不是装可用）
-- [ ] Illustrator COM / qlmanage 替换
+- [x] **qlmanage 替换（平面出图）**  
+  打样 PDF 栅格走 pymupdf（对照同一 `.venv`）；macOS qlmanage 仅兜底。杭州不依赖 Quick Look。  
+  **Completed:** v0.12.11.0 (2026-08-24)
+- [ ] Illustrator COM 替换（非 PDF 兼容 `.ai` 仍走本机 Illustrator；杭州 COM 未接线）
 - [ ] Windows 开机自启 + Tunnel 掉线告警
 - [ ] SQLite / 异步通用队列
 - [ ] React 审稿台接 OpenSeadragon（若 8/31 冻结了换栈）

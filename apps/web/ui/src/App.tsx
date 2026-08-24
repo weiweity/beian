@@ -2,6 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useState, type ReactNode } from
 import { ApiError, api, type Me } from "./api";
 import { authFailureAction, shouldAutoRedirectToFeishu } from "./authGate";
 import { Sidebar, type NavKey } from "./chrome/Sidebar";
+import { liveNavPulse } from "./pages/waitCard";
 import { NewTaskPage } from "./pages/NewTaskPage";
 import { ReviewPage } from "./pages/ReviewPage";
 import { TasksPage } from "./pages/TasksPage";
@@ -117,6 +118,7 @@ export function App() {
   const [taskId, setTaskId] = useState<string | null>(null);
   const [mockupId, setMockupId] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState(readCollapsed);
+  const [livePulse, setLivePulse] = useState({ review: false, mockup: false });
 
   const refreshMe = useCallback(async () => {
     try {
@@ -155,6 +157,33 @@ export function App() {
   }, []);
 
   const loggedIn = Boolean(me?.logged_in);
+
+  useEffect(() => {
+    if (!loggedIn) return;
+    let cancelled = false;
+    const tick = () => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      void api
+        .health()
+        .then((h) => {
+          if (cancelled) return;
+          const next = liveNavPulse(h);
+          setLivePulse((cur) => (cur.review === next.review && cur.mockup === next.mockup ? cur : next));
+        })
+        .catch(() => undefined);
+    };
+    tick();
+    const id = window.setInterval(tick, 4000);
+    const onVis = () => {
+      if (!document.hidden) tick();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [loggedIn]);
 
   useEffect(() => {
     if (me === null) return;
@@ -281,6 +310,7 @@ export function App() {
           onNavigate={go}
           onToggle={toggleSidebar}
           onLogout={() => void logout()}
+          livePulse={livePulse}
         />
         <main className={view === "settings" ? "stage stage-flush" : "stage"}>
         {view === "settings" ? (
