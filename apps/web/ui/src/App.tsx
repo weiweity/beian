@@ -10,8 +10,8 @@ import { TasksPage } from "./pages/TasksPage";
 const HistoryPage = lazy(() =>
   import("./pages/HistoryPage").then((m) => ({ default: m.HistoryPage })),
 );
-const MockupPage = lazy(() =>
-  import("./pages/MockupPage").then((m) => ({ default: m.MockupPage })),
+const MockupDesk = lazy(() =>
+  import("./pages/MockupPage").then((m) => ({ default: m.MockupDesk })),
 );
 const SettingsPage = lazy(() =>
   import("./pages/SettingsPage").then((m) => ({ default: m.SettingsPage })),
@@ -325,7 +325,11 @@ export function App() {
         ) : null}
         {view === "mockup" ? (
           <Suspense fallback={<PaneFallback label="打开打样台…" />}>
-            <MockupPage openId={mockupId} />
+            <MockupDesk
+              openId={mockupId}
+              onOpenJob={setMockupId}
+              onBack={() => setMockupId(null)}
+            />
           </Suspense>
         ) : null}
         {view === "history" ? (

@@ -1,14 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Alert, App, Button, Empty, Space, Tag, Typography } from "antd";
+import { Alert, App, Empty, Tag } from "antd";
 import { api, type MockupJob } from "../api";
 import { UploadWell } from "../chrome/UploadWell";
 import { WaitCard } from "../chrome/WaitCard";
 import { mockupFailReason, mockupFailTag } from "./mockupError";
-import { liveJobLine, pickLiveMockup, shouldShowWaitCard } from "./waitCard";
+import { liveJobLine, shouldShowWaitCard } from "./waitCard";
 import { stemFromFilename } from "./stemName";
 import "@google/model-viewer";
 
-type Props = { openId?: string | null };
+type DeskProps = { onOpenJob: (id: string) => void };
+type JobProps = { jobId: string; onBack: () => void };
 
 function mockLabel(row: MockupJob) {
   if (row.status === "done") return { text: "已出图", color: "success" as const };
@@ -27,18 +28,31 @@ function mockTitle(row: MockupJob) {
   return row.title || row.files[0]?.name || row.id.slice(0, 8);
 }
 
-export function MockupPage({ openId }: Props) {
+function fileHref(jobId: string, key: string, download = false) {
+  const base = `/api/mockups/${jobId}/files/${key}`;
+  return download ? `${base}?download=1` : base;
+}
+
+export function MockupDesk({
+  openId,
+  onOpenJob,
+  onBack,
+}: {
+  openId?: string | null;
+  onOpenJob: (id: string) => void;
+  onBack: () => void;
+}) {
+  if (openId) return <MockupJobPage jobId={openId} onBack={onBack} />;
+  return <MockupPage onOpenJob={onOpenJob} />;
+}
+
+export function MockupPage({ onOpenJob }: DeskProps) {
   const { message } = App.useApp();
   const [file, setFile] = useState<File | null>(null);
   const [productName, setProductName] = useState("");
   const [busy, setBusy] = useState(false);
-  const [job, setJob] = useState<MockupJob | null>(null);
   const [rows, setRows] = useState<MockupJob[]>([]);
-  const announced = useRef("");
   const listGen = useRef(0);
-
-  const jobWaiting = Boolean(job) && shouldShowWaitCard(job);
-  const waiting = busy || jobWaiting;
 
   function refreshList() {
     const gen = ++listGen.current;
@@ -60,53 +74,14 @@ export function MockupPage({ openId }: Props) {
       .then((list) => {
         if (cancelled || gen !== listGen.current) return;
         setRows(list);
-        if (openId) return;
-        const live = pickLiveMockup(list);
-        if (live) setJob(live);
       })
       .catch(() => undefined);
     return () => {
       cancelled = true;
     };
-  }, [openId]);
+  }, []);
 
-  useEffect(() => {
-    if (!openId) return;
-    void api
-      .mockup(openId)
-      .then((next) => {
-        setJob(next);
-        announced.current = `${next.id}:${next.status}`;
-      })
-      .catch(() => undefined);
-  }, [openId]);
-
-  useEffect(() => {
-    if (!job?.id || !jobWaiting) return;
-    let cancelled = false;
-    const id = window.setInterval(() => {
-      void api
-        .mockup(job.id)
-        .then((next) => {
-          if (cancelled) return;
-          setJob(next);
-          void refreshList();
-          if (shouldShowWaitCard(next)) return;
-          const key = `${next.id}:${next.status}`;
-          if (announced.current === key) return;
-          announced.current = key;
-          if (next.status === "failed") message.error(mockupFailReason(next.error || next.job_error));
-          else if (next.status === "done") message.success("打样完成。白底图给备案，GLB 可本机打开截图。");
-        })
-        .catch(() => undefined);
-    }, 2500);
-    return () => {
-      cancelled = true;
-      window.clearInterval(id);
-    };
-  }, [job?.id, jobWaiting, message]);
-
-  const boardLive = !jobWaiting && rows.some((r) => mockCol(r) === "running");
+  const boardLive = rows.some((r) => mockCol(r) === "running");
   useEffect(() => {
     if (!boardLive) return;
     const id = window.setInterval(() => {
@@ -133,17 +108,11 @@ export function MockupPage({ openId }: Props) {
     fd.append("file", file);
     fd.append("title", productName.trim() || stemFromFilename(file.name));
     setBusy(true);
-    setJob(null);
-    announced.current = "";
     listGen.current += 1;
     try {
       const next = await api.createMockup(fd);
-      setJob(next);
       void refreshList();
-      if (shouldShowWaitCard(next)) return;
-      announced.current = `${next.id}:${next.status}`;
-      if (next.status === "failed") message.error(mockupFailReason(next.error || next.job_error));
-      else if (next.status === "done") message.success("打样完成。白底图给备案，GLB 可本机打开截图。");
+      onOpenJob(next.id);
     } catch (err) {
       message.error(err instanceof Error ? err.message : "打样失败");
     } finally {
@@ -160,27 +129,14 @@ export function MockupPage({ openId }: Props) {
     [rows],
   );
 
-  if (waiting) {
-    return (
-      <WaitCard
-        job="打样"
-        jobStatus={job?.job_status || (job?.status === "queued" || job?.status === "running" ? job.status : "queued")}
-        queueAhead={job?.queue_ahead}
-        stage={job?.job_stage}
-        stageLabel={job?.job_stage_label}
-        etaS={job?.job_eta_s}
-      />
-    );
-  }
-
   return (
     <section className="new-form">
       <header className="page-head">
         <div>
           <h1 className="page-title">打样台</h1>
-          <p className="page-lead">交差「盒子长什么样」。白底给备案，GLB 自己截图。不是网页里转着玩当验收。</p>
+          <p className="page-lead">交差「盒子长什么样」。点进度或已出图进打样单，不在这页底下摊开。</p>
         </div>
-        <button type="button" className="btn-primary" onClick={() => void run()}>
+        <button type="button" className="btn-primary" disabled={busy} onClick={() => void run()}>
           开始打样
         </button>
       </header>
@@ -221,62 +177,221 @@ export function MockupPage({ openId }: Props) {
 
       {rows.length > 0 ? (
         <div className="review-board" style={{ marginTop: 20 }}>
-          <MockCol title="打样中" hint="本机还在跑" rows={board.running} currentId={job?.id} onOpen={setJob} />
-          <MockCol title="打样失败" hint="中断了，点开看原因" rows={board.failed} currentId={job?.id} onOpen={setJob} />
-          <MockCol title="已出图" hint="白底和 GLB" rows={board.done} currentId={job?.id} onOpen={setJob} />
+          <MockCol title="打样中" hint="点进去看进度" rows={board.running} onOpen={(row) => onOpenJob(row.id)} />
+          <MockCol title="打样失败" hint="点进去看原因" rows={board.failed} onOpen={(row) => onOpenJob(row.id)} />
+          <MockCol title="已出图" hint="点进去打开打样单" rows={board.done} onOpen={(row) => onOpenJob(row.id)} />
         </div>
       ) : (
         <p className="page-lead" style={{ marginTop: 16 }}>
           还没有打样单。选平面稿后点开始打样。
         </p>
       )}
+    </section>
+  );
+}
 
-      {job?.status === "failed" ? (
-        <Alert type="error" showIcon style={{ marginTop: 16 }} title={mockupFailReason(job.error || job.job_error)} />
+export function MockupJobPage({ jobId, onBack }: JobProps) {
+  const { message } = App.useApp();
+  const [job, setJob] = useState<MockupJob | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const glbBox = useRef<HTMLDivElement>(null);
+  const announced = useRef("");
+  const waiting = Boolean(job) && shouldShowWaitCard(job);
+
+  useEffect(() => {
+    let cancelled = false;
+    void api
+      .mockup(jobId)
+      .then((next) => {
+        if (cancelled) return;
+        setJob(next);
+        announced.current = `${next.id}:${next.status}`;
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : "加载失败");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [jobId]);
+
+  useEffect(() => {
+    if (!job?.id || !waiting) return;
+    let cancelled = false;
+    const id = window.setInterval(() => {
+      void api
+        .mockup(job.id)
+        .then((next) => {
+          if (cancelled) return;
+          setJob(next);
+          if (shouldShowWaitCard(next)) return;
+          const key = `${next.id}:${next.status}`;
+          if (announced.current === key) return;
+          announced.current = key;
+          if (next.status === "failed") message.error(mockupFailReason(next.error || next.job_error));
+          else if (next.status === "done") message.success("打样完成。白底给备案，GLB 可全屏截图。");
+        })
+        .catch((err: unknown) => {
+          if (!cancelled) setError(err instanceof Error ? err.message : "打样单读不到");
+        });
+    }, 2500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [job?.id, waiting, message]);
+
+  if (error) {
+    return (
+      <section>
+        <header className="page-head">
+          <h1 className="page-title">打样单</h1>
+          <button type="button" className="btn-ghost" onClick={onBack}>
+            返回打样台
+          </button>
+        </header>
+        <Alert type="error" showIcon title={error} />
+      </section>
+    );
+  }
+
+  if (!job) {
+    return (
+      <section>
+        <header className="page-head">
+          <h1 className="page-title">打样单</h1>
+          <button type="button" className="btn-ghost" onClick={onBack}>
+            返回打样台
+          </button>
+        </header>
+        <div className="desk-empty">
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="打开打样单…" />
+        </div>
+      </section>
+    );
+  }
+
+  if (waiting) {
+    return (
+      <section className="mockup-sheet">
+        <header className="page-head">
+          <div>
+            <h1 className="page-title">{mockTitle(job)}</h1>
+            <p className="page-lead">打样还在跑。可以回打样台，进度仍在历史记录里。</p>
+          </div>
+          <button type="button" className="btn-ghost" onClick={onBack}>
+            返回打样台
+          </button>
+        </header>
+        <WaitCard
+          job="打样"
+          jobStatus={job.job_status || (job.status === "queued" || job.status === "running" ? job.status : "queued")}
+          queueAhead={job.queue_ahead}
+          stage={job.job_stage}
+          stageLabel={job.job_stage_label}
+          etaS={job.job_eta_s}
+        />
+      </section>
+    );
+  }
+
+  const whiteA = (job.files || []).find((f) => f.key === "white_a");
+  const whiteB = (job.files || []).find((f) => f.key === "white_b");
+  const hasGlb = (job.files || []).some((f) => f.key === "glb");
+  const hasPpt = (job.files || []).some((f) => f.key === "ppt");
+
+  return (
+    <section className="mockup-sheet">
+      <header className="page-head">
+        <div>
+          <h1 className="page-title">{mockTitle(job)}</h1>
+          <p className="page-lead">打样单。白底是正面+侧面、反面+侧面；GLB 全屏转一转再截图。</p>
+        </div>
+        <button type="button" className="btn-ghost" onClick={onBack}>
+          返回打样台
+        </button>
+      </header>
+
+      {job.status === "failed" ? (
+        <Alert type="error" showIcon title={mockupFailReason(job.error || job.job_error)} />
       ) : null}
 
-      {job?.status === "done" ? (
-        <div style={{ marginTop: 16 }}>
-          <Typography.Title level={5}>{mockTitle(job)}</Typography.Title>
-          <Space wrap>
-            {(job.files || []).map((f) => (
-              <Button key={f.key} href={`/api/mockups/${job.id}/files/${f.key}`}>
-                下载{" "}
-                {f.key === "white_a"
-                  ? "白底 A"
-                  : f.key === "white_b"
-                    ? "白底 B"
-                    : f.key === "ppt"
-                      ? "PPT"
-                      : f.key === "glb"
-                        ? "GLB"
-                        : f.name}
-              </Button>
-            ))}
-          </Space>
-          {(job.files || []).some((f) => f.key === "glb") ? (
-            <div style={{ marginTop: 16 }}>
-              <model-viewer
-                src={`/api/mockups/${job.id}/files/glb`}
-                camera-controls
-                style={{
-                  width: "100%",
-                  height: 360,
-                  background: "var(--stage)",
-                  border: "1px solid var(--line)",
-                  borderRadius: 16,
-                }}
-              />
-              <Typography.Paragraph type="secondary">
-                可旋转，自己截图交差。白底图不要带尺寸标注再交备案。
-              </Typography.Paragraph>
-            </div>
-          ) : (
-            <Empty style={{ marginTop: 16 }} description="没有 GLB。看上面的失败原因。" />
-          )}
+      <div className="mockup-sheet-photos">
+        {whiteA ? (
+          <WhiteShot jobId={job.id} fileKey="white_a" alt="正面与侧面白底" caption="正面 + 侧面" />
+        ) : null}
+        {whiteB ? (
+          <WhiteShot jobId={job.id} fileKey="white_b" alt="反面与侧面白底" caption="反面 + 侧面" />
+        ) : null}
+      </div>
+
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
+        {whiteA ? (
+          <a className="btn-ghost" href={fileHref(job.id, "white_a", true)} download={whiteA.name}>
+            下载正面+侧面
+          </a>
+        ) : null}
+        {whiteB ? (
+          <a className="btn-ghost" href={fileHref(job.id, "white_b", true)} download={whiteB.name}>
+            下载反面+侧面
+          </a>
+        ) : null}
+        {hasPpt ? (
+          <a className="btn-ghost" href={fileHref(job.id, "ppt", true)} download>
+            下载 PPT
+          </a>
+        ) : job.status === "done" ? (
+          <span className="page-lead">本机没有 Node 时 PPT 会跳过，白底和 GLB 仍能出。</span>
+        ) : null}
+        {hasGlb ? (
+          <a className="btn-ghost" href={fileHref(job.id, "glb", true)} download>
+            下载 GLB
+          </a>
+        ) : null}
+      </div>
+
+      {hasGlb ? (
+        <div className="mockup-sheet-glb" ref={glbBox}>
+          <button
+            type="button"
+            className="btn-ghost"
+            onClick={() => {
+              const el = glbBox.current;
+              if (el && el.requestFullscreen) void el.requestFullscreen();
+            }}
+          >
+            全屏截图
+          </button>
+          <model-viewer src={fileHref(job.id, "glb")} camera-controls />
         </div>
+      ) : job.status === "done" ? (
+        <Empty description="没有 GLB。看上面的失败原因。" />
       ) : null}
     </section>
+  );
+}
+
+function WhiteShot({
+  jobId,
+  fileKey,
+  alt,
+  caption,
+}: {
+  jobId: string;
+  fileKey: "white_a" | "white_b";
+  alt: string;
+  caption: string;
+}) {
+  const [bad, setBad] = useState(false);
+  return (
+    <figure className="mockup-sheet-photo">
+      {bad ? (
+        <p className="page-lead">这张白底图坏了，回到打样台重新打。</p>
+      ) : (
+        <img src={fileHref(jobId, fileKey)} alt={alt} onError={() => setBad(true)} />
+      )}
+      <figcaption>{caption}</figcaption>
+    </figure>
   );
 }
 
@@ -284,13 +399,11 @@ function MockCol({
   title,
   hint,
   rows,
-  currentId,
   onOpen,
 }: {
   title: string;
   hint: string;
   rows: MockupJob[];
-  currentId?: string;
   onOpen: (job: MockupJob) => void;
 }) {
   return (
@@ -306,12 +419,7 @@ function MockCol({
           const s = mockLabel(row);
           const live = liveJobLine({ ...row, kind: "mockup" });
           return (
-            <button
-              key={row.id}
-              type="button"
-              className={row.id === currentId ? "review-card is-on" : "review-card"}
-              onClick={() => onOpen(row)}
-            >
+            <button key={row.id} type="button" className="review-card" onClick={() => onOpen(row)}>
               <div className="review-card-main">
                 <div className="review-card-name">{mockTitle(row)}</div>
                 {live ? (

@@ -144,6 +144,13 @@ export function publicMockup(job: MockupJob) {
   };
 }
 
+export function isWhiteFile(key: string, name: string): boolean {
+  const lower = name.toLowerCase();
+  if (key === "white_a") return lower.includes("front_right");
+  if (key === "white_b") return lower.includes("back_left");
+  return true;
+}
+
 export function collectOutputs(root: string): MockupJob["files"] {
   const found: MockupJob["files"] = [];
   const walk = (dir: string) => {
@@ -152,14 +159,14 @@ export function collectOutputs(root: string): MockupJob["files"] {
       const p = join(dir, name.name);
       if (name.isDirectory()) walk(p);
       else if (/\.(glb|png|pptx)$/i.test(name.name)) {
-        let key = "other";
-        if (name.name.endsWith(".glb")) key = "glb";
-        else if (name.name.endsWith(".pptx")) key = "ppt";
-        else if (name.name.includes("front_right")) key = "white_a";
-        else if (name.name.includes("back_left")) key = "white_b";
-        else if (name.name.endsWith(".png") && key === "other") {
-          key = found.some((f) => f.key === "white_a") ? "white_b" : "white_a";
-        }
+        const lower = name.name.toLowerCase();
+        let key = "";
+        if (lower.endsWith(".glb")) key = "glb";
+        else if (lower.endsWith(".pptx")) key = "ppt";
+        else if (lower.includes("front_right")) key = "white_a";
+        else if (lower.includes("back_left")) key = "white_b";
+        else continue;
+        if (found.some((f) => f.key === key)) continue;
         found.push({ key, path: p, name: basename(p) });
       }
     }

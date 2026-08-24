@@ -21,7 +21,7 @@ import {
   writeDockPlace,
   writePinsOn,
   type DockBox,
-  type DockCorner,
+  type DockHandle,
   type DockPlace,
 } from "./reviewDock";
 import { shouldShowWaitCard } from "./waitCard";
@@ -114,7 +114,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
     y: number;
     box: DockBox;
     place: DockPlace;
-    corner: DockCorner;
+    corner: DockHandle;
   } | null>(null);
   const dockDrag = useRef<{ x: number; y: number; place: DockPlace } | null>(null);
   const pendingFit = useRef<number | null>(null);
@@ -240,7 +240,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
     return () => window.removeEventListener("resize", fit);
   }, []);
 
-  function dockHandle(corner: DockCorner) {
+  function dockHandle(corner: DockHandle) {
     return (
       <button
         type="button"
@@ -880,6 +880,10 @@ export function ReviewPage({ taskId, onBack }: Props) {
                 ))}
               </div>
             ) : null}
+            {dockHandle("n")}
+            {dockHandle("s")}
+            {dockHandle("e")}
+            {dockHandle("w")}
             {dockHandle("nw")}
             {dockHandle("ne")}
             {dockHandle("sw")}

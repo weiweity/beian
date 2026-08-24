@@ -50,7 +50,7 @@ cd apps/web/backend && PYTHONPATH=. .venv/bin/python -m app.cli --help
 
 4. 测试：抄 `jobs.test.ts` 的对照块。必写断言：第二单 queued、GET 无 `job_pid`、没有最后一行 JSON →「对照中断」、对红失败仍可签字。pytest：CLI 不 `save_task`；`--help` 含 `STAGE` / `save_task` / `packaging`。打样出图测 pymupdf（`test_packaging_thumbnail.py`），不要假定有 qlmanage。
 
-5. UI 等待：`shouldShowWaitCard`（`queued` | `running` | `comparing`；`done`/`failed`/`completed` 不当等待）。离开核对页后，看板 `liveJobLine` 和侧栏 `liveNavPulse` 仍显示阶段；打样台 `pickLiveMockup` 自动跟上正在跑的那单。等待圆盘是 `WaitLoader`（对照中 / 对红中 / 打样中，不要英文 Generating）。核对页框在 `pinBox.ts`：有 bbox 才画真框，钉在框中心，不编造顶排钉；隐藏钉只藏圆圈；显示框单独开关，拖动画布暂时藏框。缩放在 `canvasZoom.ts`：CSS `transform` 1–6×（滚轮、放大/缩小/复位、点序号放大该框），拖动走 rAF 且禁止 img 原生拖拽，不上 OpenSeadragon。核对窗 `reviewDock.ts` 液态玻璃钉在整页右上（不在图内），可拖、四角缩放、可收起，左列字段右列疑点；结论在页头签字旁。确认单底部工艺说明 / 颜色要求 / 版本号不进机审（只认字段名开头，不要误杀「执行标准版本号」；旧单假疑点签字时也跳过）。离开核对页或打样台后，历史记录仍列出进行中的单并显示 `liveJobLine`，点进去仍是 WaitCard。稿上 OCR 走 `hitText.ts`（`coverage.hit` 回退，不要空白）。打样先读稿上的刀线/刀版还原切面；没有刀线才回退已登记 JSON。不能按比例硬套方盒。
+5. UI 等待：`shouldShowWaitCard`（`queued` | `running` | `comparing`；`done`/`failed`/`completed` 不当等待）。离开核对页后，看板 `liveJobLine` 和侧栏 `liveNavPulse` 仍显示阶段。打样台只交稿；点进度/已出图进单独打样单（WaitCard 或白底+GLB），不要在打样台底下摊开结果。等待圆盘是 `WaitLoader`（对照中 / 对红中 / 打样中，不要英文 Generating）。核对页框在 `pinBox.ts`：有 bbox 才画真框，钉在框中心，不编造顶排钉；隐藏钉只藏圆圈；显示框单独开关，拖动画布暂时藏框。缩放在 `canvasZoom.ts`：CSS `transform` 1–6×（滚轮、放大/缩小/复位、点序号放大该框），拖动走 rAF 且禁止 img 原生拖拽，不上 OpenSeadragon。核对窗 `reviewDock.ts` 液态玻璃钉在页头下面靠右（不盖签字），可拖，边框上下左右和四个斜角都能缩放，可收起，左列字段右列疑点；结论在页头签字旁。确认单底部工艺说明 / 颜色要求 / 版本号不进机审（只认字段名开头，不要误杀「执行标准版本号」；旧单假疑点签字时也跳过）。离开核对页或打样台后，历史记录仍列出进行中的单并显示 `liveJobLine`，点进去仍是 WaitCard / 打样单。稿上 OCR 走 `hitText.ts`（`coverage.hit` 回退，不要空白）。打样先读稿上的刀线/刀版还原切面；没有刀线才回退已登记 JSON。不能按比例硬套方盒。下载白底只给 `front_right` / `back_left`，不要把 `ai-raster` 或 PPT 质检 PNG 当成白底。预览 inline，点下载才附件。
 
 调试：对外 `job_error` 用短中文。Node 日志写 problem + cause + fix。打开 `DATA_DIR/tasks/{tid}.json`。不要新 FastAPI 路由。
 
@@ -64,7 +64,7 @@ When the user's request matches an available skill, invoke it via the Skill tool
 - 缺陷 → /investigate
 - 发 PR → /ship（只在 Mac 开发机。杭州生产机禁止 /ship 产品功能。）没听到用户说 `/ship` 或「开始 ship」不要出 PR。用户说「先不进入 ship」就只改代码。
 - 合 main → /land-and-deploy（只合 GitHub。不重启杭州、不改 DNS。）
-- 杭州上线 → 合 `main` 后等 `hangzhou-release` 变绿，再等约 20 秒，公网 health 的 version 等于刚合进去的 VERSION。不要报已上线。不要给杭州贴 pull / rebuild / 重启 8787 的升级提示词，除非 runner 灰掉或对照挡住发版。
+- 杭州上线 → 合 `main` 后等 `hangzhou-release` 变绿，再等约 20 秒，公网 health 的 version 等于刚合进去的 VERSION。不要报已上线。不要给杭州贴 pull / rebuild / 重启 8787 的升级提示词，除非 runner 灰掉或对照挡住发版。`release.ps1` 碰到 `cannot lock ref origin/main` 要删掉这条 ref 再 fetch，不要秒红。
 - 用户贴的 `www.jianghua.site` / 开工板截图是杭州当前 VERSION，不是你工作区未合的分支。没 land 绿之前不要拿公网画面证明「已经改好了」。
 - 配置发布 → /setup-deploy
 - 写 issue → /spec
@@ -81,7 +81,7 @@ MiniMax 未开语义复核是「未用」，不是「可用」；探测是 `GET 
 
 开工板是线性进度 + 7 行清单，不要画成圆环仪表，不要用「通 / 不通」当状态字。界面单测只测纯函数，不引入 RTL。
 
-杭州打样平面出图走 pymupdf（对照同一 `.venv`），不要让人装 qlmanage。macOS Quick Look 只在 pymupdf 失败时兜底。打样先读稿上的刀线/刀版还原切面，没有刀线才回退已登记 JSON，不能按比例硬套方盒。离开核对页后看板/侧栏/历史记录仍看阶段，不要只把进度画在 WaitCard 上。核对页缩放用 CSS transform，不要接 OpenSeadragon。核对窗液态玻璃钉在整页右上，可拖可四角缩放；隐藏钉只藏圆圈；显示框单独开关。PATH 里没有 Node 时打样跳过 PPT，不要把整单判失败。
+杭州打样平面出图走 pymupdf（对照同一 `.venv`），不要让人装 qlmanage。macOS Quick Look 只在 pymupdf 失败时兜底。打样先读稿上的刀线/刀版还原切面，没有刀线才回退已登记 JSON，不能按比例硬套方盒。离开核对页后看板/侧栏/历史记录仍看阶段，不要只把进度画在 WaitCard 上。核对页缩放用 CSS transform，不要接 OpenSeadragon。核对窗液态玻璃钉在页头下面靠右，可拖，边框上下左右和斜角都能缩放；隐藏钉只藏圆圈；显示框单独开关。PATH 里没有 Node 时打样跳过 PPT，不要把整单判失败。
 
 ## Design System
 
@@ -93,7 +93,7 @@ MiniMax 未开语义复核是「未用」，不是「可用」；探测是 `GET 
 - 侧栏顶用 `apps/web/ui/public/brand/logo-mark.png`。折叠时悬停变成展开按钮（同一 44pt）。完整 `shine-mage.png` 只放拒绝页。
 - 左下角飞书头像 36px + `花名（真名）` 15px，例如 `天元（魏炜）`。
 - 空审核单不画三栏。设置里有「外观」：主题、13–28px 字号（可手写）、侧栏材质（实心 / 毛玻璃 / 液态玻璃）、侧栏雾面对比度滑条、差异标记。只写 `localStorage`。深色走品牌紫雾，不是灰黑中台。
-- 审稿：专属核对页，画布吃满宽度。钉和框分开关；「隐藏钉」只藏编号圆圈。左图 CSS transform 缩放（1–6×），拖动走 rAF，禁止原生图片拖拽，不上 OpenSeadragon。核对窗钉在整页右上，可拖、四角缩放、可收起，字段和疑点两列。结论写在页头签字旁。禁止「AI 已过审」。
+- 审稿：专属核对页，画布吃满宽度。钉和框分开关；「隐藏钉」只藏编号圆圈。左图 CSS transform 缩放（1–6×），拖动走 rAF，禁止原生图片拖拽，不上 OpenSeadragon。核对窗钉在页头下面靠右，可拖，边框上下左右和斜角都能缩放、可收起，字段和疑点两列。结论写在页头签字旁。禁止「AI 已过审」。
 - 历史记录是侧栏 tab，不是第三张台。进行中的审稿/打样也列在里面，点进去看进度。
 - 打样台 8/31 不对业务开放。QA 时标出任何与 `DESIGN.md` 不符的实现。
 
@@ -154,7 +154,7 @@ MiniMax 未开语义复核是「未用」，不是「可用」；探测是 `GET 
 - Pre-merge: `/ship` 已跑 `npm test` 与 ui build。Mac `/land-and-deploy` 只合 GitHub。
 - Deploy trigger: **合进 `main` 后由杭州 self-hosted runner 跑 `release.ps1`**。对照/打样/Illustrator 在跑会失败并保持旧进程。日常 Mac 只合 `main`、等 Actions 绿。杭州手工补跑同一脚本只在 runner 灰或对照挡住时由杭州自己执行，Mac 不要主动贴：
 
-  脚本先 `fetch`、丢掉 npm 改脏的 `package-lock.json`；若还有别的本地改动则**不停** 8787。通过后才停监听 8787 的进程树再 `merge --ff-only`（2–5 分钟公网空白）。锁文件没变则跳过 `npm ci`。Git 之后清掉 `GITHUB_TOKEN` 再跑 npm。merge/编/起失败时回到停机前 SHA 再装/编，然后 `schtasks /Run beian-server-8787`。Actions `if: failure()` 也会 `/Run`（超时/取消时 catch 不会跑）。不动 cloudflared，不杀全部 `node.exe`。PowerShell 环境变量用 `$env:WB_DATA_DIR`（不要 `set`）。密钥用网页开工板填，不进仓库。Cloudflare Named Tunnel 只在杭州跑，指 `http://127.0.0.1:8787`。Mac 必须停掉 `cloudflared tunnel run beian`。不要用 `./scripts/dev-start.sh` 当杭州生产启动（zsh）。细节见 `scripts/windows/README.md`。
+  脚本先 `fetch`（`cannot lock ref origin/main` 只删这一条再拉，网络失败不要动 tracking ref）、丢掉 npm 改脏的 `package-lock.json`；若还有别的本地改动则**不停** 8787。通过后才停监听 8787 的进程树再 `merge --ff-only`（2–5 分钟公网空白）。锁文件没变则跳过 `npm ci`。Git 之后清掉 `GITHUB_TOKEN` 再跑 npm。merge/编/起失败时回到停机前 SHA 再装/编，然后 `schtasks /Run beian-server-8787`。Actions `if: failure()` 也会 `/Run`（超时/取消时 catch 不会跑）。不动 cloudflared，不杀全部 `node.exe`。PowerShell 环境变量用 `$env:WB_DATA_DIR`（不要 `set`）。密钥用网页开工板填，不进仓库。Cloudflare Named Tunnel 只在杭州跑，指 `http://127.0.0.1:8787`。Mac 必须停掉 `cloudflared tunnel run beian`。不要用 `./scripts/dev-start.sh` 当杭州生产启动（zsh）。细节见 `scripts/windows/README.md`。
 
 - 杭州 Grok 禁止：在生产机 `/ship` 新功能、改产品代码当开发机用、把生产隧道指到 Mac、对照跑着时 pull/重启、`git reset --hard`。发版后若只脏 `package-lock.json`，杭州自己 `git checkout -- package-lock.json`。
 - Mac Grok 禁止：
