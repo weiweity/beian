@@ -138,6 +138,28 @@ def test_parse_synthetic_carton(tmp_path: Path):
     assert "front" in template["face_boxes"]
 
 
+def _draw_square_carton(page, x0: float) -> None:
+    x = x0
+    page.draw_rect(pymupdf.Rect(x, 160, x + 40, 620), color=(0, 0, 0), width=1.2)
+    x += 40
+    for _ in range(4):
+        page.draw_rect(pymupdf.Rect(x, 160, x + 120, 620), color=(0, 0, 0), width=1.2)
+        x += 120
+
+
+def test_parse_two_up_cartons_are_not_pouch(tmp_path: Path):
+    d = dieline()
+    doc = pymupdf.open()
+    page = doc.new_page(width=1800, height=720)
+    _draw_square_carton(page, 80)
+    _draw_square_carton(page, 980)
+    pdf = _save(tmp_path / "two_up.pdf", doc)
+    layout = d.parse_knife_pdf(pdf, "刀线")
+    assert layout["family"] in {"carton", "flat"}
+    assert layout["dimensions_mm"]["depth"] != 3.0
+    assert 40 < layout["dimensions_mm"]["width"] < 55
+
+
 def test_parse_synthetic_pouch(tmp_path: Path):
     d = dieline()
     doc = pymupdf.open()

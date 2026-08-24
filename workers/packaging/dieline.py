@@ -328,7 +328,18 @@ def parse_knife_pdf(knife_pdf: Path, knife_layer: str) -> dict[str, Any]:
     small = _dilate(small, nw, nh, 1)
     comps = _components(small, nw, nh, min_pix=40)
     family, regions = pick_main_regions(comps, factor, zoom)
-    if family == "pouch":
+    last_error = "刀线读不出盒面"
+    for region in regions:
+        for dist_k in (20, 34, 12):
+            try:
+                layout = _carton_from_roi(mask, width, height, zoom, region, dist_k, knife_layer, page_w, page_h)
+            except RuntimeError as err:
+                last_error = str(err)
+                continue
+            if layout_sane(layout):
+                return layout
+            last_error = f"刀线还原的尺寸不合理：{layout['dimensions_mm']}"
+    if family == "pouch" and len(regions) >= 2:
         panels = []
         roles = _roles_for("pouch", 2)
         for role, region in zip(roles, regions):
@@ -344,18 +355,6 @@ def parse_knife_pdf(knife_pdf: Path, knife_layer: str) -> dict[str, Any]:
             "panels": panels,
             "dimensions_mm": {"width": face_w, "depth": 3.0, "height": face_h},
         }
-        if layout_sane(layout):
-            return layout
-        raise RuntimeError(f"刀线还原的尺寸不合理：{layout['dimensions_mm']}")
-
-    region = regions[0]
-    last_error = "刀线读不出盒面"
-    for dist_k in (20, 34, 12):
-        try:
-            layout = _carton_from_roi(mask, width, height, zoom, region, dist_k, knife_layer, page_w, page_h)
-        except RuntimeError as err:
-            last_error = str(err)
-            continue
         if layout_sane(layout):
             return layout
         last_error = f"刀线还原的尺寸不合理：{layout['dimensions_mm']}"
