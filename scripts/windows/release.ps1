@@ -38,6 +38,46 @@ function Clear-GithubToken {
   }
 }
 
+# Windows 上 packed-refs 和零散 origin/main 拧在一起时：
+# cannot lock ref 'refs/remotes/origin/main': is at A but expected B
+# 只在这一条 ref 锁上才删指针。网络/401/Clash 失败不要动 origin/main。
+function Fetch-OriginMain {
+  $log = Join-Path $env:TEMP "beian-git-fetch.log"
+  if (Test-Path $log) { Remove-Item $log -Force -ErrorAction SilentlyContinue }
+  try {
+    if ($env:GITHUB_TOKEN) {
+      & git -c "http.extraheader=AUTHORIZATION: bearer $($env:GITHUB_TOKEN)" fetch origin *> $log
+    } else {
+      & git fetch origin *> $log
+    }
+    $code = $LASTEXITCODE
+    if ($code -eq 0) { return }
+    $msg = ""
+    foreach ($enc in @("Unicode", "UTF8", "Default")) {
+      try {
+        $t = Get-Content $log -Raw -Encoding $enc -ErrorAction Stop
+      } catch {
+        continue
+      }
+      if ($t -match "cannot lock ref 'refs/remotes/origin/main'") {
+        $msg = $t
+        break
+      }
+      if (-not $msg -and $t) { $msg = $t }
+    }
+    if ($msg -match "cannot lock ref 'refs/remotes/origin/main'") {
+      Write-Host "origin/main ref 拧了，删掉再 fetch"
+      git update-ref -d refs/remotes/origin/main
+      Invoke-Git fetch origin
+      return
+    }
+    Write-Host "git fetch origin 失败"
+    $global:LASTEXITCODE = $code
+  } finally {
+    if (Test-Path $log) { Remove-Item $log -Force -ErrorAction SilentlyContinue }
+  }
+}
+
 function Get-Health {
   try {
     return Invoke-RestMethod -Uri "http://127.0.0.1:8787/api/health" -TimeoutSec 8
@@ -191,7 +231,7 @@ if (Test-DataDirInsideRepo $env:WB_DATA_DIR $Root) {
 
 # Git hygiene while :8787 is still up. npm install used to dirty package-lock.json;
 # pull then aborted after taskkill and left Cloudflare 502.
-Invoke-Git fetch origin
+Fetch-OriginMain
 Assert-GitOk "git fetch"
 Write-Host "reset package-lock.json to HEAD (npm 不得把锁文件改脏带进 pull)"
 Invoke-Git checkout -- package-lock.json
