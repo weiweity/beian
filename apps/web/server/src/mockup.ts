@@ -185,6 +185,33 @@ export function fileOf(job: MockupJob, key: string) {
   return undefined;
 }
 
+function templatesDir(): string {
+  return join(PACKAGING, "templates");
+}
+
+function isSmokeTemplate(name: string): boolean {
+  return /smoke/i.test(name);
+}
+
+export function productionTemplatePaths(): string[] {
+  const dir = templatesDir();
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((name) => name.endsWith(".json") && !isSmokeTemplate(name))
+    .sort()
+    .map((name) => join(dir, name));
+}
+
+export function defaultTemplatePath(): string {
+  const all = productionTemplatePaths();
+  const preferred = all.find((p) => basename(p) === "flower_box_47_5x47_5x177_5.json");
+  const hit = preferred || all[0];
+  if (!hit || !existsSync(hit)) {
+    throw Object.assign(new Error("缺少花盒模板"), { status: 412 });
+  }
+  return hit;
+}
+
 export function assertBlenderReady(): string {
   const blender = findBlender();
   if (!blender) {
@@ -193,10 +220,7 @@ export function assertBlenderReady(): string {
       { status: 412 },
     );
   }
-  const template = join(PACKAGING, "templates/flower_box_47_5x47_5x177_5.json");
-  if (!existsSync(template)) {
-    throw Object.assign(new Error("缺少花盒模板"), { status: 412 });
-  }
+  defaultTemplatePath();
   return blender;
 }
 
@@ -222,7 +246,7 @@ export function queueMockup(opts: {
   title?: string;
 }): MockupJob {
   const blender = assertBlenderReady();
-  const template = join(PACKAGING, "templates/flower_box_47_5x47_5x177_5.json");
+  const template = defaultTemplatePath();
   const outDir = join(mockupRoot(), opts.id);
   mkdirSync(outDir, { recursive: true });
   const manifest = {

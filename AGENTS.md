@@ -50,7 +50,7 @@ cd apps/web/backend && PYTHONPATH=. .venv/bin/python -m app.cli --help
 
 4. 测试：抄 `jobs.test.ts` 的对照块。必写断言：第二单 queued、GET 无 `job_pid`、没有最后一行 JSON →「对照中断」、对红失败仍可签字。pytest：CLI 不 `save_task`；`--help` 含 `STAGE` / `save_task` / `packaging`。打样出图测 pymupdf（`test_packaging_thumbnail.py`），不要假定有 qlmanage。
 
-5. UI 等待：`shouldShowWaitCard`（`queued` | `running` | `comparing`；`done`/`failed`/`completed` 不当等待）。离开核对页后，看板 `liveJobLine` 和侧栏 `liveNavPulse` 仍显示阶段；打样台 `pickLiveMockup` 自动跟上正在跑的那单。等待圆盘是 `WaitLoader`（对照中 / 对红中 / 打样中，不要英文 Generating）。核对页框在 `pinBox.ts`：有 bbox 才画真框，钉在框中心，不编造顶排钉，可隐藏。缩放在 `canvasZoom.ts`：CSS `transform` 1–6×（滚轮、放大/缩小/复位、点序号放大该框），不上 OpenSeadragon。核对窗 `reviewDock.ts` 悬浮可收起，左列字段右列疑点。稿上 OCR 走 `hitText.ts`（`coverage.hit` 回退，不要空白）。
+5. UI 等待：`shouldShowWaitCard`（`queued` | `running` | `comparing`；`done`/`failed`/`completed` 不当等待）。离开核对页后，看板 `liveJobLine` 和侧栏 `liveNavPulse` 仍显示阶段；打样台 `pickLiveMockup` 自动跟上正在跑的那单。等待圆盘是 `WaitLoader`（对照中 / 对红中 / 打样中，不要英文 Generating）。核对页框在 `pinBox.ts`：有 bbox 才画真框，钉在框中心，不编造顶排钉；隐藏钉只藏圆圈，保留定位框。缩放在 `canvasZoom.ts`：CSS `transform` 1–6×（滚轮、放大/缩小/复位、点序号放大该框），拖动走 rAF 且禁止 img 原生拖拽，不上 OpenSeadragon。核对窗 `reviewDock.ts` 液态玻璃悬浮可收起可缩放，左列字段右列疑点；结论在页头签字旁。稿上 OCR 走 `hitText.ts`（`coverage.hit` 回退，不要空白）。打样先读稿上的刀线/刀版还原切面；没有刀线才回退已登记 JSON。不能按比例硬套方盒。
 
 调试：对外 `job_error` 用短中文。Node 日志写 problem + cause + fix。打开 `DATA_DIR/tasks/{tid}.json`。不要新 FastAPI 路由。
 
@@ -81,7 +81,7 @@ MiniMax 未开语义复核是「未用」，不是「可用」；探测是 `GET 
 
 开工板是线性进度 + 7 行清单，不要画成圆环仪表，不要用「通 / 不通」当状态字。界面单测只测纯函数，不引入 RTL。
 
-杭州打样平面出图走 pymupdf（对照同一 `.venv`），不要让人装 qlmanage。macOS Quick Look 只在 pymupdf 失败时兜底。离开核对页后看板/侧栏仍看阶段，不要只把进度画在 WaitCard 上。核对页缩放用 CSS transform，不要接 OpenSeadragon。
+杭州打样平面出图走 pymupdf（对照同一 `.venv`），不要让人装 qlmanage。macOS Quick Look 只在 pymupdf 失败时兜底。打样先读稿上的刀线/刀版还原切面，没有刀线才回退已登记 JSON，不能按比例硬套方盒。离开核对页后看板/侧栏仍看阶段，不要只把进度画在 WaitCard 上。核对页缩放用 CSS transform，不要接 OpenSeadragon。核对窗液态玻璃可收起可缩放；隐藏钉只藏圆圈，保留定位框。
 
 ## Design System
 
@@ -93,7 +93,7 @@ MiniMax 未开语义复核是「未用」，不是「可用」；探测是 `GET 
 - 侧栏顶用 `apps/web/ui/public/brand/logo-mark.png`。折叠时悬停变成展开按钮（同一 44pt）。完整 `shine-mage.png` 只放拒绝页。
 - 左下角飞书头像 36px + `花名（真名）` 15px，例如 `天元（魏炜）`。
 - 空审核单不画三栏。设置里有「外观」：主题、13–28px 字号（可手写）、侧栏材质（实心 / 毛玻璃 / 液态玻璃）、侧栏雾面对比度滑条、差异标记。只写 `localStorage`。深色走品牌紫雾，不是灰黑中台。
-- 审稿：专属核对页，画布吃满宽度。OCR 真框 + 编号钉可隐藏。左图 CSS transform 缩放（1–6×），不上 OpenSeadragon。右上悬浮核对窗可收起，字段和疑点两列。结论由人写。禁止「AI 已过审」。
+- 审稿：专属核对页，画布吃满宽度。OCR 真框始终在；「隐藏钉」只藏编号圆圈。左图 CSS transform 缩放（1–6×），拖动走 rAF，禁止原生图片拖拽，不上 OpenSeadragon。右上液态玻璃核对窗可收起、可缩放，字段和疑点两列。结论写在页头签字旁。禁止「AI 已过审」。
 - 历史记录是侧栏 tab，不是第三张台。
 - 打样台 8/31 不对业务开放。QA 时标出任何与 `DESIGN.md` 不符的实现。
 
