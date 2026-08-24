@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections import deque
 from pathlib import Path
 from typing import Any
@@ -279,6 +280,7 @@ def layout_to_template(layout: dict[str, Any]) -> dict[str, Any]:
         "version": 1,
         "description": f"刀线还原 {layout['family']}",
         "source": "dieline",
+        "family": layout["family"],
         "knife_layer": layout["knife_layer"],
         "expected_page_points": list(layout["page_pt"]),
         "page_size_tolerance_ratio": 0.05,
@@ -310,7 +312,8 @@ def parse_knife_pdf(knife_pdf: Path, knife_layer: str) -> dict[str, Any]:
         if doc.page_count < 1:
             raise RuntimeError("刀线PDF没有页")
         page = doc[0]
-        page_w, page_h = float(page.rect.width), float(page.rect.height)
+        page.set_cropbox(page.mediabox)
+        page_w, page_h = float(page.mediabox.width), float(page.mediabox.height)
         if page_w <= 1 or page_h <= 1:
             raise RuntimeError("刀线页宽异常")
         width_px = 1600
@@ -341,7 +344,9 @@ def parse_knife_pdf(knife_pdf: Path, knife_layer: str) -> dict[str, Any]:
             "panels": panels,
             "dimensions_mm": {"width": face_w, "depth": 3.0, "height": face_h},
         }
-        return layout
+        if layout_sane(layout):
+            return layout
+        raise RuntimeError(f"刀线还原的尺寸不合理：{layout['dimensions_mm']}")
 
     region = regions[0]
     last_error = "刀线读不出盒面"
@@ -359,14 +364,19 @@ def parse_knife_pdf(knife_pdf: Path, knife_layer: str) -> dict[str, Any]:
 
 def layout_sane(layout: dict[str, Any]) -> bool:
     dims = layout.get("dimensions_mm") or {}
-    width, depth, height = float(dims.get("width") or 0), float(dims.get("depth") or 0), float(dims.get("height") or 0)
+    try:
+        width, depth, height = float(dims.get("width") or 0), float(dims.get("depth") or 0), float(dims.get("height") or 0)
+    except (TypeError, ValueError):
+        return False
+    if not all(math.isfinite(v) for v in (width, depth, height)):
+        return False
     family = layout.get("family")
     roles = {str(p.get("role")) for p in layout.get("panels") or []}
     if family == "pouch":
-        return width >= 50 and height >= 80 and {"front", "back"} <= roles
+        return 50 <= width <= 400 and 80 <= height <= 500 and {"front", "back"} <= roles
     if family == "flat":
-        return width >= 50 and depth >= 8 and height >= 50 and {"front", "back", "left", "right"} <= roles
-    return width >= 18 and depth >= 18 and height >= 40 and {"front", "back", "left", "right"} <= roles
+        return 50 <= width <= 400 and 8 <= depth <= 120 and 50 <= height <= 500 and {"front", "back", "left", "right"} <= roles
+    return 18 <= width <= 250 and 18 <= depth <= 250 and 40 <= height <= 450 and {"front", "back", "left", "right"} <= roles
 
 
 def _carton_from_roi(

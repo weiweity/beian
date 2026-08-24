@@ -97,6 +97,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
   const [dockBox, setDockBox] = useState<DockBox>(() => readDockBox(browserStore()));
   const panDrag = useRef<{ x: number; y: number } | null>(null);
   const panRaf = useRef<number | null>(null);
+  const wheelEnd = useRef<number | null>(null);
   const dockResize = useRef<{ x: number; y: number; box: DockBox } | null>(null);
   const pendingFit = useRef<number | null>(null);
   const fitHitRef = useRef<(i: number) => void>(() => undefined);
@@ -125,6 +126,27 @@ export function ReviewPage({ taskId, onBack }: Props) {
     const next = clampDockBox(box, deskRoom());
     setDockBox(next);
     writeDockBox(browserStore(), next);
+  }
+
+  function endPan(target?: EventTarget | null) {
+    if (target instanceof HTMLElement) target.classList.remove("is-panning");
+    else viewRef.current?.classList.remove("is-panning");
+    if (panRaf.current != null) {
+      window.cancelAnimationFrame(panRaf.current);
+      panRaf.current = null;
+    }
+    paintZoom(zoomRef.current);
+    setZoom(zoomRef.current);
+    panDrag.current = null;
+  }
+
+  function endDockResize() {
+    const start = dockResize.current;
+    dockResize.current = null;
+    if (!start) return;
+    const el = dockRef.current;
+    if (el) commitDock({ ...start.box, w: el.offsetWidth, h: el.offsetHeight });
+    else commitDock(start.box);
   }
 
   useEffect(() => {
@@ -231,10 +253,24 @@ export function ReviewPage({ taskId, onBack }: Props) {
       const ox = e.clientX - rect.left;
       const oy = e.clientY - rect.top;
       const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
-      commitZoom(zoomAt(zoomRef.current, zoomRef.current.scale * factor, ox, oy));
+      zoomRef.current = zoomAt(zoomRef.current, zoomRef.current.scale * factor, ox, oy);
+      if (panRaf.current == null) {
+        panRaf.current = window.requestAnimationFrame(() => {
+          panRaf.current = null;
+          paintZoom(zoomRef.current);
+        });
+      }
+      if (wheelEnd.current != null) window.clearTimeout(wheelEnd.current);
+      wheelEnd.current = window.setTimeout(() => {
+        wheelEnd.current = null;
+        setZoom(zoomRef.current);
+      }, 80);
     };
     el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
+    return () => {
+      el.removeEventListener("wheel", onWheel);
+      if (wheelEnd.current != null) window.clearTimeout(wheelEnd.current);
+    };
   }, [page?.url, waiting]);
 
   if (!taskId) {
@@ -471,24 +507,9 @@ export function ReviewPage({ taskId, onBack }: Props) {
                   });
                 }
               }}
-              onPointerUp={(e) => {
-                e.currentTarget.classList.remove("is-panning");
-                if (panRaf.current != null) {
-                  window.cancelAnimationFrame(panRaf.current);
-                  panRaf.current = null;
-                }
-                paintZoom(zoomRef.current);
-                setZoom(zoomRef.current);
-                panDrag.current = null;
-              }}
-              onPointerCancel={(e) => {
-                e.currentTarget.classList.remove("is-panning");
-                panDrag.current = null;
-              }}
-              onLostPointerCapture={(e) => {
-                e.currentTarget.classList.remove("is-panning");
-                panDrag.current = null;
-              }}
+              onPointerUp={(e) => endPan(e.currentTarget)}
+              onPointerCancel={(e) => endPan(e.currentTarget)}
+              onLostPointerCapture={(e) => endPan(e.currentTarget)}
             >
               <div className="canvas-zoom" ref={zoomElRef} style={{ transform: zoomCss(zoom) }}>
                 <img
@@ -737,17 +758,9 @@ export function ReviewPage({ taskId, onBack }: Props) {
                   el.style.height = `${next.h}px`;
                 }
               }}
-              onPointerUp={(e) => {
-                const start = dockResize.current;
-                dockResize.current = null;
-                if (!start) return;
-                commitDock(
-                  resizeDockCorner(start.box, { dx: e.clientX - start.x, dy: e.clientY - start.y }, deskRoom()),
-                );
-              }}
-              onPointerCancel={() => {
-                dockResize.current = null;
-              }}
+              onPointerUp={() => endDockResize()}
+              onPointerCancel={() => endDockResize()}
+              onLostPointerCapture={() => endDockResize()}
             />
           </aside>
         ) : (

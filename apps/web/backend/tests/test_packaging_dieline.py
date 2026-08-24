@@ -49,6 +49,51 @@ def test_layout_sane_rejects_tiny_noise():
     assert d.layout_sane(
         {"family": "pouch", "dimensions_mm": {"width": 140, "depth": 3, "height": 200}, "panels": [{"role": "front"}, {"role": "back"}]}
     )
+    assert not d.layout_sane(
+        {"family": "carton", "dimensions_mm": {"width": 900, "depth": 47, "height": 170}, "panels": four}
+    )
+    assert not d.layout_sane(
+        {"family": "pouch", "dimensions_mm": {"width": 140, "depth": 3, "height": 900}, "panels": [{"role": "front"}, {"role": "back"}]}
+    )
+    assert not d.layout_sane(
+        {"family": "carton", "dimensions_mm": {"width": float("inf"), "depth": 47, "height": 170}, "panels": four}
+    )
+
+
+def test_dieline_error_paths(tmp_path: Path):
+    d = dieline()
+    with pytest.raises(RuntimeError, match="找不到展开图"):
+        d.pick_main_regions([], 3, 1.0)
+    with pytest.raises(RuntimeError, match="竖线太少"):
+        d.assign_body_panels([0.0, 10.0, 20.0])
+    with pytest.raises(RuntimeError, match="面宽太碎"):
+        d.assign_body_panels([0, 1, 2, 3, 4])
+    from pypdf import PdfWriter
+
+    empty = tmp_path / "empty.pdf"
+    writer = PdfWriter()
+    with empty.open("wb") as stream:
+        writer.write(stream)
+    with pytest.raises(RuntimeError, match="没有页"):
+        d.parse_knife_pdf(empty, "刀线")
+
+
+def test_parse_knife_pdf_ignores_thin_cropbox(tmp_path: Path):
+    d = dieline()
+    doc = pymupdf.open()
+    page = doc.new_page(width=900, height=720)
+    x = 80
+    page.draw_rect(pymupdf.Rect(x, 160, x + 40, 620), color=(0, 0, 0), width=1.2)
+    x += 40
+    for _ in range(4):
+        page.draw_rect(pymupdf.Rect(x, 160, x + 120, 620), color=(0, 0, 0), width=1.2)
+        x += 120
+    page.set_cropbox(pymupdf.Rect(0, 0, 1.1, 720))
+    pdf = _save(tmp_path / "crop.pdf", doc)
+    layout = d.parse_knife_pdf(pdf, "刀线")
+    dims = layout["dimensions_mm"]
+    assert 40 < dims["width"] < 55
+    assert 150 < dims["height"] < 175
 
 
 def test_assign_body_panels_square_and_flat():
@@ -89,6 +134,7 @@ def test_parse_synthetic_carton(tmp_path: Path):
     assert 150 < dims["height"] < 175
     template = d.layout_to_template(layout)
     assert template["source"] == "dieline"
+    assert template["family"] in {"carton", "flat"}
     assert "front" in template["face_boxes"]
 
 
@@ -108,13 +154,12 @@ def test_parse_synthetic_pouch(tmp_path: Path):
 
 
 @pytest.mark.skipif(not SAMPLES.is_dir(), reason="本地打样样张不在 CI")
-def test_real_26h17_recovers_square_flower_box():
+def test_real_26h17_recovers_square_flower_box(tmp_path: Path):
     d = dieline()
     p = pipeline()
     src = SAMPLES / "转曲 D-达肤妍男士精华水花盒—26H17A.ai"
     assert src.is_file()
-    knife_pdf = Path("/tmp/beian-dieline-test-26h17.pdf")
-    knife_pdf.parent.mkdir(parents=True, exist_ok=True)
+    knife_pdf = tmp_path / "26h17.pdf"
     p.make_layer_pdf(src, knife_pdf, {"刀线"})
     layout = d.parse_knife_pdf(knife_pdf, "刀线")
     dims = layout["dimensions_mm"]
@@ -125,11 +170,11 @@ def test_real_26h17_recovers_square_flower_box():
 
 
 @pytest.mark.skipif(not SAMPLES.is_dir(), reason="本地打样样张不在 CI")
-def test_real_5pack_is_flat_carton():
+def test_real_5pack_is_flat_carton(tmp_path: Path):
     d = dieline()
     p = pipeline()
     src = SAMPLES / "转曲D-达肤妍祛痘细肤面膜-5片装花盒-26H06A.ai"
-    knife_pdf = Path("/tmp/beian-dieline-test-5pack.pdf")
+    knife_pdf = tmp_path / "5pack.pdf"
     p.make_layer_pdf(src, knife_pdf, {"刀线"})
     layout = d.parse_knife_pdf(knife_pdf, "刀线")
     dims = layout["dimensions_mm"]
@@ -140,11 +185,11 @@ def test_real_5pack_is_flat_carton():
 
 
 @pytest.mark.skipif(not SAMPLES.is_dir(), reason="本地打样样张不在 CI")
-def test_real_30ml_is_pouch():
+def test_real_30ml_is_pouch(tmp_path: Path):
     d = dieline()
     p = pipeline()
     src = SAMPLES / "转曲D-达肤妍祛痘细肤面膜30ml稿件-26H11A.ai"
-    knife_pdf = Path("/tmp/beian-dieline-test-pouch.pdf")
+    knife_pdf = tmp_path / "pouch.pdf"
     p.make_layer_pdf(src, knife_pdf, {"刀线"})
     layout = d.parse_knife_pdf(knife_pdf, "刀线")
     dims = layout["dimensions_mm"]

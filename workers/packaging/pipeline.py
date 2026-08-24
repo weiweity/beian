@@ -26,7 +26,8 @@ except ImportError:
     raise
 
 
-PIPELINE_VERSION = "1.3.0"
+PIPELINE_VERSION = "1.3.1"
+MAX_RASTER_PIXELS = 32_000_000
 ROOT = Path(__file__).resolve().parent
 BLENDER_SCRIPT = ROOT / "blender" / "render_job.py"
 PPT_SCRIPT = ROOT / "ppt" / "build_product_ppt.mjs"
@@ -215,6 +216,9 @@ def render_pdf_thumbnail(source: Path, output_dir: Path, width_px: int) -> Path:
             if width <= 1 or height <= 1:
                 raise PipelineError("平面页宽异常")
             zoom = float(width_px) / width
+            area = width * height * zoom * zoom
+            if area > MAX_RASTER_PIXELS:
+                zoom = (MAX_RASTER_PIXELS / (width * height)) ** 0.5
             pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), alpha=False)
             out = output_dir / f"{source.stem}.png"
             pix.save(str(out))
@@ -322,14 +326,14 @@ def crop_faces(print_png: Path, full_png: Path, assets_dir: Path, template: dict
             "top": (dims.get("width", 40), dims.get("depth", 40)),
             "bottom": (dims.get("width", 40), dims.get("depth", 40)),
         }
-        missing_print = [face for face in ("front", "back", "left", "right") if face not in sizes]
+        family = str(template.get("family") or "")
+        required_print = ("front", "back") if family == "pouch" else ("front", "back", "left", "right")
+        missing_print = [face for face in required_print if face not in sizes]
         if missing_print:
             raise PipelineError(f"刀线切面不完整，缺{missing_print}")
         for face, mm in fallback.items():
             if face in sizes:
                 continue
-            if face not in ("top", "bottom"):
-                raise PipelineError(f"刀线切面不完整，缺{face}")
             img = _paper_face((max(8, round(float(mm[0]) * px_per_mm)), max(8, round(float(mm[1]) * px_per_mm))))
             img.save(assets_dir / f"panel_{face}.png", compress_level=3)
             sizes[face] = list(img.size)
@@ -478,6 +482,8 @@ def preflight_product(
             **product,
             "die_source": template.get("source") or "registry",
             "template_id": template.get("template_id"),
+            "family": template.get("family"),
+            "dimensions_mm": template.get("dimensions_mm"),
         },
         extra_paths=fingerprint_extra,
     )

@@ -67,6 +67,53 @@ def test_pick_template_skips_smoke_even_if_size_matches(tmp_path: Path):
     assert "不要用" not in text
 
 
+def test_preflight_no_knife_does_not_stretch(tmp_path: Path):
+    import pymupdf
+
+    pipe = _load()
+    src = tmp_path / "art.pdf"
+    doc = pymupdf.open()
+    doc.new_page(width=1498.67, height=1446)
+    doc.save(str(src))
+    doc.close()
+    tmpl = tmp_path / "square.json"
+    _write(tmpl, [2833.5, 1507.67], "square", "方形花盒")
+    product = {
+        "code": "t1",
+        "slug": "t1",
+        "display_name": "t",
+        "source_ai": str(src),
+        "template": str(tmpl),
+    }
+    with pytest.raises(pipe.PipelineError, match="没有刀线或刀版层"):
+        pipe.preflight_product(product, tmp_path, tmp_path / "out", False, {}, False)
+
+
+def test_preflight_bad_knife_does_not_fall_back_to_square(tmp_path: Path):
+    import pymupdf
+
+    pipe = _load()
+    src = tmp_path / "art.pdf"
+    doc = pymupdf.open()
+    page = doc.new_page(width=2833.5, height=1507.67)
+    ocg = doc.add_ocg("刀线")
+    doc.add_ocg("印刷")
+    page.draw_rect(pymupdf.Rect(10, 10, 20, 20), color=(0, 0, 0), width=0.5, oc=ocg)
+    doc.save(str(src))
+    doc.close()
+    tmpl = tmp_path / "square.json"
+    _write(tmpl, [2833.5, 1507.67], "square", "方形花盒")
+    product = {
+        "code": "t2",
+        "slug": "t2",
+        "display_name": "t",
+        "source_ai": str(src),
+        "template": str(tmpl),
+    }
+    with pytest.raises(pipe.PipelineError, match="刀线读不出结构"):
+        pipe.preflight_product(product, tmp_path, tmp_path / "out", False, {}, False)
+
+
 def test_pick_template_mismatch_does_not_stretch(tmp_path: Path):
     pipe = _load()
     assigned = tmp_path / "square.json"

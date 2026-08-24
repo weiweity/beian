@@ -78,6 +78,30 @@ def test_crop_faces_face_boxes_and_paper_fill(tmp_path: Path):
     assert sizes["bottom"][0] >= 8
 
 
+def test_crop_faces_pouch_two_faces_paper_fills_sides(tmp_path: Path):
+    pipe = _load()
+    print_png = _png(tmp_path / "print.png")
+    full_png = _png(tmp_path / "full.png")
+    assets = tmp_path / "assets"
+    sizes = pipe.crop_faces(
+        print_png,
+        full_png,
+        assets,
+        {
+            "family": "pouch",
+            "reference_width_px": 200,
+            "face_boxes": {"front": [10, 10, 90, 90], "back": [100, 10, 180, 90]},
+            "dimensions_mm": {"width": 40, "depth": 3, "height": 80},
+        },
+    )
+    assert sizes["front"] == [80, 80]
+    assert sizes["back"] == [80, 80]
+    assert sizes["left"][0] >= 8
+    assert sizes["right"][0] >= 8
+    for name in ("front", "back", "left", "right", "top", "bottom"):
+        assert (assets / f"panel_{name}.png").is_file()
+
+
 def test_crop_faces_missing_print_face_fails(tmp_path: Path):
     pipe = _load()
     print_png = _png(tmp_path / "print.png")
