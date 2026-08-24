@@ -499,9 +499,37 @@ describe("jobs dispatcher", () => {
     });
     enqueue({ kind: "mockup", id: tid(39) });
     assert.equal(loadMockup(tid(39))?.job_status, "running");
+    assert.equal(loadMockup(tid(39))?.job_stage, "render_pdf");
+    assert.equal(loadMockup(tid(39))?.job_stage_label, "出图");
     assert.equal(loadMockup(tid(40))?.job_status, "queued");
     assert.equal(queueSnapshot().blender.running, 1);
     assert.equal(queueSnapshot().blender.queued, 1);
+  });
+
+  it("stderr STAGE export becomes mockup job_stage_label 导出", async () => {
+    const { saveMockup, loadMockup } = await import("./mockup.js");
+    setJobsTestHooks({
+      runPack: async (_manifest, opts) => {
+        opts?.onStderrLine?.("STAGE render_pdf");
+        opts?.onStderrLine?.("STAGE export");
+        return { code: 1, stdout: "", stderr: "打样中断", timedOut: false };
+      },
+    });
+    saveMockup({
+      id: tid(82),
+      status: "queued",
+      created_at: "2026-08-24T10:00:00.000Z",
+      files: [],
+      job_kind: "mockup",
+      job_status: "queued",
+    });
+    enqueue({ kind: "mockup", id: tid(82) });
+    for (let i = 0; i < 50 && loadMockup(tid(82))?.job_stage !== "export"; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    const job = loadMockup(tid(82));
+    assert.equal(job?.job_stage, "export");
+    assert.equal(job?.job_stage_label, "导出");
   });
 
   it("mockup success collects glb output files", async () => {
