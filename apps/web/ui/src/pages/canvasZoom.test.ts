@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { clampScale, panBy, resetZoom, zoomAt, zoomToBox } from "./canvasZoom.js";
+import { clampScale, panBy, resetZoom, zoomAt, zoomCss, zoomToBox } from "./canvasZoom.js";
 
 describe("clampScale", () => {
   it("stays between 1 and 6", () => {
@@ -19,6 +19,12 @@ describe("zoomAt", () => {
     assert.equal(z.x, -100);
     assert.equal(z.y, -50);
     assert.deepEqual(zoomAt({ scale: 2, x: -40, y: -10 }, 1, 100, 50), { scale: 1, x: -40, y: -10 });
+  });
+});
+
+describe("zoomCss", () => {
+  it("writes a CSS transform from pan and scale", () => {
+    assert.equal(zoomCss({ scale: 2, x: -12, y: 8 }), "translate(-12px, 8px) scale(2)");
   });
 });
 

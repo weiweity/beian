@@ -26,13 +26,19 @@ except ImportError:
     raise
 
 
-PIPELINE_VERSION = "1.2.1"
+PIPELINE_VERSION = "1.3.1"
+MAX_RASTER_PIXELS = 32_000_000
 ROOT = Path(__file__).resolve().parent
 BLENDER_SCRIPT = ROOT / "blender" / "render_job.py"
 PPT_SCRIPT = ROOT / "ppt" / "build_product_ppt.mjs"
 ILLUSTRATOR_WORKER = ROOT / "illustrator" / "illustrator_worker.py"
 ILLUSTRATOR_JSX = ROOT / "illustrator" / "export_ai.jsx"
 ILLUSTRATOR_RUNNER = ROOT / "illustrator" / "run_export.applescript"
+DIELINE_SCRIPT = ROOT / "dieline.py"
+
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from dieline import PT_TO_MM, layout_to_template, parse_knife_pdf, pick_knife_layer  # noqa: E402
 
 DEFAULT_NODE = Path(os.environ.get("RUNTIME_NODE", "node"))
 DEFAULT_NODE_MODULES = Path(os.environ.get("RUNTIME_NODE_MODULES", ""))
@@ -57,6 +63,62 @@ def save_json(path: Path, value: Any) -> None:
     with path.open("w", encoding="utf-8") as stream:
         json.dump(value, stream, ensure_ascii=False, indent=2)
         stream.write("\n")
+
+
+def is_smoke_template(path: Path) -> bool:
+    return "smoke" in path.stem.lower()
+
+
+def production_template_paths(templates_dir: Path) -> list[Path]:
+    if not templates_dir.is_dir():
+        return []
+    return sorted(p for p in templates_dir.glob("*.json") if p.is_file() and not is_smoke_template(p))
+
+
+def page_size_matches(template: dict[str, Any], page_size: list[float]) -> bool:
+    expected = template.get("expected_page_points") or []
+    if len(expected) != 2 or len(page_size) != 2:
+        return False
+    try:
+        tolerance = float(template.get("page_size_tolerance_ratio", 0.02))
+    except (TypeError, ValueError):
+        tolerance = 0.02
+    for actual, wanted in zip(page_size, expected):
+        try:
+            actual_f = float(actual)
+            wanted_f = float(wanted)
+        except (TypeError, ValueError):
+            return False
+        if wanted_f <= 0 or abs(actual_f - wanted_f) / wanted_f > tolerance:
+            return False
+    return True
+
+
+def template_label(template: dict[str, Any]) -> str:
+    dims = template.get("dimensions_mm") or {}
+    parts: list[str] = []
+    width, depth, height = dims.get("width"), dims.get("depth"), dims.get("height")
+    if width is not None and depth is not None and height is not None:
+        parts.append(f"{width}×{depth}×{height}mm")
+    desc = str(template.get("description") or template.get("template_id") or "").strip()
+    if desc:
+        parts.append(desc)
+    return " ".join(parts) or "刀模"
+
+
+def pick_template(assigned: Path, page_size: list[float], source: Path) -> tuple[Path, dict[str, Any]]:
+    assigned_data = load_json(assigned)
+    if page_size_matches(assigned_data, page_size):
+        return assigned, assigned_data
+    for cand in production_template_paths(assigned.parent):
+        if cand.resolve() == assigned.resolve():
+            continue
+        data = load_json(cand)
+        if page_size_matches(data, page_size):
+            return cand, data
+    labels = [template_label(load_json(path)) for path in production_template_paths(assigned.parent)]
+    listed = "、".join(labels) if labels else "无"
+    raise PipelineError(f"AI画板尺寸与模板不符：实际={page_size}，已登记=[{listed}]，文件={source}")
 
 
 def resolve_from(base: Path, value: str) -> Path:
@@ -89,9 +151,11 @@ def job_fingerprint(
         ILLUSTRATOR_WORKER,
         ILLUSTRATOR_JSX,
         ILLUSTRATOR_RUNNER,
+        DIELINE_SCRIPT,
         *extra_paths,
     ):
-        digest.update(file_sha256(pipeline_file).encode("ascii"))
+        if pipeline_file.is_file():
+            digest.update(file_sha256(pipeline_file).encode("ascii"))
     digest.update(file_sha256(source).encode("ascii"))
     digest.update(file_sha256(template_path).encode("ascii"))
     digest.update(json.dumps(product, ensure_ascii=False, sort_keys=True).encode("utf-8"))
@@ -152,6 +216,9 @@ def render_pdf_thumbnail(source: Path, output_dir: Path, width_px: int) -> Path:
             if width <= 1 or height <= 1:
                 raise PipelineError("平面页宽异常")
             zoom = float(width_px) / width
+            area = width * height * zoom * zoom
+            if area > MAX_RASTER_PIXELS:
+                zoom = (MAX_RASTER_PIXELS / (width * height)) ** 0.5
             pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), alpha=False)
             out = output_dir / f"{source.stem}.png"
             pix.save(str(out))
@@ -192,19 +259,15 @@ def scaled_box(box: list[int] | tuple[int, ...], scale: float) -> tuple[int, ...
     return tuple(round(value * scale) for value in box)
 
 
+def _paper_face(size: tuple[int, int]) -> Image.Image:
+    w, h = max(8, int(size[0])), max(8, int(size[1]))
+    return Image.new("RGB", (w, h), (248, 248, 247))
+
+
 def crop_faces(print_png: Path, full_png: Path, assets_dir: Path, template: dict[str, Any]) -> dict[str, list[int]]:
     reference_width = float(template["reference_width_px"])
-    panel_x = template["panel_x"]
-    body_top = template["body_top"]
-    body_bottom = template["body_bottom"]
     face_sources = template.get("face_sources", {})
     inset = int(template.get("composite_inset_reference_px", 0))
-    face_ranges = {
-        "back": (panel_x[0], panel_x[1]),
-        "left": (panel_x[1], panel_x[2]),
-        "front": (panel_x[2], panel_x[3]),
-        "right": (panel_x[3], panel_x[4]),
-    }
     assets_dir.mkdir(parents=True, exist_ok=True)
     sizes: dict[str, list[int]] = {}
     with Image.open(print_png).convert("RGB") as print_image, Image.open(full_png).convert("RGB") as full_image:
@@ -213,30 +276,67 @@ def crop_faces(print_png: Path, full_png: Path, assets_dir: Path, template: dict
                 f"印刷层与合成图尺寸不一致：{print_image.size} vs {full_image.size}"
             )
         scale = print_image.width / reference_width
-        for face, (x0, x1) in face_ranges.items():
+        boxes: dict[str, tuple[float, float, float, float]] = {}
+        explicit = template.get("face_boxes") or {}
+        if explicit:
+            for face, raw in explicit.items():
+                if not raw or len(raw) < 4:
+                    continue
+                boxes[face] = (float(raw[0]), float(raw[1]), float(raw[2]), float(raw[3]))
+        else:
+            panel_x = template["panel_x"]
+            body_top = template["body_top"]
+            body_bottom = template["body_bottom"]
+            boxes = {
+                "back": (panel_x[0], body_top, panel_x[1], body_bottom),
+                "left": (panel_x[1], body_top, panel_x[2], body_bottom),
+                "front": (panel_x[2], body_top, panel_x[3], body_bottom),
+                "right": (panel_x[3], body_top, panel_x[4], body_bottom),
+            }
+            lid = template.get("top_lid")
+            if lid and len(lid) >= 4:
+                boxes["top"] = (float(lid[0]), float(lid[1]), float(lid[2]), float(lid[3]))
+        for face, box in boxes.items():
             source_image = full_image if face_sources.get(face) == "composite" else print_image
             face_inset = inset if face_sources.get(face) == "composite" else 0
-            box = (
+            x0, y0, x1, y1 = (float(box[0]), float(box[1]), float(box[2]), float(box[3]))
+            if x1 < x0:
+                x0, x1 = x1, x0
+            if y1 < y0:
+                y0, y1 = y1, y0
+            crop_box = (
                 x0 + face_inset,
-                body_top + face_inset,
+                y0 + face_inset,
                 x1 - face_inset,
-                body_bottom - face_inset,
+                y1 - face_inset,
             )
-            crop = source_image.crop(scaled_box(box, scale))
+            crop = source_image.crop(scaled_box(crop_box, scale))
+            if crop.size[0] < 2 or crop.size[1] < 2:
+                continue
             output = assets_dir / f"panel_{face}.png"
             crop.save(output, compress_level=3)
             sizes[face] = list(crop.size)
-
-        top = print_image.crop(scaled_box(template["top_lid"], scale))
-        top_output = assets_dir / "panel_top.png"
-        top.save(top_output, compress_level=3)
-        sizes["top"] = list(top.size)
-
-        bottom_size = max(top.width, top.height)
-        bottom = Image.new("RGB", (bottom_size, bottom_size), (248, 248, 247))
-        bottom_output = assets_dir / "panel_bottom.png"
-        bottom.save(bottom_output, compress_level=3)
-        sizes["bottom"] = list(bottom.size)
+        dims = template.get("dimensions_mm") or {}
+        px_per_mm = scale / PT_TO_MM
+        fallback = {
+            "front": (dims.get("width", 40), dims.get("height", 80)),
+            "back": (dims.get("width", 40), dims.get("height", 80)),
+            "left": (dims.get("depth", 40), dims.get("height", 80)),
+            "right": (dims.get("depth", 40), dims.get("height", 80)),
+            "top": (dims.get("width", 40), dims.get("depth", 40)),
+            "bottom": (dims.get("width", 40), dims.get("depth", 40)),
+        }
+        family = str(template.get("family") or "")
+        required_print = ("front", "back") if family == "pouch" else ("front", "back", "left", "right")
+        missing_print = [face for face in required_print if face not in sizes]
+        if missing_print:
+            raise PipelineError(f"刀线切面不完整，缺{missing_print}")
+        for face, mm in fallback.items():
+            if face in sizes:
+                continue
+            img = _paper_face((max(8, round(float(mm[0]) * px_per_mm)), max(8, round(float(mm[1]) * px_per_mm))))
+            img.save(assets_dir / f"panel_{face}.png", compress_level=3)
+            sizes[face] = list(img.size)
     return sizes
 
 
@@ -325,23 +425,6 @@ def preflight_product(
         if not info_plist.is_file():
             raise PipelineError(f"需要Illustrator兜底，但应用不完整：{app_path}")
         fingerprint_extra = (info_plist,)
-    fingerprint = job_fingerprint(
-        source,
-        template_path,
-        product,
-        extra_paths=fingerprint_extra,
-    )
-    result_path = project_dir / "pipeline_result.json"
-    if not force and not force_illustrator and result_path.is_file():
-        previous = load_json(result_path)
-        outputs = previous.get("outputs", {})
-        required = [outputs.get(key) for key in ("blend", "glb", "front_right", "back_left")]
-        if previous.get("fingerprint") == fingerprint and all(
-            value and Path(value).is_file() for value in required
-        ):
-            previous["cache_hit"] = True
-            previous["preflight_elapsed_s"] = round(time.perf_counter() - started, 4)
-            return previous
 
     illustrator_result: dict[str, Any] | None = None
     input_mode = "pdf_fast"
@@ -363,21 +446,58 @@ def preflight_product(
         raise PipelineError(f"结构模板只接受单页AI，实际页数={len(reader.pages)}：{source}")
     page = reader.pages[0]
     page_size = [float(page.mediabox.width), float(page.mediabox.height)]
-    expected = template["expected_page_points"]
-    tolerance = float(template.get("page_size_tolerance_ratio", 0.02))
-    for actual, wanted in zip(page_size, expected):
-        if abs(actual - wanted) / wanted > tolerance:
-            raise PipelineError(
-                f"AI画板尺寸与模板不符：实际={page_size}，模板={expected}，文件={source}"
-            )
     layers = (
         list(illustrator_result.get("layers", []))
         if illustrator_result
         else optional_content_layers(reader)
     )
+    knife = pick_knife_layer(layers)
+    if knife:
+        knife_pdf = project_dir / "knife.pdf"
+        try:
+            make_layer_pdf(full_pdf_source, knife_pdf, {knife})
+            layout = parse_knife_pdf(knife_pdf, knife)
+            template = layout_to_template(layout)
+            template_path = knife_pdf
+            save_json(project_dir / "dieline_layout.json", layout)
+        except Exception as err:
+            raise PipelineError(f"刀线读不出结构：{err}，文件={source}") from err
+    else:
+        try:
+            template_path, template = pick_template(template_path, page_size, source)
+        except PipelineError as err:
+            raise PipelineError(
+                f"稿里没有刀线或刀版层，也无法匹配已登记刀模。实际画板={page_size}，文件={source}"
+            ) from err
+    if "印刷" not in layers and "印刷" in template.get("required_layers", []):
+        raise PipelineError(f"AI缺少必要图层['印刷']：{source}")
     missing_layers = [name for name in template.get("required_layers", []) if name not in layers]
-    if missing_layers:
+    if missing_layers and template.get("source") != "dieline":
         raise PipelineError(f"AI缺少必要图层{missing_layers}：{source}")
+
+    fingerprint = job_fingerprint(
+        source,
+        template_path,
+        {
+            **product,
+            "die_source": template.get("source") or "registry",
+            "template_id": template.get("template_id"),
+            "family": template.get("family"),
+            "dimensions_mm": template.get("dimensions_mm"),
+        },
+        extra_paths=fingerprint_extra,
+    )
+    result_path = project_dir / "pipeline_result.json"
+    if not force and not force_illustrator and result_path.is_file():
+        previous = load_json(result_path)
+        outputs = previous.get("outputs", {})
+        required = [outputs.get(key) for key in ("blend", "glb", "front_right", "back_left")]
+        if previous.get("fingerprint") == fingerprint and all(
+            value and Path(value).is_file() for value in required
+        ):
+            previous["cache_hit"] = True
+            previous["preflight_elapsed_s"] = round(time.perf_counter() - started, 4)
+            return previous
 
     with tempfile.TemporaryDirectory(prefix=f"{code}-", dir=work_root) as temp_name:
         temp_dir = Path(temp_name)

@@ -38,7 +38,7 @@ chmod 600 backend/.env.baidu backend/.env.secrets
 ## 结构
 
 ```text
-ui/          React 审稿台 / 打样台 / 历史 / 设置（WaitCard；核对页 CSS transform 缩放，不上 OpenSeadragon；离开后看板/侧栏仍显示阶段）
+ui/          React 审稿台 / 打样台 / 历史 / 设置（WaitCard；核对页 CSS transform 缩放 + rAF 拖动，不上 OpenSeadragon；液态玻璃核对窗；离开后看板/侧栏仍显示阶段）
 server/      TypeScript HTTP（jobs.ts 管对照/对红/打样入队；`/brand/*` 挂 `ui/public`）
 backend/     Python worker + 测试（cli 不写任务 JSON）
 frontend/    退役

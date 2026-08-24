@@ -53,6 +53,18 @@ def test_render_pdf_thumbnail_ignores_thin_cropbox(tmp_path):
         assert im.size[1] == 200
 
 
+def test_render_pdf_thumbnail_caps_pixel_budget(tmp_path):
+    pdf = tmp_path / "tall.pdf"
+    doc = pymupdf.open()
+    doc.new_page(width=80, height=4000)
+    doc.save(str(pdf))
+    doc.close()
+    pipe = _load()
+    out = pipe.render_pdf_thumbnail(pdf, tmp_path / "thumbs", 8000)
+    with Image.open(out) as im:
+        assert im.size[0] * im.size[1] <= pipe.MAX_RASTER_PIXELS + 16
+
+
 def test_render_pdf_thumbnail_uses_pymupdf(tmp_path):
     pdf = tmp_path / "face.pdf"
     doc = pymupdf.open()

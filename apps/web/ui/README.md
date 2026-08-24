@@ -1,8 +1,8 @@
 # beian UI（React + TypeScript + Ant Design 6）
 
-审稿台（任务 / 新建 / 审核）、打样台、历史记录、设置（开工板 + 费用账单）。对照 / 对红 / 打样排队时用等待卡，不要假取消。离开后再进看板或打样台，卡片和侧栏圆点仍显示阶段。核对页有 bbox 才画真框，钉在框中心。没有自建登录页：未登录会跳飞书授权。
+审稿台（任务 / 新建 / 审核）、打样台、历史记录、设置（开工板 + 费用账单）。对照 / 对红 / 打样排队时用等待卡，不要假取消。离开后再进看板或打样台，卡片和侧栏圆点仍显示阶段。核对页有 bbox 才画真框，钉在框中心；隐藏钉只藏编号圆圈。核对窗液态玻璃可收起可缩放，结论写在页头。没有自建登录页：未登录会跳飞书授权。
 
-飞书身份、`/api/tasks`、`/api/settings`、`/api/mockups` 已接线。核对页包装图用 CSS transform 缩放（1–6×），不上 OpenSeadragon。
+飞书身份、`/api/tasks`、`/api/settings`、`/api/mockups` 已接线。核对页包装图用 CSS transform 缩放（1–6×）并 rAF 拖动，不上 OpenSeadragon。
 
 ```bash
 cd apps/web/ui
