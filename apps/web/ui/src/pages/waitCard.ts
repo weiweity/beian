@@ -22,6 +22,11 @@ const TITLE: Record<WaitKind, string> = {
   mockup: "打样中",
 };
 
+/** 等待圆盘逐字，和 WaitCard 标题同一套：对照中 / 对红中 / 打样中。 */
+export function waitLoaderLetters(kind: WaitKind): string[] {
+  return Array.from(TITLE[kind]);
+}
+
 function queueLine(queue_ahead?: number): string {
   const n = Number(queue_ahead);
   const ahead = Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
