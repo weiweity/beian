@@ -16,6 +16,9 @@ export function mockupFailReason(raw?: string | null): string {
   if (/画板尺寸与模板不符/.test(t)) {
     return "刀线没读成结构，画板也和已登记刀模对不上。不要硬套方盒。";
   }
+  if (/Node不存在/.test(t)) {
+    return "本机 PATH 里没有 Node，PPT 出不了。白底图和立体模型仍应能出。";
+  }
   const stripped = t
     .replace(/文件\s*=\s*[A-Za-z]:\\[^\s，,]*/g, "")
     .replace(/[A-Za-z]:\\[^\s，,]+/g, "")

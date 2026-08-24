@@ -30,6 +30,13 @@ describe("mockupFailReason", () => {
     assert.doesNotMatch(text, /只接/);
   });
 
+  it("explains a missing Node binary without failing the 3D job", () => {
+    const text = mockupFailReason("Node不存在：");
+    assert.match(text, /PPT/);
+    assert.match(text, /白底/);
+    assert.doesNotMatch(text, /刀线/);
+  });
+
   it("strips other Windows paths", () => {
     const text = mockupFailReason("Illustrator 超时，文件=C:\\supply\\data\\mockups\\a.ai");
     assert.doesNotMatch(text, /C:\\/);

@@ -40,7 +40,6 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from dieline import PT_TO_MM, layout_to_template, parse_knife_pdf, pick_knife_layer  # noqa: E402
 
-DEFAULT_NODE = Path(os.environ.get("RUNTIME_NODE", "node"))
 DEFAULT_NODE_MODULES = Path(os.environ.get("RUNTIME_NODE_MODULES", ""))
 DEFAULT_RUNTIME_BIN = Path(os.environ.get("RUNTIME_BIN_DIR", ""))
 DEFAULT_PRESENTATION_SKILL = Path(os.environ.get("PRESENTATION_SKILL_DIR", ""))
@@ -604,20 +603,43 @@ def run_blender_job(job: dict[str, Any], blender_executable: Path) -> dict[str, 
     return job
 
 
-def presentation_runtime() -> dict[str, str]:
-    node = Path(os.environ.get("RUNTIME_NODE", str(DEFAULT_NODE))).resolve()
-    modules = Path(os.environ.get("RUNTIME_NODE_MODULES", str(DEFAULT_NODE_MODULES))).resolve()
-    bin_dir = Path(os.environ.get("RUNTIME_BIN_DIR", str(DEFAULT_RUNTIME_BIN))).resolve()
-    for label, path in (("Node", node), ("Node modules", modules), ("Runtime bin", bin_dir)):
-        if not path.exists():
-            raise PipelineError(f"{label}不存在：{path}")
-    node_modules_link = ROOT / "ppt" / "node_modules"
-    if not node_modules_link.exists():
-        node_modules_link.symlink_to(modules, target_is_directory=True)
+def resolve_node_bin() -> Path | None:
+    raw = (os.environ.get("RUNTIME_NODE") or "").strip()
+    if raw:
+        hinted = Path(raw).expanduser()
+        if hinted.is_file():
+            return hinted.resolve()
+    found = shutil.which("node") or shutil.which("node.exe")
+    if found:
+        hit = Path(found)
+        if hit.is_file():
+            return hit.resolve()
+    return None
+
+
+def _env_dir(env_key: str, default: Path) -> Path | None:
+    raw = (os.environ.get(env_key) or "").strip() or str(default).strip()
+    if not raw or raw in (".",):
+        return None
+    path = Path(raw).expanduser()
+    return path if path.exists() else None
+
+
+def presentation_runtime() -> dict[str, str] | None:
+    node = resolve_node_bin()
+    if node is None:
+        return None
+    modules = _env_dir("RUNTIME_NODE_MODULES", DEFAULT_NODE_MODULES)
+    bin_dir = _env_dir("RUNTIME_BIN_DIR", DEFAULT_RUNTIME_BIN)
+    ppt_modules = ROOT / "ppt" / "node_modules"
+    if modules is None and not ppt_modules.exists():
+        return None
+    if modules is not None and not ppt_modules.exists():
+        ppt_modules.symlink_to(modules.resolve(), target_is_directory=True)
     return {
         "RUNTIME_NODE": str(node),
-        "RUNTIME_NODE_MODULES": str(modules),
-        "RUNTIME_BIN_DIR": str(bin_dir),
+        "RUNTIME_NODE_MODULES": str(modules.resolve()) if modules is not None else "",
+        "RUNTIME_BIN_DIR": str(bin_dir.resolve()) if bin_dir is not None else "",
     }
 
 
@@ -745,6 +767,10 @@ def main() -> int:
 
     if generate_ppt:
         runtime = presentation_runtime()
+        if runtime is None:
+            generate_ppt = False
+            print("PPT 跳过：本机没有 node 或演示文稿运行时", file=sys.stderr)
+    if generate_ppt:
         ppt_jobs = [
             job
             for job in jobs
