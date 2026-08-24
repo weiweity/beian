@@ -6,12 +6,12 @@ from pathlib import Path
 import pymupdf
 from PIL import Image
 
-# 审稿默认：高清，便于放大看小字/脚注
-DEFAULT_DPI = 260
-DEFAULT_MAX_SIDE = 3200
+# 审稿默认：高清，便于 6× CSS 放大看小字/脚注。不上矢量看图器。
+DEFAULT_DPI = 400
+DEFAULT_MAX_SIDE = 5600
 # 双 PDF / 内双页：小刀版要更高 DPI（物理尺寸小时 220 只有 ~1000px）
-COMPARE_DPI = 320
-COMPARE_MAX_SIDE = 4000
+COMPARE_DPI = 400
+COMPARE_MAX_SIDE = 5600
 # 仅预览/极速
 FAST_DPI = 200
 FAST_MAX_SIDE = 2400
@@ -48,12 +48,17 @@ def render_pdf_pages(
     out_dir.mkdir(parents=True, exist_ok=True)
     doc = pymupdf.open(pdf_path)
     results: list[dict] = []
-    zoom = dpi / 72.0
     for i, page in enumerate(doc):
         if i >= max_pages:
             break
-        mat = pymupdf.Matrix(zoom, zoom)
-        pix = page.get_pixmap(matrix=mat, alpha=False)
+        zoom = dpi / 72.0
+        width = float(page.rect.width)
+        height = float(page.rect.height)
+        if width > 1 and height > 1:
+            side = max(width, height) * zoom
+            if side > max_side:
+                zoom *= max_side / side
+        pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), alpha=False)
         if max(pix.width, pix.height) > max_side:
             scale = max_side / max(pix.width, pix.height)
             pix = page.get_pixmap(

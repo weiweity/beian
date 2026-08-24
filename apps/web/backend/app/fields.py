@@ -7,6 +7,8 @@ from typing import Any
 import openpyxl
 from rapidfuzz import fuzz
 
+from app.layout_zones import skip_sheet_field
+
 # 字段名别名 → 规范名（匹配用）
 FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "净含量": ("净含量", "规格", "含量", "容量"),
@@ -171,6 +173,8 @@ def parse_excel_fields(path: str) -> list[dict]:
         if not val and rem:
             val = rem
             rem = ""
+        if skip_sheet_field(name):
+            continue
         fg = field_group(name)
         if fg == "成分表":
             fields.extend(split_ingredient_steps(name, val, rem))
@@ -1665,6 +1669,8 @@ def compare_fields(
         )
 
     for i, f in enumerate(fields):
+        if skip_sheet_field(f.get("field") or ""):
+            continue
         fg_pre = field_group(f["field"])
         zone_scope = "full"
         match_words = ocr_words

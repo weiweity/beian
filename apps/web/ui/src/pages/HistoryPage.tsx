@@ -1,74 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, App, Button, Empty, Popconfirm, Table, Tag } from "antd";
 import { api, ApiError, type MockupJob, type TaskSummary } from "../api";
+import { historyHasLive, historyMockRow, historyTaskRow, type HistoryRow } from "./historyRows";
 
 type Props = {
   onOpenTask: (id: string) => void;
   onOpenMockup: (id: string) => void;
 };
 
-type Row = {
-  kind: "审稿台" | "打样台";
-  id: string;
-  title: string;
-  status: string;
-  color: "default" | "warning" | "error" | "processing" | "success";
-  at: string;
-  actor: string;
-};
-
-function taskRow(row: TaskSummary): Row {
-  let status = row.status;
-  let color: Row["color"] = "default";
-  if (row.status === "completed") {
-    status = "已签字";
-    color = "success";
-  } else if (row.status === "in_review" || row.status === "pending_review") {
-    status = "待她判";
-    color = "warning";
-  } else if (row.status === "compare_failed" || row.job_status === "failed") {
-    status = row.job_error || row.error || "对照失败";
-    color = "error";
-  } else if (row.status === "comparing") {
-    status = "对照中";
-    color = "processing";
-  }
-  return {
-    kind: "审稿台",
-    id: row.id,
-    title: row.product_name || row.title,
-    status,
-    color,
-    at: row.created_at || "",
-    actor: row.completed_by || row.owner || "",
-  };
-}
-
-function mockRow(row: MockupJob): Row {
-  let status = "打样";
-  let color: Row["color"] = "default";
-  if (row.status === "done") {
-    status = "已出图";
-    color = "success";
-  } else if (row.status === "failed") {
-    status = "打样中断";
-    color = "error";
-  } else if (row.status === "running" || row.status === "queued") {
-    status = "打样中";
-    color = "processing";
-  } else {
-    status = row.status;
-  }
-  return {
-    kind: "打样台",
-    id: row.id,
-    title: row.title || row.files[0]?.name || row.id.slice(0, 8),
-    status,
-    color,
-    at: row.created_at || "",
-    actor: row.owner || "",
-  };
-}
+type Row = HistoryRow;
 
 function clock(iso: string) {
   if (!iso) return "—";
@@ -108,10 +48,19 @@ export function HistoryPage({ onOpenTask, onOpenMockup }: Props) {
   }, []);
 
   const rows = useMemo(() => {
-    const out = [...tasks.map(taskRow), ...jobs.map(mockRow)];
+    const out = [...tasks.map(historyTaskRow), ...jobs.map(historyMockRow)];
     out.sort((a, b) => (b.at || "").localeCompare(a.at || ""));
     return out;
   }, [tasks, jobs]);
+
+  const live = historyHasLive(rows);
+  useEffect(() => {
+    if (!live) return;
+    const id = window.setInterval(() => {
+      void load().catch(() => undefined);
+    }, 2500);
+    return () => window.clearInterval(id);
+  }, [live]);
 
   async function remove(row: Row) {
     setBusy(row.id);
@@ -132,7 +81,7 @@ export function HistoryPage({ onOpenTask, onOpenMockup }: Props) {
       <header className="page-head">
         <div>
           <h1 className="page-title">历史记录</h1>
-          <p className="page-lead">审稿和打样分列。不是第三张台。</p>
+          <p className="page-lead">审稿和打样分列。进行中的也在这里，点进去看进度。</p>
         </div>
       </header>
       {error ? <Alert type="error" showIcon title={error} style={{ marginBottom: 16 }} /> : null}
@@ -159,8 +108,13 @@ export function HistoryPage({ onOpenTask, onOpenMockup }: Props) {
             {
               title: "状态",
               dataIndex: "status",
-              width: 140,
-              render: (_, row) => <Tag color={row.color}>{row.status}</Tag>,
+              width: 220,
+              render: (_, row) => (
+                <div>
+                  <Tag color={row.color}>{row.status}</Tag>
+                  {row.live ? <div className="review-card-live">{row.live}</div> : null}
+                </div>
+              ),
             },
             { title: "生成人", dataIndex: "actor", width: 120, render: (v: string) => v || "—" },
             {

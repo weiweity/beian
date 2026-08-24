@@ -215,6 +215,28 @@ describe("review http", () => {
     assert.match(String(body.detail || ""), /当前状态不可对红/);
   });
 
+  it("lets her sign when the only pending 疑点 is a pack-sheet field", async () => {
+    const tid = seed({
+      id: "c3c3c3c3c3c3",
+      title: "工艺表假疑点",
+      product_name: "工艺表假疑点",
+      type: "excel_pdf",
+      status: "pending_review",
+      hits: [
+        hit({ id: "ok", field: "净含量", status: "一致", decision: "confirm" }),
+        hit({ id: "proc", field: "工艺说明", status: "疑点", decision: "pending" }),
+      ],
+    });
+    const res = await app.request(`/api/tasks/${tid}/complete`, {
+      method: "POST",
+      headers: { ...authHeader(), "content-type": "application/json" },
+      body: JSON.stringify({ conclusion: "工艺表不审，其余过了" }),
+    });
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as { status?: string };
+    assert.equal(body.status, "completed");
+  });
+
   it("blocks sign-off when v2 hits still have pending 疑点", async () => {
     const tid = seed({
       id: "444444444444",
