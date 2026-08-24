@@ -5,8 +5,12 @@ import { WaitCard } from "../chrome/WaitCard";
 import { panBy, resetZoom, zoomAt, zoomToBox } from "./canvasZoom";
 import { excelText, pdfText } from "./hitText";
 import { hitOnPage, overlayFromBox, overlaysForHit, pickHitBox, resolvePageMetrics } from "./pinBox";
-import { DEFAULT_RIGHT, clampRight, readSplit, writeSplit } from "./reviewSplit";
+import { readDockOpen, readPinsOn, writeDockOpen, writePinsOn } from "./reviewDock";
 import { shouldShowWaitCard } from "./waitCard";
+
+function browserStore(): Storage | null {
+  return typeof localStorage === "undefined" ? null : localStorage;
+}
 
 type Props = {
   taskId: string | null;
@@ -73,15 +77,13 @@ export function ReviewPage({ taskId, onBack }: Props) {
   const [useV2, setUseV2] = useState(false);
   const [nat, setNat] = useState<{ width: number; height: number } | null>(null);
   const [zoom, setZoom] = useState(resetZoom);
-  const [splitRight, setSplitRight] = useState(DEFAULT_RIGHT);
+  const [dockOpen, setDockOpen] = useState(() => readDockOpen(browserStore()));
+  const [pinsOn, setPinsOn] = useState(() => readPinsOn(browserStore()));
   const viewRef = useRef<HTMLDivElement>(null);
   const deskRef = useRef<HTMLDivElement>(null);
   const panDrag = useRef<{ x: number; y: number } | null>(null);
-  const splitDrag = useRef<{ x: number; right: number } | null>(null);
-  const splitRightRef = useRef(splitRight);
   const pendingFit = useRef<number | null>(null);
   const fitHitRef = useRef<(i: number) => void>(() => undefined);
-  splitRightRef.current = splitRight;
 
   useEffect(() => {
     if (!taskId) return;
@@ -170,21 +172,6 @@ export function ReviewPage({ taskId, onBack }: Props) {
     });
     return () => window.cancelAnimationFrame(id);
   }, [metrics, pageIdx, page?.url]);
-
-  useEffect(() => {
-    if (waiting) return;
-    const desk = deskRef.current;
-    const storage = typeof localStorage === "undefined" ? null : localStorage;
-    const apply = () => {
-      const total = deskRef.current?.clientWidth || 0;
-      if (total > 0) setSplitRight(readSplit(storage, total));
-    };
-    apply();
-    if (!desk || typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(apply);
-    ro.observe(desk);
-    return () => ro.disconnect();
-  }, [taskId, waiting]);
 
   useEffect(() => {
     const el = viewRef.current;
@@ -391,7 +378,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
         <Alert type="success" showIcon style={{ marginBottom: 16 }} title="已签字，不是系统过审" />
       ) : null}
 
-      <div className="review-desk" ref={deskRef} style={{ ["--review-right" as string]: `${splitRight}px` }}>
+      <div className="review-desk" ref={deskRef}>
         <div className="canvas glass-pane">
           {page?.url ? (
             <div
@@ -436,33 +423,35 @@ export function ReviewPage({ taskId, onBack }: Props) {
                     }
                   }}
                 />
-                {pinHits.map(({ h, i }) => {
-                  const overlays = overlaysForHit(h.bboxes, pageNo, metrics);
-                  const preferred = pickHitBox(h.bboxes, pageNo);
-                  const pin = preferred && metrics ? overlayFromBox(preferred, metrics) : null;
-                  return (
-                    <Fragment key={h.id || i}>
-                      {overlays.map((ov, k) => (
-                        <span
-                          key={`${h.id || i}-box-${k}`}
-                          className={`hit-box ${ov.kind === "warn" ? "is-warn" : ""} ${i === active ? "is-on" : "is-dim"}`.trim()}
-                          style={{ left: ov.left, top: ov.top, width: ov.width, height: ov.height }}
-                        />
-                      ))}
-                      {pin ? (
-                        <button
-                          type="button"
-                          className={i === active ? "pin is-on" : "pin is-dim"}
-                          style={{ left: pin.pinLeft, top: pin.pinTop }}
-                          onPointerDown={(e) => e.stopPropagation()}
-                          onClick={() => pickHit(i)}
-                        >
-                          {i + 1}
-                        </button>
-                      ) : null}
-                    </Fragment>
-                  );
-                })}
+                {pinsOn
+                  ? pinHits.map(({ h, i }) => {
+                      const overlays = overlaysForHit(h.bboxes, pageNo, metrics);
+                      const preferred = pickHitBox(h.bboxes, pageNo);
+                      const pin = preferred && metrics ? overlayFromBox(preferred, metrics) : null;
+                      return (
+                        <Fragment key={h.id || i}>
+                          {overlays.map((ov, k) => (
+                            <span
+                              key={`${h.id || i}-box-${k}`}
+                              className={`hit-box ${ov.kind === "warn" ? "is-warn" : ""} ${i === active ? "is-on" : "is-dim"}`.trim()}
+                              style={{ left: ov.left, top: ov.top, width: ov.width, height: ov.height }}
+                            />
+                          ))}
+                          {pin ? (
+                            <button
+                              type="button"
+                              className={i === active ? "pin is-on" : "pin is-dim"}
+                              style={{ left: pin.pinLeft, top: pin.pinTop }}
+                              onPointerDown={(e) => e.stopPropagation()}
+                              onClick={() => pickHit(i)}
+                            >
+                              {i + 1}
+                            </button>
+                          ) : null}
+                        </Fragment>
+                      );
+                    })
+                  : null}
               </div>
               <div className="canvas-tools" onPointerDown={(e) => e.stopPropagation()}>
                 <button
@@ -490,6 +479,17 @@ export function ReviewPage({ taskId, onBack }: Props) {
                 <button type="button" className="btn-ghost" onClick={() => setZoom(resetZoom())}>
                   复位
                 </button>
+                <button
+                  type="button"
+                  className="btn-ghost"
+                  onClick={() => {
+                    const next = !pinsOn;
+                    setPinsOn(next);
+                    writePinsOn(browserStore(), next);
+                  }}
+                >
+                  {pinsOn ? "隐藏钉" : "显示钉"}
+                </button>
               </div>
             </div>
           ) : (
@@ -504,152 +504,154 @@ export function ReviewPage({ taskId, onBack }: Props) {
             />
           )}
           <p className="page-lead" style={{ padding: "0 16px 12px" }}>
-            紫框 已命中 · 黄框 待核对 · 点右侧序号，图上放大这一条 · 滚轮缩放
+            紫框 已命中 · 黄框 待核对 · 点核对窗序号，图上放大这一条 · 滚轮缩放
           </p>
         </div>
 
-        <button
-          type="button"
-          className="review-split"
-          aria-label="拖动调整核对栏宽度"
-          onPointerDown={(e) => {
-            splitDrag.current = { x: e.clientX, right: splitRight };
-            (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-          }}
-          onPointerMove={(e) => {
-            const d = splitDrag.current;
-            const desk = deskRef.current;
-            if (!d || !desk) return;
-            const next = clampRight(d.right - (e.clientX - d.x), desk.clientWidth);
-            setSplitRight(next);
-          }}
-          onPointerUp={() => {
-            splitDrag.current = null;
-            writeSplit(typeof localStorage === "undefined" ? null : localStorage, splitRightRef.current);
-          }}
-          onPointerCancel={() => {
-            splitDrag.current = null;
-          }}
-          onLostPointerCapture={() => {
-            splitDrag.current = null;
-            writeSplit(typeof localStorage === "undefined" ? null : localStorage, splitRightRef.current);
-          }}
-        />
-
-        <aside className="notes glass-pane">
-          <p className="field-label" style={{ color: "var(--muted)", margin: 0 }}>
-            当前字段
-          </p>
-          {current ? (
-            <>
-              <div className="hit-now">
-                <strong style={{ fontSize: 18, display: "inline-flex", alignItems: "center", gap: 8 }}>
-                  <span className="hit-no">{active + 1}</span>
-                  {current.field || "字段"}
-                </strong>
-                {statusTag(current.status)}
-              </div>
-              <div className="pair">
-                <p className="pair-k">Excel 应印</p>
-                <p className="pair-v mono">{excelText(current)}</p>
-              </div>
-              <div className="pair">
-                <p className="pair-k">稿上 OCR</p>
-                <p className="pair-v mono">{pdfText(current)}</p>
-              </div>
-              {Array.isArray(current.coverage?.miss) && current.coverage.miss.length > 0 ? (
-                <div className="pair">
-                  <p className="pair-k">稿上没读到</p>
-                  <p className="pair-v mono">{current.coverage.miss.join("、")}</p>
-                </div>
-              ) : null}
-              <p className="pair-k">
-                {currentBox
-                  ? `包装定位 · 页 ${current.page ?? "?"} · 点定位`
-                  : "包装定位 · 这一条没有图上位置"}
+        {dockOpen ? (
+          <aside className="notes glass-pane is-float">
+            <div className="notes-toolbar">
+              <p className="field-label" style={{ color: "var(--muted)", margin: 0 }}>
+                当前字段
               </p>
-              {reviewable && current.id ? (
-                <Space wrap>
-                  <Button size="small" onClick={() => void decide(current, "confirm")}>
-                    一致
-                  </Button>
-                  <Button size="small" danger onClick={() => void decide(current, "issue")}>
-                    有错
-                  </Button>
-                  <Button size="small" onClick={() => void decide(current, "ignore")}>
-                    忽略
-                  </Button>
-                  <Button size="small" onClick={() => void copyList()}>
-                    复制改稿清单
-                  </Button>
-                </Space>
-              ) : (
-                <Button size="small" onClick={() => void copyList()}>
-                  复制改稿清单
-                </Button>
-              )}
-              <Input
-                placeholder="给你自己看的话，会进改稿清单"
-                value={current.id ? notes[current.id] || "" : ""}
-                disabled={!reviewable || !current.id}
-                onChange={(e) => {
-                  if (!current.id) return;
-                  setNotes((prev) => ({ ...prev, [current.id as string]: e.target.value }));
-                }}
-              />
-            </>
-          ) : (
-            <p className="page-lead">
-              {task?.status === "compare_failed" || task?.job_status === "failed"
-                ? "对照没跑完，没有机审条目。"
-                : "没有机审条目。仍请翻页看一遍。"}
-            </p>
-          )}
-
-          <p className="field-label" style={{ margin: "8px 0 0" }}>
-            疑点列表
-          </p>
-          <div className="hit-list">
-            {hits.map((h, i) => (
               <button
-                key={h.id || i}
                 type="button"
-                className={i === active ? "hit-card is-on" : "hit-card"}
-                onClick={() => pickHit(i)}
+                className="btn-ghost"
+                onClick={() => {
+                  setDockOpen(false);
+                  writeDockOpen(browserStore(), false);
+                }}
               >
-                <div className="hit-now">
-                  <strong style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-                    <span className="hit-no">{i + 1}</span>
-                    {h.field || "字段"}
-                  </strong>
-                  {statusTag(h.status)}
-                </div>
+                收起
               </button>
-            ))}
-          </div>
-
-          {task?.rework_check && task.rework_check.length > 0 ? (
-            <>
-              <p className="field-label">对红</p>
-              {task.rework_check.map((row) => (
-                <div key={row.field} className="hit-card">
-                  <strong>{row.field}</strong>
-                  <div>上一版：{row.v1_status}</div>
-                  <div>这一版：{row.v2_status}</div>
+            </div>
+            <div className="notes-grid">
+              <div className="notes-field">
+                {current ? (
+                  <>
+                    <div className="hit-now">
+                      <strong style={{ fontSize: 18, display: "inline-flex", alignItems: "center", gap: 8 }}>
+                        <span className="hit-no">{active + 1}</span>
+                        {current.field || "字段"}
+                      </strong>
+                      {statusTag(current.status)}
+                    </div>
+                    <div className="pair">
+                      <p className="pair-k">Excel 应印</p>
+                      <p className="pair-v mono">{excelText(current)}</p>
+                    </div>
+                    <div className="pair">
+                      <p className="pair-k">稿上 OCR</p>
+                      <p className="pair-v mono">{pdfText(current)}</p>
+                    </div>
+                    {Array.isArray(current.coverage?.miss) && current.coverage.miss.length > 0 ? (
+                      <div className="pair">
+                        <p className="pair-k">稿上没读到</p>
+                        <p className="pair-v mono">{current.coverage.miss.join("、")}</p>
+                      </div>
+                    ) : null}
+                    <p className="pair-k">
+                      {currentBox
+                        ? `包装定位 · 页 ${current.page ?? "?"} · 点定位`
+                        : "包装定位 · 这一条没有图上位置"}
+                    </p>
+                    {reviewable && current.id ? (
+                      <Space wrap>
+                        <Button size="small" onClick={() => void decide(current, "confirm")}>
+                          一致
+                        </Button>
+                        <Button size="small" danger onClick={() => void decide(current, "issue")}>
+                          有错
+                        </Button>
+                        <Button size="small" onClick={() => void decide(current, "ignore")}>
+                          忽略
+                        </Button>
+                        <Button size="small" onClick={() => void copyList()}>
+                          复制改稿清单
+                        </Button>
+                      </Space>
+                    ) : (
+                      <Button size="small" onClick={() => void copyList()}>
+                        复制改稿清单
+                      </Button>
+                    )}
+                    <Input
+                      placeholder="给你自己看的话，会进改稿清单"
+                      value={current.id ? notes[current.id] || "" : ""}
+                      disabled={!reviewable || !current.id}
+                      onChange={(e) => {
+                        if (!current.id) return;
+                        setNotes((prev) => ({ ...prev, [current.id as string]: e.target.value }));
+                      }}
+                    />
+                  </>
+                ) : (
+                  <p className="page-lead">
+                    {task?.status === "compare_failed" || task?.job_status === "failed"
+                      ? "对照没跑完，没有机审条目。"
+                      : "没有机审条目。仍请翻页看一遍。"}
+                  </p>
+                )}
+              </div>
+              <div className="notes-hits">
+                <p className="field-label" style={{ margin: 0 }}>
+                  疑点列表
+                </p>
+                <div className="hit-list">
+                  {hits.map((h, i) => (
+                    <button
+                      key={h.id || i}
+                      type="button"
+                      className={i === active ? "hit-card is-on" : "hit-card"}
+                      onClick={() => pickHit(i)}
+                    >
+                      <div className="hit-now">
+                        <strong style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                          <span className="hit-no">{i + 1}</span>
+                          {h.field || "字段"}
+                        </strong>
+                        {statusTag(h.status)}
+                      </div>
+                    </button>
+                  ))}
                 </div>
-              ))}
-            </>
-          ) : null}
-
-          <p className="field-label">写下结论</p>
-          <Input.TextArea
-            rows={3}
-            value={conclusion}
-            disabled={!reviewable}
-            onChange={(e) => setConclusion(e.target.value)}
-            placeholder="人话结论，不是系统过审"
-          />
-        </aside>
+              </div>
+            </div>
+            <div className="notes-foot">
+              {task?.rework_check && task.rework_check.length > 0 ? (
+                <>
+                  <p className="field-label">对红</p>
+                  {task.rework_check.map((row) => (
+                    <div key={row.field} className="hit-card">
+                      <strong>{row.field}</strong>
+                      <div>上一版：{row.v1_status}</div>
+                      <div>这一版：{row.v2_status}</div>
+                    </div>
+                  ))}
+                </>
+              ) : null}
+              <p className="field-label">写下结论</p>
+              <Input.TextArea
+                rows={3}
+                value={conclusion}
+                disabled={!reviewable}
+                onChange={(e) => setConclusion(e.target.value)}
+                placeholder="人话结论，不是系统过审"
+              />
+            </div>
+          </aside>
+        ) : (
+          <button
+            type="button"
+            className="notes-fab"
+            onClick={() => {
+              setDockOpen(true);
+              writeDockOpen(browserStore(), true);
+            }}
+          >
+            核对 {hits.length ? hits.length : ""}
+          </button>
+        )}
       </div>
     </section>
   );
