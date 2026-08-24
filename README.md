@@ -12,7 +12,7 @@
 | `apps/web/server` | Hono + TypeScript，对外 HTTP `:8787` |
 | `apps/web/backend` | Python 对照 worker（TS 用 `python -m app.cli` 调用） |
 | `apps/web/frontend` | 已退役的原生页，不要再改 |
-| `workers/packaging/` | 2D→3D CLI，打样台调用 |
+| `workers/packaging/` | 2D→3D CLI，打样台调用。平面出图用 pymupdf（对照同一 Python）；杭州不需要 macOS qlmanage |
 | `docs/` | 章程、ADR、设计 |
 
 HTTP 是 TypeScript。对照规则和 Blender 仍是 Python。见 `docs/adr-002-typescript-http.md`。
@@ -32,6 +32,7 @@ HTTP 是 TypeScript。对照规则和 Blender 仍是 Python。见 `docs/adr-002-
 | `TODOS.md` | 未做项 |
 | `AGENTS.md` | 给代理的硬约束、加长作业合同、易忘约定（MICRO 不改 `package.json` 三位；禁止 `git add -A`） |
 | `scripts/windows/README.md` | 杭州 Windows 生产备忘 |
+| `workers/packaging/README.md` | 打样 CLI、pymupdf 平面出图（不靠 qlmanage） |
 
 ## 本机启动
 

@@ -170,7 +170,7 @@ Windows 上 spawn 必须进 Job Object，Node 退出时杀掉子进程树。做�
 ### Worker
 
 - 对照 / 对红：`python -m app.cli compare|rework`，最后一行结果 JSON，过程中 `STAGE render_pdf|ocr|match`。不搬 `fields.py`。
-- 打样：`workers/packaging`。POST 时已确认 Blender；跑到一半消失 → failed，写清。
+- 打样：`workers/packaging`。POST 时已确认 Blender；跑到一半消失 → failed，写清。stderr 打 `STAGE render_pdf|blender|export`（出图/打样/导出）。入队后 `job_stage` 从 `render_pdf` 开始，不是 `blender`。平面出图用 pymupdf（对照同一 Python），不靠 qlmanage。
 - 超时：对照 180s、打样 420s（已有）。超时 = failed，回收槽。
 - 取消：不做。
 
@@ -188,9 +188,10 @@ Windows 上 spawn 必须进 Job Object，Node 退出时杀掉子进程树。做�
 
 - `NewTaskPage`：POST 立即返回后进入核对页；核对页见 `job_status in {queued,running}` 或 `status===comparing` 就上 WaitCard。
 - `ReviewPage`：对红 POST 返回 queued 时不要 toast「已对照第二份 PDF」；WaitCard 增加「对红」文案。
-- `MockupPage`：不要死等 POST；`busy` 时轮询 GET `/api/mockups/:id`。
-- `WaitCard`：吃 `job_stage_label`、`job_eta_s`、`queue_ahead`。queued 显示「前面还有 N 单」。
-- `TasksPage`：任一 `board==comparing` 时轮询 `/api/tasks`，否则排队卡片会停在旧状态。
+- `MockupPage`：不要死等 POST；`busy` 时轮询 GET `/api/mockups/:id`。进台时 `pickLiveMockup` 自动跟上正在跑的那单；`status=done|failed` 不当等待卡。
+- `WaitCard`：吃 `job_stage` / `job_stage_label`、`job_eta_s`、`queue_ahead`。queued 显示「前面还有 N 单」。
+- `TasksPage`：任一 `board==comparing` 时轮询 `/api/tasks`，否则排队卡片会停在旧状态。卡片用 `liveJobLine` 写阶段和大约还要，不要百分比。
+- 侧栏：`liveNavPulse` 看 `/api/health` 的 jobs 槽；审稿台/打样台作业在跑时有圆点。离开核对页再回看板，仍能看到阶段。
 
 ### 二次开发怎么加功能
 

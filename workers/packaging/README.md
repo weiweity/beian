@@ -4,7 +4,7 @@
 
 1. AI/PDF 兼容性和页面尺寸预检；
 2. 非 PDF 兼容 AI 自动调用 Illustrator 标准化；
-3. 印刷层与完整图层分别高速栅格化；
+3. 印刷层与完整图层分别高速栅格化（pymupdf 出图，杭州不靠 macOS qlmanage）；
 4. 六面纹理切片；
 5. 多产品并行调用 Blender 后台建模、渲染并导出 .blend / .glb；
 6. GLB 尺寸自动复核；
@@ -19,7 +19,7 @@
 
 ## 输入边界
 
-- PDF 兼容 AI 直接走高速通道，不启动 Illustrator。
+- PDF 兼容 AI 直接走高速通道，不启动 Illustrator。平面 PNG 用 pymupdf 按 MediaBox 整页出图（细 CropBox 不按可见条带放大）。杭州 Windows 与对照共用 `apps/web/backend/.venv` 里的 pymupdf，不要装 macOS Quick Look。pymupdf 失败时，本机若有 `/usr/bin/qlmanage` 才兜底。
 - 原生 AI 或非 PDF 兼容 AI 自动通过 Illustrator 导出完整稿和印刷层 PDF，再进入相同建模流程。
 - Illustrator 冷启动和复杂转曲稿解析可能较慢，建议保持应用常驻并批量处理异常稿；兜底 Worker 默认 7 分钟硬超时。
 - 相同刀模只需新增任务记录即可并行处理。
