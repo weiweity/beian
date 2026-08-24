@@ -22,7 +22,18 @@ describe("windows release.ps1 contract", () => {
     assert.match(script, /UTF-8 with BOM/);
     assert.match(script, /Hangzhou production CD/);
     assert.match(script, /live pull-while-serving is gone/);
-    assert.ok(indexOf(/Invoke-Git fetch origin/) < indexOf(/taskkill\.exe \/T \/F \/PID/));
+    assert.match(script, /function Fetch-OriginMain/);
+    assert.match(script, /git update-ref -d refs\/remotes\/origin\/main/);
+    assert.match(script, /cannot lock ref 'refs\/remotes\/origin\/main'/);
+    assert.match(script, /网络\/401\/Clash 失败不要动 origin\/main/);
+    assert.match(script, /^Fetch-OriginMain$/m);
+    assert.ok(indexOf(/^Fetch-OriginMain$/m) < indexOf(/taskkill\.exe \/T \/F \/PID/));
+    assert.ok(indexOf(/function Fetch-OriginMain/) < indexOf(/Invoke-Git fetch origin/));
+    assert.ok(indexOf(/Invoke-Git fetch origin/) < indexOf(/^Fetch-OriginMain$/m));
+    assert.doesNotMatch(script, /Write-Host \$msg/);
+    assert.match(script, /Remove-Item \$log -Force/);
+    assert.match(script, /Get-Content \$log -Raw -Encoding \$enc/);
+    assert.match(script, /\$global:LASTEXITCODE = \$code/);
     assert.ok(indexOf(/taskkill\.exe \/T \/F \/PID/) < indexOf(/Invoke-Git merge --ff-only origin\/main/));
   });
 

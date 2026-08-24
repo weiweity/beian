@@ -1,5 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { closeSync, createReadStream, existsSync, mkdirSync, openSync, readFileSync, readSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { Readable } from "node:stream";
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono, type Context } from "hono";
@@ -51,6 +52,7 @@ import {
   deleteMockup,
   fileOf,
   getJob,
+  isWhiteFile,
   listJobsFor,
   publicMockup,
   queueMockup,
@@ -76,7 +78,7 @@ import {
 type Env = { Variables: { session: Session } };
 
 const app = new Hono<Env>();
-const VERSION = "0.12.15.0";
+const VERSION = "0.12.16.0";
 
 app.use(compress());
 
@@ -98,6 +100,30 @@ function boom(err: unknown): never {
   const status = typeof err === "object" && err && "status" in err ? Number((err as { status: number }).status) : 500;
   const message = err instanceof Error ? err.message : String(err);
   throw new HTTPException((status || 500) as 400, { message });
+}
+
+function pngMagicAt(path: string): boolean {
+  let fd: number | undefined;
+  try {
+    fd = openSync(path, "r");
+    const buf = Buffer.alloc(8);
+    const n = readSync(fd, buf, 0, 8, 0);
+    return (
+      n >= 8 &&
+      buf[0] === 0x89 &&
+      buf[1] === 0x50 &&
+      buf[2] === 0x4e &&
+      buf[3] === 0x47 &&
+      buf[4] === 0x0d &&
+      buf[5] === 0x0a &&
+      buf[6] === 0x1a &&
+      buf[7] === 0x0a
+    );
+  } catch {
+    return false;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
 }
 
 app.onError((err, c) => {
@@ -589,17 +615,32 @@ app.get("/api/mockups/:id/files/:key", (c) => {
   const job = getJob(assertTid(c.req.param("id")));
   if (!job) throw new HTTPException(404, { message: "没有这单打样" });
   assertCanAccessMockup(job, { name: s.display_name, admin: s.role === "admin" });
-  const f = fileOf(job, c.req.param("key"));
+  const key = c.req.param("key");
+  const f = fileOf(job, key);
   if (!f?.path || !existsSync(f.path)) throw new HTTPException(404, { message: "文件还没有" });
-  const type = f.name.endsWith(".glb")
+  if (!isWhiteFile(key, f.name)) {
+    throw new HTTPException(415, { message: "这张白底图坏了，不是 PNG。回到打样台重新打。" });
+  }
+  const lower = f.name.toLowerCase();
+  const type = lower.endsWith(".glb")
     ? "model/gltf-binary"
-    : f.name.endsWith(".png")
+    : lower.endsWith(".png")
       ? "image/png"
       : "application/vnd.openxmlformats-officedocument.presentationml.presentation";
-  return new Response(readFileSync(f.path), {
+  if (type === "image/png" && !pngMagicAt(f.path)) {
+    throw new HTTPException(415, { message: "这张白底图坏了，不是 PNG。回到打样台重新打。" });
+  }
+  const ascii = f.name.replace(/[^\x20-\x7E]/g, "_").replace(/"/g, "");
+  const encoded = encodeURIComponent(f.name);
+  const forceAttach = c.req.query("download") === "1";
+  const disposition =
+    forceAttach || !(type.startsWith("image/") || type.startsWith("model/")) ? "attachment" : "inline";
+  return new Response(Readable.toWeb(createReadStream(f.path)) as ReadableStream, {
     headers: {
       "Content-Type": type,
-      "Content-Disposition": `attachment; filename="${f.name}"`,
+      "X-Content-Type-Options": "nosniff",
+      "Cache-Control": "private, no-store",
+      "Content-Disposition": `${disposition}; filename="${ascii}"; filename*=UTF-8''${encoded}`,
     },
   });
 });

@@ -6,12 +6,14 @@ const PLACE_KEY = "wb_review_dock_place";
 
 export type DockBox = { w: number; h: number };
 export type DockPlace = { top: number; right: number };
-export type DockCorner = "sw" | "se" | "nw" | "ne";
+export type DockHandle = "n" | "s" | "e" | "w" | "nw" | "ne" | "sw" | "se";
 
 export const DOCK_MIN_W = 320;
 export const DOCK_MIN_H = 280;
 export const DOCK_DEFAULT_W = 560;
 export const DOCK_DEFAULT_H = 520;
+/** 钉钉/飞书检视栏：浮在页头下面，不盖签字。 */
+export const DOCK_BELOW_HEAD = 72;
 
 export function readDockOpen(storage: Pick<Storage, "getItem"> | null): boolean {
   try {
@@ -97,10 +99,11 @@ export function writeDockBox(storage: Pick<Storage, "setItem"> | null, box: Dock
 export function clampDockPlace(place: DockPlace, room: { w: number; h: number }, box: DockBox): DockPlace {
   const maxRight = Math.max(8, Math.round(Number(room.w) || 800) - box.w - 8);
   const maxTop = Math.max(8, Math.round(Number(room.h) || 600) - box.h - 8);
+  const floor = maxTop >= DOCK_BELOW_HEAD ? DOCK_BELOW_HEAD : 8;
   const top = Number(place.top);
   const right = Number(place.right);
   return {
-    top: Math.min(maxTop, Math.max(8, Number.isFinite(top) ? Math.round(top) : 8)),
+    top: Math.min(maxTop, Math.max(floor, Number.isFinite(top) ? Math.round(top) : floor)),
     right: Math.min(maxRight, Math.max(8, Number.isFinite(right) ? Math.round(right) : 8)),
   };
 }
@@ -108,7 +111,7 @@ export function clampDockPlace(place: DockPlace, room: { w: number; h: number },
 export function readDockPlace(storage: Pick<Storage, "getItem"> | null): DockPlace {
   try {
     const raw = storage?.getItem(PLACE_KEY);
-    if (!raw) return { top: 8, right: 8 };
+    if (!raw) return { top: DOCK_BELOW_HEAD, right: 8 };
     const parsed = JSON.parse(raw) as { top?: unknown; right?: unknown };
     return clampDockPlace(
       { top: Number(parsed.top), right: Number(parsed.right) },
@@ -116,7 +119,7 @@ export function readDockPlace(storage: Pick<Storage, "getItem"> | null): DockPla
       { w: DOCK_DEFAULT_W, h: DOCK_DEFAULT_H },
     );
   } catch {
-    return { top: 8, right: 8 };
+    return { top: DOCK_BELOW_HEAD, right: 8 };
   }
 }
 
@@ -128,14 +131,14 @@ export function writeDockPlace(storage: Pick<Storage, "setItem"> | null, place: 
   }
 }
 
-/** Grow the named corner. dx right, dy down. Panel is top/right anchored. */
+/** Grow the named edge/corner. dx right, dy down. Panel is top/right anchored. */
 export function resizeDockCorner(
   start: DockBox,
   delta: { dx: number; dy: number },
   room: { w: number; h: number },
-  corner: DockCorner = "sw",
+  corner: DockHandle = "sw",
 ): DockBox {
-  return resizeDockHandle(start, { top: 8, right: 8 }, delta, room, corner).box;
+  return resizeDockHandle(start, { top: DOCK_BELOW_HEAD, right: 8 }, delta, room, corner).box;
 }
 
 export function resizeDockHandle(
@@ -143,28 +146,29 @@ export function resizeDockHandle(
   place: DockPlace,
   delta: { dx: number; dy: number },
   room: { w: number; h: number },
-  corner: DockCorner = "sw",
+  handle: DockHandle = "sw",
 ): { box: DockBox; place: DockPlace } {
+  const east = handle === "e" || handle === "ne" || handle === "se";
+  const west = handle === "w" || handle === "nw" || handle === "sw";
+  const north = handle === "n" || handle === "ne" || handle === "nw";
+  const south = handle === "s" || handle === "se" || handle === "sw";
   let w = start.w;
   let h = start.h;
   let top = place.top;
   let right = place.right;
-  if (corner === "se") {
+  if (east) {
     w = start.w + delta.dx;
     right = place.right - delta.dx;
+  }
+  if (west) {
+    w = start.w - delta.dx;
+  }
+  if (south) {
     h = start.h + delta.dy;
-  } else if (corner === "ne") {
-    w = start.w + delta.dx;
-    right = place.right - delta.dx;
+  }
+  if (north) {
     h = start.h - delta.dy;
     top = place.top + delta.dy;
-  } else if (corner === "nw") {
-    w = start.w - delta.dx;
-    h = start.h - delta.dy;
-    top = place.top + delta.dy;
-  } else {
-    w = start.w - delta.dx;
-    h = start.h + delta.dy;
   }
   const box = clampDockBox({ w, h }, room);
   return { box, place: clampDockPlace({ top, right }, room, box) };
