@@ -51,7 +51,7 @@ function mockRow(row: MockupJob): Row {
     status = "已出图";
     color = "success";
   } else if (row.status === "failed") {
-    status = row.error || row.job_error || "打样中断";
+    status = "打样中断";
     color = "error";
   } else if (row.status === "running" || row.status === "queued") {
     status = "打样中";

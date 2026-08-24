@@ -3,6 +3,7 @@ import { Alert, App, Button, Empty, Space, Tag, Typography } from "antd";
 import { api, type MockupJob } from "../api";
 import { UploadWell } from "../chrome/UploadWell";
 import { WaitCard } from "../chrome/WaitCard";
+import { mockupFailReason, mockupFailTag } from "./mockupError";
 import { liveJobLine, pickLiveMockup, shouldShowWaitCard } from "./waitCard";
 import { stemFromFilename } from "./stemName";
 import "@google/model-viewer";
@@ -11,7 +12,7 @@ type Props = { openId?: string | null };
 
 function mockLabel(row: MockupJob) {
   if (row.status === "done") return { text: "已出图", color: "success" as const };
-  if (row.status === "failed") return { text: row.error || row.job_error || "打样中断", color: "error" as const };
+  if (row.status === "failed") return { text: mockupFailTag(), color: "error" as const };
   if (row.status === "queued" || row.status === "running") return { text: "打样中", color: "processing" as const };
   return { text: row.status, color: "default" as const };
 }
@@ -94,7 +95,7 @@ export function MockupPage({ openId }: Props) {
           const key = `${next.id}:${next.status}`;
           if (announced.current === key) return;
           announced.current = key;
-          if (next.status === "failed") message.error(next.error || next.job_error || "打样失败");
+          if (next.status === "failed") message.error(mockupFailReason(next.error || next.job_error));
           else if (next.status === "done") message.success("打样完成。白底图给备案，GLB 可本机打开截图。");
         })
         .catch(() => undefined);
@@ -141,7 +142,7 @@ export function MockupPage({ openId }: Props) {
       void refreshList();
       if (shouldShowWaitCard(next)) return;
       announced.current = `${next.id}:${next.status}`;
-      if (next.status === "failed") message.error(next.error || next.job_error || "打样失败");
+      if (next.status === "failed") message.error(mockupFailReason(next.error || next.job_error));
       else if (next.status === "done") message.success("打样完成。白底图给备案，GLB 可本机打开截图。");
     } catch (err) {
       message.error(err instanceof Error ? err.message : "打样失败");
@@ -231,7 +232,7 @@ export function MockupPage({ openId }: Props) {
       )}
 
       {job?.status === "failed" ? (
-        <Alert type="error" showIcon style={{ marginTop: 16 }} title={job.error || job.job_error || "失败"} />
+        <Alert type="error" showIcon style={{ marginTop: 16 }} title={mockupFailReason(job.error || job.job_error)} />
       ) : null}
 
       {job?.status === "done" ? (
@@ -320,6 +321,9 @@ function MockCol({
                       <span />
                     </div>
                   </>
+                ) : null}
+                {row.status === "failed" ? (
+                  <div className="review-card-err">{mockupFailReason(row.error || row.job_error)}</div>
                 ) : null}
               </div>
               <div className="review-card-meta">
