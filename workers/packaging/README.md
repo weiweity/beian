@@ -8,7 +8,7 @@
 4. 按切面切片纹理（膜袋只印正反，其余面空白纸面补齐）；
 5. 多产品并行调用 Blender 后台建模、渲染并导出 .blend / .glb；
 6. GLB 尺寸自动复核；
-7. 有 Node 和 ppt 依赖时，每个产品单独生成 2 页白底 PPT 并输出逐页质检图。PATH 里没有 `node`/`node.exe`，或 ppt `node_modules` 不存在/是空目录，或没有演示文稿运行时，stderr 打 `PPT 跳过`，白底图和 GLB 仍算成功，不要把整单判失败。`--no-ppt` 同样跳过。
+7. 有 Node 和 ppt 依赖时，每个产品单独生成 1 页白底 PPT（正面+侧面、反面+侧面）并输出质检图。PATH 里没有 `node`/`node.exe`，或 ppt `node_modules` 不存在/是空目录，或没有演示文稿运行时，stderr 打 `PPT 跳过`，白底图和 GLB 仍算成功，不要把整单判失败。`--no-ppt` 同样跳过。
 
 ## 运行
 

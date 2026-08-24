@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -11,7 +11,26 @@ process.env.WB_PORT = "0";
 
 const { app } = await import("./index.js");
 const { issueSession } = await import("./auth.js");
+const { DATA_DIR } = await import("./config.js");
 const { publicMockup, saveMockup } = await import("./mockup.js");
+
+const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+function seedOwnedFile(id: string, key: string, name: string, buf: Buffer, owner = "籽烨") {
+  const dir = join(DATA_DIR, "mockups", id);
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, name);
+  writeFileSync(path, buf);
+  saveMockup({
+    id,
+    status: "done",
+    created_at: "2026-08-20T00:00:04Z",
+    files: [{ key, path, name }],
+    owner,
+    job_kind: "mockup",
+    job_status: "succeeded",
+  });
+}
 
 describe("mockup http", () => {
   it("rejects unauthenticated list", async () => {
@@ -290,5 +309,84 @@ describe("mockup post", { concurrency: false }, () => {
       if (prevAi !== undefined) process.env.ILLUSTRATOR_EXECUTABLE = prevAi;
       else delete process.env.ILLUSTRATOR_EXECUTABLE;
     }
+  });
+});
+
+describe("mockup file bytes", () => {
+  it("rejects a white png that is not a PNG", async () => {
+    seedOwnedFile("aa11aa11aa11", "white_a", "front_right_white.png", Buffer.from("not-png!!"));
+    seedOwnedFile("aa11aa11aa12", "white_a", "short.png", Buffer.from("short"));
+    const sess = issueSession("籽烨", "reviewer", "ou_mockup_png_bad", "feishu");
+    const bad = await app.request("/api/mockups/aa11aa11aa11/files/white_a", {
+      headers: { authorization: `Bearer ${sess.token}` },
+    });
+    assert.equal(bad.status, 415);
+    const body = (await bad.json()) as { detail?: string };
+    assert.match(String(body.detail || ""), /不是 PNG/);
+    const short = await app.request("/api/mockups/aa11aa11aa12/files/white_a", {
+      headers: { authorization: `Bearer ${sess.token}` },
+    });
+    assert.equal(short.status, 415);
+  });
+
+  it("serves a real white png inline with UTF-8 filename", async () => {
+    seedOwnedFile("bb22bb22bb22", "white_a", "白底正面_front_right.png", PNG_MAGIC);
+    const sess = issueSession("籽烨", "reviewer", "ou_mockup_png_ok", "feishu");
+    const res = await app.request("/api/mockups/bb22bb22bb22/files/white_a", {
+      headers: { authorization: `Bearer ${sess.token}` },
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get("content-type"), "image/png");
+    assert.equal(res.headers.get("x-content-type-options"), "nosniff");
+    assert.equal(res.headers.get("cache-control"), "private, no-store");
+    const disp = res.headers.get("content-disposition") || "";
+    assert.match(disp, /^inline;/);
+    assert.match(disp, /filename="_____front_right.png"/);
+    assert.match(disp, /filename\*=UTF-8''%E7%99%BD%E5%BA%95%E6%AD%A3%E9%9D%A2_front_right\.png/);
+    const buf = Buffer.from(await res.arrayBuffer());
+    assert.equal(buf[0], 0x89);
+    assert.equal(buf[1], 0x50);
+  });
+
+  it("serves glb inline and ppt as attachment", async () => {
+    seedOwnedFile("cc33cc33cc33", "glb", 'box"side.glb', Buffer.from("glTF"));
+    seedOwnedFile("dd44dd44dd44", "ppt", "deck.pptx", Buffer.from("PK"));
+    const sess = issueSession("籽烨", "reviewer", "ou_mockup_disp", "feishu");
+    const glb = await app.request("/api/mockups/cc33cc33cc33/files/glb", {
+      headers: { authorization: `Bearer ${sess.token}` },
+    });
+    assert.equal(glb.status, 200);
+    assert.equal(glb.headers.get("content-type"), "model/gltf-binary");
+    assert.match(glb.headers.get("content-disposition") || "", /^inline;/);
+    assert.match(glb.headers.get("content-disposition") || "", /filename="boxside.glb"/);
+    const ppt = await app.request("/api/mockups/dd44dd44dd44/files/ppt", {
+      headers: { authorization: `Bearer ${sess.token}` },
+    });
+    assert.equal(ppt.status, 200);
+    assert.match(ppt.headers.get("content-type") || "", /presentationml/);
+    assert.match(ppt.headers.get("content-disposition") || "", /^attachment;/);
+  });
+
+  it("refuses leftover ai-raster labeled as white_a even if it is a PNG", async () => {
+    seedOwnedFile("ff66ff66ff66", "white_a", "ai-raster.png", PNG_MAGIC);
+    const sess = issueSession("籽烨", "reviewer", "ou_mockup_old_white", "feishu");
+    const res = await app.request("/api/mockups/ff66ff66ff66/files/white_a", {
+      headers: { authorization: `Bearer ${sess.token}` },
+    });
+    assert.equal(res.status, 415);
+  });
+
+  it("forces attachment when download=1 so preview URLs stay inline", async () => {
+    seedOwnedFile("ee55ee55ee55", "white_a", "front_right_white.png", PNG_MAGIC);
+    const sess = issueSession("籽烨", "reviewer", "ou_mockup_dl", "feishu");
+    const preview = await app.request("/api/mockups/ee55ee55ee55/files/white_a", {
+      headers: { authorization: `Bearer ${sess.token}` },
+    });
+    assert.match(preview.headers.get("content-disposition") || "", /^inline;/);
+    const dl = await app.request("/api/mockups/ee55ee55ee55/files/white_a?download=1", {
+      headers: { authorization: `Bearer ${sess.token}` },
+    });
+    assert.equal(dl.status, 200);
+    assert.match(dl.headers.get("content-disposition") || "", /^attachment;/);
   });
 });
