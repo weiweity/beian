@@ -8,11 +8,11 @@
 4. 按切面切片纹理（膜袋只印正反，其余面空白纸面补齐）；
 5. 多产品并行调用 Blender 后台建模、渲染并导出 .blend / .glb；
 6. GLB 尺寸自动复核；
-7. 每个产品单独生成 2 页白底 PPT，并输出逐页质检图。
+7. 有 Node 和 ppt 依赖时，每个产品单独生成 2 页白底 PPT 并输出逐页质检图。PATH 里没有 `node`/`node.exe`，或没有 ppt `node_modules` / 演示文稿运行时，stderr 打 `PPT 跳过`，白底图和 GLB 仍算成功，不要把整单判失败。`--no-ppt` 同样跳过。
 
 ## 运行
 
-    # 网页打样台会调这份 CLI。本机直接跑也可以。PPT 依赖本机 Node，不要提交 node_modules。
+    # 网页打样台会调这份 CLI。本机直接跑也可以。PPT 依赖本机 Node；没有 Node 就跳过 PPT，不要提交 node_modules。
     python3 pipeline.py examples/jobs_26H17.json --workers 2 --force
 
 首次运行加 --force；同一源文件、模板和流程版本未变化时，去掉 --force 会直接复用缓存。
@@ -42,8 +42,8 @@
 - .blend：可编辑 Blender 文件；
 - .glb：可旋转查看的通用 3D 文件；
 - 正面/右侧面和背面/左侧面白底渲染图；
-- 独立 .pptx；
-- qa/：PPT 逐页渲染、蒙太奇、布局检查和来源记录；
+- 独立 .pptx（跳过 PPT 时没有这一项，也不当失败）；
+- qa/：PPT 逐页渲染、蒙太奇、布局检查和来源记录（跳过 PPT 时没有）；
 - pipeline_result.json：本产品产物和尺寸验证结果。
 
 批次根目录的 pipeline_report.json 记录总耗时、缓存命中和 10 分钟 SLA 是否达成。

@@ -169,8 +169,8 @@ Windows 上 spawn 必须进 Job Object，Node 退出时杀掉子进程树。做�
 
 ### Worker
 
-- 对照 / 对红：`python -m app.cli compare|rework`，最后一行结果 JSON，过程中 `STAGE render_pdf|ocr|match`。不搬 `fields.py`。
-- 打样：`workers/packaging`。POST 时已确认 Blender；跑到一半消失 → failed，写清。stderr 打 `STAGE render_pdf|blender|export`（出图/打样/导出）。入队后 `job_stage` 从 `render_pdf` 开始，不是 `blender`。平面出图用 pymupdf（对照同一 Python），不靠 qlmanage。先读刀线/刀版还原切面；没有刀线才回退已登记 JSON，不能硬套方盒。
+- 对照 / 对红：`python -m app.cli compare|rework`，最后一行结果 JSON，过程中 `STAGE render_pdf|ocr|match`。不搬 `fields.py`。确认单底部工艺说明 / 颜色要求 / 版本号走 `skip_sheet_field`，不进机审。
+- 打样：`workers/packaging`。POST 时已确认 Blender；跑到一半消失 → failed，写清。stderr 打 `STAGE render_pdf|blender|export`（出图/打样/导出）。入队后 `job_stage` 从 `render_pdf` 开始，不是 `blender`。平面出图用 pymupdf（对照同一 Python），不靠 qlmanage。先读刀线/刀版还原切面；没有刀线才回退已登记 JSON，不能硬套方盒。PATH 里没有 Node 或 ppt 依赖时跳过 PPT（stderr `PPT 跳过`），白底图和 GLB 仍 `done`/`succeeded`，不要把整单判成「Node不存在」。
 - 超时：对照 180s、打样 420s（已有）。超时 = failed，回收槽。
 - 取消：不做。
 
@@ -192,6 +192,7 @@ Windows 上 spawn 必须进 Job Object，Node 退出时杀掉子进程树。做�
 - `WaitCard`：吃 `job_stage` / `job_stage_label`、`job_eta_s`、`queue_ahead`。queued 显示「前面还有 N 单」。
 - `TasksPage`：任一 `board==comparing` 时轮询 `/api/tasks`，否则排队卡片会停在旧状态。卡片用 `liveJobLine` 写阶段和大约还要，不要百分比。
 - 侧栏：`liveNavPulse` 看 `/api/health` 的 jobs 槽；审稿台/打样台作业在跑时有圆点。离开核对页再回看板，仍能看到阶段。
+- `HistoryPage`：进行中的审稿/打样也列；行上写 `liveJobLine`（阶段 · 大约还要 / 前面还有 N 单），不要百分比。点进去仍是 WaitCard。有 `processing` 行就 2.5s 轮询。
 
 ### 二次开发怎么加功能
 
