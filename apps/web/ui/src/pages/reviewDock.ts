@@ -1,8 +1,12 @@
 const DOCK_KEY = "wb_review_dock";
 const PINS_KEY = "wb_review_pins";
+const BOXES_KEY = "wb_review_boxes";
 const SIZE_KEY = "wb_review_dock_size";
+const PLACE_KEY = "wb_review_dock_place";
 
 export type DockBox = { w: number; h: number };
+export type DockPlace = { top: number; right: number };
+export type DockCorner = "sw" | "se" | "nw" | "ne";
 
 export const DOCK_MIN_W = 320;
 export const DOCK_MIN_H = 280;
@@ -41,6 +45,22 @@ export function writePinsOn(storage: Pick<Storage, "setItem"> | null, on: boolea
   }
 }
 
+export function readBoxesOn(storage: Pick<Storage, "getItem"> | null): boolean {
+  try {
+    return storage?.getItem(BOXES_KEY) !== "off";
+  } catch {
+    return true;
+  }
+}
+
+export function writeBoxesOn(storage: Pick<Storage, "setItem"> | null, on: boolean): void {
+  try {
+    storage?.setItem(BOXES_KEY, on ? "on" : "off");
+  } catch {
+    /* ignore quota */
+  }
+}
+
 export function clampDockBox(box: DockBox, room: { w: number; h: number }): DockBox {
   const maxW = Math.max(DOCK_MIN_W, Math.round(Number(room.w) || DOCK_DEFAULT_W) - 24);
   const maxH = Math.max(DOCK_MIN_H, Math.round(Number(room.h) || DOCK_DEFAULT_H) - 24);
@@ -74,11 +94,82 @@ export function writeDockBox(storage: Pick<Storage, "setItem"> | null, box: Dock
   }
 }
 
-/** Top-right panel: drag the bottom-left corner. Left grows width, down grows height. */
+export function clampDockPlace(place: DockPlace, room: { w: number; h: number }, box: DockBox): DockPlace {
+  const maxRight = Math.max(8, Math.round(Number(room.w) || 800) - box.w - 8);
+  const maxTop = Math.max(8, Math.round(Number(room.h) || 600) - box.h - 8);
+  const top = Number(place.top);
+  const right = Number(place.right);
+  return {
+    top: Math.min(maxTop, Math.max(8, Number.isFinite(top) ? Math.round(top) : 8)),
+    right: Math.min(maxRight, Math.max(8, Number.isFinite(right) ? Math.round(right) : 8)),
+  };
+}
+
+export function readDockPlace(storage: Pick<Storage, "getItem"> | null): DockPlace {
+  try {
+    const raw = storage?.getItem(PLACE_KEY);
+    if (!raw) return { top: 8, right: 8 };
+    const parsed = JSON.parse(raw) as { top?: unknown; right?: unknown };
+    return clampDockPlace(
+      { top: Number(parsed.top), right: Number(parsed.right) },
+      { w: 2400, h: 1800 },
+      { w: DOCK_DEFAULT_W, h: DOCK_DEFAULT_H },
+    );
+  } catch {
+    return { top: 8, right: 8 };
+  }
+}
+
+export function writeDockPlace(storage: Pick<Storage, "setItem"> | null, place: DockPlace): void {
+  try {
+    storage?.setItem(PLACE_KEY, JSON.stringify({ top: place.top, right: place.right }));
+  } catch {
+    /* ignore quota */
+  }
+}
+
+/** Grow the named corner. dx right, dy down. Panel is top/right anchored. */
 export function resizeDockCorner(
   start: DockBox,
   delta: { dx: number; dy: number },
   room: { w: number; h: number },
+  corner: DockCorner = "sw",
 ): DockBox {
-  return clampDockBox({ w: start.w - delta.dx, h: start.h + delta.dy }, room);
+  return resizeDockHandle(start, { top: 8, right: 8 }, delta, room, corner).box;
+}
+
+export function resizeDockHandle(
+  start: DockBox,
+  place: DockPlace,
+  delta: { dx: number; dy: number },
+  room: { w: number; h: number },
+  corner: DockCorner = "sw",
+): { box: DockBox; place: DockPlace } {
+  let w = start.w;
+  let h = start.h;
+  let top = place.top;
+  let right = place.right;
+  if (corner === "se") {
+    w = start.w + delta.dx;
+    right = place.right - delta.dx;
+    h = start.h + delta.dy;
+  } else if (corner === "ne") {
+    w = start.w + delta.dx;
+    right = place.right - delta.dx;
+    h = start.h - delta.dy;
+    top = place.top + delta.dy;
+  } else if (corner === "nw") {
+    w = start.w - delta.dx;
+    h = start.h - delta.dy;
+    top = place.top + delta.dy;
+  } else {
+    w = start.w - delta.dx;
+    h = start.h + delta.dy;
+  }
+  const box = clampDockBox({ w, h }, room);
+  return { box, place: clampDockPlace({ top, right }, room, box) };
+}
+
+export function skipPackSheetField(field?: string): boolean {
+  return /^(工艺说明|颜色要求|版本号)($|[\s：:·])/.test(String(field || "").trim());
 }

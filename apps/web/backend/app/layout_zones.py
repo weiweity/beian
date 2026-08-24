@@ -137,6 +137,14 @@ def text_in_zone(ocr_words: list[dict], zone: dict[str, Any]) -> str:
     return "\n".join((w.get("text") or "") for w in words_in_zone(ocr_words, zone))
 
 
+SKIP_SHEET_FIELD = re.compile(r"^(工艺说明|颜色要求|版本号)($|[\s：:·])")
+
+
+def skip_sheet_field(name: str) -> bool:
+    """确认单底部工艺表不进机审。"""
+    return bool(SKIP_SHEET_FIELD.search(str(name or "").strip()))
+
+
 def filter_words_exclude_process(
     ocr_words: list[dict], zones: dict[str, Any]
 ) -> list[dict]:
@@ -186,7 +194,7 @@ FIELD_ZONE_MAP: dict[str, tuple[str, ...]] = {
     "英文品名": ("claims",),
     "logo标识": ("claims",),
     "使用方法": ("usage", "claims"),
-    "生产信息": ("ingredients", "usage", "process"),  # 备案常在侧面/底部
+    "生产信息": ("ingredients", "usage"),
     "净含量": ("claims", "usage"),
     "条形码": (),  # 全文（码可能在任意角）
     "二维码": (),  # 全文 + 专用 API

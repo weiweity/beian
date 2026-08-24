@@ -219,3 +219,51 @@ def test_real_30ml_is_pouch(tmp_path: Path):
     assert abs(dims["width"] - 139) < 12
     assert abs(dims["height"] - 200) < 12
     assert dims["depth"] == 3.0
+
+
+def test_resolve_node_bin_uses_which(monkeypatch, tmp_path: Path):
+    p = pipeline()
+    fake = tmp_path / "node.exe"
+    fake.write_text("")
+    monkeypatch.delenv("RUNTIME_NODE", raising=False)
+    monkeypatch.setattr(
+        p.shutil,
+        "which",
+        lambda name: str(fake) if name in ("node", "node.exe") else None,
+    )
+    assert p.resolve_node_bin() == fake.resolve()
+
+
+def test_presentation_runtime_none_without_node(monkeypatch):
+    p = pipeline()
+    monkeypatch.delenv("RUNTIME_NODE", raising=False)
+    monkeypatch.setattr(p.shutil, "which", lambda name: None)
+    assert p.resolve_node_bin() is None
+    assert p.presentation_runtime() is None
+
+
+def test_presentation_runtime_none_without_ppt_modules(monkeypatch, tmp_path: Path):
+    p = pipeline()
+    fake = tmp_path / "node"
+    fake.write_text("")
+    monkeypatch.delenv("RUNTIME_NODE_MODULES", raising=False)
+    monkeypatch.delenv("RUNTIME_BIN_DIR", raising=False)
+    monkeypatch.setattr(p, "DEFAULT_NODE_MODULES", p.Path(""))
+    monkeypatch.setattr(p, "DEFAULT_RUNTIME_BIN", p.Path(""))
+    monkeypatch.setattr(p.shutil, "which", lambda name: str(fake) if name in ("node", "node.exe") else None)
+    monkeypatch.setattr(p, "ROOT", tmp_path / "packaging")
+    (tmp_path / "packaging" / "ppt").mkdir(parents=True)
+    assert p.resolve_node_bin() == fake.resolve()
+    assert p.presentation_runtime() is None
+    assert p._env_dir("RUNTIME_NODE_MODULES", p.Path("")) is None
+
+
+def test_all_output_files_exist_without_ppt(tmp_path: Path):
+    p = pipeline()
+    files = {}
+    for key in ("blend", "glb", "front_right", "back_left"):
+        f = tmp_path / key
+        f.write_text("x")
+        files[key] = str(f)
+    assert p.all_output_files_exist({"outputs": files}, False) is True
+    assert p.all_output_files_exist({"outputs": files}, True) is False
