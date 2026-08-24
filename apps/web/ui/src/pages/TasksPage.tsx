@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Alert, Button, Empty, Input, Segmented, Space, Table, Tag } from "antd";
 import { api, ApiError, type TaskSummary } from "../api";
+import { liveJobLine } from "./waitCard";
 import { shouldShowTaskBoard } from "./tasksBoard";
 
 type Props = {
@@ -206,10 +207,16 @@ export function TasksPage({ onCreate, onOpen }: Props) {
             {
               title: "状态",
               dataIndex: "status",
-              width: 120,
+              width: 180,
               render: (_, row) => {
                 const s = statusLabel(row);
-                return <Tag color={s.color}>{s.text}</Tag>;
+                const live = liveJobLine(row);
+                return (
+                  <div>
+                    <Tag color={s.color}>{s.text}</Tag>
+                    {live ? <div className="review-card-live">{live}</div> : null}
+                  </div>
+                );
               },
             },
             { title: "创建", dataIndex: "created_at", width: 220 },
@@ -252,14 +259,25 @@ function BoardCol({
         {rows.length === 0 ? <div className="review-col-empty">没有单</div> : null}
         {rows.map((row) => {
           const s = statusLabel(row);
+          const live = liveJobLine(row);
           return (
             <button key={row.id} type="button" className="review-card" onClick={() => onOpen(row.id)}>
-              <div className="review-card-name">{row.product_name || row.title}</div>
+              <div className="review-card-main">
+                <div className="review-card-name">{row.product_name || row.title}</div>
+                {live ? (
+                  <>
+                    <div className="review-card-live">{live}</div>
+                    <div className="review-card-bar" aria-hidden>
+                      <span />
+                    </div>
+                  </>
+                ) : null}
+                {row.error ? <div className="review-card-err">{row.error}</div> : null}
+              </div>
               <div className="review-card-meta">
                 <Tag color={s.color}>{s.text}</Tag>
                 {row.owner ? <span>{row.owner}</span> : null}
               </div>
-              {row.error ? <div className="review-card-err">{row.error}</div> : null}
             </button>
           );
         })}

@@ -3,7 +3,7 @@ import { Alert, App, Button, Empty, Space, Tag, Typography } from "antd";
 import { api, type MockupJob } from "../api";
 import { UploadWell } from "../chrome/UploadWell";
 import { WaitCard } from "../chrome/WaitCard";
-import { shouldShowWaitCard } from "./waitCard";
+import { liveJobLine, pickLiveMockup, shouldShowWaitCard } from "./waitCard";
 import { stemFromFilename } from "./stemName";
 import "@google/model-viewer";
 
@@ -34,17 +34,40 @@ export function MockupPage({ openId }: Props) {
   const [job, setJob] = useState<MockupJob | null>(null);
   const [rows, setRows] = useState<MockupJob[]>([]);
   const announced = useRef("");
+  const listGen = useRef(0);
 
   const jobWaiting = Boolean(job) && shouldShowWaitCard(job);
   const waiting = busy || jobWaiting;
 
   function refreshList() {
-    return api.mockups().then(setRows).catch(() => undefined);
+    const gen = ++listGen.current;
+    return api
+      .mockups()
+      .then((list) => {
+        if (gen !== listGen.current) return list;
+        setRows(list);
+        return list;
+      })
+      .catch(() => undefined);
   }
 
   useEffect(() => {
-    void refreshList();
-  }, []);
+    let cancelled = false;
+    const gen = ++listGen.current;
+    void api
+      .mockups()
+      .then((list) => {
+        if (cancelled || gen !== listGen.current) return;
+        setRows(list);
+        if (openId) return;
+        const live = pickLiveMockup(list);
+        if (live) setJob(live);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [openId]);
 
   useEffect(() => {
     if (!openId) return;
@@ -82,6 +105,15 @@ export function MockupPage({ openId }: Props) {
     };
   }, [job?.id, jobWaiting, message]);
 
+  const boardLive = !jobWaiting && rows.some((r) => mockCol(r) === "running");
+  useEffect(() => {
+    if (!boardLive) return;
+    const id = window.setInterval(() => {
+      void refreshList();
+    }, 2500);
+    return () => window.clearInterval(id);
+  }, [boardLive]);
+
   function takeFile(next: File | null) {
     setFile(next);
     if (next) {
@@ -102,6 +134,7 @@ export function MockupPage({ openId }: Props) {
     setBusy(true);
     setJob(null);
     announced.current = "";
+    listGen.current += 1;
     try {
       const next = await api.createMockup(fd);
       setJob(next);
@@ -132,6 +165,7 @@ export function MockupPage({ openId }: Props) {
         job="打样"
         jobStatus={job?.job_status || (job?.status === "queued" || job?.status === "running" ? job.status : "queued")}
         queueAhead={job?.queue_ahead}
+        stage={job?.job_stage}
         stageLabel={job?.job_stage_label}
         etaS={job?.job_eta_s}
       />
@@ -269,6 +303,7 @@ function MockCol({
         {rows.length === 0 ? <div className="review-col-empty">没有单</div> : null}
         {rows.map((row) => {
           const s = mockLabel(row);
+          const live = liveJobLine({ ...row, kind: "mockup" });
           return (
             <button
               key={row.id}
@@ -276,7 +311,17 @@ function MockCol({
               className={row.id === currentId ? "review-card is-on" : "review-card"}
               onClick={() => onOpen(row)}
             >
-              <div className="review-card-name">{mockTitle(row)}</div>
+              <div className="review-card-main">
+                <div className="review-card-name">{mockTitle(row)}</div>
+                {live ? (
+                  <>
+                    <div className="review-card-live">{live}</div>
+                    <div className="review-card-bar" aria-hidden>
+                      <span />
+                    </div>
+                  </>
+                ) : null}
+              </div>
               <div className="review-card-meta">
                 <Tag color={s.color}>{s.text}</Tag>
                 {row.owner ? <span>{row.owner}</span> : null}

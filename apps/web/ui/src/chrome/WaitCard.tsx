@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import { feishuReadyFromHealth, waitCardCopy, type WaitKind } from "../pages/waitCard";
+import { feishuReadyFromHealth, waitCardActiveSteps, waitCardCopy, type WaitKind } from "../pages/waitCard";
 
 type Job = "对照" | "对红" | "打样";
 
@@ -29,6 +29,7 @@ type Props = {
   job: Job;
   activeSteps?: number;
   queueAhead?: number;
+  stage?: string;
   stageLabel?: string;
   etaS?: number;
   hint?: string;
@@ -38,8 +39,9 @@ type Props = {
 
 export function WaitCard({
   job,
-  activeSteps = 2,
+  activeSteps,
   queueAhead,
+  stage,
   stageLabel,
   etaS,
   hint,
@@ -65,14 +67,16 @@ export function WaitCard({
   }, [feishuReady]);
 
   const visual = VISUAL[job];
+  const kind = waitKind(job);
   const copy = waitCardCopy({
-    kind: waitKind(job),
+    kind,
     job_status: jobStatus,
     job_stage_label: stageLabel,
     job_eta_s: etaS,
     queue_ahead: queueAhead,
     feishuReady: ready,
   });
+  const stepsOn = activeSteps != null ? activeSteps : waitCardActiveSteps(kind, jobStatus, stage, stageLabel);
   return (
     <div className="wait-wrap">
       <div className="wait-card" role="status" aria-live="polite">
@@ -95,7 +99,7 @@ export function WaitCard({
         </div>
         <div className="wait-steps">
           {visual.steps.map((s, i) => (
-            <span key={s} className={i < activeSteps ? "wait-chip is-on" : "wait-chip"}>
+            <span key={s} className={i < stepsOn ? "wait-chip is-on" : "wait-chip"}>
               {s}
             </span>
           ))}
