@@ -16,7 +16,7 @@
 - 不得自行改 DNS、发布飞书版本、购买云、映射公网端口。
 - 公网/Tunnel 后禁止显示名裸登录。
 - Mac 绿灯不等于 Windows 已验收。杭州生产怎么升版见文末「Deploy Configuration」。合 `main` 后 runner 自动跑 `release.ps1`；Actions 红或公网 health 对不上 VERSION 时不要报已上线。
-- 对照失败或已完成的单不能签字；干净签字单不能再对红；对红后优先读非空 `hits_v2`（空数组回退第一轮）。
+- 对照失败或已完成的单不能签字；干净签字单不能再对红；对红后优先读非空 `hits_v2`（空数组回退第一轮）。工艺说明 / 颜色要求 / 版本号的 pending 不挡签字。
 - 飞书授权失败回到飞书，不要把远程验收人送到本机 `:8787`。JSON 404 不是 Vite 挂了；只有 HTML 或空 Content-Type 才当开发页没转到 8787。
 
 ## 目录
@@ -50,7 +50,7 @@ cd apps/web/backend && PYTHONPATH=. .venv/bin/python -m app.cli --help
 
 4. 测试：抄 `jobs.test.ts` 的对照块。必写断言：第二单 queued、GET 无 `job_pid`、没有最后一行 JSON →「对照中断」、对红失败仍可签字。pytest：CLI 不 `save_task`；`--help` 含 `STAGE` / `save_task` / `packaging`。打样出图测 pymupdf（`test_packaging_thumbnail.py`），不要假定有 qlmanage。
 
-5. UI 等待：`shouldShowWaitCard`（`queued` | `running` | `comparing`；`done`/`failed`/`completed` 不当等待）。离开核对页后，看板 `liveJobLine` 和侧栏 `liveNavPulse` 仍显示阶段；打样台 `pickLiveMockup` 自动跟上正在跑的那单。等待圆盘是 `WaitLoader`（对照中 / 对红中 / 打样中，不要英文 Generating）。核对页框在 `pinBox.ts`：有 bbox 才画真框，钉在框中心，不编造顶排钉；隐藏钉只藏圆圈；显示框单独开关，拖动画布暂时藏框。缩放在 `canvasZoom.ts`：CSS `transform` 1–6×（滚轮、放大/缩小/复位、点序号放大该框），拖动走 rAF 且禁止 img 原生拖拽，不上 OpenSeadragon。核对窗 `reviewDock.ts` 液态玻璃钉在整页右上（不在图内），可拖、四角缩放、可收起，左列字段右列疑点；结论在页头签字旁。确认单底部工艺说明 / 颜色要求 / 版本号不进机审。离开核对页或打样台后，历史记录仍列出进行中的单并显示 `liveJobLine`，点进去仍是 WaitCard。稿上 OCR 走 `hitText.ts`（`coverage.hit` 回退，不要空白）。打样先读稿上的刀线/刀版还原切面；没有刀线才回退已登记 JSON。不能按比例硬套方盒。
+5. UI 等待：`shouldShowWaitCard`（`queued` | `running` | `comparing`；`done`/`failed`/`completed` 不当等待）。离开核对页后，看板 `liveJobLine` 和侧栏 `liveNavPulse` 仍显示阶段；打样台 `pickLiveMockup` 自动跟上正在跑的那单。等待圆盘是 `WaitLoader`（对照中 / 对红中 / 打样中，不要英文 Generating）。核对页框在 `pinBox.ts`：有 bbox 才画真框，钉在框中心，不编造顶排钉；隐藏钉只藏圆圈；显示框单独开关，拖动画布暂时藏框。缩放在 `canvasZoom.ts`：CSS `transform` 1–6×（滚轮、放大/缩小/复位、点序号放大该框），拖动走 rAF 且禁止 img 原生拖拽，不上 OpenSeadragon。核对窗 `reviewDock.ts` 液态玻璃钉在整页右上（不在图内），可拖、四角缩放、可收起，左列字段右列疑点；结论在页头签字旁。确认单底部工艺说明 / 颜色要求 / 版本号不进机审（只认字段名开头，不要误杀「执行标准版本号」；旧单假疑点签字时也跳过）。离开核对页或打样台后，历史记录仍列出进行中的单并显示 `liveJobLine`，点进去仍是 WaitCard。稿上 OCR 走 `hitText.ts`（`coverage.hit` 回退，不要空白）。打样先读稿上的刀线/刀版还原切面；没有刀线才回退已登记 JSON。不能按比例硬套方盒。
 
 调试：对外 `job_error` 用短中文。Node 日志写 problem + cause + fix。打开 `DATA_DIR/tasks/{tid}.json`。不要新 FastAPI 路由。
 

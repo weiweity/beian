@@ -119,7 +119,7 @@ GET 必须走 `publicTask` / `publicMockup`，剥掉 `job_pid`、磁盘 `path`�
 | GET | `/api/mockups` / `/:id` | 读 `job.json`。无 `path`。mockup `status` 仍用现有 `queued\|running\|done\|failed`，不要改成 succeeded。 |
 | GET | `/api/health` | 可选。8/31 验收不看。 |
 
-鉴权、设置、账单、飞书登录、页图、`complete` / `decision` 不变。不迁 FastAPI 的 gold / backup / ai-review / report.pdf / presets。
+鉴权、设置、账单、飞书登录、页图、`decision` 不变。`complete` 签字门忽略工艺说明 / 颜色要求 / 版本号的 pending（只认字段名开头，避免「执行标准版本号」被误杀）。不迁 FastAPI 的 gold / backup / ai-review / report.pdf / presets。
 
 `compareBookkeeping` 从 upload/rework 的 try/catch 挪到作业终态（`jobs.ts` 里 succeeded/failed 时记一笔）。
 
@@ -169,7 +169,7 @@ Windows 上 spawn 必须进 Job Object，Node 退出时杀掉子进程树。做�
 
 ### Worker
 
-- 对照 / 对红：`python -m app.cli compare|rework`，最后一行结果 JSON，过程中 `STAGE render_pdf|ocr|match`。不搬 `fields.py`。确认单底部工艺说明 / 颜色要求 / 版本号走 `skip_sheet_field`，不进机审。
+- 对照 / 对红：`python -m app.cli compare|rework`，最后一行结果 JSON，过程中 `STAGE render_pdf|ocr|match`。不搬 `fields.py`。确认单底部工艺说明 / 颜色要求 / 版本号走 `skip_sheet_field`（字段名开头），不进机审。
 - 打样：`workers/packaging`。POST 时已确认 Blender；跑到一半消失 → failed，写清。stderr 打 `STAGE render_pdf|blender|export`（出图/打样/导出）。入队后 `job_stage` 从 `render_pdf` 开始，不是 `blender`。平面出图用 pymupdf（对照同一 Python），不靠 qlmanage。先读刀线/刀版还原切面；没有刀线才回退已登记 JSON，不能硬套方盒。PATH 里没有 Node 或 ppt 依赖时跳过 PPT（stderr `PPT 跳过`），白底图和 GLB 仍 `done`/`succeeded`，不要把整单判成「Node不存在」。
 - 超时：对照 180s、打样 420s（已有）。超时 = failed，回收槽。
 - 取消：不做。
