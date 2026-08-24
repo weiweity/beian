@@ -11,6 +11,7 @@ type Props = {
   onNavigate: (key: NavKey) => void;
   onToggle: () => void;
   onLogout: () => void;
+  livePulse?: { review?: boolean; mockup?: boolean };
 };
 
 function initial(name: string) {
@@ -26,6 +27,7 @@ export function Sidebar({
   onNavigate,
   onToggle,
   onLogout,
+  livePulse,
 }: Props) {
   return (
     <aside
@@ -71,17 +73,20 @@ export function Sidebar({
       <nav className="side-nav">
         {SIDE_NAV.map((item) => {
           const on = item.key === active;
+          const live = (item.key === "review" && livePulse?.review) || (item.key === "mockup" && livePulse?.mockup);
           return (
             <button
               key={item.key}
               type="button"
               className={on ? "side-item is-on" : "side-item"}
               aria-current={on ? "page" : undefined}
-              title={collapsed ? item.label : undefined}
+              aria-label={live ? `${item.label}，进行中` : undefined}
+              title={collapsed ? (live ? `${item.label} · 进行中` : item.label) : undefined}
               onClick={() => onNavigate(item.key)}
             >
               <img className="side-icon" src={item.icon} alt="" width={24} height={24} />
               <span className="side-label">{item.label}</span>
+              {live ? <span className="side-item-pulse" aria-hidden /> : null}
             </button>
           );
         })}

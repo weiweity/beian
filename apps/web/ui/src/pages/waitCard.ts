@@ -64,6 +64,67 @@ export function shouldShowWaitCard(t: WaitCardTask | null): boolean {
   return t.status === "comparing";
 }
 
+/** 看板/侧栏活进度。queued 不准写秒；没有作业返回 null。 */
+export function liveJobLine(opts: {
+  job_status?: string;
+  job_stage_label?: string;
+  job_eta_s?: number;
+  queue_ahead?: number;
+  kind?: WaitKind;
+}): string | null {
+  if (opts.job_status === "queued") return queueLine(opts.queue_ahead);
+  if (opts.job_status !== "running") return null;
+  const stage = (opts.job_stage_label || "").trim();
+  const fallback = opts.kind === "mockup" ? 240 : 40;
+  const eta = formatEta(opts.job_eta_s || fallback);
+  return stage ? `${stage} · ${eta}` : eta;
+}
+
+export function waitCardActiveSteps(
+  kind: WaitKind,
+  job_status?: string,
+  stage?: string,
+  stageLabel?: string,
+): number {
+  if (job_status === "queued") return 0;
+  const key = (stage || "").trim() || (stageLabel || "").trim();
+  if (kind === "mockup") {
+    if (key === "export" || key === "导出") return 4;
+    if (key === "blender" || key === "打样") return 3;
+    if (key === "render_pdf" || key === "出图") return 1;
+    return 2;
+  }
+  if (key === "match" || key === "对照") return 3;
+  if (key === "ocr" || key === "认字") return 2;
+  if (key === "render_pdf" || key === "出图") return 1;
+  return 1;
+}
+
+export function pickLiveMockup<T extends { status?: string; job_status?: string; created_at?: string }>(
+  rows: T[],
+): T | null {
+  const live = rows.filter((r) => {
+    if (r.status === "done" || r.status === "failed") return false;
+    return (
+      r.status === "queued" ||
+      r.status === "running" ||
+      r.job_status === "queued" ||
+      r.job_status === "running"
+    );
+  });
+  if (!live.length) return null;
+  return live.slice().sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")))[0];
+}
+
+export function liveNavPulse(body: { jobs?: unknown } | null | undefined): {
+  review: boolean;
+  mockup: boolean;
+} {
+  const jobs = (body?.jobs || {}) as Record<string, { running?: number; queued?: number }>;
+  const n = (k: string) => Number(jobs[k]?.running || 0) + Number(jobs[k]?.queued || 0);
+  return { review: n("ocr") > 0, mockup: n("blender") + n("illustrator") > 0 };
+}
+
 export function waitCardCopy(opts: WaitCardCopyOpts): { title: string; eta: string; hint: string } {
   const title = TITLE[opts.kind];
   const leave = leaveHint(opts.kind, opts.feishuReady);

@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { feishuReadyFromHealth, shouldShowWaitCard, waitCardCopy } from "./waitCard.js";
+import {
+  feishuReadyFromHealth,
+  liveJobLine,
+  liveNavPulse,
+  pickLiveMockup,
+  shouldShowWaitCard,
+  waitCardActiveSteps,
+  waitCardCopy,
+} from "./waitCard.js";
 
 describe("shouldShowWaitCard", () => {
   it("hides when there is no task", () => {
@@ -121,6 +129,76 @@ describe("waitCardCopy", () => {
     for (const copy of copies) {
       assert.doesNotMatch(`${copy.title}${copy.eta}${copy.hint}`, /%/);
     }
+  });
+});
+
+describe("liveJobLine", () => {
+  it("queued never writes a fake 40s eta", () => {
+    assert.equal(liveJobLine({ job_status: "queued", queue_ahead: 2 }), "前面还有 2 单");
+    assert.equal(liveJobLine({ job_status: "queued", queue_ahead: 0 }), "就快轮到");
+    assert.equal(liveJobLine({ job_status: "succeeded", job_stage_label: "认字" }), null);
+  });
+
+  it("running joins stage and eta, never a percent", () => {
+    const line = liveJobLine({
+      job_status: "running",
+      job_stage_label: "认字",
+      job_eta_s: 40,
+    });
+    assert.equal(line, "认字 · 大约还要 40 秒");
+    assert.doesNotMatch(line || "", /%/);
+    assert.equal(liveJobLine({ job_status: "running", kind: "mockup" }), "大约还要 4 分钟");
+  });
+});
+
+describe("waitCardActiveSteps", () => {
+  it("walks compare and mockup stages", () => {
+    assert.equal(waitCardActiveSteps("compare", "queued"), 0);
+    assert.equal(waitCardActiveSteps("compare", "running", "ocr"), 2);
+    assert.equal(waitCardActiveSteps("compare", "running", undefined, "对照"), 3);
+    assert.equal(waitCardActiveSteps("compare", "running", "render_pdf"), 1);
+    assert.equal(waitCardActiveSteps("mockup", "running", "render_pdf"), 1);
+    assert.equal(waitCardActiveSteps("mockup", "running", "blender"), 3);
+    assert.equal(waitCardActiveSteps("mockup", "running", undefined, "打样"), 3);
+    assert.equal(waitCardActiveSteps("mockup", "running", "export"), 4);
+  });
+});
+
+describe("pickLiveMockup", () => {
+  it("picks the newest running or queued job", () => {
+    assert.equal(pickLiveMockup([]), null);
+    const live = pickLiveMockup([
+      { status: "done", created_at: "2026-08-24T12:00:00.000Z" },
+      { status: "running", created_at: "2026-08-24T11:00:00.000Z" },
+      { status: "queued", created_at: "2026-08-24T12:30:00.000Z" },
+    ]);
+    assert.equal(live?.created_at, "2026-08-24T12:30:00.000Z");
+  });
+
+  it("does not treat a finished job with a stale running slot as live", () => {
+    assert.equal(
+      pickLiveMockup([{ status: "done", job_status: "running", created_at: "2026-08-24T13:00:00.000Z" }]),
+      null,
+    );
+    assert.equal(pickLiveMockup([{ status: "failed", job_status: "queued" }]), null);
+  });
+});
+
+describe("liveNavPulse", () => {
+  it("lights 审稿台 / 打样台 from health.jobs counts", () => {
+    assert.deepEqual(liveNavPulse(null), { review: false, mockup: false });
+    assert.deepEqual(
+      liveNavPulse({ jobs: { ocr: { running: 1, queued: 0 }, blender: { running: 0, queued: 0 } } }),
+      { review: true, mockup: false },
+    );
+    assert.deepEqual(
+      liveNavPulse({ jobs: { illustrator: { running: 0, queued: 1 } } }),
+      { review: false, mockup: true },
+    );
+    assert.deepEqual(
+      liveNavPulse({ jobs: { blender: { running: 1, queued: 0 }, ocr: { running: 0, queued: 1 } } }),
+      { review: true, mockup: true },
+    );
   });
 });
 

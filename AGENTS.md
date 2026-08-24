@@ -4,7 +4,7 @@
 
 ## 项目
 
-`beian`：供应链备案审核网页。打样台调用 `workers/packaging`（缺 Blender 要失败写清）。第一期验收人刘籽烨，收尾 2026-08-31。
+`beian`：供应链备案审核网页。打样台调用 `workers/packaging`（缺 Blender 要失败写清）。平面出图用 pymupdf（对照同一 `.venv`），杭州不要装 qlmanage。第一期验收人刘籽烨，收尾 2026-08-31。
 
 ## 硬约束
 
@@ -42,15 +42,15 @@ cd apps/web/backend && PYTHONPATH=. .venv/bin/python -m app.cli --help
 禁止：`uvicorn`、新 FastAPI 路由、把 `m.save_task` 抄回 CLI。产品入口仍是 `./scripts/dev-start.sh` → Hono `:8787`。
 
 1. CLI 在 `apps/web/backend/app/cli.py`。stderr 打 `STAGE <name>`。stdout 最后一行是结果 JSON（不要 `ocr_text`）。不要 `save_task`。
-   打样不是 `app.cli` 子命令；`jobs.ts` 调 `workers/packaging`；HTTP 仍是 `/api/mockups`。
+   打样不是 `app.cli` 子命令；`jobs.ts` 调 `workers/packaging`；HTTP 仍是 `/api/mockups`。packaging stderr 打 `STAGE render_pdf|blender|export`（出图/打样/导出）。平面出图 pymupdf 先，macOS `qlmanage` 只在 pymupdf 失败时兜底。
 
 2. 第一次 queued 落盘之后，只有 `apps/web/server/src/jobs.ts` 再写任务文件。`enqueue({ kind, id })`。路由只 save queued 一次，之后这个 tid 归 `jobs.ts`。
 
 3. Hono 动作立即返回。没有 `/api/jobs` 资源。
 
-4. 测试：抄 `jobs.test.ts` 的对照块。必写断言：第二单 queued、GET 无 `job_pid`、没有最后一行 JSON →「对照中断」、对红失败仍可签字。pytest：CLI 不 `save_task`；`--help` 含 `STAGE` / `save_task` / `packaging`。
+4. 测试：抄 `jobs.test.ts` 的对照块。必写断言：第二单 queued、GET 无 `job_pid`、没有最后一行 JSON →「对照中断」、对红失败仍可签字。pytest：CLI 不 `save_task`；`--help` 含 `STAGE` / `save_task` / `packaging`。打样出图测 pymupdf（`test_packaging_thumbnail.py`），不要假定有 qlmanage。
 
-5. UI 等待：`shouldShowWaitCard`（`queued` | `running` | `comparing`）。
+5. UI 等待：`shouldShowWaitCard`（`queued` | `running` | `comparing`；`done`/`failed`/`completed` 不当等待）。离开核对页后，看板 `liveJobLine` 和侧栏 `liveNavPulse` 仍显示阶段；打样台 `pickLiveMockup` 自动跟上正在跑的那单。核对页框在 `pinBox.ts`：有 bbox 才画真框，钉在框中心，不编造顶排钉。
 
 调试：对外 `job_error` 用短中文。Node 日志写 problem + cause + fix。打开 `DATA_DIR/tasks/{tid}.json`。不要新 FastAPI 路由。
 
@@ -81,6 +81,8 @@ MiniMax 未开语义复核是「未用」，不是「可用」；探测是 `GET 
 
 开工板是线性进度 + 7 行清单，不要画成圆环仪表，不要用「通 / 不通」当状态字。界面单测只测纯函数，不引入 RTL。
 
+杭州打样平面出图走 pymupdf（对照同一 `.venv`），不要让人装 qlmanage。macOS Quick Look 只在 pymupdf 失败时兜底。离开核对页后看板/侧栏仍看阶段，不要只把进度画在 WaitCard 上。
+
 ## Design System
 
 改任何界面之前先读 `DESIGN.md`。字体、色、间距、侧栏、核对页都以那份为准。锁定稿是 Figma Web 页，不是飞书顶栏。
@@ -91,7 +93,7 @@ MiniMax 未开语义复核是「未用」，不是「可用」；探测是 `GET 
 - 侧栏顶用 `apps/web/ui/public/brand/logo-mark.png`。折叠时悬停变成展开按钮（同一 44pt）。完整 `shine-mage.png` 只放拒绝页。
 - 左下角飞书头像 36px + `花名（真名）` 15px，例如 `天元（魏炜）`。
 - 空审核单不画三栏。设置里有「外观」：主题、13–28px 字号（可手写）、侧栏材质（实心 / 毛玻璃 / 液态玻璃）、侧栏雾面对比度滑条、差异标记。只写 `localStorage`。深色走品牌紫雾，不是灰黑中台。
-- 审稿：专属核对页，左画布 + 编号钉，右一对一检视。结论由人写。禁止「AI 已过审」。
+- 审稿：专属核对页，左画布叠 OCR 真框，编号钉在框中心；没有 bbox 不画假钉。右一对一检视。结论由人写。禁止「AI 已过审」。
 - 历史记录是侧栏 tab，不是第三张台。
 - 打样台 8/31 不对业务开放。QA 时标出任何与 `DESIGN.md` 不符的实现。
 
