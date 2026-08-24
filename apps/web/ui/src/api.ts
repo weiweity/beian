@@ -100,6 +100,7 @@ export type FieldHit = {
   decision?: string;
   bboxes?: Array<Record<string, unknown>>;
   coverage?: { miss?: string[]; hit?: string[]; ratio?: number };
+  evidence?: string;
 };
 
 export type TaskPage = {
