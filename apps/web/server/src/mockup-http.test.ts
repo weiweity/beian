@@ -367,6 +367,17 @@ describe("mockup file bytes", () => {
     assert.match(ppt.headers.get("content-disposition") || "", /^attachment;/);
   });
 
+  it("serves the sheet pdf as application/pdf", async () => {
+    seedOwnedFile("aa77aa77aa77", "sheet", "26F23A_white_sheet.pdf", Buffer.from("%PDF-1.4"));
+    const sess = issueSession("籽烨", "reviewer", "ou_mockup_pdf", "feishu");
+    const res = await app.request("/api/mockups/aa77aa77aa77/files/sheet?download=1", {
+      headers: { authorization: `Bearer ${sess.token}` },
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get("content-type"), "application/pdf");
+    assert.match(res.headers.get("content-disposition") || "", /^attachment;/);
+  });
+
   it("refuses leftover ai-raster labeled as white_a even if it is a PNG", async () => {
     seedOwnedFile("ff66ff66ff66", "white_a", "ai-raster.png", PNG_MAGIC);
     const sess = issueSession("籽烨", "reviewer", "ou_mockup_old_white", "feishu");

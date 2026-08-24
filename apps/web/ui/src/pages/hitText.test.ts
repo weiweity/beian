@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { excelText, pdfText } from "./hitText.js";
+import { excelText, isImageOnlyField, pdfText } from "./hitText.js";
 
 describe("excelText", () => {
   it("prefers excel then excel_value", () => {
@@ -27,6 +27,30 @@ describe("pdfText", () => {
 
   it("says 没读到 when OCR is empty", () => {
     assert.equal(pdfText({}), "没读到");
-    assert.equal(pdfText({ coverage: { miss: ["香柠檬"] } }), "没读到");
+  });
+
+  it("lists coverage misses even when no hits", () => {
+    assert.match(pdfText({ coverage: { miss: ["香柠檬"] } }), /未在稿上读到：香柠檬/);
+  });
+
+  it("lists coverage misses next to hits and the tally", () => {
+    assert.match(
+      pdfText({ coverage: { hit: ["积雪草"], miss: ["烟酰胺", "水"], matched: 8, total: 36 } }),
+      /积雪草[\s\S]*稿上命中 8\/36 项[\s\S]*未在稿上读到：烟酰胺 水/,
+    );
+  });
+
+  it("explains image-only brand fields", () => {
+    assert.match(pdfText({}, "中文品名"), /是图/);
+    assert.match(pdfText({}, "品牌logo"), /是图/);
+    assert.equal(pdfText({}, "成分"), "没读到");
+    assert.equal(isImageOnlyField("中文品名"), true);
+    assert.equal(isImageOnlyField("成分"), false);
+  });
+
+  it("keeps image note and coverage misses together", () => {
+    const text = pdfText({ coverage: { miss: ["香柠檬"] } }, "中文品名");
+    assert.match(text, /是图/);
+    assert.match(text, /未在稿上读到：香柠檬/);
   });
 });

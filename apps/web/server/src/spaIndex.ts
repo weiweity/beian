@@ -1,4 +1,10 @@
-/** GET / 是出 HTML 还是直接去飞书。Vite :5173 仍走 SPA，不经过这里。 */
+/** 台地址出 HTML 还是去飞书。覆盖 / /new /review/:id /mockup/:id /history /settings。Vite :5173 仍走 SPA。 */
+
+export function isSpaPath(pathname: string): boolean {
+  const p = pathname.replace(/\/+$/, "") || "/";
+  if (p === "/") return true;
+  return /^(?:\/new|\/history|\/settings|\/review(?:\/[0-9a-f]{12})?|\/mockup(?:\/[0-9a-f]{12})?)$/i.test(p);
+}
 
 export function spaIndexAction(input: {
   feishuError: string;

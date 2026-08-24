@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Alert, App, Button, Empty, Input, Space, Tag } from "antd";
 import { ApiError, api, type Decision, type FieldHit, type TaskDetail, type TaskPage } from "../api";
 import { WaitCard } from "../chrome/WaitCard";
@@ -136,8 +137,8 @@ export function ReviewPage({ taskId, onBack }: Props) {
   });
 
   function pageRoom() {
-    const el = pageRef.current;
-    return { w: el?.clientWidth || 800, h: el?.clientHeight || 600 };
+    if (typeof window === "undefined") return { w: 800, h: 600 };
+    return { w: window.innerWidth, h: window.innerHeight };
   }
 
   function commitDock(box: DockBox, place?: DockPlace) {
@@ -741,7 +742,9 @@ export function ReviewPage({ taskId, onBack }: Props) {
         </div>
 
         </div>
-        {dockOpen ? (
+        {typeof document !== "undefined"
+          ? createPortal(
+              dockOpen ? (
           <aside
             ref={dockRef}
             className="notes glass-pane is-float"
@@ -793,14 +796,8 @@ export function ReviewPage({ taskId, onBack }: Props) {
                     </div>
                     <div className="pair">
                       <p className="pair-k">稿上 OCR</p>
-                      <p className="pair-v mono">{pdfText(current)}</p>
+                      <p className="pair-v mono">{pdfText(current, current.field)}</p>
                     </div>
-                    {Array.isArray(current.coverage?.miss) && current.coverage.miss.length > 0 ? (
-                      <div className="pair">
-                        <p className="pair-k">稿上没读到</p>
-                        <p className="pair-v mono">{current.coverage.miss.join("、")}</p>
-                      </div>
-                    ) : null}
                     <p className="pair-k">
                       {currentBox
                         ? `包装定位 · 页 ${current.page ?? "?"} · 点定位`
@@ -901,7 +898,10 @@ export function ReviewPage({ taskId, onBack }: Props) {
           >
             核对 {hits.length ? hits.length : ""}
           </button>
-        )}
+        ),
+              document.body,
+            )
+          : null}
     </section>
   );
 }

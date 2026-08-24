@@ -25,8 +25,9 @@
 - [ ] **无主任务 / 打样默认拒绝**  
   `assertCanAccessTask` / `assertCanAccessMockup` 在 owner 为空时 fail-open。新上传已写 owner。杭州旧 FastAPI JSON 可能没主人。`/review` D3=C。下次：开机用 `created_by`/`actor` 回填，仍空的非 admin 403，并补列表/深链测试。
 
-- [ ] **打样完成通知不要走 `/?task=`**  
-  `notifyJobFinished` 打样也拼审核单深链。前端把 12 位 hex 当审核单打开核对页。Codex P2。下次：`/?mockup=` 并在 App 里进打样台。
+- [x] **打样完成通知不要走 `/?task=`**  
+  `notifyJobFinished` 对照走 `/review/:id`，打样走 `/mockup/:id`。前端 History API 换台。  
+  **Completed:** v0.12.17.0 (2026-08-25)
 
 - [ ] **上传先限体积再读进内存**  
   `upload` / `rework` / `mockups` 现在 `arrayBuffer()` 之后才比 `maxUploadBytes()`。单进程 OOM 会拖死对照槽。下次：Hono `bodyLimit` 与 `maxUploadBytes` 对齐。

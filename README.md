@@ -12,7 +12,7 @@
 | `apps/web/server` | Hono + TypeScript，对外 HTTP `:8787` |
 | `apps/web/backend` | Python 对照 worker（TS 用 `python -m app.cli` 调用） |
 | `apps/web/frontend` | 已退役的原生页，不要再改 |
-| `workers/packaging/` | 2D→3D CLI，打样台调用。先读稿上刀线还原盒面；平面出图用 pymupdf（对照同一 Python）；杭州不需要 macOS qlmanage。有 Node 时 PPT 一页两张白底；没有 Node 或 ppt 依赖时跳过 PPT，白底图和 GLB 仍出 |
+| `workers/packaging/` | 2D→3D CLI，打样台调用。先读稿上刀线还原盒面（密折痕先密后疏）；平面出图用 pymupdf（对照同一 Python）；杭州不需要 macOS qlmanage。PPT 用两张白底写 OOXML，不依赖 Node；写不出才试演示文稿运行时。两张白底再合成一页 PDF。缺 PPT/PDF 仍算出图 |
 | `docs/` | 章程、ADR、设计 |
 
 HTTP 是 TypeScript。对照规则和 Blender 仍是 Python。见 `docs/adr-002-typescript-http.md`。
@@ -32,7 +32,7 @@ HTTP 是 TypeScript。对照规则和 Blender 仍是 Python。见 `docs/adr-002-
 | `TODOS.md` | 未做项 |
 | `AGENTS.md` | 给代理的硬约束、加长作业合同、易忘约定（MICRO 不改 `package.json` 三位；禁止 `git add -A`） |
 | `scripts/windows/README.md` | 杭州 Windows 生产备忘 |
-| `workers/packaging/README.md` | 打样 CLI、刀线还原盒面、pymupdf 平面出图（不靠 qlmanage）；PPT 一页两张白底；无 Node 时跳过 PPT |
+| `workers/packaging/README.md` | 打样 CLI、刀线还原盒面（密折痕先密后疏）、pymupdf 平面出图（不靠 qlmanage）；PPT 用白底写 OOXML；两张白底合成 PDF |
 
 ## 本机启动
 
@@ -42,6 +42,7 @@ HTTP 是 TypeScript。对照规则和 Blender 仍是 Python。见 `docs/adr-002-
 
 - 产品 / 验收：http://127.0.0.1:8787/ （先 `cd apps/web/ui && npm run build`）
 - 开发 UI：http://127.0.0.1:5173/ （`npm run dev:ui`；Vite 听本机网卡，`/api` 反代到 8787，端口占用即失败）
+- 台地址：`/` 审稿台、`/new` 新建、`/review/:id` 核对页、`/mockup` 打样台、`/mockup/:id` 打样单、`/history`、`/settings`。后退换台。
 
 5173 登录闪或 `/api` 返回 HTML / 空 Content-Type：打开 http://127.0.0.1:8787/，或重启 `npm run dev:ui`。飞书授权失败回到飞书重试，不要把远程验收人指到本机。JSON 404（任务不存在等）不是 Vite 挂了。
 

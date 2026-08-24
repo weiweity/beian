@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import zipfile
 from typing import Any
 
 from PIL import Image
@@ -43,6 +44,11 @@ from dieline import PT_TO_MM, layout_to_template, parse_knife_pdf, pick_knife_la
 DEFAULT_NODE_MODULES = Path(os.environ.get("RUNTIME_NODE_MODULES", ""))
 DEFAULT_RUNTIME_BIN = Path(os.environ.get("RUNTIME_BIN_DIR", ""))
 DEFAULT_PRESENTATION_SKILL = Path(os.environ.get("PRESENTATION_SKILL_DIR", ""))
+WINDOWS_NODE_CANDIDATES = (
+    Path(r"C:\Program Files\nodejs\node.exe"),
+    Path(r"C:\Program Files (x86)\nodejs\node.exe"),
+    Path.home() / "AppData" / "Local" / "Programs" / "nodejs" / "node.exe",
+)
 DEFAULT_ILLUSTRATOR_APP = Path(
     "/Applications/Adobe Illustrator 2026/Adobe Illustrator.app"
 )
@@ -614,6 +620,9 @@ def resolve_node_bin() -> Path | None:
         hit = Path(found)
         if hit.is_file():
             return hit.resolve()
+    for extra in WINDOWS_NODE_CANDIDATES:
+        if extra.is_file():
+            return extra.resolve()
     return None
 
 
@@ -703,11 +712,203 @@ def run_ppt_job(job: dict[str, Any], runtime: dict[str, str]) -> dict[str, Any]:
     return job
 
 
+def _sheet_text(page: Any, origin: tuple[float, float], txt: str, size: float, color: tuple[float, float, float]) -> None:
+    try:
+        page.insert_text(origin, txt, fontsize=size, fontname="china-s", color=color)
+    except Exception:
+        try:
+            page.insert_text(origin, txt, fontsize=size, fontname="helv", color=color)
+        except Exception:
+            page.insert_text(origin, txt.encode("ascii", "replace").decode(), fontsize=size, color=color)
+
+
+def write_sheet_pdf(job: dict[str, Any]) -> None:
+    """两张白底合成一页 PDF。不依赖 Node / PPT 运行时。"""
+    import pymupdf
+
+    outputs = job.setdefault("outputs", {})
+    front = outputs.get("front_right")
+    back = outputs.get("back_left")
+    if not front or not Path(front).is_file():
+        return
+    dest = Path(job["project_dir"]) / f"{job.get('code') or 'pack'}_white_sheet.pdf"
+    doc = pymupdf.open()
+    try:
+        page = doc.new_page(width=1280, height=720)
+        title = str(job.get("display_name") or job.get("code") or "打样单")
+        _sheet_text(page, (36, 32), title[:80], 16, (0.11, 0.10, 0.12))
+        _sheet_text(page, (36, 52), "正面 + 侧面", 11, (0.35, 0.35, 0.4))
+        _sheet_text(page, (654, 52), "反面 + 侧面", 11, (0.35, 0.35, 0.4))
+        page.insert_image(pymupdf.Rect(36, 68, 626, 688), stream=Path(front).read_bytes(), keep_proportion=True)
+        if back and Path(back).is_file():
+            page.insert_image(pymupdf.Rect(654, 68, 1244, 688), stream=Path(back).read_bytes(), keep_proportion=True)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_suffix(".pdf.part")
+        doc.save(str(tmp))
+        tmp.replace(dest)
+    finally:
+        doc.close()
+    outputs["sheet_pdf"] = str(dest)
+
+
+def _xml_text(value: str) -> str:
+    return (
+        str(value)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
+
+def write_white_pptx(front: Path, back: Path, dest: Path, title: str = "") -> Path:
+    """Two white PNGs → one OOXML pptx. No Node, no env, no ppt/node_modules."""
+    front = Path(front)
+    back = Path(back)
+    if not front.is_file() or not back.is_file():
+        raise PipelineError("缺白底图，PPT 写不出")
+    front_bytes = front.read_bytes()
+    back_bytes = back.read_bytes()
+    if front_bytes[:8] != b"\x89PNG\r\n\x1a\n" or back_bytes[:8] != b"\x89PNG\r\n\x1a\n":
+        raise PipelineError("白底不是 PNG，PPT 写不出")
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    heading = _xml_text((title or dest.stem)[:80])
+    emu = 9525
+    slide_w, slide_h = 1280 * emu, 720 * emu
+    # 16:9 一页两张：正面+侧面、反面+侧面
+    parts: dict[str, bytes] = {
+        "[Content_Types].xml": """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+<Default Extension="xml" ContentType="application/xml"/>
+<Default Extension="png" ContentType="image/png"/>
+<Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>
+<Override PartName="/ppt/slides/slide1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>
+<Override PartName="/ppt/slideLayouts/slideLayout1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/>
+<Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/>
+<Override PartName="/ppt/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>
+</Types>
+""".encode("utf-8"),
+        "_rels/.rels": """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="ppt/presentation.xml"/>
+</Relationships>
+""".encode("utf-8"),
+        "ppt/presentation.xml": f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:presentation xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+<p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="rId1"/></p:sldMasterIdLst>
+<p:sldIdLst><p:sldId id="256" r:id="rId2"/></p:sldIdLst>
+<p:sldSz cx="{slide_w}" cy="{slide_h}"/>
+<p:notesSz cx="6858000" cy="9144000"/>
+</p:presentation>
+""".encode("utf-8"),
+        "ppt/_rels/presentation.xml.rels": """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="slideMasters/slideMaster1.xml"/>
+<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide1.xml"/>
+<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="theme/theme1.xml"/>
+</Relationships>
+""".encode("utf-8"),
+        "ppt/slides/_rels/slide1.xml.rels": """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>
+<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image1.png"/>
+<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image2.png"/>
+</Relationships>
+""".encode("utf-8"),
+        "ppt/slideLayouts/_rels/slideLayout1.xml.rels": """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="../slideMasters/slideMaster1.xml"/>
+</Relationships>
+""".encode("utf-8"),
+        "ppt/slideMasters/_rels/slideMaster1.xml.rels": """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>
+<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="../theme/theme1.xml"/>
+</Relationships>
+""".encode("utf-8"),
+        "ppt/theme/theme1.xml": """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="Office">
+<a:themeElements>
+<a:clrScheme name="Office"><a:dk1><a:sysClr val="windowText" lastClr="000000"/></a:dk1><a:lt1><a:sysClr val="window" lastClr="FFFFFF"/></a:lt1><a:dk2><a:srgbClr val="1C1A1F"/></a:dk2><a:lt2><a:srgbClr val="F8F5FA"/></a:lt2><a:accent1><a:srgbClr val="805898"/></a:accent1><a:accent2><a:srgbClr val="C9A3D6"/></a:accent2><a:accent3><a:srgbClr val="389E0D"/></a:accent3><a:accent4><a:srgbClr val="D48806"/></a:accent4><a:accent5><a:srgbClr val="F5222D"/></a:accent5><a:accent6><a:srgbClr val="3370FF"/></a:accent6><a:hlink><a:srgbClr val="805898"/></a:hlink><a:folHlink><a:srgbClr val="805898"/></a:folHlink></a:clrScheme>
+<a:fontScheme name="Office"><a:majorFont><a:latin typeface="PingFang SC"/><a:ea typeface="PingFang SC"/><a:cs typeface="PingFang SC"/></a:majorFont><a:minorFont><a:latin typeface="PingFang SC"/><a:ea typeface="PingFang SC"/><a:cs typeface="PingFang SC"/></a:minorFont></a:fontScheme>
+<a:fmtScheme name="Office"><a:fillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:fillStyleLst><a:lnStyleLst><a:ln w="12700"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:ln><a:ln w="12700"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:ln><a:ln w="12700"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:ln></a:lnStyleLst><a:effectStyleLst><a:effectStyle><a:effectLst/></a:effectStyle><a:effectStyle><a:effectLst/></a:effectStyle><a:effectStyle><a:effectLst/></a:effectStyle></a:effectStyleLst><a:bgFillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:bgFillStyleLst></a:fmtScheme>
+</a:themeElements>
+</a:theme>
+""".encode("utf-8"),
+        "ppt/slideMasters/slideMaster1.xml": """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sldMaster xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+<p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/></p:spTree></p:cSld>
+<p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/>
+<p:sldLayoutIdLst><p:sldLayoutId id="2147483649" r:id="rId1"/></p:sldLayoutIdLst>
+</p:sldMaster>
+""".encode("utf-8"),
+        "ppt/slideLayouts/slideLayout1.xml": """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sldLayout xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" type="blank">
+<p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/></p:spTree></p:cSld>
+<p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>
+</p:sldLayout>
+""".encode("utf-8"),
+    }
+
+    def pic(rid: str, name: str, pid: int, x: int, y: int, w: int, h: int) -> str:
+        return f"""<p:pic>
+<p:nvPicPr><p:cNvPr id="{pid}" name="{name}"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr>
+<p:blipFill><a:blip r:embed="{rid}"/><a:stretch><a:fillRect/></a:stretch></p:blipFill>
+<p:spPr><a:xfrm><a:off x="{x * emu}" y="{y * emu}"/><a:ext cx="{w * emu}" cy="{h * emu}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr>
+</p:pic>"""
+
+    def box(pid: int, name: str, text: str, x: int, y: int, w: int, h: int, size: int) -> str:
+        return f"""<p:sp>
+<p:nvSpPr><p:cNvPr id="{pid}" name="{name}"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr>
+<p:spPr><a:xfrm><a:off x="{x * emu}" y="{y * emu}"/><a:ext cx="{w * emu}" cy="{h * emu}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/></p:spPr>
+<p:txBody><a:bodyPr/><a:p><a:r><a:rPr lang="zh-CN" sz="{size * 100}"/><a:t>{text}</a:t></a:r></a:p></p:txBody>
+</p:sp>"""
+
+    parts["ppt/slides/slide1.xml"] = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+<p:cSld><p:spTree>
+<p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>
+{box(2, "title", heading, 36, 20, 1208, 36, 18)}
+{box(3, "front-caption", "正面 + 侧面", 36, 56, 590, 24, 12)}
+{box(4, "back-caption", "反面 + 侧面", 654, 56, 590, 24, 12)}
+{pic("rId2", "front-right-render", 5, 36, 88, 590, 580)}
+{pic("rId3", "back-left-render", 6, 654, 88, 590, 580)}
+</p:spTree></p:cSld>
+</p:sld>
+""".encode("utf-8")
+
+    tmp = dest.with_suffix(".pptx.part")
+    with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for name, data in parts.items():
+            zf.writestr(name, data)
+        zf.writestr("ppt/media/image1.png", front_bytes)
+        zf.writestr("ppt/media/image2.png", back_bytes)
+    tmp.replace(dest)
+    return dest
+
+
+def write_white_pptx_for_job(job: dict[str, Any]) -> None:
+    outputs = job.setdefault("outputs", {})
+    front = outputs.get("front_right")
+    back = outputs.get("back_left")
+    if not front or not back:
+        raise PipelineError("缺白底图，PPT 写不出")
+    dest = Path(job["project_dir"]) / f"{job.get('code') or 'pack'}_{job.get('slug') or 'pack'}_3D包装展示.pptx"
+    write_white_pptx(
+        Path(front),
+        Path(back),
+        dest,
+        title=str(job.get("display_name") or job.get("code") or "打样单"),
+    )
+    outputs["pptx"] = str(dest)
+
+
 def all_output_files_exist(job: dict[str, Any], generate_ppt: bool) -> bool:
     outputs = job.get("outputs", {})
     keys = ["blend", "glb", "front_right", "back_left"]
-    if generate_ppt:
-        keys.append("pptx")
+    _ = generate_ppt  # PPT 尽力写；缺 pptx 不把整单打红。
     return all(outputs.get(key) and Path(outputs[key]).is_file() for key in keys)
 
 
@@ -775,33 +976,33 @@ def main() -> int:
         completed_by_code = {job["code"]: job for job in completed}
         jobs = [completed_by_code.get(job["code"], job) for job in jobs]
 
+    for job in jobs:
+        try:
+            write_sheet_pdf(job)
+        except Exception as err:
+            print(f"打样单 PDF 跳过：{err}", file=sys.stderr)
+            job["sheet_skip"] = str(err)
+
     if generate_ppt:
-        runtime = presentation_runtime()
-        if runtime is None:
-            generate_ppt = False
-            print("PPT 跳过：本机没有 node 或演示文稿运行时", file=sys.stderr)
-    if generate_ppt:
-        ppt_jobs = [
-            job
-            for job in jobs
-            if not job.get("outputs", {}).get("pptx")
-            or not Path(job["outputs"]["pptx"]).is_file()
-            or args.force
-            or args.force_illustrator
-        ]
-        if ppt_jobs:
-            emit_stage("export")
-            mark_presentation_operation(len(ppt_jobs), runtime)
-            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-                futures = {
-                    pool.submit(run_ppt_job, job, runtime): job["code"]
-                    for job in ppt_jobs
-                }
-                completed_ppt = []
-                for future in concurrent.futures.as_completed(futures):
-                    completed_ppt.append(future.result())
-            completed_by_code = {job["code"]: job for job in completed_ppt}
-            jobs = [completed_by_code.get(job["code"], job) for job in jobs]
+        emit_stage("export")
+        for job in jobs:
+            try:
+                write_white_pptx_for_job(job)
+            except Exception as err:
+                print(f"PPT 跳过：{err}", file=sys.stderr)
+                job["ppt_skip"] = str(err)
+        ppt_jobs = [job for job in jobs if not (job.get("outputs") or {}).get("pptx")]
+        runtime = presentation_runtime() if ppt_jobs else None
+        if runtime is not None:
+            try:
+                mark_presentation_operation(len(ppt_jobs), runtime)
+                with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+                    futures = {pool.submit(run_ppt_job, job, runtime): job["code"] for job in ppt_jobs}
+                    completed_ppt = [future.result() for future in concurrent.futures.as_completed(futures)]
+                completed_by_code = {job["code"]: job for job in completed_ppt}
+                jobs = [completed_by_code.get(job["code"], job) for job in jobs]
+            except Exception as err:
+                print(f"PPT 跳过：{err}", file=sys.stderr)
 
     pipeline_elapsed = round(time.perf_counter() - pipeline_started, 4)
     for job in jobs:

@@ -8,7 +8,15 @@ process.env.WB_DATA_DIR = mkdtempSync(join(tmpdir(), "beian-notify-"));
 process.env.VITEST = "1";
 
 const { saveSettings } = await import("./settings.js");
-const { sendText } = await import("./notify.js");
+const { jobOpenPath, sendText } = await import("./notify.js");
+
+describe("jobOpenPath", () => {
+  it("opens review and mockup desks by path", () => {
+    assert.equal(jobOpenPath("compare", "aabbccddeeff"), "/review/aabbccddeeff");
+    assert.equal(jobOpenPath("rework", "aabbccddeeff"), "/review/aabbccddeeff");
+    assert.equal(jobOpenPath("mockup", "aabbccddeeff"), "/mockup/aabbccddeeff");
+  });
+});
 
 describe("sendText", () => {
   it("skips when push is off unless forced", async () => {

@@ -19,9 +19,12 @@ describe("collectOutputs", () => {
     writeFileSync(join(root, "26H06A_x_back_left_white.png"), "ok");
     writeFileSync(join(root, "box.glb"), "glb");
     writeFileSync(join(root, "deck.pptx"), "ppt");
+    writeFileSync(join(root, "knife.pdf"), "knife");
+    writeFileSync(join(root, "26F23A_white_sheet.pdf"), "pdf");
     const files = collectOutputs(root);
     const keys = files.map((f) => f.key).sort();
-    assert.deepEqual(keys, ["glb", "ppt", "white_a", "white_b"]);
+    assert.deepEqual(keys, ["glb", "ppt", "sheet", "white_a", "white_b"].sort());
+    assert.match(files.find((f) => f.key === "sheet")?.name || "", /white_sheet/);
     assert.equal(files.find((f) => f.key === "white_a")?.name.includes("front_right"), true);
     assert.doesNotMatch(files.map((f) => f.name).join(" "), /ai-raster|slide-01/);
   });
@@ -59,5 +62,13 @@ describe("collectOutputs", () => {
       ["glb", "white_a"],
     );
     assert.equal(files.find((f) => f.key === "white_a")?.name, "BOX_FRONT_RIGHT_WHITE.PNG");
+  });
+
+  it("does not treat a pdf named front_right as a white render", () => {
+    const root = mkdtempSync(join(tmpdir(), "beian-pack-pdf-white-"));
+    writeFileSync(join(root, "foo_front_right.pdf"), "%PDF");
+    writeFileSync(join(root, "box.glb"), "glb");
+    const files = collectOutputs(root);
+    assert.deepEqual(files.map((f) => f.key).sort(), ["glb"]);
   });
 });
