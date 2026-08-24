@@ -95,5 +95,7 @@ describe("reviewDock", () => {
     assert.equal(skipPackSheetField("颜色要求"), true);
     assert.equal(skipPackSheetField("版本号"), true);
     assert.equal(skipPackSheetField("中文品名"), false);
+    assert.equal(skipPackSheetField("执行标准版本号"), false);
+    assert.equal(skipPackSheetField(""), false);
   });
 });

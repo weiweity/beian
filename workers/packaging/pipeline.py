@@ -625,6 +625,16 @@ def _env_dir(env_key: str, default: Path) -> Path | None:
     return path if path.exists() else None
 
 
+def _usable_node_modules(path: Path) -> bool:
+    if not path.is_dir():
+        return False
+    try:
+        next(path.iterdir())
+    except StopIteration:
+        return False
+    return True
+
+
 def presentation_runtime() -> dict[str, str] | None:
     node = resolve_node_bin()
     if node is None:
@@ -632,7 +642,7 @@ def presentation_runtime() -> dict[str, str] | None:
     modules = _env_dir("RUNTIME_NODE_MODULES", DEFAULT_NODE_MODULES)
     bin_dir = _env_dir("RUNTIME_BIN_DIR", DEFAULT_RUNTIME_BIN)
     ppt_modules = ROOT / "ppt" / "node_modules"
-    if modules is None and not ppt_modules.exists():
+    if modules is None and not _usable_node_modules(ppt_modules):
         return None
     if modules is not None and not ppt_modules.exists():
         ppt_modules.symlink_to(modules.resolve(), target_is_directory=True)

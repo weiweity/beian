@@ -171,5 +171,5 @@ export function resizeDockHandle(
 }
 
 export function skipPackSheetField(field?: string): boolean {
-  return /工艺说明|颜色要求|版本号/.test(String(field || ""));
+  return /^(工艺说明|颜色要求|版本号)($|[\s：:·])/.test(String(field || "").trim());
 }

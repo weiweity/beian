@@ -48,12 +48,17 @@ def render_pdf_pages(
     out_dir.mkdir(parents=True, exist_ok=True)
     doc = pymupdf.open(pdf_path)
     results: list[dict] = []
-    zoom = dpi / 72.0
     for i, page in enumerate(doc):
         if i >= max_pages:
             break
-        mat = pymupdf.Matrix(zoom, zoom)
-        pix = page.get_pixmap(matrix=mat, alpha=False)
+        zoom = dpi / 72.0
+        width = float(page.rect.width)
+        height = float(page.rect.height)
+        if width > 1 and height > 1:
+            side = max(width, height) * zoom
+            if side > max_side:
+                zoom *= max_side / side
+        pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), alpha=False)
         if max(pix.width, pix.height) > max_side:
             scale = max_side / max(pix.width, pix.height)
             pix = page.get_pixmap(

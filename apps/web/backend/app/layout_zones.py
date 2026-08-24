@@ -137,7 +137,7 @@ def text_in_zone(ocr_words: list[dict], zone: dict[str, Any]) -> str:
     return "\n".join((w.get("text") or "") for w in words_in_zone(ocr_words, zone))
 
 
-SKIP_SHEET_FIELD = re.compile(r"工艺说明|颜色要求|版本号")
+SKIP_SHEET_FIELD = re.compile(r"^(工艺说明|颜色要求|版本号)($|[\s：:·])")
 
 
 def skip_sheet_field(name: str) -> bool:

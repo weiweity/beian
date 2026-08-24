@@ -15,6 +15,7 @@ def test_skip_sheet_field_names():
     assert skip_sheet_field("  版本号 ")
     assert not skip_sheet_field("中文品名")
     assert not skip_sheet_field("生产信息及其他")
+    assert not skip_sheet_field("执行标准版本号")
 
 
 def test_parse_excel_skips_process_rows(tmp_path: Path):

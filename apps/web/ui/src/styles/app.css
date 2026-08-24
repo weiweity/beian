@@ -630,6 +630,8 @@ html[data-theme="dark"] .workspace {
 }
 
 .page-head {
+  position: relative;
+  z-index: 9;
   display: flex;
   justify-content: space-between;
   align-items: flex-start;

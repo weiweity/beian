@@ -56,6 +56,7 @@ import {
   queueMockup,
 } from "./mockup.js";
 import { assertIllustratorReady } from "./aiRaster.js";
+import { skipPackSheetField } from "./sheetSkip.js";
 import {
   activeHits,
   assertCanAccessTask,
@@ -333,7 +334,7 @@ app.post("/api/tasks/:tid/complete", async (c) => {
     throw new HTTPException(400, { message: "当前状态不可签字" });
   }
   const body = (await c.req.json().catch(() => ({}))) as { conclusion?: string };
-  const hits = activeHits(task);
+  const hits = activeHits(task).filter((h) => !skipPackSheetField(h.field));
   const pending = hits.filter(
     (h) => (h.status === "疑点" || h.status === "缺失") && (h.decision || "pending") === "pending",
   );
