@@ -7,14 +7,22 @@ import { excelText, pdfText } from "./hitText";
 import { hitOnPage, overlayFromBox, overlaysForHit, pickHitBox, resolvePageMetrics } from "./pinBox";
 import {
   clampDockBox,
+  clampDockPlace,
+  readBoxesOn,
   readDockBox,
   readDockOpen,
+  readDockPlace,
   readPinsOn,
-  resizeDockCorner,
+  resizeDockHandle,
+  skipPackSheetField,
+  writeBoxesOn,
   writeDockBox,
   writeDockOpen,
+  writeDockPlace,
   writePinsOn,
   type DockBox,
+  type DockCorner,
+  type DockPlace,
 } from "./reviewDock";
 import { shouldShowWaitCard } from "./waitCard";
 
@@ -89,16 +97,26 @@ export function ReviewPage({ taskId, onBack }: Props) {
   const [zoom, setZoom] = useState(resetZoom);
   const [dockOpen, setDockOpen] = useState(() => readDockOpen(browserStore()));
   const [pinsOn, setPinsOn] = useState(() => readPinsOn(browserStore()));
+  const [boxesOn, setBoxesOn] = useState(() => readBoxesOn(browserStore()));
+  const [toolsOpen, setToolsOpen] = useState(true);
   const viewRef = useRef<HTMLDivElement>(null);
-  const deskRef = useRef<HTMLDivElement>(null);
+  const pageRef = useRef<HTMLElement>(null);
   const zoomElRef = useRef<HTMLDivElement>(null);
   const dockRef = useRef<HTMLElement>(null);
   const zoomRef = useRef(zoom);
   const [dockBox, setDockBox] = useState<DockBox>(() => readDockBox(browserStore()));
+  const [dockPlace, setDockPlace] = useState<DockPlace>(() => readDockPlace(browserStore()));
   const panDrag = useRef<{ x: number; y: number } | null>(null);
   const panRaf = useRef<number | null>(null);
   const wheelEnd = useRef<number | null>(null);
-  const dockResize = useRef<{ x: number; y: number; box: DockBox } | null>(null);
+  const dockResize = useRef<{
+    x: number;
+    y: number;
+    box: DockBox;
+    place: DockPlace;
+    corner: DockCorner;
+  } | null>(null);
+  const dockDrag = useRef<{ x: number; y: number; place: DockPlace } | null>(null);
   const pendingFit = useRef<number | null>(null);
   const fitHitRef = useRef<(i: number) => void>(() => undefined);
 
@@ -117,15 +135,19 @@ export function ReviewPage({ taskId, onBack }: Props) {
     paintZoom(zoomRef.current);
   });
 
-  function deskRoom() {
-    const el = deskRef.current;
+  function pageRoom() {
+    const el = pageRef.current;
     return { w: el?.clientWidth || 800, h: el?.clientHeight || 600 };
   }
 
-  function commitDock(box: DockBox) {
-    const next = clampDockBox(box, deskRoom());
-    setDockBox(next);
-    writeDockBox(browserStore(), next);
+  function commitDock(box: DockBox, place?: DockPlace) {
+    const room = pageRoom();
+    const nextBox = clampDockBox(box, room);
+    const nextPlace = clampDockPlace(place || dockPlace, room, nextBox);
+    setDockBox(nextBox);
+    setDockPlace(nextPlace);
+    writeDockBox(browserStore(), nextBox);
+    writeDockPlace(browserStore(), nextPlace);
   }
 
   function endPan(target?: EventTarget | null) {
@@ -145,16 +167,99 @@ export function ReviewPage({ taskId, onBack }: Props) {
     dockResize.current = null;
     if (!start) return;
     const el = dockRef.current;
-    if (el) commitDock({ ...start.box, w: el.offsetWidth, h: el.offsetHeight });
-    else commitDock(start.box);
+    if (el) {
+      commitDock(
+        { w: el.offsetWidth, h: el.offsetHeight },
+        {
+          top: el.offsetTop,
+          right: Math.max(8, pageRoom().w - el.offsetLeft - el.offsetWidth),
+        },
+      );
+    } else commitDock(start.box, start.place);
+  }
+
+  function paintDock(next: { box: DockBox; place: DockPlace }) {
+    const el = dockRef.current;
+    if (!el) return;
+    el.style.width = `${next.box.w}px`;
+    el.style.height = `${next.box.h}px`;
+    el.style.top = `${next.place.top}px`;
+    el.style.right = `${next.place.right}px`;
+  }
+
+  function onDockResizeMove(e: React.PointerEvent) {
+    const start = dockResize.current;
+    if (!start) return;
+    const next = resizeDockHandle(
+      start.box,
+      start.place,
+      { dx: e.clientX - start.x, dy: e.clientY - start.y },
+      pageRoom(),
+      start.corner,
+    );
+    paintDock(next);
+  }
+
+  function onDockMove(e: React.PointerEvent) {
+    const start = dockDrag.current;
+    if (!start) return;
+    const next = clampDockPlace(
+      {
+        top: start.place.top + (e.clientY - start.y),
+        right: start.place.right - (e.clientX - start.x),
+      },
+      pageRoom(),
+      dockBox,
+    );
+    paintDock({ box: dockBox, place: next });
+  }
+
+  function endDockMove() {
+    const start = dockDrag.current;
+    dockDrag.current = null;
+    if (!start) return;
+    const el = dockRef.current;
+    if (!el) return;
+    commitDock(dockBox, {
+      top: el.offsetTop,
+      right: Math.max(8, pageRoom().w - el.offsetLeft - el.offsetWidth),
+    });
   }
 
   useEffect(() => {
-    setDockBox((cur) => clampDockBox(cur, deskRoom()));
-    const onWin = () => setDockBox((cur) => clampDockBox(cur, deskRoom()));
-    window.addEventListener("resize", onWin);
-    return () => window.removeEventListener("resize", onWin);
+    function fit() {
+      const room = pageRoom();
+      setDockBox((cur) => {
+        const nextBox = clampDockBox(cur, room);
+        setDockPlace((p) => clampDockPlace(p, room, nextBox));
+        return nextBox;
+      });
+    }
+    fit();
+    window.addEventListener("resize", fit);
+    return () => window.removeEventListener("resize", fit);
   }, []);
+
+  function dockHandle(corner: DockCorner) {
+    return (
+      <button
+        type="button"
+        className={`notes-resize notes-resize-${corner}`}
+        aria-label="缩放核对窗"
+        onPointerDown={(e) => {
+          if (e.button !== 0) return;
+          e.preventDefault();
+          e.stopPropagation();
+          dockResize.current = { x: e.clientX, y: e.clientY, box: dockBox, place: dockPlace, corner };
+          (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+        }}
+        onPointerMove={onDockResizeMove}
+        onPointerUp={endDockResize}
+        onPointerCancel={endDockResize}
+        onLostPointerCapture={endDockResize}
+      />
+    );
+  }
 
   useEffect(() => {
     if (!taskId) return;
@@ -214,7 +319,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
     return () => window.clearInterval(id);
   }, [taskId, waiting]);
 
-  const hits = (useV2 ? task?.hits_v2 : task?.hits) || [];
+  const hits = ((useV2 ? task?.hits_v2 : task?.hits) || []).filter((h) => !skipPackSheetField(h.field));
   const pages = pageList(useV2 ? { ...(task as TaskDetail), pages: task?.pages_v2 } : task);
   const page = pages[pageIdx];
   const signed = task?.status === "completed";
@@ -387,7 +492,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
   }
 
   return (
-    <section>
+    <section className="review-page" ref={pageRef}>
       <header className="page-head">
         <div>
           <h1 className="page-title">{task?.product_name || task?.title || "核对页"}</h1>
@@ -476,7 +581,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
         <Alert type="success" showIcon style={{ marginBottom: 16 }} title="已签字，不是系统过审" />
       ) : null}
 
-      <div className="review-desk" ref={deskRef}>
+      <div className="review-desk">
         <div className="canvas glass-pane">
           {page?.url ? (
             <div
@@ -530,13 +635,15 @@ export function ReviewPage({ taskId, onBack }: Props) {
                   const pin = preferred && metrics ? overlayFromBox(preferred, metrics) : null;
                   return (
                     <Fragment key={h.id || i}>
-                      {overlays.map((ov, k) => (
-                        <span
-                          key={`${h.id || i}-box-${k}`}
-                          className={`hit-box ${ov.kind === "warn" ? "is-warn" : ""} ${i === active ? "is-on" : "is-dim"}`.trim()}
-                          style={{ left: ov.left, top: ov.top, width: ov.width, height: ov.height }}
-                        />
-                      ))}
+                      {boxesOn
+                        ? overlays.map((ov, k) => (
+                            <span
+                              key={`${h.id || i}-box-${k}`}
+                              className={`hit-box ${ov.kind === "warn" ? "is-warn" : ""} ${i === active ? "is-on" : "is-dim"}`.trim()}
+                              style={{ left: ov.left, top: ov.top, width: ov.width, height: ov.height }}
+                            />
+                          ))
+                        : null}
                       {pinsOn && pin ? (
                         <button
                           type="button"
@@ -553,42 +660,68 @@ export function ReviewPage({ taskId, onBack }: Props) {
                 })}
               </div>
               <div className="canvas-tools" onPointerDown={(e) => e.stopPropagation()}>
-                <button
-                  type="button"
-                  className="btn-ghost"
-                  onClick={() => {
-                    const el = viewRef.current;
-                    if (!el) return;
-                    commitZoom(zoomAt(zoomRef.current, zoomRef.current.scale * 1.2, el.clientWidth / 2, el.clientHeight / 2));
-                  }}
-                >
-                  放大
-                </button>
-                <button
-                  type="button"
-                  className="btn-ghost"
-                  onClick={() => {
-                    const el = viewRef.current;
-                    if (!el) return;
-                    commitZoom(zoomAt(zoomRef.current, zoomRef.current.scale / 1.2, el.clientWidth / 2, el.clientHeight / 2));
-                  }}
-                >
-                  缩小
-                </button>
-                <button type="button" className="btn-ghost" onClick={() => commitZoom(resetZoom())}>
-                  复位
-                </button>
-                <button
-                  type="button"
-                  className="btn-ghost"
-                  onClick={() => {
-                    const next = !pinsOn;
-                    setPinsOn(next);
-                    writePinsOn(browserStore(), next);
-                  }}
-                >
-                  {pinsOn ? "隐藏钉" : "显示钉"}
-                </button>
+                {toolsOpen ? (
+                  <>
+                    <button
+                      type="button"
+                      className="btn-ghost"
+                      onClick={() => {
+                        const el = viewRef.current;
+                        if (!el) return;
+                        commitZoom(
+                          zoomAt(zoomRef.current, zoomRef.current.scale * 1.2, el.clientWidth / 2, el.clientHeight / 2),
+                        );
+                      }}
+                    >
+                      放大
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-ghost"
+                      onClick={() => {
+                        const el = viewRef.current;
+                        if (!el) return;
+                        commitZoom(
+                          zoomAt(zoomRef.current, zoomRef.current.scale / 1.2, el.clientWidth / 2, el.clientHeight / 2),
+                        );
+                      }}
+                    >
+                      缩小
+                    </button>
+                    <button type="button" className="btn-ghost" onClick={() => commitZoom(resetZoom())}>
+                      复位
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-ghost"
+                      onClick={() => {
+                        const next = !pinsOn;
+                        setPinsOn(next);
+                        writePinsOn(browserStore(), next);
+                      }}
+                    >
+                      {pinsOn ? "隐藏钉" : "显示钉"}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-ghost"
+                      onClick={() => {
+                        const next = !boxesOn;
+                        setBoxesOn(next);
+                        writeBoxesOn(browserStore(), next);
+                      }}
+                    >
+                      {boxesOn ? "隐藏框" : "显示框"}
+                    </button>
+                    <button type="button" className="btn-ghost" onClick={() => setToolsOpen(false)}>
+                      收缩
+                    </button>
+                  </>
+                ) : (
+                  <button type="button" className="btn-ghost" onClick={() => setToolsOpen(true)}>
+                    标记
+                  </button>
+                )}
               </div>
             </div>
           ) : (
@@ -603,18 +736,32 @@ export function ReviewPage({ taskId, onBack }: Props) {
             />
           )}
           <p className="page-lead" style={{ padding: "0 16px 12px" }}>
-            紫框 已命中 · 黄框 待核对 · 隐藏钉只藏编号 · 拖动画布 · 滚轮缩放
+            紫框 已命中 · 黄框 待核对 · 钉和框可分开关 · 拖动画布会暂时藏框 · 滚轮缩放
           </p>
         </div>
 
+        </div>
         {dockOpen ? (
           <aside
             ref={dockRef}
             className="notes glass-pane is-float"
-            style={{ width: dockBox.w, height: dockBox.h }}
+            style={{ width: dockBox.w, height: dockBox.h, top: dockPlace.top, right: dockPlace.right }}
             onPointerDown={(e) => e.stopPropagation()}
           >
-            <div className="notes-toolbar">
+            <div
+              className="notes-toolbar"
+              onPointerDown={(e) => {
+                if (e.button !== 0) return;
+                if (e.target instanceof HTMLElement && e.target.closest("button")) return;
+                e.preventDefault();
+                dockDrag.current = { x: e.clientX, y: e.clientY, place: dockPlace };
+                (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+              }}
+              onPointerMove={onDockMove}
+              onPointerUp={endDockMove}
+              onPointerCancel={endDockMove}
+              onLostPointerCapture={endDockMove}
+            >
               <p className="field-label" style={{ color: "var(--muted)", margin: 0 }}>
                 当前字段
               </p>
@@ -733,40 +880,16 @@ export function ReviewPage({ taskId, onBack }: Props) {
                 ))}
               </div>
             ) : null}
-            <button
-              type="button"
-              className="notes-resize"
-              aria-label="缩放核对窗"
-              onPointerDown={(e) => {
-                if (e.button !== 0) return;
-                e.preventDefault();
-                e.stopPropagation();
-                dockResize.current = { x: e.clientX, y: e.clientY, box: dockBox };
-                (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-              }}
-              onPointerMove={(e) => {
-                const start = dockResize.current;
-                if (!start) return;
-                const next = resizeDockCorner(
-                  start.box,
-                  { dx: e.clientX - start.x, dy: e.clientY - start.y },
-                  deskRoom(),
-                );
-                const el = dockRef.current;
-                if (el) {
-                  el.style.width = `${next.w}px`;
-                  el.style.height = `${next.h}px`;
-                }
-              }}
-              onPointerUp={() => endDockResize()}
-              onPointerCancel={() => endDockResize()}
-              onLostPointerCapture={() => endDockResize()}
-            />
+            {dockHandle("nw")}
+            {dockHandle("ne")}
+            {dockHandle("sw")}
+            {dockHandle("se")}
           </aside>
         ) : (
           <button
             type="button"
             className="notes-fab"
+            style={{ top: dockPlace.top, right: dockPlace.right }}
             onClick={() => {
               setDockOpen(true);
               writeDockOpen(browserStore(), true);
@@ -775,7 +898,6 @@ export function ReviewPage({ taskId, onBack }: Props) {
             核对 {hits.length ? hits.length : ""}
           </button>
         )}
-      </div>
     </section>
   );
 }
