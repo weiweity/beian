@@ -11,6 +11,8 @@ from PIL import Image
 
 PT_TO_MM = 25.4 / 72.0
 KNIFE_NAMES = ("刀线", "刀版", "模切", "刀模")
+# 20/34 先试，已能折的大方盒保持现网命中；12 更密；48/64/80 更疏。不要改成纯先密后疏。
+CARTON_DIST_K = (20, 34, 12, 48, 64, 80)
 
 
 def pt_to_mm(pt: float) -> float:
@@ -304,40 +306,145 @@ def layout_to_template(layout: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def parse_knife_pdf(knife_pdf: Path, knife_layer: str) -> dict[str, Any]:
-    import pymupdf
+def knife_drawings_safe(page: Any) -> bool:
+    """刀线层大面积填色多半混进了印刷，矢量回退会脏。"""
+    drawings = page.get_drawings()
+    if not drawings:
+        return False
+    area = float(page.rect.width * page.rect.height) or 1.0
+    fill = 0.0
+    for drawing in drawings:
+        rect = drawing.get("rect")
+        if drawing.get("fill") and rect is not None:
+            fill += abs(float(rect.width) * float(rect.height))
+    return fill / area <= 0.45
 
-    doc = pymupdf.open(str(knife_pdf))
-    try:
-        if doc.page_count < 1:
-            raise RuntimeError("刀线PDF没有页")
-        page = doc[0]
-        page.set_cropbox(page.mediabox)
-        page_w, page_h = float(page.mediabox.width), float(page.mediabox.height)
-        if page_w <= 1 or page_h <= 1:
-            raise RuntimeError("刀线页宽异常")
-        width_px = 1600
-        zoom = min(width_px / page_w, 8000 / page_h)
-        pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), alpha=False)
-    finally:
-        doc.close()
-    im = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
-    mask, width, height = _mask_from_rgb(im)
+
+def _pt_xy(point: Any) -> tuple[float, float]:
+    if hasattr(point, "x"):
+        return float(point.x), float(point.y)
+    return float(point[0]), float(point[1])
+
+
+class _Rect:
+    __slots__ = ("x0", "y0", "x1", "y1")
+
+    def __init__(self, x0: float, y0: float, x1: float, y1: float) -> None:
+        self.x0, self.y0, self.x1, self.y1 = x0, y0, x1, y1
+
+
+def _freeze_drawings(drawings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Copy path items off the live MuPDF page before doc.close()."""
+    frozen: list[dict[str, Any]] = []
+    for drawing in drawings:
+        items: list[Any] = []
+        for item in drawing.get("items") or []:
+            if not item:
+                continue
+            parts: list[Any] = [item[0]]
+            for part in item[1:]:
+                if hasattr(part, "x0") and hasattr(part, "y0"):
+                    parts.append(_Rect(float(part.x0), float(part.y0), float(part.x1), float(part.y1)))
+                elif hasattr(part, "x") or isinstance(part, (tuple, list)):
+                    parts.append(_pt_xy(part))
+                else:
+                    parts.append(part)
+            items.append(tuple(parts))
+        frozen.append({"items": items})
+    return frozen
+
+
+def _plot(mask: bytearray, width: int, height: int, x: int, y: int) -> None:
+    if 0 <= x < width and 0 <= y < height:
+        mask[y * width + x] = 1
+
+
+def _thick_line(mask: bytearray, width: int, height: int, x0: int, y0: int, x1: int, y1: int, thick: int = 2) -> None:
+    rad = max(1, thick)
+    pad = rad
+    if (x0 < -pad and x1 < -pad) or (x0 >= width + pad and x1 >= width + pad):
+        return
+    if (y0 < -pad and y1 < -pad) or (y0 >= height + pad and y1 >= height + pad):
+        return
+    x0 = max(-pad, min(width + pad, x0))
+    y0 = max(-pad, min(height + pad, y0))
+    x1 = max(-pad, min(width + pad, x1))
+    y1 = max(-pad, min(height + pad, y1))
+    dx = abs(x1 - x0)
+    dy = abs(y1 - y0)
+    sx = 1 if x0 < x1 else -1
+    sy = 1 if y0 < y1 else -1
+    err = dx - dy
+    x, y = x0, y0
+    while True:
+        for oy in range(-rad, rad + 1):
+            for ox in range(-rad, rad + 1):
+                _plot(mask, width, height, x + ox, y + oy)
+        if x == x1 and y == y1:
+            break
+        e2 = 2 * err
+        if e2 > -dy:
+            err -= dy
+            x += sx
+        if e2 < dx:
+            err += dx
+            y += sy
+
+
+def _stroke_drawings_into_mask(mask: bytearray, width: int, height: int, zoom: float, drawings: list[dict[str, Any]]) -> None:
+    drawn = 0
+    for drawing in drawings:
+        for item in drawing.get("items") or []:
+            drawn += 1
+            if drawn > 8000:
+                return
+            kind = item[0]
+            if kind == "l" and len(item) >= 3:
+                x0, y0 = _pt_xy(item[1])
+                x1, y1 = _pt_xy(item[2])
+                _thick_line(mask, width, height, int(x0 * zoom), int(y0 * zoom), int(x1 * zoom), int(y1 * zoom))
+            elif kind == "re" and len(item) >= 2:
+                rect = item[1]
+                x0, y0, x1, y1 = int(rect.x0 * zoom), int(rect.y0 * zoom), int(rect.x1 * zoom), int(rect.y1 * zoom)
+                _thick_line(mask, width, height, x0, y0, x1, y0)
+                _thick_line(mask, width, height, x1, y0, x1, y1)
+                _thick_line(mask, width, height, x1, y1, x0, y1)
+                _thick_line(mask, width, height, x0, y1, x0, y0)
+            elif kind == "c" and len(item) >= 5:
+                pts = [_pt_xy(item[i]) for i in range(1, 5)]
+                for i in range(3):
+                    x0, y0 = pts[i]
+                    x1, y1 = pts[i + 1]
+                    _thick_line(mask, width, height, int(x0 * zoom), int(y0 * zoom), int(x1 * zoom), int(y1 * zoom), 1)
+
+
+def _try_parse_mask(
+    mask: bytearray,
+    width: int,
+    height: int,
+    zoom: float,
+    knife_layer: str,
+    page_w: float,
+    page_h: float,
+) -> tuple[dict[str, Any] | None, str]:
     factor = 3
     small, nw, nh = _downsample(mask, width, height, factor)
     small = _dilate(small, nw, nh, 1)
     comps = _components(small, nw, nh, min_pix=40)
-    family, regions = pick_main_regions(comps, factor, zoom)
+    try:
+        family, regions = pick_main_regions(comps, factor, zoom)
+    except RuntimeError as err:
+        return None, str(err)
     last_error = "刀线读不出盒面"
     for region in regions:
-        for dist_k in (20, 34, 12):
+        for dist_k in CARTON_DIST_K:
             try:
                 layout = _carton_from_roi(mask, width, height, zoom, region, dist_k, knife_layer, page_w, page_h)
             except RuntimeError as err:
                 last_error = str(err)
                 continue
             if layout_sane(layout):
-                return layout
+                return layout, ""
             last_error = f"刀线还原的尺寸不合理：{layout['dimensions_mm']}"
     if family == "pouch" and len(regions) >= 2:
         panels = []
@@ -356,9 +463,49 @@ def parse_knife_pdf(knife_pdf: Path, knife_layer: str) -> dict[str, Any]:
             "dimensions_mm": {"width": face_w, "depth": 3.0, "height": face_h},
         }
         if layout_sane(layout):
-            return layout
+            return layout, ""
         last_error = f"刀线还原的尺寸不合理：{layout['dimensions_mm']}"
-    raise RuntimeError(last_error)
+    return None, last_error
+
+
+def parse_knife_pdf(knife_pdf: Path, knife_layer: str) -> dict[str, Any]:
+    import pymupdf
+
+    doc = pymupdf.open(str(knife_pdf))
+    try:
+        if doc.page_count < 1:
+            raise RuntimeError("刀线PDF没有页")
+        page = doc[0]
+        page.set_cropbox(page.mediabox)
+        page_w, page_h = float(page.mediabox.width), float(page.mediabox.height)
+        if page_w <= 1 or page_h <= 1:
+            raise RuntimeError("刀线页宽异常")
+        width_px = 1600
+        zoom = min(width_px / page_w, 8000 / page_h)
+        pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), alpha=False)
+        samples = bytes(pix.samples)
+        size = (pix.width, pix.height)
+        drawings_ok = knife_drawings_safe(page)
+        drawings = _freeze_drawings(page.get_drawings()) if drawings_ok else []
+    finally:
+        doc.close()
+    im = Image.frombytes("RGB", size, samples)
+    mask, width, height = _mask_from_rgb(im)
+    # 密折痕花盒（胶原棒）在 20/34 会把盒身切碎。先密后疏，命中即停，不改已能折的大方盒。
+    layout, last_error = _try_parse_mask(mask, width, height, zoom, knife_layer, page_w, page_h)
+    if layout:
+        layout["die_source"] = "raster"
+        return layout
+    if drawings_ok and drawings:
+        stroked = bytearray(width * height)
+        _stroke_drawings_into_mask(stroked, width, height, zoom, drawings)
+        stroked = _dilate(stroked, width, height, 1)
+        layout, vector_error = _try_parse_mask(stroked, width, height, zoom, knife_layer, page_w, page_h)
+        if layout:
+            layout["die_source"] = "vector"
+            return layout
+        last_error = vector_error or last_error
+    raise RuntimeError(last_error or "刀线读不出盒面")
 
 
 def layout_sane(layout: dict[str, Any]) -> bool:
