@@ -81,7 +81,7 @@ MiniMax 未开语义复核是「未用」，不是「可用」；探测是 `GET 
 
 开工板是线性进度 + 7 行清单，不要画成圆环仪表，不要用「通 / 不通」当状态字。界面单测只测纯函数，不引入 RTL。
 
-杭州打样平面出图走 pymupdf（对照同一 `.venv`），不要让人装 qlmanage。macOS Quick Look 只在 pymupdf 失败时兜底。离开核对页后看板/侧栏仍看阶段，不要只把进度画在 WaitCard 上。核对页缩放用 CSS transform，不要接 OpenSeadragon。
+杭州打样平面出图走 pymupdf（对照同一 `.venv`），不要让人装 qlmanage。macOS Quick Look 只在 pymupdf 失败时兜底。打样先读稿上的刀线/刀版还原切面，没有刀线才回退已登记 JSON，不能按比例硬套方盒。离开核对页后看板/侧栏仍看阶段，不要只把进度画在 WaitCard 上。核对页缩放用 CSS transform，不要接 OpenSeadragon。核对窗液态玻璃可收起可缩放；隐藏钉只藏圆圈，保留定位框。
 
 ## Design System
 
