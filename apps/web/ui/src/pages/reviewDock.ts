@@ -104,7 +104,7 @@ export function writeDockBox(storage: Pick<Storage, "setItem"> | null, box: Dock
 export type ScreenRect = { left: number; top: number; width: number; height: number };
 export type DockInset = { left: number; top: number; right: number; bottom: number };
 
-/** How much the floating dock covers the canvas. Used to pad the page image into the remaining view. */
+/** How much the floating dock covers the canvas. Overlap math only — the page image is not padded. */
 export function dockCanvasInset(canvas: ScreenRect, dock: ScreenRect): DockInset {
   const out: DockInset = { left: 0, top: 0, right: 0, bottom: 0 };
   const cL = Number(canvas.left) || 0;
