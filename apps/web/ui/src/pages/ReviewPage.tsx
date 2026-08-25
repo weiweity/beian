@@ -4,11 +4,12 @@ import { Alert, App, Button, Empty, Input, Space, Tag } from "antd";
 import { ApiError, api, type Decision, type FieldHit, type TaskDetail, type TaskPage } from "../api";
 import { WaitCard } from "../chrome/WaitCard";
 import { panBy, resetZoom, zoomAt, zoomCss, zoomToBox } from "./canvasZoom";
-import { excelText, pdfText } from "./hitText";
+import { doubtLines, excelText, pdfText } from "./hitText";
 import { hitOnPage, overlayFromBox, overlaysForHit, pickHitBox, resolvePageMetrics } from "./pinBox";
 import {
   clampDockBox,
   clampDockPlace,
+  dockCanvasInset,
   dockVisual,
   readBoxesOn,
   readDockBox,
@@ -123,6 +124,12 @@ export function ReviewPage({ taskId, onBack }: Props) {
   const dockDrag = useRef<{ x: number; y: number; place: DockPlace } | null>(null);
   const pendingFit = useRef<number | null>(null);
   const fitHitRef = useRef<(i: number) => void>(() => undefined);
+  const canvasShellRef = useRef<HTMLDivElement>(null);
+  const waiting = shouldShowWaitCard(task);
+  const canvasReady = Boolean(
+    !waiting &&
+      pageList(useV2 ? { ...(task as TaskDetail), pages: task?.pages_v2 } : task)[pageIdx]?.url,
+  );
 
   function paintZoom(next: typeof zoom) {
     const el = zoomElRef.current;
@@ -180,6 +187,31 @@ export function ReviewPage({ taskId, onBack }: Props) {
     dockRef.current?.classList.toggle("is-busy", on);
   }
 
+  function readCanvasInset() {
+    const canvas = canvasShellRef.current;
+    const dock = dockRef.current;
+    if (!canvas || !dock) return null;
+    const cr = canvas.getBoundingClientRect();
+    const dr = dock.getBoundingClientRect();
+    return dockCanvasInset(
+      { left: cr.left, top: cr.top, width: cr.width, height: cr.height },
+      { left: dr.left, top: dr.top, width: dr.width, height: dr.height },
+    );
+  }
+
+  function paintCanvasInset() {
+    const next = readCanvasInset();
+    const view = viewRef.current;
+    if (!next || !view) return next;
+    view.style.marginLeft = `${next.left}px`;
+    view.style.marginRight = `${next.right}px`;
+    return next;
+  }
+
+  function syncCanvasInset() {
+    paintCanvasInset();
+  }
+
   function toggleDock() {
     const next = !dockOpenRef.current;
     dockOpenRef.current = next;
@@ -198,6 +230,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
       start.corner,
     );
     paintDock(next);
+    paintCanvasInset();
   }
 
   function onDockMove(e: React.PointerEvent) {
@@ -212,6 +245,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
       dockBox,
     );
     paintDock({ box: dockBox, place: next });
+    paintCanvasInset();
   }
 
   function endDockMove() {
@@ -259,6 +293,23 @@ export function ReviewPage({ taskId, onBack }: Props) {
     setDockPlace(place);
     writeDockPlace(browserStore(), place);
   }, []);
+
+  useLayoutEffect(() => {
+    syncCanvasInset();
+  }, [dockOpen, dockBox, dockPlace, waiting, canvasReady]);
+
+  useEffect(() => {
+    const el = dockRef.current;
+    if (!el) return;
+    function onEnd(e: TransitionEvent) {
+      if (e.target !== el) return;
+      if (e.propertyName === "width" || e.propertyName === "height" || e.propertyName === "top") {
+        syncCanvasInset();
+      }
+    }
+    el.addEventListener("transitionend", onEnd);
+    return () => el.removeEventListener("transitionend", onEnd);
+  }, [canvasReady]);
 
   useEffect(() => {
     function fit() {
@@ -317,8 +368,6 @@ export function ReviewPage({ taskId, onBack }: Props) {
       cancelled = true;
     };
   }, [taskId]);
-
-  const waiting = shouldShowWaitCard(task);
 
   useEffect(() => {
     if (!taskId || !waiting) return;
@@ -616,7 +665,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
       ) : null}
 
       <div className="review-desk">
-        <div className="canvas glass-pane">
+        <div className="canvas glass-pane" ref={canvasShellRef}>
           {page?.url ? (
             <div
               className="canvas-view"
@@ -826,6 +875,16 @@ export function ReviewPage({ taskId, onBack }: Props) {
                       </strong>
                       {statusTag(current.status)}
                     </div>
+                    {doubtLines(current).length ? (
+                      <div className="pair pair-doubt">
+                        <p className="pair-k">疑点 / 错误点</p>
+                        <ul className="doubt-list">
+                          {doubtLines(current).map((line) => (
+                            <li key={line}>{line}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : null}
                     <div className="pair">
                       <p className="pair-k">Excel 应印</p>
                       <p className="pair-v mono">{excelText(current)}</p>

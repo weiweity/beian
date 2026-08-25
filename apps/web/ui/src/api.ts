@@ -101,6 +101,7 @@ export type FieldHit = {
   bboxes?: Array<Record<string, unknown>>;
   coverage?: { miss?: string[]; hit?: string[]; ratio?: number; matched?: number; total?: number };
   evidence?: string;
+  sequence_diff?: { only_in_excel?: string[] };
 };
 
 export type TaskPage = {

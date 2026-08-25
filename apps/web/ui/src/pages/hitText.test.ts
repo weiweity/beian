@@ -1,6 +1,23 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { excelText, isImageOnlyField, pdfText } from "./hitText.js";
+import { doubtLines, excelText, isImageOnlyField, pdfText } from "./hitText.js";
+
+describe("doubtLines", () => {
+  it("lists miss phrases and hides when consistent", () => {
+    assert.deepEqual(doubtLines({ status: "一致", coverage: { hit: ["水"] } }), []);
+    assert.deepEqual(doubtLines({ status: "疑点", coverage: { miss: ["烟酰胺", ""] } }), ["烟酰胺"]);
+    assert.deepEqual(
+      doubtLines({ status: "缺失", sequence_diff: { only_in_excel: ["香柠檬"] }, coverage: { miss: ["香柠檬"] } }),
+      ["香柠檬"],
+    );
+    assert.deepEqual(doubtLines({ decision: "issue", evidence: "稿上少了净含量" }), ["稿上少了净含量"]);
+    assert.deepEqual(doubtLines({ status: "疑点" }), []);
+    assert.deepEqual(doubtLines({ status: "一致", sequence_diff: { only_in_excel: ["香柠檬"] } }), []);
+    assert.deepEqual(doubtLines({ status: "疑点", sequence_diff: { only_in_excel: ["香柠檬"] } }), ["香柠檬"]);
+    const long = "漏".repeat(140);
+    assert.equal(doubtLines({ status: "缺失", evidence: long })[0]?.length, 120);
+  });
+});
 
 describe("excelText", () => {
   it("prefers excel then excel_value", () => {
