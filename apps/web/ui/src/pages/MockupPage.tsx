@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Alert, App, Empty, Tag } from "antd";
 import { api, type MockupJob } from "../api";
 import { UploadWell } from "../chrome/UploadWell";
@@ -6,6 +7,13 @@ import { WaitCard } from "../chrome/WaitCard";
 import { mockupFailReason, mockupFailTag } from "./mockupError";
 import { liveJobLine, shouldShowWaitCard } from "./waitCard";
 import { stemFromFilename } from "./stemName";
+import { HUD_MS, downloadHudLine, missingPptHud } from "./mockupHud";
+import {
+  enterElementFullscreen,
+  exitElementFullscreen,
+  isElementFullscreen,
+  pingViewerAfterFullscreen,
+} from "./mockupFullscreen";
 import "@google/model-viewer";
 
 type DeskProps = { onOpenJob: (id: string) => void };
@@ -31,21 +39,6 @@ function mockTitle(row: MockupJob) {
 function fileHref(jobId: string, key: string, download = false) {
   const base = `/api/mockups/${jobId}/files/${key}`;
   return download ? `${base}?download=1` : base;
-}
-
-function DownloadGlyph() {
-  return (
-    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
-      <path
-        d="M12 3v12m0 0-4-4m4 4 4-4M5 16v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
 }
 
 export function MockupDesk({
@@ -209,9 +202,43 @@ export function MockupJobPage({ jobId, onBack }: JobProps) {
   const { message } = App.useApp();
   const [job, setJob] = useState<MockupJob | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [hud, setHud] = useState("");
+  const [glbFs, setGlbFs] = useState(false);
   const glbBox = useRef<HTMLDivElement>(null);
+  const hudTimer = useRef<number | null>(null);
   const announced = useRef("");
+  const lastGlbFs = useRef(false);
   const waiting = Boolean(job) && shouldShowWaitCard(job);
+
+  function notice(text: string) {
+    setHud(text);
+    if (hudTimer.current != null) window.clearTimeout(hudTimer.current);
+    hudTimer.current = window.setTimeout(() => setHud(""), HUD_MS);
+  }
+
+  useEffect(() => {
+    return () => {
+      if (hudTimer.current != null) window.clearTimeout(hudTimer.current);
+      if (isElementFullscreen(glbBox.current)) void exitElementFullscreen().catch(() => undefined);
+    };
+  }, []);
+
+  useEffect(() => {
+    function onFs() {
+      const el = glbBox.current;
+      const on = isElementFullscreen(el);
+      setGlbFs(on);
+      if (on === lastGlbFs.current) return;
+      lastGlbFs.current = on;
+      if (el) pingViewerAfterFullscreen(el);
+    }
+    document.addEventListener("fullscreenchange", onFs);
+    document.addEventListener("webkitfullscreenchange", onFs);
+    return () => {
+      document.removeEventListener("fullscreenchange", onFs);
+      document.removeEventListener("webkitfullscreenchange", onFs);
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -323,15 +350,34 @@ export function MockupJobPage({ jobId, onBack }: JobProps) {
           <h1 className="page-title">{mockTitle(job)}</h1>
           <p className="page-lead">打样单。白底是正面+侧面、反面+侧面；GLB 全屏转一转再截图。</p>
         </div>
-        <div style={{ display: "grid", gap: 8, justifyItems: "end" }}>
+        <div className="mockup-sheet-head-actions">
           <button type="button" className="btn-ghost" onClick={onBack}>
             返回打样台
           </button>
           {hasSheet ? (
-            <a className="mockup-dl" href={fileHref(job.id, "sheet", true)} download aria-label="下载 PDF">
-              <DownloadGlyph />
+            <a
+              className="btn-ghost"
+              href={fileHref(job.id, "sheet", true)}
+              download
+              onClick={() => notice(downloadHudLine("PDF"))}
+            >
+              下载 PDF
             </a>
           ) : null}
+          {hasPpt ? (
+            <a
+              className="btn-ghost"
+              href={fileHref(job.id, "ppt", true)}
+              download
+              onClick={() => notice(downloadHudLine("PPT"))}
+            >
+              下载+PPT
+            </a>
+          ) : (
+            <button type="button" className="btn-ghost" onClick={() => notice(missingPptHud())}>
+              下载+PPT
+            </button>
+          )}
         </div>
       </header>
 
@@ -341,22 +387,42 @@ export function MockupJobPage({ jobId, onBack }: JobProps) {
 
       <div className="mockup-sheet-photos">
         {whiteA ? (
-          <WhiteShot jobId={job.id} fileKey="white_a" alt="正面与侧面白底" caption="正面 + 侧面" downloadName={whiteA.name} />
+          <WhiteShot
+            jobId={job.id}
+            fileKey="white_a"
+            alt="正面与侧面白底"
+            caption="正面 + 侧面"
+            downloadName={whiteA.name}
+            onDownload={() => notice(downloadHudLine("白底"))}
+          />
         ) : (
           <figure className="mockup-sheet-photo">
-            <p className="page-lead">还没有正面+侧面。</p>
+            <div className="mockup-sheet-frame">
+              <p className="page-lead">还没有正面+侧面。</p>
+            </div>
+            <figcaption className="mockup-sheet-cap">正面 + 侧面</figcaption>
           </figure>
         )}
         {whiteB ? (
-          <WhiteShot jobId={job.id} fileKey="white_b" alt="反面与侧面白底" caption="反面 + 侧面" downloadName={whiteB.name} />
+          <WhiteShot
+            jobId={job.id}
+            fileKey="white_b"
+            alt="反面与侧面白底"
+            caption="反面 + 侧面"
+            downloadName={whiteB.name}
+            onDownload={() => notice(downloadHudLine("白底"))}
+          />
         ) : (
           <figure className="mockup-sheet-photo">
-            <p className="page-lead">还没有反面+侧面。</p>
+            <div className="mockup-sheet-frame">
+              <p className="page-lead">还没有反面+侧面。</p>
+            </div>
+            <figcaption className="mockup-sheet-cap">反面 + 侧面</figcaption>
           </figure>
         )}
         {hasGlb ? (
-          <figure className="mockup-sheet-photo mockup-sheet-glb-wrap">
-            <div className="mockup-sheet-glb" ref={glbBox}>
+          <figure className="mockup-sheet-photo">
+            <div className="mockup-sheet-frame mockup-sheet-glb" ref={glbBox}>
               <model-viewer
                 src={fileHref(job.id, "glb")}
                 camera-controls
@@ -367,41 +433,51 @@ export function MockupJobPage({ jobId, onBack }: JobProps) {
                 tone-mapping="commerce"
                 interaction-prompt="none"
               />
+              <button
+                type="button"
+                className="mockup-dl mockup-dl-fs"
+                aria-label={glbFs ? "退出全屏" : "全屏截图"}
+                onClick={() => {
+                  const el = glbBox.current;
+                  if (!el) return;
+                  if (isElementFullscreen(el)) {
+                    void exitElementFullscreen().catch(() => undefined);
+                    return;
+                  }
+                  void enterElementFullscreen(el).catch(() => notice("全屏打不开"));
+                }}
+              >
+                {glbFs ? "退出" : "全屏"}
+              </button>
+              <a
+                className="mockup-dl mockup-dl-corner"
+                href={fileHref(job.id, "glb", true)}
+                download
+                aria-label="下载 GLB"
+                onClick={() => notice(downloadHudLine("GLB"))}
+              >
+                下载
+              </a>
             </div>
-            <figcaption className="mockup-sheet-cap">
-              <span>GLB</span>
-              <span className="mockup-sheet-cap-actions">
-                <button
-                  type="button"
-                  className="mockup-dl"
-                  aria-label="全屏截图"
-                  onClick={() => {
-                    const el = glbBox.current;
-                    if (el && el.requestFullscreen) void el.requestFullscreen();
-                  }}
-                >
-                  全屏
-                </button>
-                <a className="mockup-dl" href={fileHref(job.id, "glb", true)} download aria-label="下载 GLB">
-                  <DownloadGlyph />
-                </a>
-              </span>
-            </figcaption>
+            <figcaption className="mockup-sheet-cap">GLB</figcaption>
           </figure>
         ) : (
           <figure className="mockup-sheet-photo">
-            <Empty description={job.status === "done" ? "没有 GLB。看上面的失败原因。" : "GLB 还没出"} />
+            <div className="mockup-sheet-frame">
+              <Empty description={job.status === "done" ? "没有 GLB。看上面的失败原因。" : "GLB 还没出"} />
+            </div>
+            <figcaption className="mockup-sheet-cap">GLB</figcaption>
           </figure>
         )}
       </div>
-
-      {hasPpt ? (
-        <a className="btn-ghost" href={fileHref(job.id, "ppt", true)} download>
-          下载 PPT
-        </a>
-      ) : job.status === "done" ? (
-        <p className="page-lead">{hasSheet ? "PPT 没写成。白底、GLB 和 PDF 仍可用。" : "PPT 没写成。白底和 GLB 仍可用。"}</p>
-      ) : null}
+      {hud && typeof document !== "undefined"
+        ? createPortal(
+            <p className="mockup-hud" role="status" aria-live="polite">
+              {hud}
+            </p>,
+            document.body,
+          )
+        : null}
     </section>
   );
 }
@@ -412,27 +488,37 @@ function WhiteShot({
   alt,
   caption,
   downloadName,
+  onDownload,
 }: {
   jobId: string;
   fileKey: "white_a" | "white_b";
   alt: string;
   caption: string;
   downloadName?: string;
+  onDownload: () => void;
 }) {
   const [bad, setBad] = useState(false);
   return (
     <figure className="mockup-sheet-photo">
-      {bad ? (
-        <p className="page-lead">这张白底图坏了，回到打样台重新打。</p>
-      ) : (
-        <img src={fileHref(jobId, fileKey)} alt={alt} onError={() => setBad(true)} />
-      )}
-      <figcaption className="mockup-sheet-cap">
-        <span>{caption}</span>
-        <a className="mockup-dl" href={fileHref(jobId, fileKey, true)} download={downloadName} aria-label={`下载${caption}`}>
-          <DownloadGlyph />
-        </a>
-      </figcaption>
+      <div className="mockup-sheet-frame">
+        {bad ? (
+          <p className="page-lead">这张白底图坏了，回到打样台重新打。</p>
+        ) : (
+          <img src={fileHref(jobId, fileKey)} alt={alt} onError={() => setBad(true)} />
+        )}
+        {bad ? null : (
+          <a
+            className="mockup-dl mockup-dl-corner"
+            href={fileHref(jobId, fileKey, true)}
+            download={downloadName}
+            aria-label={`下载${caption}`}
+            onClick={onDownload}
+          >
+            下载
+          </a>
+        )}
+      </div>
+      <figcaption className="mockup-sheet-cap">{caption}</figcaption>
     </figure>
   );
 }
