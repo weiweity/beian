@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { authFailureAction, describeBrokenApi, feishuLoginHref, shouldAutoRedirectToFeishu } from "./authGate.js";
+import {
+  authFailureAction,
+  describeBrokenApi,
+  feishuLoginHref,
+  isLocalDevHost,
+  shouldAutoRedirectToFeishu,
+} from "./authGate.js";
 
 describe("feishuLoginHref", () => {
   it("keeps root login without next", () => {
@@ -97,6 +103,7 @@ describe("authFailureAction", () => {
       authFailureAction({
         authError: null,
         apiBroken: "本机开发页没有把 /api 转到审稿服务",
+        host: "127.0.0.1:5173",
       }),
       { href: "http://127.0.0.1:8787/", label: "打开本机审稿服务" },
     );
@@ -111,6 +118,40 @@ describe("authFailureAction", () => {
       { href: "/api/auth/feishu/login", label: "重新飞书授权" },
     );
   });
+
+  it("does not send a public visitor to localhost", () => {
+    assert.deepEqual(
+      authFailureAction({
+        authError: null,
+        apiBroken: "审稿服务没回上。刷新后再试。",
+        host: "www.jianghua.site",
+        pathname: "/mockup",
+      }),
+      { href: "/mockup", label: "刷新后再试" },
+    );
+    assert.deepEqual(
+      authFailureAction({
+        authError: null,
+        apiBroken: "审稿服务没回上。刷新后再试。",
+        host: "www.jianghua.site",
+        pathname: "//evil",
+      }),
+      { href: "/", label: "刷新后再试" },
+    );
+  });
+});
+
+describe("isLocalDevHost", () => {
+  it("treats loopback and Vite as local, public hosts as not", () => {
+    assert.equal(isLocalDevHost("localhost:5173"), true);
+    assert.equal(isLocalDevHost("127.0.0.1:8787"), true);
+    assert.equal(isLocalDevHost("192.168.1.8:5173"), true);
+    assert.equal(isLocalDevHost("[::1]:8787"), true);
+    assert.equal(isLocalDevHost(""), true);
+    assert.equal(isLocalDevHost("www.jianghua.site"), false);
+    assert.equal(isLocalDevHost("notlocalhost.com"), false);
+    assert.equal(isLocalDevHost("127.0.0.1.sslip.io"), false);
+  });
 });
 
 describe("describeBrokenApi", () => {
@@ -118,10 +159,22 @@ describe("describeBrokenApi", () => {
     assert.match(String(describeBrokenApi(200, "text/html")), /8787/);
     assert.match(String(describeBrokenApi(404, "")), /8787/);
     assert.equal(describeBrokenApi(401, "application/json"), null);
+    assert.match(String(describeBrokenApi(502, "text/html", "127.0.0.1:5173")), /不要只用 Vite/);
   });
 
   it("does not treat a JSON 404 as a dead vite proxy", () => {
     assert.equal(describeBrokenApi(404, "application/json"), null);
     assert.equal(describeBrokenApi(404, "application/json; charset=utf-8"), null);
+  });
+
+  it("does not tell a public visitor to open Vite", () => {
+    const line = String(describeBrokenApi(403, "text/html", "www.jianghua.site"));
+    assert.match(line, /审稿服务没回上/);
+    assert.doesNotMatch(line, /5173/);
+    assert.doesNotMatch(line, /dev:ui/);
+  });
+
+  it("leaves non-html bodies to the JSON/detail path", () => {
+    assert.equal(describeBrokenApi(502, "text/plain"), null);
   });
 });

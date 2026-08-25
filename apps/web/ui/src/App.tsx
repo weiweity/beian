@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useState, type ReactNode } from "react";
-import { ApiError, api, type Me } from "./api";
+import { api, brokenApiMessage, type Me } from "./api";
 import { authFailureAction, feishuLoginHref, shouldAutoRedirectToFeishu } from "./authGate";
 import { Sidebar, type NavKey } from "./chrome/Sidebar";
 import { hrefOf, parsePath, type AppView } from "./appRoute";
@@ -130,8 +130,7 @@ export function App() {
         setTaskId(null);
       }
     } catch (e) {
-      const msg = e instanceof ApiError ? e.message : "";
-      if (msg.includes("8787") || msg.includes("JSON")) setApiBroken(msg);
+      setApiBroken(brokenApiMessage(e, window.location.host));
       setMe({ logged_in: false, display_name: null, avatar_url: null, role: null, perms: [] });
     }
   }, []);
@@ -307,7 +306,12 @@ export function App() {
   if (!loggedIn) {
     if (authError || apiBroken) {
       const message = authError || apiBroken || "";
-      const action = authFailureAction({ authError, apiBroken });
+      const action = authFailureAction({
+        authError,
+        apiBroken,
+        pathname: window.location.pathname,
+        host: window.location.host,
+      });
       return (
         <AuthShell title={authError ? authTitle(authError) : "进不了这间审稿室"}>
           <p>{message}</p>
