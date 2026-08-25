@@ -189,7 +189,7 @@ Windows 上 spawn 必须进 Job Object，Node 退出时杀掉子进程树。做�
 
 - `NewTaskPage`：POST 立即返回后进入核对页；核对页见 `job_status in {queued,running}` 或 `status===comparing` 就上 WaitCard。
 - `ReviewPage`：对红 POST 返回 queued 时不要 toast「已对照第二份 PDF」；WaitCard 增加「对红」文案。
-- `MockupPage` / `MockupJobPage`：打样台只交稿和列单。点进度或已出图进打样单；进行中是 WaitCard，完成一屏三图：正面+侧面、反面+侧面、GLB；每张右上角下载；「返回打样台」下面下载 PDF。不要死等 POST；打样单里轮询 GET `/api/mockups/:id`。`status=done|failed` 不当等待卡。地址 `/mockup` 与 `/mockup/:id`。
+- `MockupPage` / `MockupJobPage`：打样台只交稿和列单。点进度或已出图进打样单；进行中是 WaitCard，完成一屏三图：正面+侧面、反面+侧面、GLB；下载是图下说明行右侧 44 玻璃圆钮，不压产品。不要死等 POST；打样单里轮询 GET `/api/mockups/:id`。`status=done|failed` 不当等待卡。地址 `/mockup` 与 `/mockup/:id`。
 - `WaitCard`：吃 `job_stage` / `job_stage_label`、`job_eta_s`、`queue_ahead`。queued 显示「前面还有 N 单」。
 - `TasksPage`：任一 `board==comparing` 时轮询 `/api/tasks`，否则排队卡片会停在旧状态。卡片用 `liveJobLine` 写阶段和大约还要，不要百分比。
 - 侧栏：`liveNavPulse` 看 `/api/health` 的 jobs 槽；审稿台/打样台作业在跑时有圆点。离开核对页再回看板，仍能看到阶段。

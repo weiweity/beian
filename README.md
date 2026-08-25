@@ -12,7 +12,7 @@
 | `apps/web/server` | Hono + TypeScript，对外 HTTP `:8787` |
 | `apps/web/backend` | Python 对照 worker（TS 用 `python -m app.cli` 调用） |
 | `apps/web/frontend` | 已退役的原生页，不要再改 |
-| `workers/packaging/` | 2D→3D CLI，打样台调用。先读稿上刀线还原盒面（密折痕先密后疏）；平面出图用 pymupdf（对照同一 Python）；杭州不需要 macOS qlmanage。PPT 用两张白底写 OOXML，不依赖 Node；写不出才试演示文稿运行时。两张白底再合成一页 PDF（页底先铺白；pymupdf 写不出且还没落盘才用已装 Pillow，不盖掉已写成的文件）。缺 PPT/PDF 仍算出图 |
+| `workers/packaging/` | 2D→3D CLI，打样台调用。先读稿上刀线还原盒面（密折痕先密后疏）；平面出图用 pymupdf（对照同一 Python）；杭州不需要 macOS qlmanage。PPT 用两张白底写 OOXML，不依赖 Node；写不出才试演示文稿运行时。两张白底再合成一页 PDF（页底先铺白，槽按源图比例 contain；pymupdf 写不出且还没落盘才用已装 Pillow，不盖掉已写成的文件）。缺 PPT/PDF 仍算出图 |
 | `docs/` | 章程、ADR、设计 |
 
 HTTP 是 TypeScript。对照规则和 Blender 仍是 Python。见 `docs/adr-002-typescript-http.md`。
@@ -32,7 +32,7 @@ HTTP 是 TypeScript。对照规则和 Blender 仍是 Python。见 `docs/adr-002-
 | `TODOS.md` | 未做项 |
 | `AGENTS.md` | 给代理的硬约束、加长作业合同、易忘约定（MICRO 不改 `package.json` 三位；禁止 `git add -A`） |
 | `scripts/windows/README.md` | 杭州 Windows 生产备忘 |
-| `workers/packaging/README.md` | 打样 CLI、刀线还原盒面（密折痕先密后疏）、pymupdf 平面出图（不靠 qlmanage）；PPT 用白底写 OOXML；两张白底合成 PDF（pymupdf 写不出且未落盘才用 Pillow） |
+| `workers/packaging/README.md` | 打样 CLI、刀线还原盒面（密折痕先密后疏）、pymupdf 平面出图（不靠 qlmanage）；PPT 用白底写 OOXML；两张白底合成 PDF（槽 contain；pymupdf 写不出且未落盘才用 Pillow）；棚只提亮，不改盒子材质 |
 
 ## 本机启动
 
