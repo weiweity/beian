@@ -50,7 +50,7 @@ cd apps/web/backend && PYTHONPATH=. .venv/bin/python -m app.cli --help
 
 4. 测试：抄 `jobs.test.ts` 的对照块。必写断言：第二单 queued、GET 无 `job_pid`、没有最后一行 JSON →「对照中断」、对红失败仍可签字。pytest：CLI 不 `save_task`；`--help` 含 `STAGE` / `save_task` / `packaging`。打样出图测 pymupdf（`test_packaging_thumbnail.py`），不要假定有 qlmanage。打样 PDF 测铺白和 Pillow 兜底（`test_packaging_dieline.py`）：pymupdf 已落盘则不覆盖，不要让人再装插件。
 
-5. UI 等待：`shouldShowWaitCard`（`queued` | `running` | `comparing`；`done`/`failed`/`completed` 不当等待）。离开核对页后，看板 `liveJobLine` 和侧栏 `liveNavPulse` 仍显示阶段。打样台只交稿；点进度/已出图进单独打样单（WaitCard 或一屏三图：正面+侧面、反面+侧面、GLB），不要在打样台底下摊开结果。下载提示走 `mockupHud.ts`（不挡点击）；GLB 全屏走 `mockupFullscreen.ts`。等待圆盘是 `WaitLoader`（对照中 / 对红中 / 打样中，不要英文 Generating）。核对页框在 `pinBox.ts`：有 bbox 才画真框，钉在框中心，不编造顶排钉；隐藏钉只藏圆圈；显示框单独开关，拖动画布暂时藏框。缩放在 `canvasZoom.ts`：CSS `transform` 1–6×（滚轮、放大/缩小/复位、点序号放大该框），拖动走 rAF 且禁止 img 原生拖拽，不上 OpenSeadragon。核对窗 `reviewDock.ts` 液态玻璃浮在整页最上面（含侧栏），进页展开并叠在左侧栏上，可随意拖，不挤页图；窗 z 最高可盖画布，夹住不盖页头签字；收起/展开 280ms 动画，可拖，边框上下左右和四个斜角都能缩放；左列当前字段顶栏是疑点/错误点（有才出现）再 Excel 应印 / 稿上 OCR，右列疑点列表；结论在页头签字旁。确认单底部工艺说明 / 颜色要求 / 版本号不进机审（只认字段名开头，不要误杀「执行标准版本号」；旧单假疑点签字时也跳过）。离开核对页或打样台后，历史记录仍列出进行中的单并显示 `liveJobLine`，点进去仍是 WaitCard / 打样单。稿上 OCR 走 `hitText.ts`（`coverage.hit` 回退，并列出 `coverage.miss` 和命中项数；品名/品牌/logo 没字就说明稿上多半是图）。打样先读稿上的刀线/刀版还原切面；密折痕先密后疏试间距；没有刀线才回退已登记 JSON。不能按比例硬套方盒。下载白底只给 `front_right` / `back_left`，不要把 `ai-raster` 或 PPT 质检 PNG 当成白底。预览 inline，点下载才附件。地址按台分开：`/` `/new` `/review/:id` `/mockup` `/mockup/:id` `/history` `/settings`，后退换台。
+5. UI 等待：`shouldShowWaitCard`（`queued` | `running` | `comparing`；`done`/`failed`/`completed` 不当等待）。离开核对页后，看板 `liveJobLine` 和侧栏 `liveNavPulse` 仍显示阶段。打样台只交稿；点进度/已出图进单独打样单（WaitCard 或一屏三图：正面+侧面、反面+侧面、GLB），不要在打样台底下摊开结果。下载提示走 `mockupHud.ts`（不挡点击）；GLB 全屏走 `mockupFullscreen.ts`。等待圆盘是 `WaitLoader`（对照中 / 对红中 / 打样中，不要英文 Generating）。核对页框在 `pinBox.ts`：有 bbox 才画真框，钉在框中心，不编造顶排钉；隐藏钉只藏圆圈；显示框单独开关，拖动画布暂时藏框。缩放在 `canvasZoom.ts`：CSS `transform` 1–6×（滚轮、放大/缩小/复位、点序号放大该框），拖动走 rAF 且禁止 img 原生拖拽，不上 OpenSeadragon。核对窗 `reviewDock.ts` 液态玻璃浮在整页最上面（含侧栏），进页展开并叠在左侧栏上，可随意拖，不挤页图；窗 z 最高可盖画布，夹住不盖页头签字；收起/展开 280ms 动画，可拖，边框上下左右和四个斜角都能缩放；左列当前字段顶栏是疑点/错误点（有才出现）再 Excel 应印 / 稿上 OCR，右列疑点列表；结论在页头签字旁。确认单底部工艺说明 / 颜色要求 / 版本号不进机审（只认字段名开头，不要误杀「执行标准版本号」；旧单假疑点签字时也跳过）。离开核对页或打样台后，历史记录仍列出进行中的单并显示 `liveJobLine`，点进去仍是 WaitCard / 打样单。稿上 OCR 走 `hitText.ts`（`coverage.hit` 回退，并列出 `coverage.miss` 和命中项数；品名/品牌/logo 没字就说明稿上多半是图）。打样先读稿上的刀线/刀版还原切面；密折痕先密后疏试间距；没有刀线才回退已登记 JSON。不能按比例硬套方盒。下载白底只给 `front_right` / `back_left`，不要把 `ai-raster` 或 PPT 质检 PNG 当成白底。预览 inline，点下载才附件。地址按台分开：`/reviewup` `/reviewup/new` `/review/:id` `/mockup` `/mockup/new` `/mockup/:id` `/history` `/settings`，后退换台。旧 `/` `/new` `/review` 302 到审稿台新地址。
 
 调试：对外 `job_error` 用短中文。Node 日志写 problem + cause + fix。打开 `DATA_DIR/tasks/{tid}.json`。不要新 FastAPI 路由。
 
@@ -71,7 +71,7 @@ When the user's request matches an available skill, invoke it via the Skill tool
 
 ## 易忘约定（防记忆漂移）
 
-升 VERSION 时：`VERSION` 文件和 `apps/web/server/src/index.ts` 里的 `VERSION` 常量必须同号。`package.json` 只写三位（npm 不认第四位）：MICRO（`0.12.8.0` → `0.12.8.1`）三位不动；PATCH/MINOR/MAJOR 才改三位。4 位号，本线功能发版走 PATCH（`0.12.x.0`），不要随手跳 `0.13`。开放 PR 的 VERSION 若落后于 `main`，不合；先 `/ship` 重占号。
+升 VERSION 时：`VERSION` 文件和 `apps/web/server/src/index.ts` 里的 `VERSION` 常量必须同号。`package.json` 只写三位（npm 不认第四位）：MICRO（`0.12.8.0` → `0.12.8.1`）三位不动；PATCH/MINOR/MAJOR 才改三位。4 位号，本线现为 `0.13.x.0`。用户点名大版本才跳 MINOR。开放 PR 的 VERSION 若落后于 `main`，不合；先 `/ship` 重占号。
 
 魏炜飞书真名或花名「魏炜」才是杭州机箱管理员，能扫 Blender / Illustrator（含 PATH）。不要凭显示名「管理员」提权。升版后旧 cookie 仍是审核员，要重新走飞书登录。伸美其他人默认审稿员：能进审稿台，不能扫本机 exe。2026-08-24 当周不做品牌登录闪屏、申请权限工单（office-hours D1=A）。
 

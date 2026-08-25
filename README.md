@@ -42,7 +42,7 @@ HTTP 是 TypeScript。对照规则和 Blender 仍是 Python。见 `docs/adr-002-
 
 - 产品 / 验收：http://127.0.0.1:8787/ （先 `cd apps/web/ui && npm run build`）
 - 开发 UI：http://127.0.0.1:5173/ （`npm run dev:ui`；Vite 听本机网卡，`/api` 反代到 8787，端口占用即失败）
-- 台地址：`/` 审稿台、`/new` 新建、`/review/:id` 核对页、`/mockup` 打样台、`/mockup/:id` 打样单、`/history`、`/settings`。后退换台。
+- 台地址：`/reviewup` 审稿台、`/reviewup/new` 审稿工作台、`/review/:id` 核对页、`/mockup` 打样台、`/mockup/new` 打样工作台、`/mockup/:id` 打样单、`/history`、`/settings`。旧 `/` `/new` `/review` 会转到新地址。后退换台。
 
 5173 登录闪或 `/api` 返回 HTML / 空 Content-Type：打开 http://127.0.0.1:8787/，或重启 `npm run dev:ui`。飞书授权失败回到飞书重试，不要把远程验收人指到本机。JSON 404（任务不存在等）不是 Vite 挂了。
 

@@ -17,15 +17,32 @@ const { issueSession } = await import("./auth.js");
 const { COOKIE } = await import("./config.js");
 
 describe("GET / spa gate", () => {
-  it("sends anonymous public visitors to Feishu before the JS bundle", async () => {
+  it("sends the old review desk root to /reviewup", async () => {
     const res = await app.request("/", { headers: { host: "www.jianghua.site" } });
     assert.equal(res.status, 302);
+    assert.equal(res.headers.get("location"), "/reviewup");
+    assert.match(res.headers.get("cache-control") || "", /no-store/);
+    const neu = await app.request("/new", { headers: { host: "www.jianghua.site" } });
+    assert.equal(neu.status, 302);
+    assert.equal(neu.headers.get("location"), "/reviewup/new");
+    const bare = await app.request("/review", { headers: { host: "www.jianghua.site" } });
+    assert.equal(bare.status, 302);
+    assert.equal(bare.headers.get("location"), "/reviewup");
+  });
+
+  it("sends anonymous public visitors on /reviewup to Feishu before the JS bundle", async () => {
+    const res = await app.request("/reviewup", { headers: { host: "www.jianghua.site" } });
+    assert.equal(res.status, 302);
     assert.match(res.headers.get("location") || "", /\/api\/auth\/feishu\/login/);
+    assert.doesNotMatch(res.headers.get("location") || "", /next=/);
     assert.match(res.headers.get("cache-control") || "", /no-store/);
   });
 
-  it("still shows the Feishu error page", async () => {
-    const res = await app.request("/?feishu_error=denied", { headers: { host: "www.jianghua.site" } });
+  it("still shows the Feishu error page after following the old-root redirect", async () => {
+    const hop = await app.request("/?feishu_error=denied", { headers: { host: "www.jianghua.site" } });
+    assert.equal(hop.status, 302);
+    assert.equal(hop.headers.get("location"), "/reviewup?feishu_error=denied");
+    const res = await app.request("/reviewup?feishu_error=denied", { headers: { host: "www.jianghua.site" } });
     assert.equal(res.status, 200);
     const html = await res.text();
     assert.match(html, /打开审稿台|root/);
@@ -33,7 +50,7 @@ describe("GET / spa gate", () => {
 
   it("serves the app when wb_session is valid", async () => {
     const sess = issueSession("刘籽烨", "reviewer", "ou_spa_http", "feishu");
-    const res = await app.request("/", {
+    const res = await app.request("/reviewup", {
       headers: { host: "www.jianghua.site", cookie: `${COOKIE}=${sess.token}` },
     });
     assert.equal(res.status, 200);
@@ -42,7 +59,16 @@ describe("GET / spa gate", () => {
 
   it("keeps desk paths on the same SPA gate", async () => {
     const sess = issueSession("刘籽烨", "reviewer", "ou_spa_desk", "feishu");
-    for (const path of ["/new", "/settings", "/review", "/history", "/mockup", "/mockup/aabbccddeeff", "/review/aabbccddeeff"]) {
+    for (const path of [
+      "/reviewup",
+      "/reviewup/new",
+      "/settings",
+      "/history",
+      "/mockup",
+      "/mockup/new",
+      "/mockup/aabbccddeeff",
+      "/review/aabbccddeeff",
+    ]) {
       const res = await app.request(path, {
         headers: { host: "www.jianghua.site", cookie: `${COOKIE}=${sess.token}` },
       });
@@ -58,6 +84,9 @@ describe("GET / spa gate", () => {
     const mock = await app.request("/mockup/aabbccddeeff", { headers: { host: "www.jianghua.site" } });
     assert.equal(mock.status, 302);
     assert.match(mock.headers.get("location") || "", /mockup%2Faabbccddeeff/);
+    const work = await app.request("/reviewup/new", { headers: { host: "www.jianghua.site" } });
+    assert.equal(work.status, 302);
+    assert.match(work.headers.get("location") || "", /reviewup%2Fnew/);
   });
 
   it("does not redirect when Feishu is not configured", async () => {
@@ -66,7 +95,7 @@ describe("GET / spa gate", () => {
     delete process.env.FEISHU_APP_ID;
     delete process.env.FEISHU_APP_SECRET;
     try {
-      const res = await app.request("/", { headers: { host: "www.jianghua.site" } });
+      const res = await app.request("/reviewup", { headers: { host: "www.jianghua.site" } });
       assert.equal(res.status, 200);
     } finally {
       if (id) process.env.FEISHU_APP_ID = id;
@@ -78,7 +107,7 @@ describe("GET / spa gate", () => {
     const prev = process.env.WB_PUBLIC;
     delete process.env.WB_PUBLIC;
     try {
-      const res = await app.request("/", { headers: { host: "127.0.0.1:8787" } });
+      const res = await app.request("/reviewup", { headers: { host: "127.0.0.1:8787" } });
       assert.equal(res.status, 200);
     } finally {
       if (prev === undefined) delete process.env.WB_PUBLIC;

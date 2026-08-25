@@ -23,6 +23,7 @@ type Ctx = {
   prefs: Appearance;
   setPrefs: (next: Appearance) => void;
   resolved: "light" | "dark";
+  setActor: (openId: string) => void;
 };
 
 const AppearanceContext = createContext<Ctx | null>(null);
@@ -38,7 +39,8 @@ function readSystemDark() {
 }
 
 export function AppearanceRoot({ children }: { children: ReactNode }) {
-  const [prefs, setPrefsState] = useState(loadAppearance);
+  const [actor, setActorState] = useState("");
+  const [prefs, setPrefsState] = useState(() => loadAppearance(""));
   const [systemDark, setSystemDark] = useState(readSystemDark);
 
   useEffect(() => {
@@ -52,17 +54,23 @@ export function AppearanceRoot({ children }: { children: ReactNode }) {
     applyAppearance(prefs, systemDark);
   }, [prefs, systemDark]);
 
+  const setActor = useCallback((openId: string) => {
+    const id = (openId || "").trim();
+    setActorState(id);
+    setPrefsState(loadAppearance(id));
+  }, []);
+
   const setPrefs = useCallback((next: Appearance) => {
     const clean = parseAppearance(next);
-    saveAppearance(clean);
+    saveAppearance(clean, actor);
     setPrefsState(clean);
-  }, []);
+  }, [actor]);
 
   const resolved = resolveTheme(prefs.theme, systemDark);
   const theme = useMemo(() => buildTheme(resolved, prefs.fontPx), [resolved, prefs.fontPx]);
 
   return (
-    <AppearanceContext.Provider value={{ prefs, setPrefs, resolved }}>
+    <AppearanceContext.Provider value={{ prefs, setPrefs, resolved, setActor }}>
       <ConfigProvider locale={zhCN} theme={theme}>
         {children}
       </ConfigProvider>

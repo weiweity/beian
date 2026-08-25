@@ -17,7 +17,7 @@ export function shouldAutoRedirectToFeishu(input: {
 
 export function feishuLoginHref(pathname = "/"): string {
   const p = (pathname || "/").replace(/\/+$/, "") || "/";
-  if (!p.startsWith("/") || p.startsWith("//") || p === "/" || !isSpaPath(p)) {
+  if (!p.startsWith("/") || p.startsWith("//") || p === "/" || p === "/reviewup" || !isSpaPath(p)) {
     return "/api/auth/feishu/login";
   }
   return `/api/auth/feishu/login?next=${encodeURIComponent(p)}`;
@@ -33,8 +33,8 @@ export function authFailureAction(input: {
     if (isLocalDevHost(input.host || "")) {
       return { href: "http://127.0.0.1:8787/", label: "打开本机审稿服务" };
     }
-    const p = input.pathname || "/";
-    return { href: isSpaPath(p) ? p : "/", label: "刷新后再试" };
+    const p = input.pathname || "/reviewup";
+    return { href: isSpaPath(p) ? p : "/reviewup", label: "刷新后再试" };
   }
   return { href: feishuLoginHref(input.pathname || "/"), label: "重新飞书授权" };
 }

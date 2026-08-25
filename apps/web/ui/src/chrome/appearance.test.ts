@@ -213,6 +213,10 @@ describe("loadAppearance / saveAppearance", () => {
       assert.deepEqual(loadAppearance(), APPEARANCE_DEFAULT);
       mem.set(APPEARANCE_KEY, '"just a string"');
       assert.deepEqual(loadAppearance(), APPEARANCE_DEFAULT);
+      saveAppearance({ ...APPEARANCE_DEFAULT, fontPx: 20 }, "ou_a");
+      saveAppearance({ ...APPEARANCE_DEFAULT, fontPx: 14 }, "ou_b");
+      assert.equal(loadAppearance("ou_a").fontPx, 20);
+      assert.equal(loadAppearance("ou_b").fontPx, 14);
     } finally {
       if (prev) g.localStorage = prev;
       else delete g.localStorage;

@@ -121,7 +121,7 @@ describe("setupBoard copy", () => {
     assert.match(rowDetail(row, { pending: true }, "天元（魏炜）", true), /正在发给/);
     assert.match(idleRowMessage("lark", "push"), /授权|open_id/);
     assert.match(WIZARD["飞书推送"].intro, /不必手填开关、open_id、bot/);
-    assert.equal(settingsGroupPath("飞书推送"), "/?tab=settings&group=" + encodeURIComponent("飞书推送"));
+    assert.equal(settingsGroupPath("飞书推送"), "/settings?group=" + encodeURIComponent("飞书推送"));
     assert.match(feishuLoginHref("飞书推送"), /^\/api\/auth\/feishu\/login\?next=/);
     assert.equal(feishuAppReady(undefined), false);
     assert.equal(

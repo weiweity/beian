@@ -1,4 +1,4 @@
-import { closeSync, createReadStream, existsSync, mkdirSync, openSync, readFileSync, readSync, writeFileSync } from "node:fs";
+import { closeSync, copyFileSync, createReadStream, existsSync, mkdirSync, openSync, readFileSync, readSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { serve } from "@hono/node-server";
@@ -8,7 +8,7 @@ import { compress } from "hono/compress";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import { HTTPException } from "hono/http-exception";
 import { cacheHeaderFor, REDIRECT_CACHE } from "./cacheHeaders.js";
-import { isSpaPath, spaIndexAction } from "./spaIndex.js";
+import { isSpaPath, legacyDeskRedirect, spaIndexAction } from "./spaIndex.js";
 import { COOKIE, DATA_DIR, HOST, PORT, REPO_ROOT, UI_DIST, UI_PUBLIC, cookieSecure } from "./config.js";
 import { billingSnapshot, loadVendorBills, resetBillingCache } from "./billing.js";
 import { notifyTaskComplete, sendText } from "./notify.js";
@@ -60,6 +60,7 @@ import {
 } from "./mockup.js";
 import { assertIllustratorReady } from "./aiRaster.js";
 import { skipPackSheetField } from "./sheetSkip.js";
+import { consumeReceipt, receiptOwner, stageBuffers } from "./uploads.js";
 import {
   activeHits,
   assertCanAccessTask,
@@ -79,7 +80,7 @@ import {
 type Env = { Variables: { session: Session } };
 
 const app = new Hono<Env>();
-const VERSION = "0.12.21.0";
+const VERSION = "0.13.0.0";
 
 app.use(compress());
 
@@ -239,7 +240,7 @@ app.get("/api/auth/feishu/callback", async (c) => {
       path: "/",
       maxAge: 7 * 24 * 3600,
     });
-    return c.redirect(`${publicBase()}${oauth.next || "/"}`, 302);
+    return c.redirect(`${publicBase()}${oauth.next || "/reviewup"}`, 302);
   } catch (e) {
     const msg = e instanceof Error ? e.message : "登录失败";
     const code = /白名单/.test(msg) ? "forbidden" : "failed";
@@ -274,6 +275,101 @@ app.delete("/api/tasks/:tid", (c) => {
   } catch (e) {
     boom(e);
   }
+});
+
+app.post("/api/uploads", async (c) => {
+  const s = need(c, "create");
+  const body = await c.req.parseBody({ all: true });
+  const parts: { field: string; name: string; buf: Buffer }[] = [];
+  async function take(field: string, file: unknown) {
+    if (!(file instanceof File)) return;
+    parts.push({ field, name: file.name, buf: Buffer.from(await file.arrayBuffer()) });
+  }
+  await take("excel", body.excel);
+  await take("pdf", body.pdf);
+  await take("ai", body.file || body.ai);
+  if (!parts.length) throw new HTTPException(400, { message: "没有文件" });
+  try {
+    const rec = stageBuffers(receiptOwner(s), parts);
+    return c.json({
+      receipt: rec.id,
+      files: rec.files.map((f) => ({ field: f.field, name: f.name, bytes: f.bytes })),
+    });
+  } catch (err) {
+    throw new HTTPException(400, { message: err instanceof Error ? err.message : "上传失败" });
+  }
+});
+
+app.post("/api/tasks/start", async (c) => {
+  const s = need(c, "create");
+  const body = (await c.req.json()) as {
+    receipt?: string;
+    product_name?: string;
+    title?: string;
+    pack_surface?: string;
+  };
+  const rec = consumeReceipt(String(body.receipt || ""), receiptOwner(s));
+  if (!rec) throw new HTTPException(400, { message: "上传已过期，请重新传文件" });
+  const excel = rec.files.find((f) => f.field === "excel");
+  const pdf = rec.files.find((f) => f.field === "pdf");
+  if (!excel || !pdf) throw new HTTPException(400, { message: "需要 excel + 包装 PDF" });
+  const product = String(body.product_name || "")
+    .replace(/[\u0000-\u001f]/g, "")
+    .trim()
+    .slice(0, 80);
+  if (!product) throw new HTTPException(400, { message: "品名必填" });
+  const tid = newTid();
+  const dir = join(DATA_DIR, "uploads", tid);
+  mkdirSync(dir, { recursive: true });
+  copyFileSync(excel.path, join(dir, "source.xlsx"));
+  copyFileSync(pdf.path, join(dir, "artwork.pdf"));
+  saveTask({
+    id: tid,
+    title: String(body.title || product),
+    product_name: product,
+    type: "excel_pdf",
+    status: "comparing",
+    created_at: nowIso(),
+    owner: s.display_name,
+    created_by: s.display_name,
+    pack_surface: String(body.pack_surface || "carton"),
+    job_kind: "compare",
+    job_status: "queued",
+  });
+  try {
+    enqueue({ kind: "compare", id: tid });
+  } catch (err) {
+    console.warn("enqueue compare failed:", err instanceof Error ? err.message : err);
+  }
+  return c.json(publicTask(loadTask(tid), { name: s.display_name, admin: s.role === "admin" }));
+});
+
+app.post("/api/mockups/start", async (c) => {
+  const s = need(c, "create");
+  try {
+    assertBlenderReady();
+    assertIllustratorReady();
+  } catch (e) {
+    boom(e);
+  }
+  const body = (await c.req.json()) as { receipt?: string; title?: string; product_name?: string };
+  const rec = consumeReceipt(String(body.receipt || ""), receiptOwner(s));
+  if (!rec) throw new HTTPException(400, { message: "上传已过期，请重新传文件" });
+  const ai = rec.files.find((f) => f.field === "ai");
+  if (!ai) throw new HTTPException(400, { message: "需要 .ai 稿件" });
+  const id = newTid();
+  const dir = join(DATA_DIR, "mockups", id);
+  mkdirSync(dir, { recursive: true });
+  const src = join(dir, ai.name.replace(/[^a-zA-Z0-9._-]/g, "_") || "art.ai");
+  copyFileSync(ai.path, src);
+  const title = String(body.title || body.product_name || "").trim();
+  const job = queueMockup({ id, sourcePath: src, displayName: s.display_name, title });
+  try {
+    enqueue({ kind: "mockup", id });
+  } catch (err) {
+    console.warn("enqueue mockup failed:", err instanceof Error ? err.message : err);
+  }
+  return c.json(decorateQueueAhead([publicMockup(getJob(id) || job)])[0]);
 });
 
 app.post("/api/tasks/upload", async (c) => {
@@ -673,7 +769,8 @@ function spaHtml(c: Context) {
   if (action === "feishu") {
     c.header("Cache-Control", REDIRECT_CACHE);
     const next = sanitizeNext(c.req.path);
-    const q = isSpaPath(next) && next !== "/" ? `?next=${encodeURIComponent(next)}` : "";
+    const home = next === "/" || next === "/reviewup";
+    const q = isSpaPath(next) && !home ? `?next=${encodeURIComponent(next)}` : "";
     return c.redirect(`/api/auth/feishu/login${q}`, 302);
   }
   const index = join(UI_DIST, "index.html");
@@ -684,13 +781,24 @@ function spaHtml(c: Context) {
   return c.html(readFileSync(index, "utf8"));
 }
 
-app.get("/", spaHtml);
-app.get("/new", spaHtml);
+function legacyToReviewup(c: Context) {
+  const dest = legacyDeskRedirect(c.req.path);
+  if (!dest) return spaHtml(c);
+  const q = new URL(c.req.url).search;
+  c.header("Cache-Control", REDIRECT_CACHE);
+  return c.redirect(`${dest}${q}`, 302);
+}
+
+app.get("/", legacyToReviewup);
+app.get("/new", legacyToReviewup);
+app.get("/review", legacyToReviewup);
+app.get("/reviewup", spaHtml);
+app.get("/reviewup/new", spaHtml);
 app.get("/history", spaHtml);
 app.get("/settings", spaHtml);
-app.get("/review", spaHtml);
 app.get("/review/:id", spaHtml);
 app.get("/mockup", spaHtml);
+app.get("/mockup/new", spaHtml);
 app.get("/mockup/:id", spaHtml);
 
 export { app };

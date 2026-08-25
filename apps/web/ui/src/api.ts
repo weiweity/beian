@@ -57,6 +57,51 @@ async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
   return (await res.json()) as T;
 }
 
+export type UploadReceipt = {
+  receipt: string;
+  files: { field: string; name: string; bytes: number }[];
+};
+
+function uploadWithProgress<T>(path: string, fd: FormData, onProgress?: (pct: number) => void): Promise<T> {
+  if (typeof XMLHttpRequest === "undefined") {
+    return request<T>(path, { method: "POST", body: fd });
+  }
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", path);
+    xhr.withCredentials = true;
+    xhr.upload.onprogress = (ev) => {
+      if (!onProgress || !ev.lengthComputable || ev.total <= 0) return;
+      onProgress(Math.max(0, Math.min(100, Math.round((ev.loaded / ev.total) * 100))));
+    };
+    xhr.onload = () => {
+      const ct = xhr.getResponseHeader("content-type") || "";
+      if (xhr.status === 413) {
+        reject(new ApiError(413, UPLOAD_TOO_LARGE, false));
+        return;
+      }
+      let detail = xhr.statusText;
+      try {
+        if (ct.includes("application/json") && xhr.responseText) {
+          const body = JSON.parse(xhr.responseText) as T & { detail?: unknown };
+          if (xhr.status >= 200 && xhr.status < 300) {
+            onProgress?.(100);
+            resolve(body);
+            return;
+          }
+          if (typeof body.detail === "string") detail = body.detail;
+        }
+      } catch {
+        /* keep statusText */
+      }
+      const hint = describeBrokenApi(xhr.status, ct, apiHost());
+      reject(new ApiError(xhr.status, hint || detail, Boolean(hint)));
+    };
+    xhr.onerror = () => reject(new ApiError(0, "上传中断", true));
+    xhr.send(fd);
+  });
+}
+
 export type Me = {
   logged_in: boolean;
   display_name: string | null;
@@ -163,6 +208,12 @@ export const api = {
   task: (id: string) => request<TaskDetail>(`/api/tasks/${id}`),
   uploadExcelPdf: (fd: FormData) =>
     request<TaskDetail>("/api/tasks/upload", { method: "POST", body: fd }),
+  stageUpload: (fd: FormData, onProgress?: (pct: number) => void) =>
+    uploadWithProgress<UploadReceipt>("/api/uploads", fd, onProgress),
+  startTask: (body: { receipt: string; product_name: string; title?: string; pack_surface?: string }) =>
+    request<TaskDetail>("/api/tasks/start", { method: "POST", body: JSON.stringify(body) }),
+  startMockup: (body: { receipt: string; title?: string; product_name?: string }) =>
+    request<MockupJob>("/api/mockups/start", { method: "POST", body: JSON.stringify(body) }),
   decide: (id: string, body: { hit_id: string; decision: Decision; note?: string }) =>
     request<TaskDetail>(`/api/tasks/${id}/decision`, {
       method: "POST",

@@ -11,6 +11,7 @@ import {
 describe("feishuLoginHref", () => {
   it("keeps root login without next", () => {
     assert.equal(feishuLoginHref("/"), "/api/auth/feishu/login");
+    assert.equal(feishuLoginHref("/reviewup"), "/api/auth/feishu/login");
     assert.equal(feishuLoginHref("/api/auth/feishu/login"), "/api/auth/feishu/login");
     assert.equal(feishuLoginHref("https://evil.example/"), "/api/auth/feishu/login");
   });
@@ -23,6 +24,10 @@ describe("feishuLoginHref", () => {
     assert.equal(
       feishuLoginHref("/review/aabbccddeeff/"),
       "/api/auth/feishu/login?next=%2Freview%2Faabbccddeeff",
+    );
+    assert.equal(
+      feishuLoginHref("/reviewup/new"),
+      "/api/auth/feishu/login?next=%2Freviewup%2Fnew",
     );
     assert.equal(feishuLoginHref("/foo"), "/api/auth/feishu/login");
   });
@@ -136,7 +141,7 @@ describe("authFailureAction", () => {
         host: "www.jianghua.site",
         pathname: "//evil",
       }),
-      { href: "/", label: "刷新后再试" },
+      { href: "/reviewup", label: "刷新后再试" },
     );
   });
 });

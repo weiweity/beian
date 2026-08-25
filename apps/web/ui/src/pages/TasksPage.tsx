@@ -3,6 +3,8 @@ import { Alert, Button, Empty, Input, Segmented, Space, Table, Tag } from "antd"
 import { api, ApiError, type TaskSummary } from "../api";
 import { liveJobLine } from "./waitCard";
 import { shouldShowTaskBoard } from "./tasksBoard";
+import { PENDING_REVIEW, deskClock, type DeskCardRow } from "./deskBoard";
+import { DeskCol } from "./DeskCol";
 
 type Props = {
   onCreate: () => void;
@@ -15,13 +17,33 @@ type Col = "comparing" | "failed" | "review" | "done";
 function statusLabel(row: TaskSummary) {
   if (row.status === "completed") return { text: "已签字", color: "default" as const };
   if (row.status === "in_review" || row.status === "pending_review") {
-    return { text: "待她判", color: "warning" as const };
+    return { text: PENDING_REVIEW, color: "warning" as const };
   }
   if (row.status === "compare_failed" || row.job_status === "failed") {
     return { text: "对照失败", color: "error" as const };
   }
   if (row.status === "comparing") return { text: "正在对照", color: "processing" as const };
   return { text: row.status, color: "default" as const };
+}
+
+function toDeskCard(row: TaskSummary): DeskCardRow {
+  const s = statusLabel(row);
+  return {
+    id: row.id,
+    title: row.product_name || row.title,
+    statusText: s.text,
+    statusColor: s.color,
+    actor: row.owner,
+    at: row.job_started_at || row.created_at,
+    live: liveJobLine({
+      job_status: row.job_status,
+      job_stage_label: row.job_stage_label,
+      job_eta_s: row.job_eta_s,
+      queue_ahead: row.queue_ahead,
+      kind: row.job_kind === "rework" ? "rework" : "compare",
+    }),
+    error: row.error || row.job_error,
+  };
 }
 
 function columnOf(row: TaskSummary): Col {
@@ -123,7 +145,7 @@ export function TasksPage({ onCreate, onOpen }: Props) {
             />
           ) : null}
           <Button type="primary" onClick={onCreate}>
-            新建 Excel↔PDF
+            进入工作台
           </Button>
         </Space>
       </div>
@@ -150,24 +172,24 @@ export function TasksPage({ onCreate, onOpen }: Props) {
               ) : (
                 <div>
                   <div>还没有审核单</div>
-                  <div className="desk-empty-hint">把 Excel 和备案/包装 PDF 交上来对照</div>
+                  <div className="desk-empty-hint">右上角进入工作台，把 Excel 和备案/包装 PDF 交上来对照</div>
                 </div>
               )
             }
           >
             {loading ? null : (
               <Button type="primary" onClick={onCreate}>
-                新建 Excel↔PDF
+                进入工作台
               </Button>
             )}
           </Empty>
         </div>
       ) : layout === "board" ? (
         <div className="review-board is-four">
-          <BoardCol title="对照中" hint="机器还在跑" rows={board.comparing} onOpen={onOpen} />
-          <BoardCol title="对照失败" hint="中断了，点开看原因" rows={board.failed} onOpen={onOpen} />
-          <BoardCol title="待她判" hint="要人写结论" rows={board.review} onOpen={onOpen} />
-          <BoardCol title="已签字" hint="结论已记下" rows={board.done} onOpen={onOpen} />
+          <DeskCol title="对照中" hint="机器还在跑" rows={board.comparing.map(toDeskCard)} onOpen={onOpen} />
+          <DeskCol title="对照失败" hint="中断了，点开看原因" rows={board.failed.map(toDeskCard)} onOpen={onOpen} />
+          <DeskCol title="待审核" hint="要人写结论" rows={board.review.map(toDeskCard)} onOpen={onOpen} />
+          <DeskCol title="已签字" hint="结论已记下" rows={board.done.map(toDeskCard)} onOpen={onOpen} />
         </div>
       ) : (
         <Table<TaskSummary>
@@ -191,7 +213,7 @@ export function TasksPage({ onCreate, onOpen }: Props) {
                   </Button>
                 ) : (
                   <Button type="primary" onClick={onCreate}>
-                    新建 Excel↔PDF
+                    进入工作台
                   </Button>
                 )}
               </Empty>
@@ -219,7 +241,13 @@ export function TasksPage({ onCreate, onOpen }: Props) {
                 );
               },
             },
-            { title: "创建", dataIndex: "created_at", width: 220 },
+            {
+              title: "工作时间",
+              dataIndex: "created_at",
+              width: 180,
+              render: (_, row) => deskClock(row.job_started_at || row.created_at),
+            },
+            { title: "使用人", dataIndex: "owner", width: 100, render: (v: string) => v || "—" },
             {
               title: "",
               key: "open",
@@ -234,54 +262,5 @@ export function TasksPage({ onCreate, onOpen }: Props) {
         />
       )}
     </section>
-  );
-}
-
-function BoardCol({
-  title,
-  hint,
-  rows,
-  onOpen,
-}: {
-  title: string;
-  hint: string;
-  rows: TaskSummary[];
-  onOpen: (id: string) => void;
-}) {
-  return (
-    <div className="review-col">
-      <div className="review-col-head">
-        <strong>{title}</strong>
-        <span>{rows.length}</span>
-      </div>
-      <p className="review-col-hint">{hint}</p>
-      <div className="review-col-list">
-        {rows.length === 0 ? <div className="review-col-empty">没有单</div> : null}
-        {rows.map((row) => {
-          const s = statusLabel(row);
-          const live = liveJobLine(row);
-          return (
-            <button key={row.id} type="button" className="review-card" onClick={() => onOpen(row.id)}>
-              <div className="review-card-main">
-                <div className="review-card-name">{row.product_name || row.title}</div>
-                {live ? (
-                  <>
-                    <div className="review-card-live">{live}</div>
-                    <div className="review-card-bar" aria-hidden>
-                      <span />
-                    </div>
-                  </>
-                ) : null}
-                {row.error ? <div className="review-card-err">{row.error}</div> : null}
-              </div>
-              <div className="review-card-meta">
-                <Tag color={s.color}>{s.text}</Tag>
-                {row.owner ? <span>{row.owner}</span> : null}
-              </div>
-            </button>
-          );
-        })}
-      </div>
-    </div>
   );
 }

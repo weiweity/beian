@@ -67,4 +67,16 @@ describe("historyHasLive", () => {
     assert.equal(historyHasLive([live, done]), true);
     assert.equal(historyHasLive([done]), false);
   });
+
+  it("labels pending review as 待审核", () => {
+    const row = historyTaskRow({
+      id: "t2",
+      title: "花盒",
+      product_name: "达肤妍",
+      type: "pack",
+      status: "pending_review",
+    });
+    assert.equal(row.status, "待审核");
+    assert.doesNotMatch(row.status, /待她判/);
+  });
 });

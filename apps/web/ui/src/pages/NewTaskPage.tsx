@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { App } from "antd";
 import { api } from "../api";
 import { UploadWell } from "../chrome/UploadWell";
@@ -14,7 +14,49 @@ export function NewTaskPage({ onCreated, onBack }: Props) {
   const [pack, setPack] = useState("carton");
   const [excel, setExcel] = useState<File | null>(null);
   const [pdf, setPdf] = useState<File | null>(null);
+  const [receipt, setReceipt] = useState<string | null>(null);
+  const [pct, setPct] = useState(0);
+  const [uploading, setUploading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (!excel || !pdf) {
+      setReceipt(null);
+      setPct(0);
+      return;
+    }
+    if (bytesTooLarge(excel.size, pdf.size)) {
+      setReceipt(null);
+      return;
+    }
+    let cancelled = false;
+    const fd = new FormData();
+    fd.append("excel", excel);
+    fd.append("pdf", pdf);
+    setUploading(true);
+    setReceipt(null);
+    setPct(0);
+    void api
+      .stageUpload(fd, (n) => {
+        if (!cancelled) setPct(n);
+      })
+      .then((res) => {
+        if (cancelled) return;
+        setReceipt(res.receipt);
+        setPct(100);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setReceipt(null);
+        message.error(err instanceof Error ? err.message : "上传失败");
+      })
+      .finally(() => {
+        if (!cancelled) setUploading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [excel, pdf, message]);
 
   async function submit() {
     const name = productName.trim();
@@ -30,19 +72,22 @@ export function NewTaskPage({ onCreated, onBack }: Props) {
       message.error(UPLOAD_TOO_LARGE);
       return;
     }
-    const fd = new FormData();
-    fd.append("product_name", name);
-    fd.append("title", name);
-    fd.append("pack_surface", pack);
-    fd.append("excel", excel);
-    fd.append("pdf", pdf);
+    if (!receipt) {
+      message.warning("请先等文件传完。");
+      return;
+    }
     setSubmitting(true);
     try {
-      const task = await api.uploadExcelPdf(fd);
+      const task = await api.startTask({
+        receipt,
+        product_name: name,
+        title: name,
+        pack_surface: pack,
+      });
       message.success("已开始对照。结论还要你来定。");
       onCreated(task.id);
     } catch (err) {
-      message.error(err instanceof Error ? err.message : "上传失败");
+      message.error(err instanceof Error ? err.message : "无法开始对照");
       setSubmitting(false);
     }
   }
@@ -76,8 +121,13 @@ export function NewTaskPage({ onCreated, onBack }: Props) {
           <button type="button" className="btn-ghost" onClick={onBack}>
             返回
           </button>
-          <button type="button" className="btn-primary" onClick={() => void submit()}>
-            开始对照
+          <button
+            type="button"
+            className="btn-primary"
+            disabled={!receipt || uploading}
+            onClick={() => void submit()}
+          >
+            {uploading ? `上传中 ${pct}%` : "开始对照"}
           </button>
         </div>
       </header>
@@ -113,6 +163,9 @@ export function NewTaskPage({ onCreated, onBack }: Props) {
         </div>
       </div>
 
+      {excel && pdf ? (
+        <p className="page-lead">{uploading ? `正在上传 ${pct}%` : receipt ? "上传成功，可以开始对照。" : "等待上传"}</p>
+      ) : null}
       <div className="upload-row">
         <UploadWell
           icon="/brand/ui/well-excel.svg"
