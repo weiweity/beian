@@ -79,7 +79,7 @@ import {
 type Env = { Variables: { session: Session } };
 
 const app = new Hono<Env>();
-const VERSION = "0.12.17.0";
+const VERSION = "0.12.17.1";
 
 app.use(compress());
 

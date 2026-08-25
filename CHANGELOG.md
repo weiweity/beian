@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.12.17.1] - 2026-08-25
+
+### Fixed
+
+- 杭州发版：PowerShell 不再把 `git fetch` 的 stderr 当成失败。Actions 用 cmd 先拉码并检出新的 `release.ps1`，盘上旧脚本坏了也能升上去。
+
 ## [0.12.17.0] - 2026-08-25
 
 ### Added
