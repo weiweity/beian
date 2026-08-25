@@ -1,9 +1,21 @@
-import { closeSync, copyFileSync, createReadStream, existsSync, mkdirSync, openSync, readFileSync, readSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  copyFileSync,
+  createReadStream,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono, type Context } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import { compress } from "hono/compress";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import { HTTPException } from "hono/http-exception";
@@ -22,7 +34,6 @@ import {
 import {
   feishuRedirect,
   getSetting,
-  maxUploadBytes,
   publicBase,
   adminOnlyKeys,
   publicView,
@@ -40,6 +51,7 @@ import {
   getSession,
   logout as dropSession,
   hasPerm,
+  permissionsFor,
   oauthReady,
   sanitizeNext,
   lockAllowedTenant,
@@ -52,6 +64,7 @@ import {
   assertCanAccessMockup,
   deleteMockup,
   fileOf,
+  findMockupBySourceReceipt,
   getJob,
   isWhiteFile,
   listJobsFor,
@@ -60,12 +73,29 @@ import {
 } from "./mockup.js";
 import { assertIllustratorReady } from "./aiRaster.js";
 import { skipPackSheetField } from "./sheetSkip.js";
-import { consumeReceipt, loadReceipt, purgeReceiptFiles, receiptOwner, stageBuffers, underReceiptDir } from "./uploads.js";
+import {
+  consumeReceipt,
+  createUploadAdmission,
+  discardReceipt,
+  listReceipts,
+  loadReceipt,
+  MAX_UPLOAD_BODY_BYTES,
+  purgeReceiptFiles,
+  receiptOwner,
+  restoreReceipt,
+  stageBuffers,
+  tooLarge,
+  underReceiptDir,
+  UPLOAD_BODY_TOO_LARGE,
+  oversizeMessage,
+  uploadTotalTooLarge,
+} from "./uploads.js";
 import {
   activeHits,
   assertCanAccessTask,
   assertTid,
   deleteTask,
+  findTaskBySourceReceipt,
   isHitDecision,
   isReviewableStatus,
   isReworkableTask,
@@ -82,6 +112,7 @@ type Env = { Variables: { session: Session } };
 
 const app = new Hono<Env>();
 const VERSION = "0.13.0.0";
+const uploadAdmission = createUploadAdmission(1);
 
 app.use(compress());
 
@@ -167,9 +198,7 @@ app.get("/api/auth/me", (c) => {
     avatar_url: s.avatar_url || "",
     role: s.role,
     open_id: s.open_id || "",
-    perms: s.role === "admin"
-      ? ["read", "create", "decide", "complete", "delete", "export", "manage_users"]
-      : ["read", "create", "decide", "complete", "delete", "export"],
+    perms: permissionsFor(s.role),
     expires_at: s.expires_at,
   });
 });
@@ -267,7 +296,7 @@ app.get("/api/tasks/:tid", (c) => {
 });
 
 app.delete("/api/tasks/:tid", (c) => {
-  const s = need(c, "create");
+  const s = need(c, "delete");
   try {
     const task = loadTask(c.req.param("tid"));
     assertCanAccessTask(task, viewerFromSession(s));
@@ -278,28 +307,62 @@ app.delete("/api/tasks/:tid", (c) => {
   }
 });
 
-app.post("/api/uploads", async (c) => {
+app.get("/api/uploads", (c) => {
   const s = need(c, "create");
-  const body = await c.req.parseBody({ all: true });
-  const parts: { field: string; name: string; buf: Buffer }[] = [];
-  async function take(field: string, file: unknown) {
-    if (!(file instanceof File)) return;
-    parts.push({ field, name: file.name, buf: Buffer.from(await file.arrayBuffer()) });
-  }
-  await take("excel", body.excel);
-  await take("pdf", body.pdf);
-  await take("ai", body.file || body.ai);
-  if (!parts.length) throw new HTTPException(400, { message: "没有文件" });
-  try {
-    const rec = stageBuffers(receiptOwner(s), parts);
-    return c.json({
-      receipt: rec.id,
-      files: rec.files.map((f) => ({ field: f.field, name: f.name, bytes: f.bytes })),
-    });
-  } catch (err) {
-    throw new HTTPException(400, { message: err instanceof Error ? err.message : "上传失败" });
-  }
+  return c.json(listReceipts(receiptOwner(s)));
 });
+
+app.delete("/api/uploads/:id", (c) => {
+  const s = need(c, "create");
+  return c.json({ ok: discardReceipt(c.req.param("id"), receiptOwner(s)) });
+});
+
+app.post(
+  "/api/uploads",
+  async (c, next) => {
+    need(c, "create");
+    await uploadAdmission.run(next);
+  },
+  bodyLimit({
+    maxSize: MAX_UPLOAD_BODY_BYTES,
+    onError: (c) => c.json({ detail: UPLOAD_BODY_TOO_LARGE }, 413),
+  }),
+  async (c) => {
+    const s = need(c, "create");
+    const body = await c.req.parseBody({ all: true });
+    const selected: { field: string; file: File }[] = [];
+    function take(field: string, file: unknown) {
+      if (!(file instanceof File)) return;
+      selected.push({ field, file });
+    }
+    take("excel", body.excel);
+    take("pdf", body.pdf);
+    take("ai", body.file || body.ai);
+    if (!selected.length) throw new HTTPException(400, { message: "没有文件" });
+    const rawClientUploadId = body.client_upload_id;
+    const clientUploadId =
+      typeof rawClientUploadId === "string" && /^[a-zA-Z0-9_-]{8,80}$/.test(rawClientUploadId)
+        ? rawClientUploadId
+        : undefined;
+    if (uploadTotalTooLarge(selected.map(({ file }) => file.size))) {
+      throw new HTTPException(413, { message: UPLOAD_BODY_TOO_LARGE });
+    }
+    const parts: { field: string; name: string; buf: Buffer }[] = [];
+    for (const { field, file } of selected) {
+      parts.push({ field, name: file.name, buf: Buffer.from(await file.arrayBuffer()) });
+    }
+    try {
+      const rec = stageBuffers(receiptOwner(s), parts, clientUploadId);
+      return c.json({
+        receipt: rec.id,
+        client_upload_id: rec.client_upload_id,
+        files: rec.files.map((f) => ({ field: f.field, name: f.name, bytes: f.bytes })),
+      });
+    } catch (err) {
+      throw new HTTPException(400, { message: err instanceof Error ? err.message : "上传失败" });
+    }
+  },
+);
 
 app.post("/api/tasks/start", async (c) => {
   const s = need(c, "create");
@@ -316,13 +379,23 @@ app.post("/api/tasks/start", async (c) => {
   if (!product) throw new HTTPException(400, { message: "品名必填" });
   const owner = receiptOwner(s);
   const receiptId = String(body.receipt || "");
+  const existing = findTaskBySourceReceipt(receiptId, owner);
+  if (existing) {
+    discardReceipt(receiptId, owner);
+    purgeReceiptFiles(receiptId);
+    return c.json(publicTask(existing, viewerFromSession(s)));
+  }
   const peeked = loadReceipt(receiptId, owner);
   if (!peeked) throw new HTTPException(400, { message: "上传已过期，请重新传文件" });
   if (!peeked.files.some((f) => f.field === "excel") || !peeked.files.some((f) => f.field === "pdf")) {
     throw new HTTPException(400, { message: "需要 excel + 包装 PDF" });
   }
   const rec = consumeReceipt(receiptId, owner);
-  if (!rec) throw new HTTPException(400, { message: "上传已过期，请重新传文件" });
+  if (!rec) {
+    const recovered = findTaskBySourceReceipt(receiptId, owner);
+    if (recovered) return c.json(publicTask(recovered, viewerFromSession(s)));
+    throw new HTTPException(400, { message: "上传已过期，请重新传文件" });
+  }
   const excel = rec.files.find((f) => f.field === "excel");
   const pdf = rec.files.find((f) => f.field === "pdf");
   if (!excel || !pdf || !underReceiptDir(rec.id, excel.path) || !underReceiptDir(rec.id, pdf.path)) {
@@ -331,23 +404,37 @@ app.post("/api/tasks/start", async (c) => {
   }
   const tid = newTid();
   const dir = join(DATA_DIR, "uploads", tid);
-  mkdirSync(dir, { recursive: true });
-  copyFileSync(excel.path, join(dir, "source.xlsx"));
-  copyFileSync(pdf.path, join(dir, "artwork.pdf"));
+  try {
+    mkdirSync(dir, { recursive: true });
+    copyFileSync(excel.path, join(dir, "source.xlsx"));
+    copyFileSync(pdf.path, join(dir, "artwork.pdf"));
+    saveTask({
+      id: tid,
+      title: String(body.title || product).slice(0, 80),
+      product_name: product,
+      type: "excel_pdf",
+      status: "comparing",
+      created_at: nowIso(),
+      owner: viewerFromSession(s).id,
+      created_by: s.display_name,
+      pack_surface: String(body.pack_surface || "carton"),
+      job_kind: "compare",
+      job_status: "queued",
+      source_receipt: receiptId,
+    });
+  } catch (err) {
+    rmSync(dir, { recursive: true, force: true });
+    const restored = restoreReceipt(rec);
+    console.error("create compare task failed", {
+      problem: "上传回执已领取，但审核单文件没有准备完成",
+      cause: err instanceof Error ? err.message : String(err),
+      fix: restored ? "回执已恢复，可重新开始对照" : "回执未能恢复，需要重新上传",
+    });
+    throw new HTTPException(500, {
+      message: restored ? "创建审核单失败，请再点一次开始对照" : "创建审核单失败，请重新上传",
+    });
+  }
   purgeReceiptFiles(rec.id);
-  saveTask({
-    id: tid,
-    title: String(body.title || product).slice(0, 80),
-    product_name: product,
-    type: "excel_pdf",
-    status: "comparing",
-    created_at: nowIso(),
-    owner: viewerFromSession(s).id,
-    created_by: s.display_name,
-    pack_surface: String(body.pack_surface || "carton"),
-    job_kind: "compare",
-    job_status: "queued",
-  });
   try {
     enqueue({ kind: "compare", id: tid });
   } catch (err) {
@@ -358,20 +445,30 @@ app.post("/api/tasks/start", async (c) => {
 
 app.post("/api/mockups/start", async (c) => {
   const s = need(c, "create");
+  const body = (await c.req.json()) as { receipt?: string; title?: string; product_name?: string };
+  const owner = receiptOwner(s);
+  const receiptId = String(body.receipt || "");
+  const existing = findMockupBySourceReceipt(receiptId, owner);
+  if (existing) {
+    discardReceipt(receiptId, owner);
+    purgeReceiptFiles(receiptId);
+    return c.json(decorateQueueAhead([publicMockup(existing)])[0]);
+  }
   try {
     assertBlenderReady();
     assertIllustratorReady();
   } catch (e) {
     boom(e);
   }
-  const body = (await c.req.json()) as { receipt?: string; title?: string; product_name?: string };
-  const owner = receiptOwner(s);
-  const receiptId = String(body.receipt || "");
   const peeked = loadReceipt(receiptId, owner);
   if (!peeked) throw new HTTPException(400, { message: "上传已过期，请重新传文件" });
   if (!peeked.files.some((f) => f.field === "ai")) throw new HTTPException(400, { message: "需要 .ai 稿件" });
   const rec = consumeReceipt(receiptId, owner);
-  if (!rec) throw new HTTPException(400, { message: "上传已过期，请重新传文件" });
+  if (!rec) {
+    const recovered = findMockupBySourceReceipt(receiptId, owner);
+    if (recovered) return c.json(decorateQueueAhead([publicMockup(recovered)])[0]);
+    throw new HTTPException(400, { message: "上传已过期，请重新传文件" });
+  }
   const ai = rec.files.find((f) => f.field === "ai");
   if (!ai || !underReceiptDir(rec.id, ai.path)) {
     purgeReceiptFiles(rec.id);
@@ -379,12 +476,33 @@ app.post("/api/mockups/start", async (c) => {
   }
   const id = newTid();
   const dir = join(DATA_DIR, "mockups", id);
-  mkdirSync(dir, { recursive: true });
-  const src = join(dir, ai.name.replace(/[^a-zA-Z0-9._-]/g, "_") || "art.ai");
-  copyFileSync(ai.path, src);
+  let job: ReturnType<typeof queueMockup>;
+  try {
+    mkdirSync(dir, { recursive: true });
+    const src = join(dir, ai.name.replace(/[^a-zA-Z0-9._-]/g, "_") || "art.ai");
+    copyFileSync(ai.path, src);
+    const title = String(body.title || body.product_name || "").trim().slice(0, 80);
+    job = queueMockup({
+      id,
+      sourcePath: src,
+      sourceReceipt: receiptId,
+      ownerId: viewerFromSession(s).id,
+      displayName: s.display_name,
+      title,
+    });
+  } catch (err) {
+    rmSync(dir, { recursive: true, force: true });
+    const restored = restoreReceipt(rec);
+    console.error("create mockup task failed", {
+      problem: "上传回执已领取，但打样单文件没有准备完成",
+      cause: err instanceof Error ? err.message : String(err),
+      fix: restored ? "回执已恢复，可重新开始打样" : "回执未能恢复，需要重新上传",
+    });
+    throw new HTTPException(500, {
+      message: restored ? "创建打样单失败，请再点一次开始打样" : "创建打样单失败，请重新上传",
+    });
+  }
   purgeReceiptFiles(rec.id);
-  const title = String(body.title || body.product_name || "").trim().slice(0, 80);
-  const job = queueMockup({ id, sourcePath: src, ownerId: viewerFromSession(s).id, displayName: s.display_name, title });
   try {
     enqueue({ kind: "mockup", id });
   } catch (err) {
@@ -444,50 +562,79 @@ app.post("/api/tasks/:tid/complete", async (c) => {
   return c.json(publicTask(task, viewerFromSession(s)));
 });
 
-app.post("/api/tasks/:tid/rework", async (c) => {
-  const s = need(c, "create");
-  const tid = assertTid(c.req.param("tid"));
-  const body = await c.req.parseBody();
-  const task = loadTask(tid);
-  assertCanAccessTask(task, viewerFromSession(s));
-  if (task.job_status === "queued" || task.job_status === "running") {
-    throw new HTTPException(409, { message: "对红还在排队或正在跑" });
-  }
-  if (!isReworkableTask(task)) {
-    throw new HTTPException(400, { message: "当前状态不可对红" });
-  }
-  const pdf = body.pdf;
-  if (!(pdf instanceof File)) throw new HTTPException(400, { message: "需要改稿后的 PDF" });
-  const pdfBuf = Buffer.from(await pdf.arrayBuffer());
-  const limit = maxUploadBytes();
-  if (pdfBuf.length > limit) {
-    throw new HTTPException(400, { message: `文件超过 ${Math.round(limit / 1024 / 1024)} MB` });
-  }
-  if (pdfBuf.length < 5 || pdfBuf.subarray(0, 4).toString("utf8") !== "%PDF") {
-    throw new HTTPException(400, { message: "不是有效的 PDF" });
-  }
-  const dir = join(DATA_DIR, "uploads", tid);
-  mkdirSync(dir, { recursive: true });
-  const pdfPath = join(dir, "artwork_v2.pdf");
-  writeFileSync(pdfPath, pdfBuf);
-  task.status_before_job = task.status;
-  task.status = "comparing";
-  task.job_kind = "rework";
-  task.job_status = "queued";
-  task.job_error = undefined;
-  task.reclaim_count = 0;
-  delete task.job_pid;
-  delete task.job_finished_at;
-  task.notify_job_id = undefined;
-  task.notify_sent = false;
-  saveTask(task);
-  try {
-    enqueue({ kind: "rework", id: tid });
-  } catch (err) {
-    console.warn("enqueue rework failed:", err instanceof Error ? err.message : err);
-  }
-  return c.json(publicTask(loadTask(tid), viewerFromSession(s)));
-});
+app.post(
+  "/api/tasks/:tid/rework",
+  async (c, next) => {
+    const s = need(c, "create");
+    const task = loadTask(assertTid(c.req.param("tid")));
+    assertCanAccessTask(task, viewerFromSession(s));
+    await next();
+  },
+  async (_c, next) => {
+    await uploadAdmission.run(next);
+  },
+  bodyLimit({
+    maxSize: MAX_UPLOAD_BODY_BYTES,
+    onError: (c) => c.json({ detail: UPLOAD_BODY_TOO_LARGE }, 413),
+  }),
+  async (c) => {
+    const s = need(c, "create");
+    const tid = assertTid(c.req.param("tid"));
+    // 排队期间状态可能变化，解析前后都以当前落盘任务为准。
+    const beforeParse = loadTask(tid);
+    assertCanAccessTask(beforeParse, viewerFromSession(s));
+    if (beforeParse.job_status === "queued" || beforeParse.job_status === "running") {
+      throw new HTTPException(409, { message: "对红还在排队或正在跑" });
+    }
+    if (!isReworkableTask(beforeParse)) {
+      throw new HTTPException(400, { message: "当前状态不可对红" });
+    }
+    const body = await c.req.parseBody();
+    const pdf = body.pdf;
+    if (!(pdf instanceof File)) throw new HTTPException(400, { message: "需要改稿后的 PDF" });
+    if (uploadTotalTooLarge([pdf.size])) {
+      throw new HTTPException(413, { message: UPLOAD_BODY_TOO_LARGE });
+    }
+    if (tooLarge(pdf.size)) {
+      throw new HTTPException(400, { message: oversizeMessage() });
+    }
+    const pdfBuf = Buffer.from(await pdf.arrayBuffer());
+    // parseBody / arrayBuffer 会让出事件循环；另一标签可能已经删单、签字或启动
+    // 另一轮作业。最后一次 await 之后重新读盘，此后同步落盘，不让旧对象复活任务。
+    const task = loadTask(tid);
+    assertCanAccessTask(task, viewerFromSession(s));
+    if (task.job_status === "queued" || task.job_status === "running") {
+      throw new HTTPException(409, { message: "对红还在排队或正在跑" });
+    }
+    if (!isReworkableTask(task)) {
+      throw new HTTPException(400, { message: "当前状态不可对红" });
+    }
+    if (pdfBuf.length < 5 || pdfBuf.subarray(0, 4).toString("utf8") !== "%PDF") {
+      throw new HTTPException(400, { message: "不是有效的 PDF" });
+    }
+    const dir = join(DATA_DIR, "uploads", tid);
+    mkdirSync(dir, { recursive: true });
+    const pdfPath = join(dir, "artwork_v2.pdf");
+    writeFileSync(pdfPath, pdfBuf);
+    task.status_before_job = task.status;
+    task.status = "comparing";
+    task.job_kind = "rework";
+    task.job_status = "queued";
+    task.job_error = undefined;
+    task.reclaim_count = 0;
+    delete task.job_pid;
+    delete task.job_finished_at;
+    task.notify_job_id = undefined;
+    task.notify_sent = false;
+    saveTask(task);
+    try {
+      enqueue({ kind: "rework", id: tid });
+    } catch (err) {
+      console.warn("enqueue rework failed:", err instanceof Error ? err.message : err);
+    }
+    return c.json(publicTask(loadTask(tid), viewerFromSession(s)));
+  },
+);
 
 app.get("/api/tasks/:tid/pages/:name", (c) => {
   const s = need(c, "read");
@@ -629,7 +776,7 @@ app.get("/api/mockups/:id", (c) => {
 });
 
 app.delete("/api/mockups/:id", (c) => {
-  const s = need(c, "create");
+  const s = need(c, "delete");
   try {
     const job = getJob(assertTid(c.req.param("id")));
     if (!job) throw new HTTPException(404, { message: "没有这单打样" });

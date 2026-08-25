@@ -287,6 +287,10 @@ export function hasPerm(role: Role, perm: string): boolean {
   return PERMS[role]?.includes(perm) ?? false;
 }
 
+export function permissionsFor(role: Role): string[] {
+  return [...(PERMS[role] || [])];
+}
+
 export function isLoopbackHost(hostHeader: string): boolean {
   const host = (hostHeader || "").split(":")[0].replace(/^\[|\]$/g, "");
   return host === "localhost" || host === "127.0.0.1" || host === "::1";

@@ -410,6 +410,15 @@ describe("mockup post", { concurrency: false }, () => {
       assert.ok(body.job_status === "queued" || body.job_status === "running");
       assert.ok(body.status === "queued" || body.status === "running");
       assert.equal("job_pid" in body, false);
+
+      // 服务端若已建单但响应丢了，重试同一回执应命中原单；恢复不再依赖此刻的本机工具探测。
+      delete process.env.BLENDER_EXECUTABLE;
+      delete process.env.ILLUSTRATOR_EXECUTABLE;
+      const retry = await startMockup(sess.token, receipt);
+      assert.equal(retry.status, 200);
+      const retried = (await retry.json()) as { id?: string; source_receipt?: string };
+      assert.equal(retried.id, (body as { id?: string }).id);
+      assert.equal("source_receipt" in retried, false);
     } finally {
       resetJobsTestHooks();
       if (prevBin !== undefined) process.env.BLENDER_EXECUTABLE = prevBin;

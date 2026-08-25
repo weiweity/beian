@@ -132,6 +132,7 @@ export function publicTask(task: Task, viewer?: Viewer): Record<string, unknown>
     notify_sent: _ns,
     reclaim_count: _rc,
     status_before_job: _sb,
+    source_receipt: _sourceReceipt,
     ...rest
   } = task;
   return {

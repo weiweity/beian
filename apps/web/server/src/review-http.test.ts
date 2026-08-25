@@ -719,4 +719,137 @@ describe("review http", () => {
     const body = (await res.json()) as { detail?: string };
     assert.match(String(body.detail || ""), /不是有效的 PDF/);
   });
+
+  it("honors a lower WB_MAX_UPLOAD_MB limit for rework", async () => {
+    const { saveSettings } = await import("./settings.js");
+    const tid = seed({
+      id: "151515151519",
+      title: "低上限改稿",
+      product_name: "低上限改稿",
+      type: "excel_pdf",
+      status: "completed",
+      complete_kind: "rework",
+      conclusion: "待设计改稿",
+      hits: [hit({ decision: "issue" })],
+    });
+    saveSettings({ WB_MAX_UPLOAD_MB: "1" });
+    try {
+      const bytes = Buffer.alloc(1024 * 1024 + 1);
+      bytes.write("%PDF-1.4");
+      const fd = new FormData();
+      fd.set("pdf", new File([bytes], "large.pdf", { type: "application/pdf" }));
+      const res = await app.request(`/api/tasks/${tid}/rework`, {
+        method: "POST",
+        headers: authHeader(),
+        body: fd,
+      });
+      assert.equal(res.status, 400);
+      assert.match(String(((await res.json()) as { detail?: string }).detail || ""), /文件超过 1 MB/);
+    } finally {
+      saveSettings({ WB_MAX_UPLOAD_MB: "" });
+    }
+  });
+
+  it("does not resurrect a task deleted while a slow rework body is parsing", async () => {
+    const tid = seed({
+      id: "151515151520",
+      title: "并发删除改稿",
+      product_name: "并发删除改稿",
+      type: "excel_pdf",
+      status: "completed",
+      complete_kind: "rework",
+      conclusion: "待设计改稿",
+      hits: [hit({ decision: "issue" })],
+    });
+    const boundary = "beian-slow-rework";
+    const encoder = new TextEncoder();
+    let releaseBody!: () => void;
+    let bodyStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      bodyStarted = resolve;
+    });
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(
+          `--${boundary}\r\nContent-Disposition: form-data; name="pdf"; filename="slow.pdf"\r\nContent-Type: application/pdf\r\n\r\n`,
+        ));
+        bodyStarted();
+        void new Promise<void>((resolve) => {
+          releaseBody = resolve;
+        }).then(() => {
+          controller.enqueue(encoder.encode("%PDF-1.4\n%slow\r\n"));
+          controller.enqueue(encoder.encode(`--${boundary}--\r\n`));
+          controller.close();
+        });
+      },
+    });
+    const request = new Request(`http://localhost/api/tasks/${tid}/rework`, {
+      method: "POST",
+      headers: { ...authHeader(), "content-type": `multipart/form-data; boundary=${boundary}` },
+      body,
+      duplex: "half",
+    } as RequestInit & { duplex: "half" });
+    const rework = app.request(request);
+    await started;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const removed = await app.request(`/api/tasks/${tid}`, { method: "DELETE", headers: authHeader() });
+    assert.equal(removed.status, 200);
+    releaseBody();
+
+    const result = await rework;
+    assert.equal(result.status, 404);
+    const get = await app.request(`/api/tasks/${tid}`, { headers: authHeader() });
+    assert.equal(get.status, 404);
+  });
+
+  it("rejects an oversized rework body before parsing it", async () => {
+    const { MAX_UPLOAD_BODY_BYTES } = await import("./uploads.js");
+    const tid = seed({
+      id: "151515151516",
+      title: "大改稿",
+      product_name: "大改稿",
+      type: "excel_pdf",
+      status: "completed",
+      complete_kind: "rework",
+      conclusion: "待设计改稿",
+      hits: [hit({ decision: "issue" })],
+    });
+    const boundary = "beian-rework-over-limit";
+    const res = await app.request(`/api/tasks/${tid}/rework`, {
+      method: "POST",
+      headers: {
+        ...authHeader(),
+        "content-type": `multipart/form-data; boundary=${boundary}`,
+        "content-length": String(MAX_UPLOAD_BODY_BYTES + 1),
+      },
+      body: `--${boundary}--\r\n`,
+    });
+    assert.equal(res.status, 413);
+    assert.deepEqual(await res.json(), { detail: "上传总量超过 100 MB" });
+  });
+
+  it("checks rework ownership before accepting or sizing the request body", async () => {
+    const { MAX_UPLOAD_BODY_BYTES } = await import("./uploads.js");
+    const tid = seed({
+      id: "151515151517",
+      title: "别人的改稿",
+      product_name: "别人的改稿",
+      type: "excel_pdf",
+      status: "completed",
+      complete_kind: "rework",
+      conclusion: "待设计改稿",
+      hits: [hit({ decision: "issue" })],
+    });
+    const other = issueSession("路人", "reviewer", "ou_rework_body_other", "feishu");
+    const res = await app.request(`/api/tasks/${tid}/rework`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${other.token}`,
+        "content-type": "multipart/form-data; boundary=foreign-large-body",
+        "content-length": String(MAX_UPLOAD_BODY_BYTES + 1),
+      },
+      body: "--foreign-large-body--\r\n",
+    });
+    assert.equal(res.status, 403);
+  });
 });
