@@ -74,6 +74,7 @@ import {
   newTid,
   nowIso,
   saveTask,
+  viewerFromSession,
 } from "./tasks.js";
 
 
@@ -251,15 +252,15 @@ app.get("/api/auth/feishu/callback", async (c) => {
 app.get("/api/tasks", (c) => {
   const s = need(c, "read");
   const q = c.req.query("q") || "";
-  return c.json(decorateQueueAhead(listTasks(q, s.display_name, s.role === "admin")));
+  return c.json(decorateQueueAhead(listTasks(q, viewerFromSession(s))));
 });
 
 app.get("/api/tasks/:tid", (c) => {
   const s = need(c, "read");
   try {
     const task = loadTask(c.req.param("tid"));
-    assertCanAccessTask(task, { name: s.display_name, admin: s.role === "admin" });
-    return c.json(publicTask(task, { name: s.display_name, admin: s.role === "admin" }));
+    assertCanAccessTask(task, viewerFromSession(s));
+    return c.json(publicTask(task, viewerFromSession(s)));
   } catch (e) {
     boom(e);
   }
@@ -269,7 +270,7 @@ app.delete("/api/tasks/:tid", (c) => {
   const s = need(c, "create");
   try {
     const task = loadTask(c.req.param("tid"));
-    assertCanAccessTask(task, { name: s.display_name, admin: s.role === "admin" });
+    assertCanAccessTask(task, viewerFromSession(s));
     deleteTask(task.id);
     return c.json({ ok: true });
   } catch (e) {
@@ -330,7 +331,7 @@ app.post("/api/tasks/start", async (c) => {
     type: "excel_pdf",
     status: "comparing",
     created_at: nowIso(),
-    owner: s.display_name,
+    owner: viewerFromSession(s).id,
     created_by: s.display_name,
     pack_surface: String(body.pack_surface || "carton"),
     job_kind: "compare",
@@ -341,7 +342,7 @@ app.post("/api/tasks/start", async (c) => {
   } catch (err) {
     console.warn("enqueue compare failed:", err instanceof Error ? err.message : err);
   }
-  return c.json(publicTask(loadTask(tid), { name: s.display_name, admin: s.role === "admin" }));
+  return c.json(publicTask(loadTask(tid), viewerFromSession(s)));
 });
 
 app.post("/api/mockups/start", async (c) => {
@@ -363,7 +364,7 @@ app.post("/api/mockups/start", async (c) => {
   const src = join(dir, ai.name.replace(/[^a-zA-Z0-9._-]/g, "_") || "art.ai");
   copyFileSync(ai.path, src);
   const title = String(body.title || body.product_name || "").trim();
-  const job = queueMockup({ id, sourcePath: src, displayName: s.display_name, title });
+  const job = queueMockup({ id, sourcePath: src, ownerId: viewerFromSession(s).id, displayName: s.display_name, title });
   try {
     enqueue({ kind: "mockup", id });
   } catch (err) {
@@ -412,7 +413,7 @@ app.post("/api/tasks/upload", async (c) => {
     type: "excel_pdf",
     status: "comparing",
     created_at: nowIso(),
-    owner: s.display_name,
+    owner: viewerFromSession(s).id,
     created_by: s.display_name,
     pack_surface: String(body.pack_surface || "carton"),
     job_kind: "compare",
@@ -423,7 +424,7 @@ app.post("/api/tasks/upload", async (c) => {
   } catch (err) {
     console.warn("enqueue compare failed:", err instanceof Error ? err.message : err);
   }
-  return c.json(publicTask(loadTask(tid), { name: s.display_name, admin: s.role === "admin" }));
+  return c.json(publicTask(loadTask(tid), viewerFromSession(s)));
 });
 
 app.post("/api/tasks/:tid/decision", async (c) => {
@@ -431,7 +432,7 @@ app.post("/api/tasks/:tid/decision", async (c) => {
   const tid = assertTid(c.req.param("tid"));
   const body = (await c.req.json()) as { hit_id?: string; decision?: string; note?: string };
   const task = loadTask(tid);
-  assertCanAccessTask(task, { name: s.display_name, admin: s.role === "admin" });
+  assertCanAccessTask(task, viewerFromSession(s));
   if (!isReviewableStatus(task.status)) {
     throw new HTTPException(400, { message: "当前状态不可审核" });
   }
@@ -446,13 +447,13 @@ app.post("/api/tasks/:tid/decision", async (c) => {
   task.actor = s.display_name;
   task.audit = [...(task.audit || []), { at: nowIso(), actor: s.display_name, action: "decision", hit_id: body.hit_id }];
   saveTask(task);
-  return c.json(publicTask(task, { name: s.display_name, admin: s.role === "admin" }));
+  return c.json(publicTask(task, viewerFromSession(s)));
 });
 
 app.post("/api/tasks/:tid/complete", async (c) => {
   const s = need(c, "complete");
   const task = loadTask(c.req.param("tid"));
-  assertCanAccessTask(task, { name: s.display_name, admin: s.role === "admin" });
+  assertCanAccessTask(task, viewerFromSession(s));
   if (!isReviewableStatus(task.status)) {
     throw new HTTPException(400, { message: "当前状态不可签字" });
   }
@@ -474,7 +475,7 @@ app.post("/api/tasks/:tid/complete", async (c) => {
   void notifyTaskComplete(task, s.display_name).catch((err) => {
     console.warn("feishu notify failed:", err instanceof Error ? err.message : err);
   });
-  return c.json(publicTask(task, { name: s.display_name, admin: s.role === "admin" }));
+  return c.json(publicTask(task, viewerFromSession(s)));
 });
 
 app.post("/api/tasks/:tid/rework", async (c) => {
@@ -482,7 +483,7 @@ app.post("/api/tasks/:tid/rework", async (c) => {
   const tid = assertTid(c.req.param("tid"));
   const body = await c.req.parseBody();
   const task = loadTask(tid);
-  assertCanAccessTask(task, { name: s.display_name, admin: s.role === "admin" });
+  assertCanAccessTask(task, viewerFromSession(s));
   if (task.job_status === "queued" || task.job_status === "running") {
     throw new HTTPException(409, { message: "对红还在排队或正在跑" });
   }
@@ -519,13 +520,13 @@ app.post("/api/tasks/:tid/rework", async (c) => {
   } catch (err) {
     console.warn("enqueue rework failed:", err instanceof Error ? err.message : err);
   }
-  return c.json(publicTask(loadTask(tid), { name: s.display_name, admin: s.role === "admin" }));
+  return c.json(publicTask(loadTask(tid), viewerFromSession(s)));
 });
 
 app.get("/api/tasks/:tid/pages/:name", (c) => {
   const s = need(c, "read");
   const tid = assertTid(c.req.param("tid"));
-  assertCanAccessTask(loadTask(tid), { name: s.display_name, admin: s.role === "admin" });
+  assertCanAccessTask(loadTask(tid), viewerFromSession(s));
   const name = c.req.param("name");
   if (!/^page_\d{2}\.png$/.test(name)) throw new HTTPException(400, { message: "非法页名" });
   const p = join(DATA_DIR, "uploads", tid, "pages", name);
@@ -536,7 +537,7 @@ app.get("/api/tasks/:tid/pages/:name", (c) => {
 app.get("/api/tasks/:tid/pages/:side/:name", (c) => {
   const s = need(c, "read");
   const tid = assertTid(c.req.param("tid"));
-  assertCanAccessTask(loadTask(tid), { name: s.display_name, admin: s.role === "admin" });
+  assertCanAccessTask(loadTask(tid), viewerFromSession(s));
   const side = c.req.param("side");
   const name = c.req.param("name");
   if (!/^[a-z0-9]+$/i.test(side) || !/^page_\d{2}\.png$/.test(name)) {
@@ -650,7 +651,7 @@ app.post("/api/settings/billing/refresh", async (c) => {
 
 app.get("/api/mockups", (c) => {
   const s = need(c, "read");
-  return c.json(decorateQueueAhead(listJobsFor({ name: s.display_name, admin: s.role === "admin" }).map(publicMockup)));
+  return c.json(decorateQueueAhead(listJobsFor(viewerFromSession(s)).map(publicMockup)));
 });
 
 app.post("/api/mockups", async (c) => {
@@ -677,7 +678,7 @@ app.post("/api/mockups", async (c) => {
   }
   writeFileSync(src, buf);
   const title = String(body.title || body.product_name || "").trim();
-  const job = queueMockup({ id, sourcePath: src, displayName: s.display_name, title });
+  const job = queueMockup({ id, sourcePath: src, ownerId: viewerFromSession(s).id, displayName: s.display_name, title });
   try {
     enqueue({ kind: "mockup", id });
   } catch (err) {
@@ -690,7 +691,7 @@ app.get("/api/mockups/:id", (c) => {
   const s = need(c, "read");
   const job = getJob(assertTid(c.req.param("id")));
   if (!job) throw new HTTPException(404, { message: "没有这单打样" });
-  assertCanAccessMockup(job, { name: s.display_name, admin: s.role === "admin" });
+  assertCanAccessMockup(job, viewerFromSession(s));
   return c.json(decorateQueueAhead([publicMockup(job)])[0]);
 });
 
@@ -699,7 +700,7 @@ app.delete("/api/mockups/:id", (c) => {
   try {
     const job = getJob(assertTid(c.req.param("id")));
     if (!job) throw new HTTPException(404, { message: "没有这单打样" });
-    assertCanAccessMockup(job, { name: s.display_name, admin: s.role === "admin" });
+    assertCanAccessMockup(job, viewerFromSession(s));
     deleteMockup(job.id);
     return c.json({ ok: true });
   } catch (e) {
@@ -711,7 +712,7 @@ app.get("/api/mockups/:id/files/:key", (c) => {
   const s = need(c, "read");
   const job = getJob(assertTid(c.req.param("id")));
   if (!job) throw new HTTPException(404, { message: "没有这单打样" });
-  assertCanAccessMockup(job, { name: s.display_name, admin: s.role === "admin" });
+  assertCanAccessMockup(job, viewerFromSession(s));
   const key = c.req.param("key");
   const f = fileOf(job, key);
   if (!f?.path || !existsSync(f.path)) throw new HTTPException(404, { message: "文件还没有" });

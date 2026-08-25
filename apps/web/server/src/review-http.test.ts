@@ -33,6 +33,7 @@ type SeedTask = {
   hits?: SeedHit[];
   hits_v2?: SeedHit[];
   pages_v2?: Array<{ url?: string }>;
+  owner?: string;
 };
 
 function authHeader() {
@@ -41,7 +42,7 @@ function authHeader() {
 }
 
 function seed(task: SeedTask) {
-  saveTask(task);
+  saveTask({ owner: "ou_review_http", ...task });
   return task.id;
 }
 
@@ -484,6 +485,42 @@ describe("review http", () => {
       headers: { authorization: `Bearer ${other.token}` },
     });
     assert.equal(res.status, 403);
+  });
+
+  it("fails closed for a legacy task without owner, while admin can read it", async () => {
+    saveTask({
+      id: "232323232323",
+      title: "无主人旧单",
+      product_name: "无主人旧单",
+      type: "excel_pdf",
+      status: "pending_review",
+    });
+    const reviewer = issueSession("刘籽烨", "reviewer", "ou_ownerless_reviewer", "feishu");
+    const denied = await app.request("/api/tasks/232323232323", {
+      headers: { authorization: `Bearer ${reviewer.token}` },
+    });
+    assert.equal(denied.status, 403);
+    const admin = issueSession("管理员", "admin", "ou_ownerless_admin", "feishu");
+    const allowed = await app.request("/api/tasks/232323232323", {
+      headers: { authorization: `Bearer ${admin.token}` },
+    });
+    assert.equal(allowed.status, 200);
+  });
+
+  it("keeps display-name compatibility for a legacy task owner", async () => {
+    saveTask({
+      id: "242424242424",
+      title: "花名主人旧单",
+      product_name: "花名主人旧单",
+      type: "excel_pdf",
+      status: "pending_review",
+      owner: "魏炜",
+    });
+    const owner = issueSession("魏炜", "reviewer", "ou_legacy_owner", "feishu");
+    const res = await app.request("/api/tasks/242424242424", {
+      headers: { authorization: `Bearer ${owner.token}` },
+    });
+    assert.equal(res.status, 200);
   });
 
   it("owner can delete a task; stranger cannot", async () => {

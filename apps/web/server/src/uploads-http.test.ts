@@ -13,8 +13,8 @@ const { app } = await import("./index.js");
 const { issueSession } = await import("./auth.js");
 const { setJobsTestHooks, resetJobsTestHooks } = await import("./jobs.js");
 
-function authHeader(openId = "ou_upload_http", name = "魏炜") {
-  const sess = issueSession(name, "admin", openId, "feishu");
+function authHeader(openId = "ou_upload_http", name = "魏炜", role: "admin" | "reviewer" = "admin") {
+  const sess = issueSession(name, role, openId, "feishu");
   return { authorization: `Bearer ${sess.token}` };
 }
 
@@ -45,6 +45,9 @@ describe("upload then start", () => {
       body: JSON.stringify({ receipt: staged.receipt, product_name: "喷雾" }),
     });
     assert.equal(start.status, 200);
+    const task = (await start.json()) as { owner?: string; created_by?: string };
+    assert.equal(task.owner, "ou_upload_http");
+    assert.equal(task.created_by, "魏炜");
     const again = await app.request("/api/tasks/start", {
       method: "POST",
       headers: { ...authHeader(), "content-type": "application/json" },
@@ -54,7 +57,7 @@ describe("upload then start", () => {
     resetJobsTestHooks();
   });
 
-  it("does not let another Feishu account start from this receipt", async () => {
+  it("does not let another Feishu account with the same display name start from this receipt", async () => {
     const fd = new FormData();
     fd.append("excel", new File([Buffer.from("PK\x03\x04xxxx")], "a.xlsx"));
     fd.append("pdf", new File([Buffer.from("%PDF-1.4\n%")], "a.pdf"));
@@ -63,9 +66,35 @@ describe("upload then start", () => {
     const staged = (await up.json()) as { receipt?: string };
     const start = await app.request("/api/tasks/start", {
       method: "POST",
-      headers: { ...authHeader("ou_b", "刘籽烨"), "content-type": "application/json" },
+      headers: { ...authHeader("ou_b", "魏炜"), "content-type": "application/json" },
       body: JSON.stringify({ receipt: staged.receipt, product_name: "喷雾" }),
     });
     assert.equal(start.status, 400);
+  });
+
+  it("does not let another Feishu account with the same display name read this task", async () => {
+    setJobsTestHooks({
+      runCompare: async () => ({ code: 0, stdout: "{}", stderr: "", timedOut: false }),
+    });
+    try {
+      const fd = new FormData();
+      fd.append("excel", new File([Buffer.from("PK\x03\x04xxxx")], "a.xlsx"));
+      fd.append("pdf", new File([Buffer.from("%PDF-1.4\n%")], "a.pdf"));
+      const up = await app.request("/api/uploads", { method: "POST", headers: authHeader("ou_same_a", "同名"), body: fd });
+      const staged = (await up.json()) as { receipt?: string };
+      const start = await app.request("/api/tasks/start", {
+        method: "POST",
+        headers: { ...authHeader("ou_same_a", "同名"), "content-type": "application/json" },
+        body: JSON.stringify({ receipt: staged.receipt, product_name: "同名隔离" }),
+      });
+      assert.equal(start.status, 200);
+      const task = (await start.json()) as { id?: string };
+      const denied = await app.request(`/api/tasks/${task.id}`, {
+        headers: authHeader("ou_same_b", "同名", "reviewer"),
+      });
+      assert.equal(denied.status, 403);
+    } finally {
+      resetJobsTestHooks();
+    }
   });
 });

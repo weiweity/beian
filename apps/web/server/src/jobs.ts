@@ -16,9 +16,11 @@ import {
   loadTask,
   nowIso,
   saveTask,
+  assertCanAccessTask,
   taskOwner,
   type JobKind,
   type Task,
+  type Viewer,
 } from "./tasks.js";
 import { compareTask, killTree, reworkTask, runPackaging, type RunPythonResult } from "./workers.js";
 import { rasterAiFile } from "./aiRaster.js";
@@ -122,13 +124,8 @@ export function decorateQueueAhead<T extends { id?: string; created_at?: string;
   }));
 }
 
-export function publicTask(task: Task, viewer?: { name: string; admin: boolean }): Record<string, unknown> {
-  if (viewer && !viewer.admin) {
-    const owner = taskOwner(task);
-    if (owner && owner !== viewer.name) {
-      throw Object.assign(new Error("没有权限"), { status: 403 });
-    }
-  }
+export function publicTask(task: Task, viewer?: Viewer): Record<string, unknown> {
+  if (viewer) assertCanAccessTask(task, viewer);
   const {
     job_pid: _pid,
     notify_job_id: _nk,

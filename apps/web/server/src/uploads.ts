@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DATA_DIR } from "./config.js";
-import { newTid, nowIso } from "./tasks.js";
+import { newTid, nowIso, viewerFromSession } from "./tasks.js";
 import { maxUploadBytes } from "./settings.js";
 
 export type StagedFile = { field: string; name: string; path: string; bytes: number };
@@ -36,7 +36,7 @@ export function magicOk(field: string, buf: Buffer, name: string): string | null
 
 /** 飞书号优先；显示名登录没有 open_id 时才用花名。同名两人不能互相领 receipt。 */
 export function receiptOwner(s: { open_id?: string; display_name?: string }): string {
-  return String(s.open_id || s.display_name || "").trim();
+  return viewerFromSession(s).id;
 }
 
 export function stageBuffers(

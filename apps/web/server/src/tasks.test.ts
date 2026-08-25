@@ -8,6 +8,8 @@ process.env.WB_DATA_DIR = mkdtempSync(join(tmpdir(), "beian-ts-"));
 
 const { activeHits, boardColumn, deleteTask, hasReworkPages, isHitDecision, isReviewableStatus, isReworkableStatus, isReworkableTask, listTasks, loadTask, saveTask } = await import("./tasks.js");
 
+const admin = { id: "ou_admin", name: "管理员", admin: true };
+
 describe("listTasks", () => {
   before(() => {
     saveTask({
@@ -29,19 +31,19 @@ describe("listTasks", () => {
   });
 
   it("待签在前", () => {
-    const rows = listTasks();
+    const rows = listTasks("", admin);
     assert.equal(rows[0]?.product_name, "某某精华");
     assert.equal(rows[1]?.product_name, "另一支霜");
   });
 
   it("按品名搜", () => {
-    const rows = listTasks("精华");
+    const rows = listTasks("精华", admin);
     assert.equal(rows.length, 1);
     assert.equal(rows[0]?.id, "aaaaaaaaaaaa");
   });
 
   it("搜不到为空", () => {
-    assert.deepEqual(listTasks("没有这个品"), []);
+    assert.deepEqual(listTasks("没有这个品", admin), []);
   });
 
   it("对照失败不进对照中列", () => {

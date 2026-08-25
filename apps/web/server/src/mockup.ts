@@ -3,7 +3,7 @@ import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { DATA_DIR, PACKAGING } from "./config.js";
 import { blenderBin } from "./settings.js";
-import { isTid, replaceFile } from "./tasks.js";
+import { canAccessOwner, isTid, replaceFile, type Viewer } from "./tasks.js";
 
 export type MockupJob = {
   id: string;
@@ -13,6 +13,7 @@ export type MockupJob = {
   created_at: string;
   files: { key: string; path?: string; name: string }[];
   owner?: string;
+  created_by?: string;
   source_path?: string;
   manifest_path?: string;
   job_kind?: "mockup";
@@ -92,20 +93,14 @@ export function mockupOwner(job: MockupJob): string {
   return String(job.owner || "");
 }
 
-export function assertCanAccessMockup(job: MockupJob, viewer: { name: string; admin: boolean }): void {
-  if (viewer.admin) return;
-  const owner = mockupOwner(job);
-  if (owner && owner !== viewer.name) {
+export function assertCanAccessMockup(job: MockupJob, viewer: Viewer): void {
+  if (!canAccessOwner(mockupOwner(job), viewer)) {
     throw Object.assign(new Error("没有权限"), { status: 403 });
   }
 }
 
-export function listJobsFor(viewer: { name: string; admin: boolean }): MockupJob[] {
-  return listJobs().filter((job) => {
-    if (viewer.admin) return true;
-    const owner = mockupOwner(job);
-    return !owner || owner === viewer.name;
-  });
+export function listJobsFor(viewer: Viewer): MockupJob[] {
+  return listJobs().filter((job) => canAccessOwner(mockupOwner(job), viewer));
 }
 
 export function loadAllMockups(): MockupJob[] {
@@ -131,7 +126,7 @@ export function publicMockup(job: MockupJob) {
     title: job.title || "",
     error: job.error || job.job_error,
     created_at: job.created_at,
-    owner: job.owner,
+    owner: job.created_by || job.owner,
     files: (job.files || []).map((f) => ({ key: f.key, name: f.name })),
     job_kind: job.job_kind || "mockup",
     job_status: job.job_status,
@@ -251,6 +246,7 @@ export function deleteMockup(id: string): void {
 export function queueMockup(opts: {
   id: string;
   sourcePath: string;
+  ownerId: string;
   displayName: string;
   title?: string;
 }): MockupJob {
@@ -283,7 +279,8 @@ export function queueMockup(opts: {
     title: (opts.title || "").trim().slice(0, 80),
     created_at: new Date().toISOString(),
     files: [],
-    owner: opts.displayName,
+    owner: opts.ownerId,
+    created_by: opts.displayName,
     source_path: opts.sourcePath,
     manifest_path: manifestPath,
     job_kind: "mockup",
