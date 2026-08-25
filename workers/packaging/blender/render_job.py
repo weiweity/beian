@@ -148,7 +148,7 @@ def add_studio(job):
     scene.render.image_settings.compression = 35
     scene.render.image_settings.color_depth = "8"
     scene.view_settings.look = "AgX - Medium High Contrast"
-    scene.view_settings.exposure = -0.55
+    scene.view_settings.exposure = -0.05
     scene.world.color = (1.0, 1.0, 1.0)
 
     world = scene.world
@@ -170,7 +170,7 @@ def add_studio(job):
     if floor_shader.inputs.get("Emission Color"):
         floor_shader.inputs["Emission Color"].default_value = (1.0, 1.0, 1.0, 1.0)
     if floor_shader.inputs.get("Emission Strength"):
-        floor_shader.inputs["Emission Strength"].default_value = 8.0
+        floor_shader.inputs["Emission Strength"].default_value = 0.45
     floor.data.materials.append(floor_mat)
 
     bpy.ops.mesh.primitive_plane_add(size=520, location=(0, 130, 145), rotation=(math.radians(90), 0, 0))

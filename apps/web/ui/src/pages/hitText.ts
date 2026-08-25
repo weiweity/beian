@@ -7,8 +7,33 @@ export type HitText = {
   pdf?: string;
   found?: string;
   evidence?: string;
+  status?: string;
+  decision?: string;
   coverage?: { hit?: string[]; miss?: string[]; ratio?: number; matched?: number; total?: number };
+  sequence_diff?: { only_in_excel?: string[] };
 };
+
+/** 当前字段顶栏：机审 miss / 她标有错。一致且无 miss 返回空。 */
+export function doubtLines(h: HitText): string[] {
+  const misses = (h.coverage?.miss || []).map((s) => String(s).trim()).filter(Boolean);
+  const st = h.status || "";
+  const flagged = h.decision === "issue" || /疑|缺|误/.test(st);
+  const excelOnly = flagged
+    ? (h.sequence_diff?.only_in_excel || []).map((s) => String(s).trim()).filter(Boolean)
+    : [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const line of [...misses, ...excelOnly]) {
+    if (seen.has(line)) continue;
+    seen.add(line);
+    out.push(line);
+  }
+  if (!out.length && flagged) {
+    const ev = (h.evidence || "").trim();
+    if (ev) out.push(ev.slice(0, 120));
+  }
+  return out;
+}
 
 export function excelText(h: HitText): string {
   const t = (h.excel || "").trim() || (h.excel_value || "").trim() || (h.expected || "").trim();

@@ -475,6 +475,21 @@ def test_fit_white_rgb_flattens_alpha_onto_white(tmp_path: Path):
     assert out.getpixel((x, y)) == (220, 30, 40)
 
 
+def test_contain_rect_keeps_source_aspect():
+    p = pipeline()
+    r = p._contain_rect((0, 0, 590, 620), 200, 100)
+    w, h = r[2] - r[0], r[3] - r[1]
+    assert abs(w / h - 2.0) < 0.01
+    assert w <= 590 + 1e-6
+    assert h <= 620 + 1e-6
+    assert p._contain_rect((0, 0, 590, 620), 0, 10) == (0, 0, 590, 620)
+    portrait = p._contain_rect((0, 0, 590, 620), 100, 200)
+    pw, ph = portrait[2] - portrait[0], portrait[3] - portrait[1]
+    assert abs(pw / ph - 0.5) < 0.01
+    assert abs((portrait[0] + portrait[2]) / 2 - 295) < 1
+    assert ph <= 620 + 1e-6
+
+
 def test_write_sheet_pdf_keeps_file_when_pymupdf_raises_after_write(tmp_path: Path, monkeypatch):
     p = pipeline()
     from PIL import Image

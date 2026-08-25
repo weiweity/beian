@@ -103,9 +103,11 @@ def infer_pack_profile(
         "active_piece": active,
         "ml_hints": ml_m[:6],
         "ignore_piece_codes": [],
-        "codes_on_pack": codes_on_pack[:6],
+        "codes_on_pack": list(dict.fromkeys(codes_on_pack))[:20],
         "piece_from_barcode": piece_from_code,
         "rules": [],
+        "excel_net": excel_net_content or "",
+        "excel_barcode": excel_barcode or "",
     }
     if active == "5":
         profile["ignore_piece_codes"] = ["1"]
@@ -121,16 +123,48 @@ def infer_pack_profile(
         profile["rules"].append("载体：花盒 — 反向检查忽略工艺表底部")
     if surface == "pouch":
         profile["rules"].append("载体：膜袋 — 默认单片；版面紧，成分区优先")
+    sku_ml = re.findall(r"(\d+(?:\.\d+)?)\s*ml\s*装", ocr, flags=re.I)
+    sku_uniq = list(dict.fromkeys(sku_ml))
+    if len(sku_uniq) == 1:
+        profile["active_spec"] = f"{sku_uniq[0]}ml装"
+        profile["rules"].append(f"规格键：包装上的 {profile['active_spec']}")
+    elif active:
+        profile["active_spec"] = str(active)
+    else:
+        profile["active_spec"] = None
     return profile
+
+
+def parse_spec_keys(*, excel_net: str = "", excel_barcode: str = "") -> dict[str, list[str]]:
+    """SKU 标签 → 码。5片/单片/30ml装 是键；(2ml+28ml) 配方数字不是键。"""
+    blob = f"{excel_barcode or ''}\n{excel_net or ''}"
+    out: dict[str, list[str]] = {}
+
+    def _add(key: str, code: str) -> None:
+        out.setdefault(key, [])
+        if code not in out[key]:
+            out[key].append(code)
+
+    for m in re.finditer(r"(\d+(?:\.\d+)?)\s*ml\s*装\s*[:：]?\s*(\d{8,14})", blob, flags=re.I):
+        _add(f"{m.group(1)}ml装", m.group(2))
+    for m in re.finditer(r"(\d+)\s*片(?:装)?\s*[:：]?\s*(\d{8,14})", blob):
+        _add(m.group(1), m.group(2))
+    for m in re.finditer(r"单片(?:装)?\s*[:：]?\s*(\d{8,14})", blob):
+        _add("1", m.group(1))
+    if not out:
+        bare = re.findall(r"\d{8,14}", excel_barcode or "")
+        if bare:
+            out["*"] = bare
+    return out
 
 
 def parse_barcode_by_piece(excel_barcode: str) -> dict[str, list[str]]:
     """5片：xxx / 1片：yyy / 单片：zzz → {5:[..], 1:[..]}"""
     out: dict[str, list[str]] = {}
     text = excel_barcode or ""
-    for m in re.finditer(r"(\d+)\s*片\s*[:：]?\s*(\d{8,14})", text):
+    for m in re.finditer(r"(\d+)\s*片(?:装)?\s*[:：]?\s*(\d{8,14})", text):
         out.setdefault(m.group(1), []).append(m.group(2))
-    for m in re.finditer(r"单片\s*[:：]?\s*(\d{8,14})", text):
+    for m in re.finditer(r"单片(?:装)?\s*[:：]?\s*(\d{8,14})", text):
         out.setdefault("1", []).append(m.group(1))
     # 无前缀的裸码
     bare = re.findall(r"\d{8,14}", text)
@@ -139,28 +173,56 @@ def parse_barcode_by_piece(excel_barcode: str) -> dict[str, list[str]]:
     return out
 
 
-def required_barcodes(excel_barcode: str, profile: dict[str, Any]) -> tuple[list[str], list[str]]:
+def required_barcodes(
+    excel_barcode: str,
+    profile: dict[str, Any],
+    excel_net: str = "",
+) -> tuple[list[str], list[str]]:
     """
-    返回 (必须命中的码, 可忽略的码)
+    返回 (必须命中的码, 可忽略的码)。
+    当前规格的码里命中一条即可；其它规格忽略。
     """
-    by_p = parse_barcode_by_piece(excel_barcode)
+    net = excel_net or str((profile or {}).get("excel_net") or "")
+    by_p = parse_spec_keys(excel_net=net, excel_barcode=excel_barcode)
+    if not by_p:
+        by_p = parse_barcode_by_piece(excel_barcode)
     if not by_p:
         return re.findall(r"\d{8,14}", excel_barcode or ""), []
+    on_pack = [str(x) for x in (profile.get("codes_on_pack") or [])]
     if "*" in by_p:
-        return by_p["*"], []
-    active = set(profile.get("active_pieces") or [])
-    ignore_keys = set(profile.get("ignore_piece_codes") or [])
-    must, ign = [], []
-    for piece, codes in by_p.items():
-        if active and piece in active:
-            must.extend(codes)
-        elif piece in ignore_keys or (active and piece not in active):
-            ign.extend(codes)
-        else:
-            must.extend(codes)
-    # 若 active 推断失败，全部必须
+        codes = by_p["*"]
+        hit = [c for c in codes if c in on_pack]
+        if hit:
+            return hit, [c for c in codes if c not in hit]
+        return codes, []
+    active_spec = str(profile.get("active_spec") or "") or None
+    active_pieces = {str(x) for x in (profile.get("active_pieces") or []) if x is not None}
+    ignore_keys = {str(x) for x in (profile.get("ignore_piece_codes") or [])}
+
+    def _pick(spec: str | None) -> tuple[list[str], list[str]]:
+        must: list[str] = []
+        ign: list[str] = []
+        for key, codes in by_p.items():
+            if spec:
+                if key == spec:
+                    must.extend(codes)
+                else:
+                    ign.extend(codes)
+            elif active_pieces and key in active_pieces:
+                must.extend(codes)
+            elif key in ignore_keys or (active_pieces and key not in active_pieces):
+                ign.extend(codes)
+            else:
+                must.extend(codes)
+        return must, ign
+
+    must, ign = _pick(active_spec)
+    if not must and active_spec and (active_spec.endswith("ml装")):
+        must, ign = _pick(None)
     if not must and by_p:
+        # 规格对不上：不要用稿上已印的码自证当前装。
+        all_codes: list[str] = []
         for codes in by_p.values():
-            must.extend(codes)
-        ign = []
+            all_codes.extend(codes)
+        return [], all_codes
     return must, ign

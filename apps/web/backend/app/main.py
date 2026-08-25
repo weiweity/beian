@@ -646,6 +646,8 @@ def _surface_job(
             profile["active_pieces"] = ["1"]
             profile["active_piece"] = "1"
             profile["ignore_piece_codes"] = ["5"]
+            if not str(profile.get("active_spec") or "").endswith("ml装"):
+                profile["active_spec"] = "1"
             profile.setdefault("rules", []).append("用户选择膜袋 → 装型按单片考核")
     if surface_label == "花盒":
         profile["surface"] = "carton"
