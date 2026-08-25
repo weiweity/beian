@@ -111,7 +111,7 @@ import {
 type Env = { Variables: { session: Session } };
 
 const app = new Hono<Env>();
-const VERSION = "0.13.0.0";
+const VERSION = "0.13.1.0";
 const uploadAdmission = createUploadAdmission(1);
 
 app.use(compress());
