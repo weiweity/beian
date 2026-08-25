@@ -814,7 +814,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
                 {dockOpen ? "收起" : hits.length ? `展开 ${hits.length}` : "展开"}
               </button>
             </div>
-            <div className="notes-body">
+            <div className="notes-body" aria-hidden={!dockOpen}>
             <div className="notes-grid">
               <div className="notes-field">
                 {current ? (

@@ -475,6 +475,25 @@ def test_fit_white_rgb_flattens_alpha_onto_white(tmp_path: Path):
     assert out.getpixel((x, y)) == (220, 30, 40)
 
 
+def test_write_sheet_pdf_keeps_file_when_pymupdf_raises_after_write(tmp_path: Path, monkeypatch):
+    p = pipeline()
+    from PIL import Image
+
+    front = tmp_path / "front.png"
+    Image.new("RGB", (16, 12), (255, 255, 255)).save(front)
+    dest = tmp_path / "KEEP_white_sheet.pdf"
+    dest.write_bytes(b"%PDF-already")
+    job = {
+        "code": "KEEP",
+        "project_dir": str(tmp_path),
+        "outputs": {"front_right": str(front)},
+    }
+    monkeypatch.setattr(pymupdf, "open", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("after write")))
+    p.write_sheet_pdf(job)
+    assert dest.read_bytes() == b"%PDF-already"
+    assert job["outputs"]["sheet_pdf"] == str(dest)
+
+
 def test_write_sheet_pdf_pillow_page_is_white(tmp_path: Path):
     p = pipeline()
     from PIL import Image

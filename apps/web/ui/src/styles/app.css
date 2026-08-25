@@ -616,6 +616,17 @@ html[data-theme="dark"] .side-item.is-on .side-icon {
 .stage:has(.mockup-sheet),
 .stage:has(.mockup-desk) {
   background: #ffffff;
+  color: #1c1a1f;
+}
+
+.stage:has(.mockup-sheet) .page-title,
+.stage:has(.mockup-desk) .page-title {
+  color: #1c1a1f;
+}
+
+.stage:has(.mockup-sheet) .page-lead,
+.stage:has(.mockup-desk) .page-lead {
+  color: #6b6572;
 }
 
 html[data-theme="dark"] .workspace {
@@ -636,7 +647,7 @@ html[data-theme="dark"] .workspace {
 
 .page-head {
   position: relative;
-  z-index: 9;
+  z-index: 81;
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
@@ -1985,7 +1996,7 @@ html[data-theme="dark"] .apple-slider::-moz-range-thumb {
   position: absolute;
   top: 12px;
   left: 12px;
-  z-index: 3;
+  z-index: 85;
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
@@ -2214,6 +2225,7 @@ html[data-diff="off"] .hit-box {
   opacity: 0;
   overflow: hidden;
   pointer-events: none;
+  visibility: hidden;
 }
 
 .notes-toggle {

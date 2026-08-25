@@ -723,18 +723,18 @@ def _sheet_text(page: Any, origin: tuple[float, float], txt: str, size: float, c
 
 
 def _fit_white_rgb(path: Path, box_w: int, box_h: int):
-    im = Image.open(path)
-    if im.mode in ("RGBA", "LA"):
-        bg = Image.new("RGB", im.size, (255, 255, 255))
-        alpha = im.getchannel("A") if "A" in im.getbands() else None
-        bg.paste(im.convert("RGBA"), mask=alpha)
-        im = bg
-    else:
-        im = im.convert("RGB")
-    im.thumbnail((box_w, box_h), Image.Resampling.LANCZOS)
-    canvas = Image.new("RGB", (box_w, box_h), (255, 255, 255))
-    canvas.paste(im, ((box_w - im.width) // 2, (box_h - im.height) // 2))
-    return canvas
+    with Image.open(path) as src:
+        if src.mode in ("RGBA", "LA"):
+            im = src.convert("RGBA")
+            bg = Image.new("RGB", im.size, (255, 255, 255))
+            bg.paste(im, mask=im.getchannel("A"))
+            im = bg
+        else:
+            im = src.convert("RGB")
+        im.thumbnail((box_w, box_h), Image.Resampling.LANCZOS)
+        canvas = Image.new("RGB", (box_w, box_h), (255, 255, 255))
+        canvas.paste(im, ((box_w - im.width) // 2, (box_h - im.height) // 2))
+        return canvas
 
 
 def _write_sheet_pdf_pillow(dest: Path, front: str, back: str | None) -> None:
@@ -776,9 +776,14 @@ def write_sheet_pdf(job: dict[str, Any]) -> None:
             tmp.replace(dest)
         finally:
             doc.close()
-    except Exception:
-        _write_sheet_pdf_pillow(dest, str(front), str(back) if back else None)
-    outputs["sheet_pdf"] = str(dest)
+    except Exception as err:
+        if dest.is_file() and dest.stat().st_size > 0:
+            print(f"打样单 PDF pymupdf 告警已落盘：{err}", file=sys.stderr)
+        else:
+            print(f"打样单 PDF pymupdf 失败，改用 Pillow：{err}", file=sys.stderr)
+            _write_sheet_pdf_pillow(dest, str(front), str(back) if back else None)
+    if dest.is_file() and dest.stat().st_size > 0:
+        outputs["sheet_pdf"] = str(dest)
 
 
 def _xml_text(value: str) -> str:
