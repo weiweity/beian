@@ -169,7 +169,7 @@ describe("reviewDock", () => {
     assert.deepEqual(shown, { box, place: parked });
   });
 
-  it("pads the canvas by the dock overlap and keeps the sign clear", () => {
+  it("measures dock overlap without requiring the canvas to pad", () => {
     const canvas = { left: 280, top: 104, width: 1000, height: 700 };
     const dock = { left: 20, top: 104, width: 400, height: 520 };
     const inset = dockCanvasInset(canvas, dock);
