@@ -1969,6 +1969,9 @@ html[data-theme="dark"] .apple-slider::-moz-range-thumb {
   flex: 1;
   min-height: 320px;
   overflow: hidden;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
   touch-action: none;
   cursor: grab;
   user-select: none;
@@ -1987,7 +1990,10 @@ html[data-theme="dark"] .apple-slider::-moz-range-thumb {
 
 .canvas-zoom {
   position: relative;
-  width: 100%;
+  flex: none;
+  width: auto;
+  max-width: 100%;
+  max-height: 100%;
   transform-origin: 0 0;
   will-change: transform;
 }
@@ -1995,7 +2001,8 @@ html[data-theme="dark"] .apple-slider::-moz-range-thumb {
 .canvas-tools {
   position: absolute;
   top: 12px;
-  left: 12px;
+  left: auto;
+  right: 12px;
   z-index: 3;
   display: flex;
   flex-wrap: wrap;
@@ -2015,7 +2022,8 @@ html[data-theme="dark"] .apple-slider::-moz-range-thumb {
 .canvas img {
   display: block;
   width: 100%;
-  height: auto;
+  height: 100%;
+  object-fit: fill;
   pointer-events: none;
   -webkit-user-drag: none;
   image-rendering: auto;

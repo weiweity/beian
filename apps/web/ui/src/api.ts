@@ -1,11 +1,24 @@
+import { API_DOWN_LOCAL } from "./apiHint";
 import { describeBrokenApi } from "./authGate";
+
+function apiHost(): string {
+  return typeof window === "undefined" ? "" : window.location.host;
+}
 
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  brokenApi: boolean;
+  constructor(status: number, message: string, brokenApi = false) {
     super(message);
     this.status = status;
+    this.brokenApi = brokenApi;
   }
+}
+
+/** 开机探测：HTML / 空体 / 本机 Vite JSON 502 才点亮拒绝页。不要扫文案里有没有 8787。 */
+export function brokenApiMessage(err: unknown, host = ""): string | null {
+  if (err instanceof ApiError) return err.brokenApi ? err.message : null;
+  return describeBrokenApi(0, "text/html", host);
 }
 
 async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
@@ -19,6 +32,7 @@ async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
     headers,
   });
   const ct = res.headers.get("content-type") || "";
+  const hint = describeBrokenApi(res.status, ct, apiHost());
   if (!res.ok) {
     let detail = res.statusText;
     try {
@@ -30,10 +44,11 @@ async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
     } catch {
       /* keep statusText */
     }
-    throw new ApiError(res.status, describeBrokenApi(res.status, ct) || detail);
+    const message = hint || detail;
+    throw new ApiError(res.status, message, Boolean(hint) || message === API_DOWN_LOCAL);
   }
   if (!ct.includes("application/json")) {
-    throw new ApiError(res.status || 502, describeBrokenApi(res.status, ct) || "接口没有返回 JSON");
+    throw new ApiError(res.status || 502, hint || "接口没有返回 JSON", true);
   }
   return (await res.json()) as T;
 }

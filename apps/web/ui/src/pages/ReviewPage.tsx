@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { Alert, App, Button, Empty, Input, Space, Tag } from "antd";
 import { ApiError, api, type Decision, type FieldHit, type TaskDetail, type TaskPage } from "../api";
 import { WaitCard } from "../chrome/WaitCard";
-import { panBy, resetZoom, zoomAt, zoomCss, zoomToBox } from "./canvasZoom";
+import { fittedPage, panBy, resetZoom, zoomAt, zoomCss, zoomToBox } from "./canvasZoom";
 import { doubtLines, excelText, pdfText } from "./hitText";
 import { hitOnPage, overlayFromBox, overlaysForHit, pickHitBox, resolvePageMetrics } from "./pinBox";
 import {
@@ -95,6 +95,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
   const [busy, setBusy] = useState(false);
   const [useV2, setUseV2] = useState(false);
   const [nat, setNat] = useState<{ width: number; height: number } | null>(null);
+  const [viewSize, setViewSize] = useState<{ width: number; height: number } | null>(null);
   const [zoom, setZoom] = useState(resetZoom);
   const [dockOpen, setDockOpen] = useState(true);
   const [pinsOn, setPinsOn] = useState(() => readPinsOn(browserStore()));
@@ -105,6 +106,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
   const zoomElRef = useRef<HTMLDivElement>(null);
   const dockRef = useRef<HTMLElement>(null);
   const zoomRef = useRef(zoom);
+  const laidRef = useRef({ imgW: 0, imgH: 0, offsetX: 0, offsetY: 0 });
   const dockOpenRef = useRef(true);
   const [dockBox, setDockBox] = useState<DockBox>(() => readDockBox(browserStore()));
   const [dockPlace, setDockPlace] = useState<DockPlace>(() =>
@@ -362,6 +364,8 @@ export function ReviewPage({ taskId, onBack }: Props) {
 
   const pageNo = Number(page?.page || pageIdx + 1);
   const metrics = resolvePageMetrics(page, nat);
+  const laid = metrics && viewSize ? fittedPage(metrics, viewSize) : { imgW: 0, imgH: 0, offsetX: 0, offsetY: 0 };
+  laidRef.current = laid;
   const pinHits = useMemo(() => {
     return hits.map((h, i) => ({ h, i })).filter(({ h }) => hitOnPage(h, pageNo));
   }, [hits, pageNo]);
@@ -382,14 +386,29 @@ export function ReviewPage({ taskId, onBack }: Props) {
     return () => window.cancelAnimationFrame(id);
   }, [metrics, pageIdx, page?.url]);
 
+  useLayoutEffect(() => {
+    const node = viewRef.current;
+    if (!node) return;
+    const read = () => {
+      const width = node.clientWidth;
+      const height = node.clientHeight;
+      setViewSize((prev) => (prev && prev.width === width && prev.height === height ? prev : { width, height }));
+    };
+    read();
+    const ro = new ResizeObserver(read);
+    ro.observe(node);
+    return () => ro.disconnect();
+  }, [page?.url, waiting]);
+
   useEffect(() => {
     const el = viewRef.current;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       const rect = el.getBoundingClientRect();
-      const ox = e.clientX - rect.left;
-      const oy = e.clientY - rect.top;
+      const parked = laidRef.current;
+      const ox = e.clientX - rect.left - parked.offsetX;
+      const oy = e.clientY - rect.top - parked.offsetY;
       const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
       zoomRef.current = zoomAt(zoomRef.current, zoomRef.current.scale * factor, ox, oy);
       if (panRaf.current == null) {
@@ -649,7 +668,15 @@ export function ReviewPage({ taskId, onBack }: Props) {
               onPointerCancel={(e) => endPan(e.currentTarget)}
               onLostPointerCapture={(e) => endPan(e.currentTarget)}
             >
-              <div className="canvas-zoom" ref={zoomElRef} style={{ transform: zoomCss(zoom) }}>
+              <div
+                className="canvas-zoom"
+                ref={zoomElRef}
+                style={{
+                  transform: zoomCss(zoom),
+                  width: laid.imgW > 1 ? laid.imgW : undefined,
+                  height: laid.imgH > 1 ? laid.imgH : undefined,
+                }}
+              >
                 <img
                   src={page.url}
                   alt=""
@@ -701,8 +728,14 @@ export function ReviewPage({ taskId, onBack }: Props) {
                       onClick={() => {
                         const el = viewRef.current;
                         if (!el) return;
+                        const parked = laidRef.current;
                         commitZoom(
-                          zoomAt(zoomRef.current, zoomRef.current.scale * 1.2, el.clientWidth / 2, el.clientHeight / 2),
+                          zoomAt(
+                            zoomRef.current,
+                            zoomRef.current.scale * 1.2,
+                            el.clientWidth / 2 - parked.offsetX,
+                            el.clientHeight / 2 - parked.offsetY,
+                          ),
                         );
                       }}
                     >
@@ -714,8 +747,14 @@ export function ReviewPage({ taskId, onBack }: Props) {
                       onClick={() => {
                         const el = viewRef.current;
                         if (!el) return;
+                        const parked = laidRef.current;
                         commitZoom(
-                          zoomAt(zoomRef.current, zoomRef.current.scale / 1.2, el.clientWidth / 2, el.clientHeight / 2),
+                          zoomAt(
+                            zoomRef.current,
+                            zoomRef.current.scale / 1.2,
+                            el.clientWidth / 2 - parked.offsetX,
+                            el.clientHeight / 2 - parked.offsetY,
+                          ),
                         );
                       }}
                     >
