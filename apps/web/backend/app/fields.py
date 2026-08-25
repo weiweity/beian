@@ -585,7 +585,7 @@ def union_boxes(boxes: list[dict], *, pad: int = 4) -> list[dict]:
 
 
 def expand_block_boxes(
-    seed_boxes: list[dict], ocr_words: list[dict], *, y_gap: float = 1.8, x_slack: float = 0.35
+    seed_boxes: list[dict], ocr_words: list[dict], *, y_gap: float = 1.8, x_slack: float = 0.08
 ) -> list[dict]:
     """
     从种子命中行向上下扩展，吞掉同一栏连续的成分/说明文字行，
@@ -598,6 +598,7 @@ def expand_block_boxes(
     collected: list[dict] = []
     for page in pages:
         page_seeds = [b for b in seeds if int(b.get("page") or 1) == page]
+        page_seeds = _keep_same_panel(page_seeds)
         page_words = []
         for w in ocr_words:
             if int(w.get("page") or 1) != page:
@@ -615,8 +616,9 @@ def expand_block_boxes(
         s_right = max(b["left"] + b["width"] for b in page_seeds)
         med_h = sorted(b["height"] for b in page_seeds)[len(page_seeds) // 2] or 20
         gap = med_h * y_gap
-        col_left = s_left - (s_right - s_left) * x_slack
-        col_right = s_right + (s_right - s_left) * x_slack
+        pad_x = min(32, max(8, (s_right - s_left) * x_slack))
+        col_left = s_left - pad_x
+        col_right = s_right + pad_x
 
         # 迭代扩展直到稳定
         top, bot = s_top, s_bot
@@ -1028,6 +1030,8 @@ def match_field(
                 must_codes, ign_codes = codes, []
             hit_c = [c for c in must_codes if c in n_ocr]
             miss_c = [c for c in must_codes if c not in n_ocr]
+            if hit_c:
+                miss_c = []
             # 仅必检码参与 coverage；忽略码不进 miss_phrases（避免 UI「建议核对」）
             total_req = max(1, len(must_codes))
             cov = {
@@ -1043,13 +1047,10 @@ def match_field(
             )
             if code_boxes:
                 boxes = code_boxes
-            if not hit_c and must_codes:
-                score = min(score, 40.0)
-            elif miss_c:
-                score = 72.0
-            else:
-                # 必检全中；有忽略码未印 = 规格分支一致
+            if hit_c:
                 score = max(score, 95.0)
+            elif must_codes:
+                score = min(score, 40.0)
 
     # 净含量：拆「装型分支」（5片装/单片装）；装型画像只考核当前装
     net_branch_info: dict[str, Any] | None = None
@@ -1060,15 +1061,27 @@ def match_field(
             if ln.strip()
         ] or [excel_value or ""]
         active = str((pack_profile or {}).get("active_piece") or "")
-        if active:
-            focused = []
+        active_spec = str((pack_profile or {}).get("active_spec") or "")
+        focused = []
+        if active_spec.endswith("ml装"):
+            token = re.sub(r"装$", "", active_spec)
+            ml_num = re.match(r"^(\d+(?:\.\d+)?)\s*ml$", token, flags=re.I)
+            if ml_num:
+                spec_re = re.compile(
+                    rf"(?<![0-9.]){re.escape(ml_num.group(1))}\s*ml\s*装",
+                    re.I,
+                )
+                focused = [br for br in branches if spec_re.search(br)]
+            else:
+                focused = [br for br in branches if active_spec in br]
+        if not focused and active:
             for br in branches:
                 if active == "5" and re.search(r"5\s*片", br):
                     focused.append(br)
                 elif active == "1" and re.search(r"单片|1\s*片", br):
                     focused.append(br)
-            if focused:
-                branches = focused
+        if focused:
+            branches = focused
         n_ocr = normalize(ocr_text or "")
         n_ocr_u = normalize_units(ocr_text or "")
         pack_raw = ocr_text or ""
@@ -1800,28 +1813,16 @@ def compare_fields(
                                 "note": "装型画像：非当前装，可不命中",
                             }
                         )
-                    req_ok = all(i["found"] for i in items if i.get("required")) if must else True
-                    # 覆盖 miss 与卡一致：忽略装不进 miss
+                    req_ok = any(i["found"] for i in items if i.get("required")) if must else False
+                    # 覆盖 miss 与卡一致：忽略装不进 miss；当前规格命中一条即可
                     if h.get("coverage"):
-                        h["coverage"]["miss"] = [
-                            c for c in must if c not in n_pack
-                        ]
+                        hit_req = [c for c in must if c in n_pack]
+                        h["coverage"]["hit"] = hit_req
+                        h["coverage"]["miss"] = [] if hit_req else list(must)
                         h["coverage"]["miss_phrases"] = h["coverage"]["miss"]
-                        h["coverage"]["hit"] = [c for c in must if c in n_pack]
-                        h["coverage"]["matched"] = len(h["coverage"]["hit"])
+                        h["coverage"]["matched"] = len(hit_req)
                         h["coverage"]["total"] = max(1, len(must))
-                        h["coverage"]["ratio"] = h["coverage"]["matched"] / h["coverage"][
-                            "total"
-                        ]
-                    # 必检全中则保持一致；仅忽略装未印不算待处理
-                    if req_ok and h.get("status") == "疑点" and not any(
-                        not i["found"] for i in items if i.get("required")
-                    ):
-                        # 若疑点仅来自忽略码展示，拉回一致
-                        if h.get("doubt_bucket") == "branch" or "规格" in (
-                            h.get("evidence") or ""
-                        ):
-                            pass
+                        h["coverage"]["ratio"] = 1.0 if hit_req else 0.0
                     h["barcode_card"] = {
                         "codes": items,
                         "total": len(must),
@@ -1862,7 +1863,40 @@ def compare_fields(
                 except Exception:
                     pass
         hits.append(h)
+    for h in hits:
+        if (h.get("field_group") or "") != "成分表":
+            continue
+        boxes = list(h.get("bboxes") or [])
+        kept = _keep_same_panel(boxes)
+        if kept and len(kept) < len(boxes):
+            h["bboxes"] = kept
+            h["page"] = kept[0].get("page") or h.get("page")
+            h["no_bbox"] = False
+            h["evidence"] = (h.get("evidence") or "") + " · 定位限制在同一刀板块"
     return hits
+
+
+def _keep_same_panel(boxes: list[dict], *, gap: int = 120) -> list[dict]:
+    """同一页展开图上，丢掉跳到邻板的框。"""
+    if len(boxes) < 2:
+        return boxes
+    ordered = sorted(boxes, key=lambda b: (int(b.get("page") or 1), int(b.get("left") or 0)))
+    clusters: list[list[dict]] = []
+    cur: list[dict] = [ordered[0]]
+    for b in ordered[1:]:
+        prev = cur[-1]
+        if int(b.get("page") or 1) != int(prev.get("page") or 1):
+            clusters.append(cur)
+            cur = [b]
+            continue
+        prev_r = int(prev.get("left") or 0) + int(prev.get("width") or 0)
+        if int(b.get("left") or 0) - prev_r > gap:
+            clusters.append(cur)
+            cur = [b]
+        else:
+            cur.append(b)
+    clusters.append(cur)
+    return max(clusters, key=len)
 
 def locate_text_in_ocr(text: str, ocr_words: list[dict], *, limit: int = 3) -> list[dict]:
     if not text or not ocr_words:
