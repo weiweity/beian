@@ -27,8 +27,9 @@
 
 ## P1 — 作业模块审查留下的洞（本周不改）
 
-- [ ] **无主任务 / 打样默认拒绝**  
-  `assertCanAccessTask` / `assertCanAccessMockup` 在 owner 为空时 fail-open。新上传已写 owner。杭州旧 FastAPI JSON 可能没主人。`/review` D3=C。下次：开机用 `created_by`/`actor` 回填，仍空的非 admin 403，并补列表/深链测试。
+- [x] **无主任务 / 打样默认拒绝**  
+  非 admin 读空 owner 403。新单 owner 写飞书 `open_id`。旧单花名仍能被同名会话读到。  
+  **Completed:** v0.13.0.0 (2026-08-25)
 
 - [x] **打样完成通知不要走 `/?task=`**  
   `notifyJobFinished` 对照走 `/review/:id`，打样走 `/mockup/:id`。前端 History API 换台。  
