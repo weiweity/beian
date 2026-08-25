@@ -130,7 +130,7 @@ export function MockupPage({ onOpenJob }: DeskProps) {
   );
 
   return (
-    <section className="new-form">
+    <section className="new-form mockup-desk">
       <header className="page-head">
         <div>
           <h1 className="page-title">打样台</h1>
@@ -355,7 +355,16 @@ export function MockupJobPage({ jobId, onBack }: JobProps) {
               >
                 全屏截图
               </button>
-              <model-viewer src={fileHref(job.id, "glb")} camera-controls />
+              <model-viewer
+                src={fileHref(job.id, "glb")}
+                camera-controls
+                environment-image="neutral"
+                exposure="0.72"
+                shadow-intensity="1"
+                shadow-softness="0.25"
+                tone-mapping="commerce"
+                interaction-prompt="none"
+              />
             </div>
             <figcaption>GLB</figcaption>
           </figure>

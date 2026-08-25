@@ -429,6 +429,88 @@ def test_write_sheet_pdf_without_node(tmp_path: Path):
     doc = pymupdf.open(dest)
     try:
         assert doc.page_count == 1
+        pix = doc[0].get_pixmap()
+        n = pix.n
+        i = (2 * pix.width + 2) * n
+        assert pix.samples[i] >= 250 and pix.samples[i + 1] >= 250 and pix.samples[i + 2] >= 250
+    finally:
+        doc.close()
+
+
+def test_write_sheet_pdf_pillow_when_pymupdf_raises(tmp_path: Path, monkeypatch):
+    p = pipeline()
+    from PIL import Image
+
+    front = tmp_path / "front.png"
+    back = tmp_path / "back.png"
+    Image.new("RGB", (40, 30), (255, 255, 255)).save(front)
+    Image.new("RGB", (40, 30), (255, 255, 255)).save(back)
+    job = {
+        "code": "PILL",
+        "display_name": "胶原棒",
+        "project_dir": str(tmp_path),
+        "outputs": {"front_right": str(front), "back_left": str(back)},
+    }
+    monkeypatch.setattr(pymupdf, "open", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no mupdf")))
+    p.write_sheet_pdf(job)
+    dest = Path(job["outputs"]["sheet_pdf"])
+    assert dest.is_file()
+    assert dest.read_bytes()[:4] == b"%PDF"
+
+
+def test_fit_white_rgb_flattens_alpha_onto_white(tmp_path: Path):
+    p = pipeline()
+    from PIL import Image
+
+    src = Image.new("RGBA", (8, 8), (0, 0, 0, 0))
+    src.putpixel((3, 3), (220, 30, 40, 255))
+    path = tmp_path / "rgba.png"
+    src.save(path)
+    out = p._fit_white_rgb(path, 20, 16)
+    assert out.mode == "RGB"
+    assert out.size == (20, 16)
+    assert out.getpixel((0, 0)) == (255, 255, 255)
+    x = (20 - 8) // 2 + 3
+    y = (16 - 8) // 2 + 3
+    assert out.getpixel((x, y)) == (220, 30, 40)
+
+
+def test_write_sheet_pdf_keeps_file_when_pymupdf_raises_after_write(tmp_path: Path, monkeypatch):
+    p = pipeline()
+    from PIL import Image
+
+    front = tmp_path / "front.png"
+    Image.new("RGB", (16, 12), (255, 255, 255)).save(front)
+    dest = tmp_path / "KEEP_white_sheet.pdf"
+    dest.write_bytes(b"%PDF-already")
+    job = {
+        "code": "KEEP",
+        "project_dir": str(tmp_path),
+        "outputs": {"front_right": str(front)},
+    }
+    monkeypatch.setattr(pymupdf, "open", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("after write")))
+    p.write_sheet_pdf(job)
+    assert dest.read_bytes() == b"%PDF-already"
+    assert job["outputs"]["sheet_pdf"] == str(dest)
+
+
+def test_write_sheet_pdf_pillow_page_is_white(tmp_path: Path):
+    p = pipeline()
+    from PIL import Image
+
+    front = tmp_path / "front.png"
+    back = tmp_path / "back.png"
+    Image.new("RGB", (40, 30), (255, 255, 255)).save(front)
+    Image.new("RGB", (40, 30), (255, 255, 255)).save(back)
+    dest = tmp_path / "sheet.pdf"
+    p._write_sheet_pdf_pillow(dest, str(front), str(back))
+    assert dest.is_file()
+    doc = pymupdf.open(dest)
+    try:
+        pix = doc[0].get_pixmap()
+        n = pix.n
+        i = (2 * pix.width + 2) * n
+        assert pix.samples[i] >= 250 and pix.samples[i + 1] >= 250 and pix.samples[i + 2] >= 250
     finally:
         doc.close()
 
