@@ -101,13 +101,44 @@ export function writeDockBox(storage: Pick<Storage, "setItem"> | null, box: Dock
   }
 }
 
+export type ScreenRect = { left: number; top: number; width: number; height: number };
+export type DockInset = { left: number; top: number; right: number; bottom: number };
+
+/** How much the floating dock covers the canvas. Used to pad the page image into the remaining view. */
+export function dockCanvasInset(canvas: ScreenRect, dock: ScreenRect): DockInset {
+  const out: DockInset = { left: 0, top: 0, right: 0, bottom: 0 };
+  const cL = Number(canvas.left) || 0;
+  const cT = Number(canvas.top) || 0;
+  const cR = cL + Math.max(0, Number(canvas.width) || 0);
+  const cB = cT + Math.max(0, Number(canvas.height) || 0);
+  const dL = Number(dock.left) || 0;
+  const dT = Number(dock.top) || 0;
+  const dR = dL + Math.max(0, Number(dock.width) || 0);
+  const dB = dT + Math.max(0, Number(dock.height) || 0);
+  if (dR <= cL || dL >= cR || dB <= cT || dT >= cB) return out;
+  const dockCx = (dL + dR) / 2;
+  const canvasCx = (cL + cR) / 2;
+  if (dockCx <= canvasCx) out.left = Math.max(0, Math.round(Math.min(dR, cR) - cL));
+  else out.right = Math.max(0, Math.round(cR - Math.max(dL, cL)));
+  return out;
+}
+
+export function rectsOverlap(a: ScreenRect, b: ScreenRect): boolean {
+  const aR = a.left + a.width;
+  const aB = a.top + a.height;
+  const bR = b.left + b.width;
+  const bB = b.top + b.height;
+  return a.left < bR && aR > b.left && a.top < bB && aB > b.top;
+}
+
 export function clampDockPlace(place: DockPlace, room: { w: number; h: number }, box: DockBox): DockPlace {
   const maxRight = Math.max(8, Math.round(Number(room.w) || 800) - box.w - 8);
   const maxTop = Math.max(8, Math.round(Number(room.h) || 600) - box.h - 8);
+  const minTop = Math.min(DOCK_BELOW_HEAD, maxTop);
   const top = Number(place.top);
   const right = Number(place.right);
   return {
-    top: Math.min(maxTop, Math.max(8, Number.isFinite(top) ? Math.round(top) : DOCK_BELOW_HEAD)),
+    top: Math.min(maxTop, Math.max(minTop, Number.isFinite(top) ? Math.round(top) : DOCK_BELOW_HEAD)),
     right: Math.min(maxRight, Math.max(8, Number.isFinite(right) ? Math.round(right) : 8)),
   };
 }

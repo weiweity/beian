@@ -33,6 +33,21 @@ function fileHref(jobId: string, key: string, download = false) {
   return download ? `${base}?download=1` : base;
 }
 
+function DownloadGlyph() {
+  return (
+    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+      <path
+        d="M12 3v12m0 0-4-4m4 4 4-4M5 16v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 export function MockupDesk({
   openId,
   onOpenJob,
@@ -313,8 +328,8 @@ export function MockupJobPage({ jobId, onBack }: JobProps) {
             返回打样台
           </button>
           {hasSheet ? (
-            <a className="btn-ghost" href={fileHref(job.id, "sheet", true)} download>
-              下载 PDF
+            <a className="mockup-dl" href={fileHref(job.id, "sheet", true)} download aria-label="下载 PDF">
+              <DownloadGlyph />
             </a>
           ) : null}
         </div>
@@ -342,31 +357,36 @@ export function MockupJobPage({ jobId, onBack }: JobProps) {
         {hasGlb ? (
           <figure className="mockup-sheet-photo mockup-sheet-glb-wrap">
             <div className="mockup-sheet-glb" ref={glbBox}>
-              <a className="btn-ghost" href={fileHref(job.id, "glb", true)} download>
-                下载 GLB
-              </a>
-              <button
-                type="button"
-                className="btn-ghost mockup-sheet-glb-fs"
-                onClick={() => {
-                  const el = glbBox.current;
-                  if (el && el.requestFullscreen) void el.requestFullscreen();
-                }}
-              >
-                全屏截图
-              </button>
               <model-viewer
                 src={fileHref(job.id, "glb")}
                 camera-controls
                 environment-image="neutral"
-                exposure="0.72"
+                exposure="0.9"
                 shadow-intensity="1"
                 shadow-softness="0.25"
                 tone-mapping="commerce"
                 interaction-prompt="none"
               />
             </div>
-            <figcaption>GLB</figcaption>
+            <figcaption className="mockup-sheet-cap">
+              <span>GLB</span>
+              <span className="mockup-sheet-cap-actions">
+                <button
+                  type="button"
+                  className="mockup-dl"
+                  aria-label="全屏截图"
+                  onClick={() => {
+                    const el = glbBox.current;
+                    if (el && el.requestFullscreen) void el.requestFullscreen();
+                  }}
+                >
+                  全屏
+                </button>
+                <a className="mockup-dl" href={fileHref(job.id, "glb", true)} download aria-label="下载 GLB">
+                  <DownloadGlyph />
+                </a>
+              </span>
+            </figcaption>
           </figure>
         ) : (
           <figure className="mockup-sheet-photo">
@@ -402,15 +422,17 @@ function WhiteShot({
   const [bad, setBad] = useState(false);
   return (
     <figure className="mockup-sheet-photo">
-      <a className="btn-ghost" href={fileHref(jobId, fileKey, true)} download={downloadName}>
-        下载
-      </a>
       {bad ? (
         <p className="page-lead">这张白底图坏了，回到打样台重新打。</p>
       ) : (
         <img src={fileHref(jobId, fileKey)} alt={alt} onError={() => setBad(true)} />
       )}
-      <figcaption>{caption}</figcaption>
+      <figcaption className="mockup-sheet-cap">
+        <span>{caption}</span>
+        <a className="mockup-dl" href={fileHref(jobId, fileKey, true)} download={downloadName} aria-label={`下载${caption}`}>
+          <DownloadGlyph />
+        </a>
+      </figcaption>
     </figure>
   );
 }
