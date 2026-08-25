@@ -41,16 +41,41 @@ function Clear-GithubToken {
 # Windows 上 packed-refs 和零散 origin/main 拧在一起时：
 # cannot lock ref 'refs/remotes/origin/main': is at A but expected B
 # 只在这一条 ref 锁上才删指针。网络/401/Clash 失败不要动 origin/main。
+# git fetch 把 "From https://..." 写在 stderr。PS5 + Stop 会打成 NativeCommandError，
+# 即使 exit 0 也在停 8787 之前抛（0.12.17.0 hangzhou-release 8s 红）。只看 LASTEXITCODE。
+function Invoke-GitFetch {
+  param([string]$LogPath = "")
+  $prevEap = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  try {
+    if ($LogPath) {
+      if ($env:GITHUB_TOKEN) {
+        & git -c "http.extraheader=AUTHORIZATION: bearer $($env:GITHUB_TOKEN)" fetch origin *> $LogPath
+      } else {
+        & git fetch origin *> $LogPath
+      }
+    } else {
+      if ($env:GITHUB_TOKEN) {
+        & git -c "http.extraheader=AUTHORIZATION: bearer $($env:GITHUB_TOKEN)" fetch origin
+      } else {
+        & git fetch origin
+      }
+    }
+  } catch {
+    # NativeCommandError from git stderr — LASTEXITCODE is the real result
+  } finally {
+    $ErrorActionPreference = $prevEap
+  }
+  $code = $LASTEXITCODE
+  if ($null -eq $code) { return 1 }
+  return [int]$code
+}
+
 function Fetch-OriginMain {
   $log = Join-Path $env:TEMP "beian-git-fetch.log"
   if (Test-Path $log) { Remove-Item $log -Force -ErrorAction SilentlyContinue }
   try {
-    if ($env:GITHUB_TOKEN) {
-      & git -c "http.extraheader=AUTHORIZATION: bearer $($env:GITHUB_TOKEN)" fetch origin *> $log
-    } else {
-      & git fetch origin *> $log
-    }
-    $code = $LASTEXITCODE
+    $code = Invoke-GitFetch -LogPath $log
     if ($code -eq 0) { return }
     $msg = ""
     foreach ($enc in @("Unicode", "UTF8", "Default")) {
@@ -68,8 +93,8 @@ function Fetch-OriginMain {
     if ($msg -match "cannot lock ref 'refs/remotes/origin/main'") {
       Write-Host "origin/main ref 拧了，删掉再 fetch"
       git update-ref -d refs/remotes/origin/main
-      Invoke-Git fetch origin
-      return
+      $code = Invoke-GitFetch
+      if ($code -eq 0) { return }
     }
     Write-Host "git fetch origin 失败"
     $global:LASTEXITCODE = $code
@@ -231,6 +256,11 @@ if (Test-DataDirInsideRepo $env:WB_DATA_DIR $Root) {
 
 # Git hygiene while :8787 is still up. npm install used to dirty package-lock.json;
 # pull then aborted after taskkill and left Cloudflare 502.
+# Actions may have copied this file from origin/main so this process is already
+# the new script. Restore HEAD so porcelain can stop 8787; merge brings it back.
+Write-Host "reset scripts/windows/release.ps1 to HEAD (Actions 预取的新脚本已在本进程)"
+Invoke-Git checkout HEAD -- scripts/windows/release.ps1
+Assert-GitOk "git checkout HEAD -- scripts/windows/release.ps1"
 Fetch-OriginMain
 Assert-GitOk "git fetch"
 Write-Host "reset package-lock.json to HEAD (npm 不得把锁文件改脏带进 pull)"

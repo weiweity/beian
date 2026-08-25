@@ -27,9 +27,14 @@ describe("windows release.ps1 contract", () => {
     assert.match(script, /cannot lock ref 'refs\/remotes\/origin\/main'/);
     assert.match(script, /网络\/401\/Clash 失败不要动 origin\/main/);
     assert.match(script, /^Fetch-OriginMain$/m);
+    assert.match(script, /function Invoke-GitFetch/);
+    assert.match(script, /NativeCommandError from git stderr/);
+    assert.match(script, /\$ErrorActionPreference = "Continue"/);
     assert.ok(indexOf(/^Fetch-OriginMain$/m) < indexOf(/taskkill\.exe \/T \/F \/PID/));
-    assert.ok(indexOf(/function Fetch-OriginMain/) < indexOf(/Invoke-Git fetch origin/));
-    assert.ok(indexOf(/Invoke-Git fetch origin/) < indexOf(/^Fetch-OriginMain$/m));
+    assert.ok(indexOf(/function Invoke-GitFetch/) < indexOf(/fetch origin \*> \$LogPath/));
+    assert.ok(indexOf(/\$ErrorActionPreference = "Continue"/) < indexOf(/fetch origin \*> \$LogPath/));
+    assert.ok(indexOf(/checkout HEAD -- scripts\/windows\/release\.ps1/) < indexOf(/^Fetch-OriginMain$/m));
+    assert.ok(indexOf(/function Invoke-GitFetch/) < indexOf(/^Fetch-OriginMain$/m));
     assert.doesNotMatch(script, /Write-Host \$msg/);
     assert.match(script, /Remove-Item \$log -Force/);
     assert.match(script, /Get-Content \$log -Raw -Encoding \$enc/);
@@ -147,17 +152,22 @@ describe("windows release.ps1 contract", () => {
     assert.doesNotMatch(yml, /^\s+shell: powershell\s*$/m);
     assert.match(yml, /if: failure\(\)/);
     assert.match(yml, /schtasks \/Run \/TN beian-server-8787/);
+    assert.match(yml, /^[^#\n]*git -C D:\\beian fetch origin/m);
+    assert.match(yml, /^[^#\n]*git -C D:\\beian checkout origin\/main -- scripts\/windows\/release\.ps1/m);
     const lockIdx = yml.search(/^[^#\n]*git -C D:\\beian checkout -- package-lock\.json/m);
-    const errIdx = yml.indexOf("if errorlevel 1 exit /b 1");
+    const fetchIdx = yml.search(/^[^#\n]*git -C D:\\beian fetch origin/m);
+    const ps1Idx = yml.search(/^[^#\n]*git -C D:\\beian checkout origin\/main -- scripts\/windows\/release\.ps1/m);
     const runIdx = yml.indexOf("D:\\beian\\scripts\\windows\\release.ps1");
     const failIdx = yml.indexOf("if: failure()");
-    assert.ok(lockIdx >= 0 && errIdx > lockIdx && runIdx > errIdx && failIdx > runIdx);
+    assert.ok(lockIdx >= 0 && fetchIdx > lockIdx && ps1Idx > fetchIdx && runIdx > ps1Idx && failIdx > runIdx);
+    assert.doesNotMatch(yml, /GITHUB_TOKEN/);
   });
 
   it("uses GITHUB_TOKEN for git when Actions provides it, never prints the token", () => {
     assert.match(script, /function Invoke-Git/);
     assert.match(script, /http.extraheader=AUTHORIZATION: bearer/);
-    assert.match(script, /Invoke-Git fetch origin/);
+    assert.match(script, /function Invoke-GitFetch/);
+    assert.match(script, /Invoke-GitFetch -LogPath \$log/);
     assert.match(script, /Invoke-Git merge --ff-only origin\/main/);
     assert.doesNotMatch(script, /Write-Host.*GITHUB_TOKEN/);
     assert.match(script, /GITHUB_TOKEN/);

@@ -33,7 +33,13 @@ jobs:
         shell: cmd
         run: |
           rem On-disk script lags origin until pull. Drop npm-dirty lockfile first.
+          rem cmd fetch: git stderr is not a failed errorlevel. PS5 Stop treats it as NativeCommandError.
+          rem Then copy origin/main's release.ps1 so this land can self-heal a broken on-disk CD script.
           git -C D:\beian checkout -- package-lock.json
+          if errorlevel 1 exit /b 1
+          git -C D:\beian fetch origin
+          if errorlevel 1 exit /b 1
+          git -C D:\beian checkout origin/main -- scripts/windows/release.ps1
           if errorlevel 1 exit /b 1
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File D:\beian\scripts\windows\release.ps1
       - name: Start last 8787 if release died after stop
