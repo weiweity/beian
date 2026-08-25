@@ -7,6 +7,11 @@ from pathlib import Path
 import bpy
 from mathutils import Matrix, Vector
 
+_PACKAGING = Path(__file__).resolve().parents[1]
+if str(_PACKAGING) not in sys.path:
+    sys.path.insert(0, str(_PACKAGING))
+from camera_frame import aabb_after_z_rotation, camera_fit_after_yaw, camera_location_mm, camera_ortho_scale_mm, camera_target_mm
+
 
 def job_path_from_argv():
     if "--" not in sys.argv:
@@ -147,16 +152,15 @@ def add_studio(job):
     scene.render.film_transparent = False
     scene.render.image_settings.compression = 35
     scene.render.image_settings.color_depth = "8"
-    scene.view_settings.look = "AgX - Medium High Contrast"
-    scene.view_settings.exposure = -0.05
+    scene.view_settings.look = "None"
+    scene.view_settings.exposure = 0.0
     scene.world.color = (1.0, 1.0, 1.0)
 
     world = scene.world
     world.use_nodes = True
     background = world.node_tree.nodes.get("Background")
     background.inputs["Color"].default_value = (1.0, 1.0, 1.0, 1.0)
-    # AgX + 负曝光会把 1.0 世界光压成灰。略抬强度，地/背板用自发光顶成白底。
-    background.inputs["Strength"].default_value = 1.35
+    background.inputs["Strength"].default_value = 2.4
 
     bpy.ops.mesh.primitive_plane_add(size=600, location=(0, 0, -0.8))
     floor = bpy.context.object
@@ -170,7 +174,7 @@ def add_studio(job):
     if floor_shader.inputs.get("Emission Color"):
         floor_shader.inputs["Emission Color"].default_value = (1.0, 1.0, 1.0, 1.0)
     if floor_shader.inputs.get("Emission Strength"):
-        floor_shader.inputs["Emission Strength"].default_value = 0.45
+        floor_shader.inputs["Emission Strength"].default_value = 1.15
     floor.data.materials.append(floor_mat)
 
     bpy.ops.mesh.primitive_plane_add(size=520, location=(0, 130, 145), rotation=(math.radians(90), 0, 0))
@@ -201,27 +205,56 @@ def add_studio(job):
     rim.data.size = 95
     look_at(rim, (0, 0, 90))
 
-    bpy.ops.object.camera_add(location=(165, -260, 205))
+    dims = job["dimensions_mm"]
+    width = float(dims["width"])
+    depth = float(dims["depth"])
+    height = float(dims["height"])
+    loc = camera_location_mm(width, depth, height)
+    target = camera_target_mm(width, depth, height)
+    bpy.ops.object.camera_add(location=loc)
     camera = bpy.context.object
     camera.name = "Product Camera"
     camera.data.type = "ORTHO"
-    camera.data.ortho_scale = float(job["render"]["camera_ortho_scale_mm"])
-    camera.data.lens = 52
-    look_at(camera, (0, 0, 88))
+    camera.data.ortho_scale = float(job["render"].get("camera_ortho_scale_mm") or camera_ortho_scale_mm(width, depth, height))
+    camera.data.clip_start = 0.1
+    camera.data.clip_end = max(4000.0, camera.data.ortho_scale * 8)
+    look_at(camera, target)
     scene.camera = camera
     return camera
 
 
+def apply_camera_fit(camera, job, yaw_rad):
+    dims = job["dimensions_mm"]
+    width = float(dims["width"])
+    depth = float(dims["depth"])
+    height = float(dims["height"])
+    loc, target, scale = camera_fit_after_yaw(width, depth, height, yaw_rad)
+    pinned = float(job["render"].get("camera_ortho_scale_mm") or 0)
+    span_w, span_d, _span_h = aabb_after_z_rotation(width, depth, height, yaw_rad)
+    camera.location = loc
+    if pinned and abs(span_w - width) < 1e-6 and abs(span_d - depth) < 1e-6:
+        camera.data.ortho_scale = pinned
+    else:
+        camera.data.ortho_scale = scale
+    camera.data.clip_end = max(4000.0, camera.data.ortho_scale * 8)
+    look_at(camera, target)
+
+
 def render_views(job, root):
     scene = bpy.context.scene
+    camera = scene.camera
     outputs = job["outputs"]
     front_rotation = math.radians(float(job["render"].get("front_rotation_deg", 0)))
     back_rotation = math.radians(float(job["render"].get("back_rotation_deg", 180)))
     root.rotation_euler.z = front_rotation
+    bpy.context.view_layer.update()
+    apply_camera_fit(camera, job, front_rotation)
     scene.render.filepath = outputs["front_right"]
     bpy.ops.render.render(write_still=True)
 
     root.rotation_euler.z = back_rotation
+    bpy.context.view_layer.update()
+    apply_camera_fit(camera, job, back_rotation)
     scene.render.filepath = outputs["back_left"]
     bpy.ops.render.render(write_still=True)
     root.rotation_euler.z = 0.0
@@ -248,12 +281,20 @@ def export_model(job, root, model_objects):
         obj.parent = None
         obj.matrix_world = scale_to_metres @ world_matrix
     bpy.context.view_layer.update()
-    bpy.ops.export_scene.gltf(
+    gltf_kwargs = dict(
         filepath=job["outputs"]["glb"],
         export_format="GLB",
         use_selection=True,
         export_yup=True,
+        export_texcoords=True,
+        export_normals=True,
+        export_materials="EXPORT",
     )
+    try:
+        bpy.ops.export_scene.gltf(**gltf_kwargs)
+    except TypeError:
+        gltf_kwargs.pop("export_materials", None)
+        bpy.ops.export_scene.gltf(**gltf_kwargs)
 
 
 def verify_glb(job):
@@ -266,6 +307,18 @@ def verify_glb(job):
         points.extend(obj.matrix_world @ Vector(corner) for corner in obj.bound_box)
     if not points:
         raise RuntimeError("GLB verification failed: no mesh objects")
+    has_image = False
+    for mat in bpy.data.materials:
+        if not mat.use_nodes:
+            continue
+        for node in mat.node_tree.nodes:
+            if node.type == "TEX_IMAGE" and getattr(node, "image", None):
+                has_image = True
+                break
+        if has_image:
+            break
+    if not has_image:
+        raise RuntimeError("GLB verification failed: no printed artwork textures")
     mins = [min(point[i] for point in points) for i in range(3)]
     maxs = [max(point[i] for point in points) for i in range(3)]
     measured_m = sorted([maxs[i] - mins[i] for i in range(3)])

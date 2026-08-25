@@ -45,7 +45,7 @@ export function historyTaskRow(row: TaskSummary): HistoryRow {
     status = "已签字";
     color = "success";
   } else if (row.status === "in_review" || row.status === "pending_review") {
-    status = "待她判";
+    status = "待审核";
     color = "warning";
   } else if (row.status === "compare_failed" || row.job_status === "failed") {
     status = row.job_error || row.error || "对照失败";

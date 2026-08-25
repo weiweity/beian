@@ -80,9 +80,9 @@ Approach C。禁止 `/history` 和名为「历史中心」的页。任务页里�
 ### 状态（对外文案）
 
 ```
-对照中 → 待她判 →（一校有 issue）等新稿
+对照中 → 待审核 →（一校有 issue）等新稿
                  →（一校零 issue）已签字
-等新稿 →（她上传新 PDF）对红中 → 待她判（对红）
+等新稿 →（她上传新 PDF）对红中 → 待审核（对红）
 对红后：仍可签字（结论写清未改项）。8/31 不收第三份 PDF，不覆盖 v1/v2。
 ```
 
@@ -91,7 +91,7 @@ Approach C。禁止 `/history` 和名为「历史中心」的页。任务页里�
 | 她看见 | 内部 |
 |---|---|
 | 对照中 | `in_review` |
-| 待她判 | `in_review` + 有 hits |
+| 待审核 | `in_review` + 有 hits |
 | 等新稿 | `in_review` + round=1 + 有 issue + 无 v2 |
 | 对红中 | `in_review` + round=2 + 正在跑 |
 | 已签字 | `completed` |
@@ -154,7 +154,7 @@ bbox 只展示，不作判定。定位失败的项留在任务上，不要丢。
 - `POST /api/tasks/{tid}/decision`、`complete`、飞书 session、`GET /api/tasks?mine=`
 - `test_auth_gate.py` 已拦匿名读和 X-Actor
 - 对照引擎 + OCR；`fields.normalize()` 去空白（P1 空格 pass 不要改它）
-- 旧 vanilla `frontend/` 仍是 8787 的 `/`
+- 旧 vanilla `frontend/` 已退役。Hono 审稿台 `/reviewup`，工作台 `/reviewup/new`
 
 ## NOT in scope（本周 P0）
 
@@ -192,12 +192,12 @@ bbox 只展示，不作判定。定位失败的项留在任务上，不要丢。
 
 1. complete 有 issue 也签；推送改「待设计改稿」
 2. decide 加 `note` + 复制清单
-3. `/` 挂 React dist
+3. 审稿台 `/reviewup` 挂 React dist（旧 `/` 302）
 4. 品名必填 + 列表 q
 5. 六条后端 pytest 全补
 
 ```
-对照中 → 待她判 → 已签字
+对照中 → 待审核 → 已签字
                 ↘ 清单复制给设计（任务仍可签）
 ```
 

@@ -1,20 +1,35 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { isSpaPath, spaIndexAction } from "./spaIndex.js";
+import { isSpaPath, legacyDeskRedirect, spaIndexAction } from "./spaIndex.js";
 
 describe("isSpaPath", () => {
   it("allows desks and ids, rejects api and static", () => {
     assert.equal(isSpaPath("/"), true);
+    assert.equal(isSpaPath("/reviewup"), true);
+    assert.equal(isSpaPath("/reviewup/new"), true);
     assert.equal(isSpaPath("/new"), true);
     assert.equal(isSpaPath("/history/"), true);
     assert.equal(isSpaPath("/settings"), true);
     assert.equal(isSpaPath("/review"), true);
     assert.equal(isSpaPath("/review/aabbccddeeff"), true);
     assert.equal(isSpaPath("/mockup"), true);
+    assert.equal(isSpaPath("/mockup/new"), true);
     assert.equal(isSpaPath("/mockup/AABBCCDDEEFF"), true);
     assert.equal(isSpaPath("/api/health"), false);
     assert.equal(isSpaPath("/brand/logo-mark.png"), false);
     assert.equal(isSpaPath("/review/not-an-id"), false);
+    assert.equal(isSpaPath("/reviewup/not-an-id"), false);
+  });
+});
+
+describe("legacyDeskRedirect", () => {
+  it("sends old review desk bookmarks to /reviewup", () => {
+    assert.equal(legacyDeskRedirect("/"), "/reviewup");
+    assert.equal(legacyDeskRedirect("/new"), "/reviewup/new");
+    assert.equal(legacyDeskRedirect("/review"), "/reviewup");
+    assert.equal(legacyDeskRedirect("/reviewup"), null);
+    assert.equal(legacyDeskRedirect("/review/aabbccddeeff"), null);
+    assert.equal(legacyDeskRedirect("/mockup"), null);
   });
 });
 

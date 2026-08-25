@@ -27,6 +27,39 @@ def pipeline():
     return _load("packaging_pipeline", PACKAGING / "pipeline.py")
 
 
+def camera_frame():
+    return _load("packaging_camera_frame", PACKAGING / "camera_frame.py")
+
+
+def test_camera_ortho_covers_height_not_just_longest_side():
+    cam = camera_frame()
+    # 高瘦盒：只乘最长边会把盖子裁掉。
+    scale = cam.camera_ortho_scale_mm(40.0, 30.0, 180.0)
+    assert scale >= 180.0
+    loc = cam.camera_location_mm(40.0, 30.0, 180.0)
+    target = cam.camera_target_mm(40.0, 30.0, 180.0)
+    assert target[2] == pytest.approx(90.0)
+    assert loc[2] > target[2]
+
+
+def test_camera_fit_after_front_back_rotation():
+    cam = camera_frame()
+    import math
+
+    w, d, h = 80.0, 40.0, 120.0
+    span0 = cam.aabb_after_z_rotation(w, d, h, 0.0)
+    span180 = cam.aabb_after_z_rotation(w, d, h, math.pi)
+    span90 = cam.aabb_after_z_rotation(w, d, h, math.pi / 2)
+    assert span0 == pytest.approx(span180)
+    assert span0[0] == pytest.approx(w)
+    assert span0[1] == pytest.approx(d)
+    assert span90[0] == pytest.approx(d)
+    assert span90[1] == pytest.approx(w)
+    loc, target, scale = cam.camera_fit_after_yaw(w, d, h, math.pi / 2)
+    assert scale >= h
+    assert loc[2] > target[2]
+
+
 def test_pick_knife_layer_aliases():
     d = dieline()
     assert d.pick_knife_layer(["印刷", "刀线", "标注"]) == "刀线"

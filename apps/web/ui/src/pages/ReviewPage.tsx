@@ -79,7 +79,7 @@ function statusLead(task: TaskDetail | null, pageIdx: number, pages: TaskPage[])
   const pageNo = pages[pageIdx]?.page || pageIdx + 1;
   if (!task) return "核对页";
   if (task.status === "completed") return `核对页 · 第 ${pageNo} 页 · 已签字`;
-  if (isReviewable(task.status)) return `核对页 · 点字段，图上定位。第 ${pageNo} 页 · 待她判`;
+  if (isReviewable(task.status)) return `核对页 · 点字段，图上定位。第 ${pageNo} 页 · 待审核`;
   if (task.status === "compare_failed") return `核对页 · 第 ${pageNo} 页 · 对照中断`;
   return `核对页 · 第 ${pageNo} 页`;
 }

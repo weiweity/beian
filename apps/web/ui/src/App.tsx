@@ -4,6 +4,7 @@ import { authFailureAction, feishuLoginHref, shouldAutoRedirectToFeishu } from "
 import { Sidebar, type NavKey } from "./chrome/Sidebar";
 import { hrefOf, parsePath, type AppView } from "./appRoute";
 import { liveNavPulse } from "./pages/waitCard";
+import { useAppearance } from "./chrome/AppearanceRoot";
 import { NewTaskPage } from "./pages/NewTaskPage";
 import { ReviewPage } from "./pages/ReviewPage";
 import { TasksPage } from "./pages/TasksPage";
@@ -60,7 +61,7 @@ function AuthShell({ title, children }: { title?: string; children: ReactNode })
 }
 
 function navOf(view: View): NavKey {
-  if (view === "mockup") return "mockup";
+  if (view === "mockup" || view === "mockupNew") return "mockup";
   if (view === "history") return "history";
   if (view === "settings") return "settings";
   return "review";
@@ -107,6 +108,7 @@ function bootRoute() {
 }
 
 export function App() {
+  const { setActor } = useAppearance();
   const [me, setMe] = useState<Me | null>(null);
   const boot = bootRoute();
   const [view, setView] = useState<View>(boot.view);
@@ -123,6 +125,7 @@ export function App() {
       setMe(next);
       setApiBroken(null);
       if (next.logged_in) {
+        if (next.open_id) setActor(next.open_id);
         const r = parsePath(window.location.pathname, window.location.search, window.location.hash);
         setView((cur) => (cur === "tasks" && r.view === "settings" ? "settings" : cur));
         setAuthError(null);
@@ -133,7 +136,7 @@ export function App() {
       setApiBroken(brokenApiMessage(e, window.location.host));
       setMe({ logged_in: false, display_name: null, avatar_url: null, role: null, perms: [] });
     }
-  }, []);
+  }, [setActor]);
 
   useEffect(() => {
     const err = new URLSearchParams(window.location.search).get("feishu_error") || "";
@@ -355,12 +358,14 @@ export function App() {
             />
           </Suspense>
         ) : null}
-        {view === "mockup" ? (
+        {view === "mockup" || view === "mockupNew" ? (
           <Suspense fallback={<PaneFallback label="打开打样台…" />}>
             <MockupDesk
-              openId={mockupId}
+              openId={view === "mockupNew" ? null : mockupId}
+              composing={view === "mockupNew"}
               onOpenJob={(id) => goRoute({ view: "mockup", mockupId: id })}
               onBack={() => goRoute({ view: "mockup" })}
+              onCompose={() => goRoute({ view: "mockupNew" })}
             />
           </Suspense>
         ) : null}

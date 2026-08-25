@@ -11,11 +11,10 @@
 | `apps/web/ui` | React + Ant Design 6 审稿台 / 打样台 / 历史 / 设置 |
 | `apps/web/server` | Hono + TypeScript，对外 HTTP `:8787` |
 | `apps/web/backend` | Python 对照 worker（TS 用 `python -m app.cli` 调用） |
-| `apps/web/frontend` | 已退役的原生页，不要再改 |
 | `workers/packaging/` | 2D→3D CLI，打样台调用。先读稿上刀线还原盒面（密折痕先密后疏）；平面出图用 pymupdf（对照同一 Python）；杭州不需要 macOS qlmanage。PPT 用两张白底写 OOXML，不依赖 Node；写不出才试演示文稿运行时。两张白底再合成一页 PDF（页底先铺白，槽按源图比例 contain；pymupdf 写不出且还没落盘才用已装 Pillow，不盖掉已写成的文件）。缺 PPT/PDF 仍算出图 |
 | `docs/` | 章程、ADR、设计 |
 
-HTTP 是 TypeScript。对照规则和 Blender 仍是 Python。见 `docs/adr-002-typescript-http.md`。
+旧 `apps/web/frontend` 已删除。网页入口只有 `apps/web/ui` + Hono `apps/web/server`；对照规则和 Blender 仍是 Python。见 `docs/adr-002-typescript-http.md`。
 
 ## 文档
 
@@ -42,11 +41,11 @@ HTTP 是 TypeScript。对照规则和 Blender 仍是 Python。见 `docs/adr-002-
 
 - 产品 / 验收：http://127.0.0.1:8787/ （先 `cd apps/web/ui && npm run build`）
 - 开发 UI：http://127.0.0.1:5173/ （`npm run dev:ui`；Vite 听本机网卡，`/api` 反代到 8787，端口占用即失败）
-- 台地址：`/` 审稿台、`/new` 新建、`/review/:id` 核对页、`/mockup` 打样台、`/mockup/:id` 打样单、`/history`、`/settings`。后退换台。
+- 台地址：`/reviewup` 审稿台、`/reviewup/new` 审稿工作台、`/review/:id` 核对页、`/mockup` 打样台、`/mockup/new` 打样工作台、`/mockup/:id` 打样单、`/history`、`/settings`。旧 `/` `/new` `/review` 会转到新地址。后退换台。
 
 5173 登录闪或 `/api` 返回 HTML / 空 Content-Type：打开 http://127.0.0.1:8787/，或重启 `npm run dev:ui`。飞书授权失败回到飞书重试，不要把远程验收人指到本机。JSON 404（任务不存在等）不是 Vite 挂了。
 
-不要再跑 `uvicorn app.main:app` 当入口。
+不要跑 uvicorn。没有 `app.main`。产品入口只有 Hono `:8787`。
 
 测服务端、界面和对照 CLI：仓库根目录 `npm test`（Mac；不打外网）。杭州生产只做 health/logo 冒烟，不跑单测。只要服务端：`npm run test -w beian-server`。只要界面：`npm run test -w beian-ui`。
 

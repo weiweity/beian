@@ -46,6 +46,7 @@ describe("feishu authorize", () => {
     assert.equal(auth.sanitizeNext("ok"), "/");
     assert.equal(auth.sanitizeNext("/api/tasks"), "/");
     assert.equal(auth.sanitizeNext("/review/aabbccddeeff"), "/review/aabbccddeeff");
+    assert.equal(auth.sanitizeNext("/reviewup/new"), "/reviewup/new");
     assert.equal(auth.sanitizeNext("/\r\nLocation: https://evil.example"), "/");
   });
 
