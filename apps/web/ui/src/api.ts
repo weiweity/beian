@@ -1,5 +1,6 @@
 import { API_DOWN_LOCAL } from "./apiHint";
 import { describeBrokenApi } from "./authGate";
+import { UPLOAD_TOO_LARGE } from "./uploadLimit";
 
 function apiHost(): string {
   return typeof window === "undefined" ? "" : window.location.host;
@@ -32,6 +33,9 @@ async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
     headers,
   });
   const ct = res.headers.get("content-type") || "";
+  if (res.status === 413) {
+    throw new ApiError(413, UPLOAD_TOO_LARGE, false);
+  }
   const hint = describeBrokenApi(res.status, ct, apiHost());
   if (!res.ok) {
     let detail = res.statusText;
@@ -51,6 +55,64 @@ async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
     throw new ApiError(res.status || 502, hint || "接口没有返回 JSON", true);
   }
   return (await res.json()) as T;
+}
+
+export type UploadReceipt = {
+  receipt: string;
+  files: { field: string; name: string; bytes: number }[];
+};
+
+function uploadWithProgress<T>(
+  path: string,
+  fd: FormData,
+  onProgress?: (pct: number) => void,
+  signal?: AbortSignal,
+): Promise<T> {
+  if (typeof XMLHttpRequest === "undefined") {
+    return request<T>(path, { method: "POST", body: fd, signal });
+  }
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", path);
+    xhr.withCredentials = true;
+    xhr.upload.onprogress = (ev) => {
+      if (!onProgress || !ev.lengthComputable || ev.total <= 0) return;
+      onProgress(Math.max(0, Math.min(100, Math.round((ev.loaded / ev.total) * 100))));
+    };
+    if (signal) {
+      if (signal.aborted) {
+        reject(new ApiError(0, "上传中断", true));
+        return;
+      }
+      signal.addEventListener("abort", () => xhr.abort(), { once: true });
+    }
+    xhr.onabort = () => reject(new ApiError(0, "上传中断", true));
+    xhr.onload = () => {
+      const ct = xhr.getResponseHeader("content-type") || "";
+      if (xhr.status === 413) {
+        reject(new ApiError(413, UPLOAD_TOO_LARGE, false));
+        return;
+      }
+      let detail = xhr.statusText;
+      try {
+        if (ct.includes("application/json") && xhr.responseText) {
+          const body = JSON.parse(xhr.responseText) as T & { detail?: unknown };
+          if (xhr.status >= 200 && xhr.status < 300) {
+            onProgress?.(100);
+            resolve(body);
+            return;
+          }
+          if (typeof body.detail === "string") detail = body.detail;
+        }
+      } catch {
+        /* keep statusText */
+      }
+      const hint = describeBrokenApi(xhr.status, ct, apiHost());
+      reject(new ApiError(xhr.status, hint || detail, Boolean(hint)));
+    };
+    xhr.onerror = () => reject(new ApiError(0, "上传中断", true));
+    xhr.send(fd);
+  });
 }
 
 export type Me = {
@@ -157,8 +219,12 @@ export const api = {
   tasks: (q?: string) =>
     request<TaskSummary[]>(q ? `/api/tasks?q=${encodeURIComponent(q)}` : "/api/tasks"),
   task: (id: string) => request<TaskDetail>(`/api/tasks/${id}`),
-  uploadExcelPdf: (fd: FormData) =>
-    request<TaskDetail>("/api/tasks/upload", { method: "POST", body: fd }),
+  stageUpload: (fd: FormData, onProgress?: (pct: number) => void, signal?: AbortSignal) =>
+    uploadWithProgress<UploadReceipt>("/api/uploads", fd, onProgress, signal),
+  startTask: (body: { receipt: string; product_name: string; title?: string; pack_surface?: string }) =>
+    request<TaskDetail>("/api/tasks/start", { method: "POST", body: JSON.stringify(body) }),
+  startMockup: (body: { receipt: string; title?: string; product_name?: string }) =>
+    request<MockupJob>("/api/mockups/start", { method: "POST", body: JSON.stringify(body) }),
   decide: (id: string, body: { hit_id: string; decision: Decision; note?: string }) =>
     request<TaskDetail>(`/api/tasks/${id}/decision`, {
       method: "POST",
@@ -171,16 +237,10 @@ export const api = {
     }),
   rework: (id: string, fd: FormData) =>
     request<TaskDetail>(`/api/tasks/${id}/rework`, { method: "POST", body: fd }),
-  createMockup: (fd: FormData) => request<MockupJob>("/api/mockups", { method: "POST", body: fd }),
   mockups: () => request<MockupJob[]>("/api/mockups"),
   mockup: (id: string) => request<MockupJob>(`/api/mockups/${id}`),
   deleteTask: (id: string) => request<{ ok: boolean }>(`/api/tasks/${id}`, { method: "DELETE" }),
   deleteMockup: (id: string) => request<{ ok: boolean }>(`/api/mockups/${id}`, { method: "DELETE" }),
-  loginDisplay: (display_name: string) =>
-    request<{ token?: string }>("/api/auth/login", {
-      method: "POST",
-      body: JSON.stringify({ display_name }),
-    }),
   settings: () => request<SettingsView>("/api/settings"),
   saveSettings: (values: Record<string, string>) =>
     request<SettingsView & { restart?: boolean }>("/api/settings", {

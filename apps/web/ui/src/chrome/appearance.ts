@@ -11,6 +11,11 @@ export type Appearance = {
 };
 
 export const APPEARANCE_KEY = "wb_appearance";
+
+export function appearanceStorageKey(openId = ""): string {
+  const id = (openId || "").trim();
+  return id ? `${APPEARANCE_KEY}:${id}` : APPEARANCE_KEY;
+}
 export const FONT_PX_MIN = 13;
 export const FONT_PX_MAX = 28;
 export const FONT_PX_DEFAULT = 16;
@@ -100,9 +105,13 @@ export function parseAppearance(raw: unknown): Appearance {
   };
 }
 
-export function loadAppearance(): Appearance {
+export function loadAppearance(openId = ""): Appearance {
   try {
-    const raw = localStorage.getItem(APPEARANCE_KEY);
+    const raw = localStorage.getItem(appearanceStorageKey(openId));
+    if (!raw && openId) {
+      const legacy = localStorage.getItem(APPEARANCE_KEY);
+      if (legacy) return parseAppearance(JSON.parse(legacy) as unknown);
+    }
     if (!raw) return { ...APPEARANCE_DEFAULT };
     return parseAppearance(JSON.parse(raw) as unknown);
   } catch {
@@ -110,9 +119,9 @@ export function loadAppearance(): Appearance {
   }
 }
 
-export function saveAppearance(next: Appearance): void {
+export function saveAppearance(next: Appearance, openId = ""): void {
   try {
-    localStorage.setItem(APPEARANCE_KEY, JSON.stringify(next));
+    localStorage.setItem(appearanceStorageKey(openId), JSON.stringify(next));
   } catch {
     /* ignore quota / private mode */
   }

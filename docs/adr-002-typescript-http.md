@@ -16,6 +16,6 @@
 ## 不做
 
 - 不把 `fields.py` / 百度 OCR / Blender 脚本改写成 TypeScript。
-- 不删旧 FastAPI 源码（测试与 worker 还用）。旧 vanilla `frontend/` 不再当 `GET /`。
+- 不把对照规则改写成 TypeScript。旧 FastAPI `app.main` 和 vanilla `frontend/` 后来都已删除；产品页面只由 React UI + Hono 提供，对照走 `python -m app.cli`。
 
 后续设计约束见 `docs/adr-004-ousterhout-design.md`（深模块、唯一 HTTP 入口、8/31 前不搬迁 FastAPI）。不扩大本 ADR 的原始决定。

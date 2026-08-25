@@ -8,6 +8,8 @@ process.env.WB_DATA_DIR = mkdtempSync(join(tmpdir(), "beian-ts-"));
 
 const { activeHits, boardColumn, deleteTask, hasReworkPages, isHitDecision, isReviewableStatus, isReworkableStatus, isReworkableTask, listTasks, loadTask, saveTask } = await import("./tasks.js");
 
+const admin = { id: "ou_admin", name: "管理员", admin: true };
+
 describe("listTasks", () => {
   before(() => {
     saveTask({
@@ -29,19 +31,19 @@ describe("listTasks", () => {
   });
 
   it("待签在前", () => {
-    const rows = listTasks();
+    const rows = listTasks("", admin);
     assert.equal(rows[0]?.product_name, "某某精华");
     assert.equal(rows[1]?.product_name, "另一支霜");
   });
 
   it("按品名搜", () => {
-    const rows = listTasks("精华");
+    const rows = listTasks("精华", admin);
     assert.equal(rows.length, 1);
     assert.equal(rows[0]?.id, "aaaaaaaaaaaa");
   });
 
   it("搜不到为空", () => {
-    assert.deepEqual(listTasks("没有这个品"), []);
+    assert.deepEqual(listTasks("没有这个品", admin), []);
   });
 
   it("对照失败不进对照中列", () => {
@@ -61,6 +63,24 @@ describe("listTasks", () => {
     });
     deleteTask("cccccccccccc");
     assert.throws(() => loadTask("cccccccccccc"), /任务不存在/);
+  });
+
+  it("reviewer only sees own owner rows", () => {
+    saveTask({
+      id: "eeeeeeeeeeee",
+      title: "爱丽丝",
+      product_name: "爱丽丝",
+      type: "excel_pdf",
+      status: "pending_review",
+      created_at: "2026-08-19T11:00:00Z",
+      owner: "ou_alice",
+      created_by: "同名",
+    });
+    const alice = { id: "ou_alice", name: "同名", admin: false };
+    const bob = { id: "ou_bob", name: "同名", admin: false };
+    assert.equal(listTasks("", alice).some((r) => r.id === "eeeeeeeeeeee"), true);
+    assert.equal(listTasks("", bob).some((r) => r.id === "eeeeeeeeeeee"), false);
+    assert.equal(listTasks("", alice).some((r) => r.id === "aaaaaaaaaaaa"), false);
   });
 
   it("deleteTask refuses a running compare", () => {

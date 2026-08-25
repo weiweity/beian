@@ -20,6 +20,31 @@ export type Hit = {
 export type JobStatus = "queued" | "running" | "succeeded" | "failed";
 export type JobKind = "compare" | "rework" | "mockup";
 
+export type Viewer = {
+  id: string;
+  name: string;
+  admin: boolean;
+};
+
+export function viewerFromSession(session: {
+  open_id?: string;
+  display_name?: string;
+  role?: string;
+}): Viewer {
+  const name = String(session.display_name || "").trim();
+  return {
+    id: String(session.open_id || name).trim(),
+    name,
+    admin: session.role === "admin",
+  };
+}
+
+export function canAccessOwner(owner: string, viewer: Viewer): boolean {
+  if (viewer.admin) return true;
+  const expected = String(owner || "").trim();
+  return Boolean(expected) && (expected === viewer.id || expected === viewer.name);
+}
+
 export type Task = {
   id: string;
   title: string;
@@ -131,18 +156,16 @@ export function loadAllTasks(): Task[] {
 }
 
 export function taskOwner(task: Task): string {
-  return String(task.owner || task.created_by || task.actor || "");
+  return String(task.owner || "").trim();
 }
 
-export function assertCanAccessTask(task: Task, viewer: { name: string; admin: boolean }): void {
-  if (viewer.admin) return;
-  const owner = taskOwner(task);
-  if (owner && owner !== viewer.name) {
+export function assertCanAccessTask(task: Task, viewer: Viewer): void {
+  if (!canAccessOwner(taskOwner(task), viewer)) {
     throw Object.assign(new Error("没有权限"), { status: 403 });
   }
 }
 
-export function listTasks(q = "", mineName = "", admin = false): Record<string, unknown>[] {
+export function listTasks(q: string, viewer: Viewer): Record<string, unknown>[] {
   const needle = q.trim().toLowerCase();
   const items: Task[] = [];
   for (const name of readdirSync(tasksDir())) {
@@ -154,8 +177,7 @@ export function listTasks(q = "", mineName = "", admin = false): Record<string, 
     }
   }
   const filtered = items.filter((t) => {
-    const owner = t.owner || t.created_by || t.actor || "";
-    if (mineName && !admin && owner && owner !== mineName) return false;
+    if (!canAccessOwner(taskOwner(t), viewer)) return false;
     if (needle) {
       const hay = `${t.product_name || ""} ${t.title || ""}`.toLowerCase();
       if (!hay.includes(needle)) return false;
@@ -174,7 +196,7 @@ export function listTasks(q = "", mineName = "", admin = false): Record<string, 
     type: t.type,
     status: t.status,
     created_at: t.created_at,
-    owner: t.owner || t.created_by || t.actor,
+    owner: t.created_by || t.actor || t.owner,
     completed_by: t.completed_by,
     round: t.round || 1,
     board: boardColumn(t.status, t.job_status),

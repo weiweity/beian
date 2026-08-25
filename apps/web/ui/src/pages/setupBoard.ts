@@ -1,7 +1,7 @@
 import type { ProbeResult } from "../api";
 
 export const SETUP_RETURN = "wb_setup_return_probe";
-export const SETUP_NEXT = "/?tab=settings&group=" + encodeURIComponent("开工板");
+export const SETUP_NEXT = "/settings?group=" + encodeURIComponent("开工板");
 
 export const PROBE_BY_GROUP: Record<string, string[]> = {
   开工板: ["feishu", "lark", "baidu", "minimax", "python", "blender", "illustrator"],
@@ -76,7 +76,7 @@ export const PUSH_INTRO =
   "点发一条测试即可。不必装 lark-cli，不必手填开关、open_id、bot。开工板绿不等于籽烨已收到；她作为审稿接收人可在本页再测一次。";
 
 export function settingsGroupPath(group: string): string {
-  return "/?tab=settings&group=" + encodeURIComponent(group);
+  return "/settings?group=" + encodeURIComponent(group);
 }
 
 export function feishuLoginHref(nextGroup = "开工板"): string {

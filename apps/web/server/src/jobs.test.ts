@@ -101,7 +101,7 @@ describe("jobs dispatcher", () => {
       job_pid: 99999,
       notify_job_id: "secret",
     });
-    const pub = publicTask(loadTask(tid(12)), { name: "籽烨", admin: false });
+    const pub = publicTask(loadTask(tid(12)), { id: "ou_ziye", name: "籽烨", admin: false });
     assert.equal("job_pid" in pub, false);
     assert.equal("notify_job_id" in pub, false);
     assert.equal(pub.job_status, "running");
@@ -115,7 +115,7 @@ describe("jobs dispatcher", () => {
       status: "pending_review",
       owner: "籽烨",
     });
-    assert.throws(() => publicTask(loadTask(tid(13)), { name: "别人", admin: false }), (err: Error & { status?: number }) => {
+    assert.throws(() => publicTask(loadTask(tid(13)), { id: "ou_other", name: "别人", admin: false }), (err: Error & { status?: number }) => {
       assert.equal(err.status, 403);
       return true;
     });

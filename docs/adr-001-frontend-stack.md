@@ -6,9 +6,9 @@
 
 ## 决策
 
-1. **前端改为 TypeScript + React 18 + Vite + Ant Design 6。** 后端仍是 FastAPI，不改成 Node。组件 API 以 `@ant-design/cli` / `antd` skill 为准，不要凭记忆写 props。
+1. **前端改为 TypeScript + React 18 + Vite + Ant Design 6。** 本 ADR 决策时后端仍是 FastAPI；之后已按 ADR-002 改为 Hono 产品层。组件 API 以 `@ant-design/cli` / `antd` skill 为准，不要凭记忆写 props。
 2. **设计哲学对齐** `customer-agent-prototype/DESIGN.md` 里的**内部工具纪律**，不复制该仓的产品壳。视觉 token 用 Ant Design，产品结构仍是审稿台。
-3. 现有 `apps/web/frontend/`（原生 JS + Geist + OpenSeadragon）作为对照实现，React 壳达到「刘籽烨能审一单」后删除或移入 `archive/`。
+3. 原 `apps/web/frontend/`（原生 JS + Geist + OpenSeadragon）曾作为对照实现；React 入口稳定后已直接删除，未保留 archive 副本。
 
 ## 为什么换栈
 
@@ -40,8 +40,8 @@
 
 ```
 apps/web/
-  backend/           FastAPI 不动
-  frontend/          旧静态页，过渡期保留
+  backend/           Python 对照 worker（`python -m app.cli`）
+  server/            Hono 产品 HTTP :8787
   ui/                新建：Vite + React + TS
     src/
       pages/         任务 / 新建 / 审核
@@ -50,7 +50,7 @@ apps/web/
 ```
 
 开发：`ui` 走 Vite 代理到 `127.0.0.1:8787`。  
-生产：`pnpm build` 的 `dist/` 由 FastAPI 当静态目录挂出去。飞书网页应用打开的仍是同一个 HTTPS 域名。
+生产：`npm run build` 的 `dist/` 由 Hono 当静态目录挂出去。飞书网页应用打开的仍是同一个 HTTPS 域名。
 
 ## 不做
 

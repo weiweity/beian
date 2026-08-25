@@ -276,7 +276,6 @@ def layout_to_template(layout: dict[str, Any]) -> dict[str, Any]:
         fx0, fy0, fx1, _fy1 = boxes["front"]
         lid = min(max(width, depth) / PT_TO_MM, max(8.0, fy0 - layout["roi"][1]))
         boxes["top"] = [fx0, max(layout["roi"][1], fy0 - lid), fx1, fy0]
-    longest = max(width, depth, height)
     return {
         "template_id": f"dieline_{layout['family']}",
         "version": 1,
@@ -298,7 +297,7 @@ def layout_to_template(layout: dict[str, Any]) -> dict[str, Any]:
         "render": {
             "resolution_x": 2000,
             "resolution_y": 2400,
-            "camera_ortho_scale_mm": round(max(longest * 1.28, 80.0), 1),
+            "camera_ortho_scale_mm": round(max(max(math.hypot(width, depth), height, width, depth, 1.0) * 1.36, 80.0), 1),
             "front_rotation_deg": 0.0,
             "back_rotation_deg": 180.0,
         },

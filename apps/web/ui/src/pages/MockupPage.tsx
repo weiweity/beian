@@ -1,13 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Alert, App, Empty, Tag } from "antd";
+import { Alert, App, Button, Empty } from "antd";
 import { api, type MockupJob } from "../api";
 import { UploadWell } from "../chrome/UploadWell";
 import { WaitCard } from "../chrome/WaitCard";
 import { mockupFailReason, mockupFailTag } from "./mockupError";
 import { liveJobLine, shouldShowWaitCard } from "./waitCard";
 import { stemFromFilename } from "./stemName";
+import { UPLOAD_TOO_LARGE, bytesTooLarge } from "../uploadLimit";
 import { HUD_MS, downloadHudLine, missingPptHud } from "./mockupHud";
+import { type DeskCardRow } from "./deskBoard";
+import { DeskCol } from "./DeskCol";
+import { shouldShowTaskBoard } from "./tasksBoard";
 import {
   enterElementFullscreen,
   exitElementFullscreen,
@@ -43,22 +47,42 @@ function fileHref(jobId: string, key: string, download = false) {
 
 export function MockupDesk({
   openId,
+  composing,
   onOpenJob,
   onBack,
+  onCompose,
 }: {
   openId?: string | null;
+  composing?: boolean;
   onOpenJob: (id: string) => void;
   onBack: () => void;
+  onCompose?: () => void;
 }) {
   if (openId) return <MockupJobPage jobId={openId} onBack={onBack} />;
-  return <MockupPage onOpenJob={onOpenJob} />;
+  if (composing) {
+    return <MockupNewPage onCreated={onOpenJob} onBack={onBack} />;
+  }
+  return <MockupPage onOpenJob={onOpenJob} onCompose={onCompose || (() => undefined)} />;
 }
 
-export function MockupPage({ onOpenJob }: DeskProps) {
-  const { message } = App.useApp();
-  const [file, setFile] = useState<File | null>(null);
-  const [productName, setProductName] = useState("");
-  const [busy, setBusy] = useState(false);
+function toMockCard(row: MockupJob): DeskCardRow {
+  const s = mockLabel(row);
+  return {
+    id: row.id,
+    title: mockTitle(row),
+    statusText: s.text,
+    statusColor: s.color,
+    actor: row.owner,
+    at: row.job_started_at || row.created_at,
+    live: liveJobLine({ ...row, kind: "mockup" }),
+    error: row.status === "failed" ? mockupFailReason(row.error || row.job_error) : null,
+  };
+}
+
+export function MockupPage({
+  onOpenJob,
+  onCompose,
+}: DeskProps & { onCompose: () => void }) {
   const [rows, setRows] = useState<MockupJob[]>([]);
   const listGen = useRef(0);
 
@@ -98,36 +122,6 @@ export function MockupPage({ onOpenJob }: DeskProps) {
     return () => window.clearInterval(id);
   }, [boardLive]);
 
-  function takeFile(next: File | null) {
-    setFile(next);
-    if (next) {
-      message.success("已选平面稿");
-      if (!productName.trim()) setProductName(stemFromFilename(next.name));
-    }
-  }
-
-  async function run() {
-    if (busy) return;
-    if (!file) {
-      message.warning("先选 .ai 稿件");
-      return;
-    }
-    const fd = new FormData();
-    fd.append("file", file);
-    fd.append("title", productName.trim() || stemFromFilename(file.name));
-    setBusy(true);
-    listGen.current += 1;
-    try {
-      const next = await api.createMockup(fd);
-      void refreshList();
-      onOpenJob(next.id);
-    } catch (err) {
-      message.error(err instanceof Error ? err.message : "打样失败");
-    } finally {
-      setBusy(false);
-    }
-  }
-
   const board = useMemo(
     () => ({
       running: rows.filter((r) => mockCol(r) === "running"),
@@ -136,25 +130,156 @@ export function MockupPage({ onOpenJob }: DeskProps) {
     }),
     [rows],
   );
+  const showBoard = shouldShowTaskBoard(rows.length, "");
+
+  return (
+    <section className="mockup-desk">
+      <div className="desk-head">
+        <div>
+          <h1 className="page-title">打样台</h1>
+          <p className="page-lead">交差「盒子长什么样」。点进度或已出图进打样单。</p>
+        </div>
+        <Button type="primary" onClick={onCompose}>
+          进入工作台
+        </Button>
+      </div>
+      {!showBoard ? (
+        <div className="desk-empty">
+          <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description={
+              <div>
+                <div>还没有打样单</div>
+                <div className="desk-empty-hint">右上角进入工作台，交一份 .ai 平面稿</div>
+              </div>
+            }
+          >
+            <Button type="primary" onClick={onCompose}>
+              进入工作台
+            </Button>
+          </Empty>
+        </div>
+      ) : (
+        <div className="review-board">
+          <DeskCol title="打样中" hint="点进去看进度" rows={board.running.map(toMockCard)} onOpen={onOpenJob} />
+          <DeskCol title="打样失败" hint="点进去看原因" rows={board.failed.map(toMockCard)} onOpen={onOpenJob} />
+          <DeskCol title="已出图" hint="点进去打开打样单" rows={board.done.map(toMockCard)} onOpen={onOpenJob} />
+        </div>
+      )}
+    </section>
+  );
+}
+
+export function MockupNewPage({
+  onCreated,
+  onBack,
+}: {
+  onCreated: (id: string) => void;
+  onBack: () => void;
+}) {
+  const { message } = App.useApp();
+  const [file, setFile] = useState<File | null>(null);
+  const [productName, setProductName] = useState("");
+  const [receipt, setReceipt] = useState<string | null>(null);
+  const [pct, setPct] = useState(0);
+  const [uploading, setUploading] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  function takeFile(next: File | null) {
+    setFile(next);
+    setReceipt(null);
+    setPct(0);
+    if (next) {
+      message.success("已选平面稿");
+      if (!productName.trim()) setProductName(stemFromFilename(next.name));
+    }
+  }
+
+  useEffect(() => {
+    if (!file) return;
+    if (bytesTooLarge(file.size)) return;
+    let cancelled = false;
+    const ac = new AbortController();
+    const fd = new FormData();
+    fd.append("file", file);
+    setUploading(true);
+    void api
+      .stageUpload(
+        fd,
+        (n) => {
+          if (!cancelled) setPct(n);
+        },
+        ac.signal,
+      )
+      .then((res) => {
+        if (cancelled) return;
+        setReceipt(res.receipt);
+        setPct(100);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setReceipt(null);
+        message.error(err instanceof Error ? err.message : "上传失败");
+      })
+      .finally(() => {
+        if (!cancelled) setUploading(false);
+      });
+    return () => {
+      cancelled = true;
+      ac.abort();
+    };
+  }, [file, message]);
+
+  async function run() {
+    if (busy) return;
+    if (!file) {
+      message.warning("先选 .ai 稿件");
+      return;
+    }
+    if (bytesTooLarge(file.size)) {
+      message.error(UPLOAD_TOO_LARGE);
+      return;
+    }
+    if (!receipt) {
+      message.warning("请先等文件传完。");
+      return;
+    }
+    setBusy(true);
+    try {
+      const next = await api.startMockup({
+        receipt,
+        title: productName.trim() || stemFromFilename(file.name),
+      });
+      onCreated(next.id);
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : "打样失败");
+      setBusy(false);
+    }
+  }
+
+  if (busy) return <WaitCard job="打样" jobStatus="queued" />;
 
   return (
     <section className="new-form mockup-desk">
       <header className="page-head">
         <div>
-          <h1 className="page-title">打样台</h1>
-          <p className="page-lead">交差「盒子长什么样」。点进度或已出图进打样单，不在这页底下摊开。</p>
+          <h1 className="page-title">打样工作台</h1>
+          <p className="page-lead">先交平面稿。本机要有 Blender。</p>
         </div>
-        <button type="button" className="btn-primary" disabled={busy} onClick={() => void run()}>
-          开始打样
-        </button>
+        <div style={{ display: "flex", gap: 12 }}>
+          <button type="button" className="btn-ghost" onClick={onBack}>
+            返回
+          </button>
+          <button
+            type="button"
+            className="btn-primary"
+            disabled={busy || !receipt || uploading}
+            onClick={() => void run()}
+          >
+            {uploading ? `上传中 ${pct}%` : "开始打样"}
+          </button>
+        </div>
       </header>
-
-      <Alert
-        type="info"
-        showIcon
-        title="本机要有 Blender。流水线仍是仓库里的 Python worker，网页只负责交文件。"
-      />
-
       <div className="new-meta">
         <label className="new-meta-name">
           品名
@@ -166,7 +291,6 @@ export function MockupPage({ onOpenJob }: DeskProps) {
           />
         </label>
       </div>
-
       <div className="upload-row" style={{ gridTemplateColumns: "1fr" }}>
         <UploadWell
           icon="/brand/ui/well-pdf.svg"
@@ -182,18 +306,6 @@ export function MockupPage({ onOpenJob }: DeskProps) {
           <span className="upload-well-btn">{file ? "更换平面稿" : "选取平面稿"}</span>
         </UploadWell>
       </div>
-
-      {rows.length > 0 ? (
-        <div className="review-board" style={{ marginTop: 20 }}>
-          <MockCol title="打样中" hint="点进去看进度" rows={board.running} onOpen={(row) => onOpenJob(row.id)} />
-          <MockCol title="打样失败" hint="点进去看原因" rows={board.failed} onOpen={(row) => onOpenJob(row.id)} />
-          <MockCol title="已出图" hint="点进去打开打样单" rows={board.done} onOpen={(row) => onOpenJob(row.id)} />
-        </div>
-      ) : (
-        <p className="page-lead" style={{ marginTop: 16 }}>
-          还没有打样单。选平面稿后点开始打样。
-        </p>
-      )}
     </section>
   );
 }
@@ -341,7 +453,6 @@ export function MockupJobPage({ jobId, onBack }: JobProps) {
   const whiteB = (job.files || []).find((f) => f.key === "white_b");
   const hasGlb = (job.files || []).some((f) => f.key === "glb");
   const hasPpt = (job.files || []).some((f) => f.key === "ppt");
-  const hasSheet = (job.files || []).some((f) => f.key === "sheet");
 
   return (
     <section className="mockup-sheet">
@@ -354,16 +465,6 @@ export function MockupJobPage({ jobId, onBack }: JobProps) {
           <button type="button" className="btn-ghost" onClick={onBack}>
             返回打样台
           </button>
-          {hasSheet ? (
-            <a
-              className="btn-ghost"
-              href={fileHref(job.id, "sheet", true)}
-              download
-              onClick={() => notice(downloadHudLine("PDF"))}
-            >
-              下载 PDF
-            </a>
-          ) : null}
           {hasPpt ? (
             <a
               className="btn-ghost"
@@ -371,11 +472,11 @@ export function MockupJobPage({ jobId, onBack }: JobProps) {
               download
               onClick={() => notice(downloadHudLine("PPT"))}
             >
-              下载+PPT
+              下载 PPT
             </a>
           ) : (
             <button type="button" className="btn-ghost" onClick={() => notice(missingPptHud())}>
-              下载+PPT
+              下载 PPT
             </button>
           )}
         </div>
@@ -523,53 +624,4 @@ function WhiteShot({
   );
 }
 
-function MockCol({
-  title,
-  hint,
-  rows,
-  onOpen,
-}: {
-  title: string;
-  hint: string;
-  rows: MockupJob[];
-  onOpen: (job: MockupJob) => void;
-}) {
-  return (
-    <div className="review-col">
-      <div className="review-col-head">
-        <strong>{title}</strong>
-        <span>{rows.length}</span>
-      </div>
-      <p className="review-col-hint">{hint}</p>
-      <div className="review-col-list">
-        {rows.length === 0 ? <div className="review-col-empty">没有单</div> : null}
-        {rows.map((row) => {
-          const s = mockLabel(row);
-          const live = liveJobLine({ ...row, kind: "mockup" });
-          return (
-            <button key={row.id} type="button" className="review-card" onClick={() => onOpen(row)}>
-              <div className="review-card-main">
-                <div className="review-card-name">{mockTitle(row)}</div>
-                {live ? (
-                  <>
-                    <div className="review-card-live">{live}</div>
-                    <div className="review-card-bar" aria-hidden>
-                      <span />
-                    </div>
-                  </>
-                ) : null}
-                {row.status === "failed" ? (
-                  <div className="review-card-err">{mockupFailReason(row.error || row.job_error)}</div>
-                ) : null}
-              </div>
-              <div className="review-card-meta">
-                <Tag color={s.color}>{s.text}</Tag>
-                {row.owner ? <span>{row.owner}</span> : null}
-              </div>
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
+
