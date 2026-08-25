@@ -12,6 +12,11 @@ export const DOCK_MIN_W = 320;
 export const DOCK_MIN_H = 280;
 export const DOCK_DEFAULT_W = 560;
 export const DOCK_DEFAULT_H = 520;
+export const DOCK_SHUT_W = 168;
+export const DOCK_SHUT_H = 48;
+export const DOCK_SIDE_GAP = 8;
+/** 壳左右 20px。进核对页时窗叠在左侧栏上，不盖右边签字。 */
+export const DOCK_SHELL_PAD = 20;
 /** 钉钉/飞书检视栏：portal 到 body 后相对视口。壳 20 + 主区 24 + 页头，不盖签字。 */
 export const DOCK_BELOW_HEAD = 104;
 
@@ -107,10 +112,53 @@ export function clampDockPlace(place: DockPlace, room: { w: number; h: number },
   };
 }
 
+export function sidebarDockPlace(
+  room: { w: number; h: number },
+  box: DockBox,
+  dockLeft = DOCK_SHELL_PAD,
+): DockPlace {
+  const left = Math.max(DOCK_SIDE_GAP, Math.round(Number(dockLeft) || DOCK_SHELL_PAD));
+  return clampDockPlace(
+    {
+      top: DOCK_BELOW_HEAD,
+      right: Math.round(Number(room.w) || 800) - box.w - left,
+    },
+    room,
+    box,
+  );
+}
+
+/** 收起时高度收到工具条，左边不动（叠在侧栏上往里收）。 */
+export function dockVisual(
+  open: boolean,
+  box: DockBox,
+  place: DockPlace,
+  room: { w: number; h: number },
+): { box: DockBox; place: DockPlace } {
+  if (open) return { box, place };
+  const left = Math.round(Number(room.w) || 800) - place.right - box.w;
+  const shutBox = { w: DOCK_SHUT_W, h: DOCK_SHUT_H };
+  return {
+    box: shutBox,
+    place: clampDockPlace(
+      {
+        top: place.top,
+        right: Math.round(Number(room.w) || 800) - left - shutBox.w,
+      },
+      room,
+      shutBox,
+    ),
+  };
+}
+
 export function readDockPlace(storage: Pick<Storage, "getItem"> | null): DockPlace {
+  const fallback = sidebarDockPlace(
+    { w: 2400, h: 1800 },
+    { w: DOCK_DEFAULT_W, h: DOCK_DEFAULT_H },
+  );
   try {
     const raw = storage?.getItem(PLACE_KEY);
-    if (!raw) return { top: DOCK_BELOW_HEAD, right: 8 };
+    if (!raw) return fallback;
     const parsed = JSON.parse(raw) as { top?: unknown; right?: unknown };
     return clampDockPlace(
       { top: Number(parsed.top), right: Number(parsed.right) },
@@ -118,7 +166,7 @@ export function readDockPlace(storage: Pick<Storage, "getItem"> | null): DockPla
       { w: DOCK_DEFAULT_W, h: DOCK_DEFAULT_H },
     );
   } catch {
-    return { top: DOCK_BELOW_HEAD, right: 8 };
+    return fallback;
   }
 }
 

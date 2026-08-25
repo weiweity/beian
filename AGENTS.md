@@ -50,7 +50,7 @@ cd apps/web/backend && PYTHONPATH=. .venv/bin/python -m app.cli --help
 
 4. 测试：抄 `jobs.test.ts` 的对照块。必写断言：第二单 queued、GET 无 `job_pid`、没有最后一行 JSON →「对照中断」、对红失败仍可签字。pytest：CLI 不 `save_task`；`--help` 含 `STAGE` / `save_task` / `packaging`。打样出图测 pymupdf（`test_packaging_thumbnail.py`），不要假定有 qlmanage。
 
-5. UI 等待：`shouldShowWaitCard`（`queued` | `running` | `comparing`；`done`/`failed`/`completed` 不当等待）。离开核对页后，看板 `liveJobLine` 和侧栏 `liveNavPulse` 仍显示阶段。打样台只交稿；点进度/已出图进单独打样单（WaitCard 或一屏三图：正面+侧面、反面+侧面、GLB），不要在打样台底下摊开结果。等待圆盘是 `WaitLoader`（对照中 / 对红中 / 打样中，不要英文 Generating）。核对页框在 `pinBox.ts`：有 bbox 才画真框，钉在框中心，不编造顶排钉；隐藏钉只藏圆圈；显示框单独开关，拖动画布暂时藏框。缩放在 `canvasZoom.ts`：CSS `transform` 1–6×（滚轮、放大/缩小/复位、点序号放大该框），拖动走 rAF 且禁止 img 原生拖拽，不上 OpenSeadragon。核对窗 `reviewDock.ts` 液态玻璃浮在整页最上面（含侧栏），默认定页头下面靠右不盖签字，可拖到侧栏，边框上下左右和四个斜角都能缩放，可收起，左列字段右列疑点；结论在页头签字旁。确认单底部工艺说明 / 颜色要求 / 版本号不进机审（只认字段名开头，不要误杀「执行标准版本号」；旧单假疑点签字时也跳过）。离开核对页或打样台后，历史记录仍列出进行中的单并显示 `liveJobLine`，点进去仍是 WaitCard / 打样单。稿上 OCR 走 `hitText.ts`（`coverage.hit` 回退，并列出 `coverage.miss` 和命中项数；品名/品牌/logo 没字就说明稿上多半是图）。打样先读稿上的刀线/刀版还原切面；密折痕先密后疏试间距；没有刀线才回退已登记 JSON。不能按比例硬套方盒。下载白底只给 `front_right` / `back_left`，不要把 `ai-raster` 或 PPT 质检 PNG 当成白底。预览 inline，点下载才附件。地址按台分开：`/` `/new` `/review/:id` `/mockup` `/mockup/:id` `/history` `/settings`，后退换台。
+5. UI 等待：`shouldShowWaitCard`（`queued` | `running` | `comparing`；`done`/`failed`/`completed` 不当等待）。离开核对页后，看板 `liveJobLine` 和侧栏 `liveNavPulse` 仍显示阶段。打样台只交稿；点进度/已出图进单独打样单（WaitCard 或一屏三图：正面+侧面、反面+侧面、GLB），不要在打样台底下摊开结果。等待圆盘是 `WaitLoader`（对照中 / 对红中 / 打样中，不要英文 Generating）。核对页框在 `pinBox.ts`：有 bbox 才画真框，钉在框中心，不编造顶排钉；隐藏钉只藏圆圈；显示框单独开关，拖动画布暂时藏框。缩放在 `canvasZoom.ts`：CSS `transform` 1–6×（滚轮、放大/缩小/复位、点序号放大该框），拖动走 rAF 且禁止 img 原生拖拽，不上 OpenSeadragon。核对窗 `reviewDock.ts` 液态玻璃浮在整页最上面（含侧栏），进页展开并叠在左侧栏上（不盖右边签字），收起/展开 280ms 动画，可拖，边框上下左右和四个斜角都能缩放，左列字段右列疑点；结论在页头签字旁。确认单底部工艺说明 / 颜色要求 / 版本号不进机审（只认字段名开头，不要误杀「执行标准版本号」；旧单假疑点签字时也跳过）。离开核对页或打样台后，历史记录仍列出进行中的单并显示 `liveJobLine`，点进去仍是 WaitCard / 打样单。稿上 OCR 走 `hitText.ts`（`coverage.hit` 回退，并列出 `coverage.miss` 和命中项数；品名/品牌/logo 没字就说明稿上多半是图）。打样先读稿上的刀线/刀版还原切面；密折痕先密后疏试间距；没有刀线才回退已登记 JSON。不能按比例硬套方盒。下载白底只给 `front_right` / `back_left`，不要把 `ai-raster` 或 PPT 质检 PNG 当成白底。预览 inline，点下载才附件。地址按台分开：`/` `/new` `/review/:id` `/mockup` `/mockup/:id` `/history` `/settings`，后退换台。
 
 调试：对外 `job_error` 用短中文。Node 日志写 problem + cause + fix。打开 `DATA_DIR/tasks/{tid}.json`。不要新 FastAPI 路由。
 
@@ -81,7 +81,7 @@ MiniMax 未开语义复核是「未用」，不是「可用」；探测是 `GET 
 
 开工板是线性进度 + 7 行清单，不要画成圆环仪表，不要用「通 / 不通」当状态字。界面单测只测纯函数，不引入 RTL。
 
-杭州打样平面出图走 pymupdf（对照同一 `.venv`），不要让人装 qlmanage。macOS Quick Look 只在 pymupdf 失败时兜底。打样先读稿上的刀线/刀版还原切面，密折痕先密后疏试间距，没有刀线才回退已登记 JSON，不能按比例硬套方盒。离开核对页后看板/侧栏/历史记录仍看阶段，不要只把进度画在 WaitCard 上。核对页缩放用 CSS transform，不要接 OpenSeadragon。核对窗液态玻璃浮在整页最上面（含侧栏），默认定页头下面靠右，可拖到侧栏，边框上下左右和斜角都能缩放；隐藏钉只藏圆圈；显示框单独开关。打样 PPT 先用两张白底写 OOXML，不依赖 Node；写不出才试演示文稿运行时。缺 PPT 不要把整单判失败；两张白底仍合成 PDF。
+杭州打样平面出图走 pymupdf（对照同一 `.venv`），不要让人装 qlmanage。macOS Quick Look 只在 pymupdf 失败时兜底。打样先读稿上的刀线/刀版还原切面，密折痕先密后疏试间距，没有刀线才回退已登记 JSON，不能按比例硬套方盒。离开核对页后看板/侧栏/历史记录仍看阶段，不要只把进度画在 WaitCard 上。核对页缩放用 CSS transform，不要接 OpenSeadragon。核对窗液态玻璃浮在整页最上面（含侧栏），进页展开并叠在左侧栏上，收起/展开有动画，可拖，边框上下左右和斜角都能缩放；隐藏钉只藏圆圈；显示框单独开关。打样 PPT 先用两张白底写 OOXML，不依赖 Node；写不出才试演示文稿运行时。缺 PPT 不要把整单判失败；两张白底仍合成 PDF。
 
 ## Design System
 
@@ -93,7 +93,7 @@ MiniMax 未开语义复核是「未用」，不是「可用」；探测是 `GET 
 - 侧栏顶用 `apps/web/ui/public/brand/logo-mark.png`。折叠时悬停变成展开按钮（同一 44pt）。完整 `shine-mage.png` 只放拒绝页。
 - 左下角飞书头像 36px + `花名（真名）` 15px，例如 `天元（魏炜）`。
 - 空审核单不画三栏。设置里有「外观」：主题、13–28px 字号（可手写）、侧栏材质（实心 / 毛玻璃 / 液态玻璃）、侧栏雾面对比度滑条、差异标记。只写 `localStorage`。深色走品牌紫雾，不是灰黑中台。
-- 审稿：专属核对页，画布吃满宽度。钉和框分开关；「隐藏钉」只藏编号圆圈。左图 CSS transform 缩放（1–6×），拖动走 rAF，禁止原生图片拖拽，不上 OpenSeadragon。核对窗浮在整页最上面（含侧栏），默认定页头下面靠右，可拖到侧栏，边框上下左右和斜角都能缩放、可收起，字段和疑点两列。结论写在页头签字旁。禁止「AI 已过审」。
+- 审稿：专属核对页，画布吃满宽度。钉和框分开关；「隐藏钉」只藏编号圆圈。左图 CSS transform 缩放（1–6×），拖动走 rAF，禁止原生图片拖拽，不上 OpenSeadragon。核对窗浮在整页最上面（含侧栏），进页展开并叠在左侧栏上，收起/展开有动画，可拖，边框上下左右和斜角都能缩放，字段和疑点两列。结论写在页头签字旁。禁止「AI 已过审」。
 - 历史记录是侧栏 tab，不是第三张台。进行中的审稿/打样也列在里面，点进去看进度。
 - 打样台 8/31 不对业务开放。QA 时标出任何与 `DESIGN.md` 不符的实现。
 

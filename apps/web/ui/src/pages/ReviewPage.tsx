@@ -9,12 +9,12 @@ import { hitOnPage, overlayFromBox, overlaysForHit, pickHitBox, resolvePageMetri
 import {
   clampDockBox,
   clampDockPlace,
+  dockVisual,
   readBoxesOn,
   readDockBox,
-  readDockOpen,
-  readDockPlace,
   readPinsOn,
   resizeDockHandle,
+  sidebarDockPlace,
   skipPackSheetField,
   writeBoxesOn,
   writeDockBox,
@@ -96,7 +96,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
   const [useV2, setUseV2] = useState(false);
   const [nat, setNat] = useState<{ width: number; height: number } | null>(null);
   const [zoom, setZoom] = useState(resetZoom);
-  const [dockOpen, setDockOpen] = useState(() => readDockOpen(browserStore()));
+  const [dockOpen, setDockOpen] = useState(true);
   const [pinsOn, setPinsOn] = useState(() => readPinsOn(browserStore()));
   const [boxesOn, setBoxesOn] = useState(() => readBoxesOn(browserStore()));
   const [toolsOpen, setToolsOpen] = useState(true);
@@ -105,8 +105,11 @@ export function ReviewPage({ taskId, onBack }: Props) {
   const zoomElRef = useRef<HTMLDivElement>(null);
   const dockRef = useRef<HTMLElement>(null);
   const zoomRef = useRef(zoom);
+  const dockOpenRef = useRef(true);
   const [dockBox, setDockBox] = useState<DockBox>(() => readDockBox(browserStore()));
-  const [dockPlace, setDockPlace] = useState<DockPlace>(() => readDockPlace(browserStore()));
+  const [dockPlace, setDockPlace] = useState<DockPlace>(() =>
+    sidebarDockPlace(typeof window === "undefined" ? { w: 1200, h: 800 } : { w: window.innerWidth, h: window.innerHeight }, readDockBox(browserStore())),
+  );
   const panDrag = useRef<{ x: number; y: number } | null>(null);
   const panRaf = useRef<number | null>(null);
   const wheelEnd = useRef<number | null>(null);
@@ -163,29 +166,25 @@ export function ReviewPage({ taskId, onBack }: Props) {
     panDrag.current = null;
   }
 
-  function endDockResize() {
-    const start = dockResize.current;
-    dockResize.current = null;
-    if (!start) return;
-    const el = dockRef.current;
-    if (el) {
-      commitDock(
-        { w: el.offsetWidth, h: el.offsetHeight },
-        {
-          top: el.offsetTop,
-          right: Math.max(8, pageRoom().w - el.offsetLeft - el.offsetWidth),
-        },
-      );
-    } else commitDock(start.box, start.place);
-  }
-
   function paintDock(next: { box: DockBox; place: DockPlace }) {
     const el = dockRef.current;
     if (!el) return;
-    el.style.width = `${next.box.w}px`;
-    el.style.height = `${next.box.h}px`;
-    el.style.top = `${next.place.top}px`;
-    el.style.right = `${next.place.right}px`;
+    const shown = dockVisual(dockOpenRef.current, next.box, next.place, pageRoom());
+    el.style.width = `${shown.box.w}px`;
+    el.style.height = `${shown.box.h}px`;
+    el.style.top = `${shown.place.top}px`;
+    el.style.right = `${shown.place.right}px`;
+  }
+
+  function markDockBusy(on: boolean) {
+    dockRef.current?.classList.toggle("is-busy", on);
+  }
+
+  function toggleDock() {
+    const next = !dockOpenRef.current;
+    dockOpenRef.current = next;
+    setDockOpen(next);
+    writeDockOpen(browserStore(), next);
   }
 
   function onDockResizeMove(e: React.PointerEvent) {
@@ -218,14 +217,48 @@ export function ReviewPage({ taskId, onBack }: Props) {
   function endDockMove() {
     const start = dockDrag.current;
     dockDrag.current = null;
+    markDockBusy(false);
     if (!start) return;
     const el = dockRef.current;
     if (!el) return;
+    const room = pageRoom();
     commitDock(dockBox, {
       top: el.offsetTop,
-      right: Math.max(8, pageRoom().w - el.offsetLeft - el.offsetWidth),
+      right: Math.max(8, room.w - el.offsetLeft - dockBox.w),
     });
   }
+
+  function endDockResize() {
+    const start = dockResize.current;
+    dockResize.current = null;
+    markDockBusy(false);
+    if (!start) return;
+    const el = dockRef.current;
+    if (el) {
+      commitDock(
+        { w: el.offsetWidth, h: el.offsetHeight },
+        {
+          top: el.offsetTop,
+          right: Math.max(8, pageRoom().w - el.offsetLeft - el.offsetWidth),
+        },
+      );
+    } else commitDock(start.box, start.place);
+  }
+
+  useLayoutEffect(() => {
+    const room = pageRoom();
+    const box = clampDockBox(readDockBox(browserStore()), room);
+    const side = document.querySelector(".sidebar");
+    const dockLeft =
+      side instanceof HTMLElement ? Math.round(side.getBoundingClientRect().left) : 20;
+    const place = sidebarDockPlace(room, box, dockLeft);
+    dockOpenRef.current = true;
+    setDockOpen(true);
+    writeDockOpen(browserStore(), true);
+    setDockBox(box);
+    setDockPlace(place);
+    writeDockPlace(browserStore(), place);
+  }, []);
 
   useEffect(() => {
     function fit() {
@@ -236,7 +269,6 @@ export function ReviewPage({ taskId, onBack }: Props) {
         return nextBox;
       });
     }
-    fit();
     window.addEventListener("resize", fit);
     return () => window.removeEventListener("resize", fit);
   }, []);
@@ -248,9 +280,10 @@ export function ReviewPage({ taskId, onBack }: Props) {
         className={`notes-resize notes-resize-${corner}`}
         aria-label="缩放核对窗"
         onPointerDown={(e) => {
-          if (e.button !== 0) return;
+          if (e.button !== 0 || !dockOpenRef.current) return;
           e.preventDefault();
           e.stopPropagation();
+          markDockBusy(true);
           dockResize.current = { x: e.clientX, y: e.clientY, box: dockBox, place: dockPlace, corner };
           (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
         }}
@@ -744,11 +777,18 @@ export function ReviewPage({ taskId, onBack }: Props) {
         </div>
         {typeof document !== "undefined"
           ? createPortal(
-              dockOpen ? (
           <aside
             ref={dockRef}
-            className="notes glass-pane is-float"
-            style={{ width: dockBox.w, height: dockBox.h, top: dockPlace.top, right: dockPlace.right }}
+            className={dockOpen ? "notes glass-pane is-float" : "notes glass-pane is-float is-shut"}
+            style={(() => {
+              const shown = dockVisual(dockOpen, dockBox, dockPlace, pageRoom());
+              return {
+                width: shown.box.w,
+                height: shown.box.h,
+                top: shown.place.top,
+                right: shown.place.right,
+              };
+            })()}
             onPointerDown={(e) => e.stopPropagation()}
           >
             <div
@@ -757,6 +797,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
                 if (e.button !== 0) return;
                 if (e.target instanceof HTMLElement && e.target.closest("button")) return;
                 e.preventDefault();
+                markDockBusy(true);
                 dockDrag.current = { x: e.clientX, y: e.clientY, place: dockPlace };
                 (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
               }}
@@ -768,17 +809,12 @@ export function ReviewPage({ taskId, onBack }: Props) {
               <p className="field-label" style={{ color: "var(--muted)", margin: 0 }}>
                 当前字段
               </p>
-              <button
-                type="button"
-                className="btn-ghost"
-                onClick={() => {
-                  setDockOpen(false);
-                  writeDockOpen(browserStore(), false);
-                }}
-              >
-                收起
+              <button type="button" className="notes-toggle" onClick={toggleDock}>
+                <span className="notes-toggle-mark" aria-hidden />
+                {dockOpen ? "收起" : hits.length ? `展开 ${hits.length}` : "展开"}
               </button>
             </div>
+            <div className="notes-body">
             <div className="notes-grid">
               <div className="notes-field">
                 {current ? (
@@ -877,6 +913,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
                 ))}
               </div>
             ) : null}
+            </div>
             {dockHandle("n")}
             {dockHandle("s")}
             {dockHandle("e")}
@@ -885,20 +922,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
             {dockHandle("ne")}
             {dockHandle("sw")}
             {dockHandle("se")}
-          </aside>
-        ) : (
-          <button
-            type="button"
-            className="notes-fab"
-            style={{ top: dockPlace.top, right: dockPlace.right }}
-            onClick={() => {
-              setDockOpen(true);
-              writeDockOpen(browserStore(), true);
-            }}
-          >
-            核对 {hits.length ? hits.length : ""}
-          </button>
-        ),
+          </aside>,
               document.body,
             )
           : null}
