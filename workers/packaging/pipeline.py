@@ -722,6 +722,20 @@ def _sheet_text(page: Any, origin: tuple[float, float], txt: str, size: float, c
             page.insert_text(origin, txt.encode("ascii", "replace").decode(), fontsize=size, color=color)
 
 
+def _contain_rect(
+    slot: tuple[float, float, float, float], img_w: int, img_h: int
+) -> tuple[float, float, float, float]:
+    sl, st, sr, sb = slot
+    sw, sh = sr - sl, sb - st
+    if img_w <= 0 or img_h <= 0 or sw <= 0 or sh <= 0:
+        return slot
+    scale = min(sw / float(img_w), sh / float(img_h))
+    dw, dh = img_w * scale, img_h * scale
+    x = sl + (sw - dw) / 2.0
+    y = st + (sh - dh) / 2.0
+    return (x, y, x + dw, y + dh)
+
+
 def _fit_white_rgb(path: Path, box_w: int, box_h: int):
     with Image.open(path) as src:
         if src.mode in ("RGBA", "LA"):
@@ -767,9 +781,21 @@ def write_sheet_pdf(job: dict[str, Any]) -> None:
             _sheet_text(page, (36, 32), title[:80], 16, (0.11, 0.10, 0.12))
             _sheet_text(page, (36, 52), "正面 + 侧面", 11, (0.35, 0.35, 0.4))
             _sheet_text(page, (654, 52), "反面 + 侧面", 11, (0.35, 0.35, 0.4))
-            page.insert_image(pymupdf.Rect(36, 68, 626, 688), stream=Path(front).read_bytes(), keep_proportion=True)
+            try:
+                with Image.open(front) as im:
+                    fw, fh = im.size
+                front_rect = pymupdf.Rect(*_contain_rect((36, 68, 626, 688), fw, fh))
+            except Exception:
+                front_rect = pymupdf.Rect(36, 68, 626, 688)
+            page.insert_image(front_rect, stream=Path(front).read_bytes(), keep_proportion=True)
             if back and Path(back).is_file():
-                page.insert_image(pymupdf.Rect(654, 68, 1244, 688), stream=Path(back).read_bytes(), keep_proportion=True)
+                try:
+                    with Image.open(back) as im:
+                        bw, bh = im.size
+                    back_rect = pymupdf.Rect(*_contain_rect((654, 68, 1244, 688), bw, bh))
+                except Exception:
+                    back_rect = pymupdf.Rect(654, 68, 1244, 688)
+                page.insert_image(back_rect, stream=Path(back).read_bytes(), keep_proportion=True)
             dest.parent.mkdir(parents=True, exist_ok=True)
             tmp = dest.with_suffix(".pdf.part")
             doc.save(str(tmp))
