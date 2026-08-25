@@ -60,7 +60,7 @@ import {
 } from "./mockup.js";
 import { assertIllustratorReady } from "./aiRaster.js";
 import { skipPackSheetField } from "./sheetSkip.js";
-import { consumeReceipt, receiptOwner, stageBuffers } from "./uploads.js";
+import { consumeReceipt, loadReceipt, purgeReceiptFiles, receiptOwner, stageBuffers, underReceiptDir } from "./uploads.js";
 import {
   activeHits,
   assertCanAccessTask,
@@ -309,24 +309,35 @@ app.post("/api/tasks/start", async (c) => {
     title?: string;
     pack_surface?: string;
   };
-  const rec = consumeReceipt(String(body.receipt || ""), receiptOwner(s));
-  if (!rec) throw new HTTPException(400, { message: "上传已过期，请重新传文件" });
-  const excel = rec.files.find((f) => f.field === "excel");
-  const pdf = rec.files.find((f) => f.field === "pdf");
-  if (!excel || !pdf) throw new HTTPException(400, { message: "需要 excel + 包装 PDF" });
   const product = String(body.product_name || "")
     .replace(/[\u0000-\u001f]/g, "")
     .trim()
     .slice(0, 80);
   if (!product) throw new HTTPException(400, { message: "品名必填" });
+  const owner = receiptOwner(s);
+  const receiptId = String(body.receipt || "");
+  const peeked = loadReceipt(receiptId, owner);
+  if (!peeked) throw new HTTPException(400, { message: "上传已过期，请重新传文件" });
+  if (!peeked.files.some((f) => f.field === "excel") || !peeked.files.some((f) => f.field === "pdf")) {
+    throw new HTTPException(400, { message: "需要 excel + 包装 PDF" });
+  }
+  const rec = consumeReceipt(receiptId, owner);
+  if (!rec) throw new HTTPException(400, { message: "上传已过期，请重新传文件" });
+  const excel = rec.files.find((f) => f.field === "excel");
+  const pdf = rec.files.find((f) => f.field === "pdf");
+  if (!excel || !pdf || !underReceiptDir(rec.id, excel.path) || !underReceiptDir(rec.id, pdf.path)) {
+    purgeReceiptFiles(rec.id);
+    throw new HTTPException(400, { message: "上传已过期，请重新传文件" });
+  }
   const tid = newTid();
   const dir = join(DATA_DIR, "uploads", tid);
   mkdirSync(dir, { recursive: true });
   copyFileSync(excel.path, join(dir, "source.xlsx"));
   copyFileSync(pdf.path, join(dir, "artwork.pdf"));
+  purgeReceiptFiles(rec.id);
   saveTask({
     id: tid,
-    title: String(body.title || product),
+    title: String(body.title || product).slice(0, 80),
     product_name: product,
     type: "excel_pdf",
     status: "comparing",
@@ -354,16 +365,25 @@ app.post("/api/mockups/start", async (c) => {
     boom(e);
   }
   const body = (await c.req.json()) as { receipt?: string; title?: string; product_name?: string };
-  const rec = consumeReceipt(String(body.receipt || ""), receiptOwner(s));
+  const owner = receiptOwner(s);
+  const receiptId = String(body.receipt || "");
+  const peeked = loadReceipt(receiptId, owner);
+  if (!peeked) throw new HTTPException(400, { message: "上传已过期，请重新传文件" });
+  if (!peeked.files.some((f) => f.field === "ai")) throw new HTTPException(400, { message: "需要 .ai 稿件" });
+  const rec = consumeReceipt(receiptId, owner);
   if (!rec) throw new HTTPException(400, { message: "上传已过期，请重新传文件" });
   const ai = rec.files.find((f) => f.field === "ai");
-  if (!ai) throw new HTTPException(400, { message: "需要 .ai 稿件" });
+  if (!ai || !underReceiptDir(rec.id, ai.path)) {
+    purgeReceiptFiles(rec.id);
+    throw new HTTPException(400, { message: "需要 .ai 稿件" });
+  }
   const id = newTid();
   const dir = join(DATA_DIR, "mockups", id);
   mkdirSync(dir, { recursive: true });
   const src = join(dir, ai.name.replace(/[^a-zA-Z0-9._-]/g, "_") || "art.ai");
   copyFileSync(ai.path, src);
-  const title = String(body.title || body.product_name || "").trim();
+  purgeReceiptFiles(rec.id);
+  const title = String(body.title || body.product_name || "").trim().slice(0, 80);
   const job = queueMockup({ id, sourcePath: src, ownerId: viewerFromSession(s).id, displayName: s.display_name, title });
   try {
     enqueue({ kind: "mockup", id });

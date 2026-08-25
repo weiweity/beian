@@ -65,6 +65,24 @@ describe("listTasks", () => {
     assert.throws(() => loadTask("cccccccccccc"), /任务不存在/);
   });
 
+  it("reviewer only sees own owner rows", () => {
+    saveTask({
+      id: "eeeeeeeeeeee",
+      title: "爱丽丝",
+      product_name: "爱丽丝",
+      type: "excel_pdf",
+      status: "pending_review",
+      created_at: "2026-08-19T11:00:00Z",
+      owner: "ou_alice",
+      created_by: "同名",
+    });
+    const alice = { id: "ou_alice", name: "同名", admin: false };
+    const bob = { id: "ou_bob", name: "同名", admin: false };
+    assert.equal(listTasks("", alice).some((r) => r.id === "eeeeeeeeeeee"), true);
+    assert.equal(listTasks("", bob).some((r) => r.id === "eeeeeeeeeeee"), false);
+    assert.equal(listTasks("", alice).some((r) => r.id === "aaaaaaaaaaaa"), false);
+  });
+
   it("deleteTask refuses a running compare", () => {
     saveTask({
       id: "dddddddddddd",

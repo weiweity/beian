@@ -30,6 +30,7 @@ export function NewTaskPage({ onCreated, onBack }: Props) {
       return;
     }
     let cancelled = false;
+    const ac = new AbortController();
     const fd = new FormData();
     fd.append("excel", excel);
     fd.append("pdf", pdf);
@@ -37,9 +38,13 @@ export function NewTaskPage({ onCreated, onBack }: Props) {
     setReceipt(null);
     setPct(0);
     void api
-      .stageUpload(fd, (n) => {
-        if (!cancelled) setPct(n);
-      })
+      .stageUpload(
+        fd,
+        (n) => {
+          if (!cancelled) setPct(n);
+        },
+        ac.signal,
+      )
       .then((res) => {
         if (cancelled) return;
         setReceipt(res.receipt);
@@ -55,6 +60,7 @@ export function NewTaskPage({ onCreated, onBack }: Props) {
       });
     return () => {
       cancelled = true;
+      ac.abort();
     };
   }, [excel, pdf, message]);
 

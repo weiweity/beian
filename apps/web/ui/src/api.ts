@@ -62,9 +62,14 @@ export type UploadReceipt = {
   files: { field: string; name: string; bytes: number }[];
 };
 
-function uploadWithProgress<T>(path: string, fd: FormData, onProgress?: (pct: number) => void): Promise<T> {
+function uploadWithProgress<T>(
+  path: string,
+  fd: FormData,
+  onProgress?: (pct: number) => void,
+  signal?: AbortSignal,
+): Promise<T> {
   if (typeof XMLHttpRequest === "undefined") {
-    return request<T>(path, { method: "POST", body: fd });
+    return request<T>(path, { method: "POST", body: fd, signal });
   }
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
@@ -74,6 +79,14 @@ function uploadWithProgress<T>(path: string, fd: FormData, onProgress?: (pct: nu
       if (!onProgress || !ev.lengthComputable || ev.total <= 0) return;
       onProgress(Math.max(0, Math.min(100, Math.round((ev.loaded / ev.total) * 100))));
     };
+    if (signal) {
+      if (signal.aborted) {
+        reject(new ApiError(0, "上传中断", true));
+        return;
+      }
+      signal.addEventListener("abort", () => xhr.abort(), { once: true });
+    }
+    xhr.onabort = () => reject(new ApiError(0, "上传中断", true));
     xhr.onload = () => {
       const ct = xhr.getResponseHeader("content-type") || "";
       if (xhr.status === 413) {
@@ -206,8 +219,8 @@ export const api = {
   tasks: (q?: string) =>
     request<TaskSummary[]>(q ? `/api/tasks?q=${encodeURIComponent(q)}` : "/api/tasks"),
   task: (id: string) => request<TaskDetail>(`/api/tasks/${id}`),
-  stageUpload: (fd: FormData, onProgress?: (pct: number) => void) =>
-    uploadWithProgress<UploadReceipt>("/api/uploads", fd, onProgress),
+  stageUpload: (fd: FormData, onProgress?: (pct: number) => void, signal?: AbortSignal) =>
+    uploadWithProgress<UploadReceipt>("/api/uploads", fd, onProgress, signal),
   startTask: (body: { receipt: string; product_name: string; title?: string; pack_surface?: string }) =>
     request<TaskDetail>("/api/tasks/start", { method: "POST", body: JSON.stringify(body) }),
   startMockup: (body: { receipt: string; title?: string; product_name?: string }) =>

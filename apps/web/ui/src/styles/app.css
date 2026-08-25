@@ -825,8 +825,10 @@ html[data-theme="dark"] .workspace {
 }
 
 .review-col-all {
-  color: var(--muted) !important;
-  padding-inline: 6px !important;
+  color: var(--muted);
+  padding-inline: 8px;
+  min-height: 40px;
+  min-width: 40px;
 }
 
 .review-col-hint {
@@ -856,7 +858,7 @@ html[data-theme="dark"] .workspace {
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 6px;
+  gap: 8px;
   width: 100%;
   text-align: left;
   border: 0;
@@ -874,7 +876,8 @@ html[data-theme="dark"] .workspace {
 
 .review-card-id {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
   color: var(--muted);
   letter-spacing: 0.02em;
 }
@@ -891,7 +894,7 @@ html[data-theme="dark"] .workspace {
 
 .review-card-time {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .review-card-main {
@@ -900,7 +903,6 @@ html[data-theme="dark"] .workspace {
 }
 
 .review-card-live {
-  margin-top: 6px;
   color: var(--accent);
   font-size: 13px;
   line-height: 18px;
@@ -908,7 +910,6 @@ html[data-theme="dark"] .workspace {
 
 .review-card-bar {
   height: 3px;
-  margin-top: 8px;
   border-radius: 999px;
   background: var(--accent-mist);
   overflow: hidden;
@@ -955,7 +956,6 @@ html[data-theme="dark"] .workspace {
 }
 
 .review-card-err {
-  margin-top: 8px;
   color: var(--danger);
   font-size: 13px;
   line-height: 18px;

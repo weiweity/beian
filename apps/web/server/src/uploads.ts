@@ -1,7 +1,7 @@
-import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { DATA_DIR } from "./config.js";
-import { newTid, nowIso, viewerFromSession } from "./tasks.js";
+import { isTid, newTid, nowIso, viewerFromSession } from "./tasks.js";
 import { maxUploadBytes } from "./settings.js";
 
 export type StagedFile = { field: string; name: string; path: string; bytes: number };
@@ -16,6 +16,27 @@ const TTL_MS = 30 * 60 * 1000;
 
 function receiptPath(id: string): string {
   return join(DATA_DIR, "uploads", "receipts", `${id}.json`);
+}
+
+function receiptDir(id: string): string {
+  return join(DATA_DIR, "uploads", "receipts", id);
+}
+
+export function underReceiptDir(id: string, p: string): boolean {
+  if (!isTid(id)) return false;
+  const root = resolve(receiptDir(id));
+  const full = resolve(p);
+  const rel = relative(root, full);
+  return Boolean(rel) && !rel.startsWith("..") && !isAbsolute(rel);
+}
+
+export function purgeReceiptFiles(id: string): void {
+  if (!isTid(id)) return;
+  try {
+    rmSync(receiptDir(id), { recursive: true, force: true });
+  } catch {
+    /* already gone */
+  }
 }
 
 export function magicOk(field: string, buf: Buffer, name: string): string | null {
@@ -62,27 +83,57 @@ export function stageBuffers(
   return rec;
 }
 
+function receiptUsable(rec: UploadReceipt, owner: string): boolean {
+  if (!String(rec.owner || "").trim() || rec.owner !== owner) return false;
+  const age = Date.now() - Date.parse(rec.created_at);
+  return Number.isFinite(age) && age <= TTL_MS;
+}
+
 export function loadReceipt(id: string, owner: string): UploadReceipt | null {
+  if (!isTid(id)) return null;
   try {
     const rec = JSON.parse(readFileSync(receiptPath(id), "utf8")) as UploadReceipt;
-    if (rec.owner && rec.owner !== owner) return null;
-    const age = Date.now() - Date.parse(rec.created_at);
-    if (!Number.isFinite(age) || age > TTL_MS) return null;
+    if (!receiptUsable(rec, owner)) return null;
     return rec;
   } catch {
     return null;
   }
 }
 
+/** 原子拿走收据 JSON。稿件目录仍在，开工拷完后调用 purgeReceiptFiles。 */
 export function consumeReceipt(id: string, owner: string): UploadReceipt | null {
-  const rec = loadReceipt(id, owner);
-  if (!rec) return null;
+  if (!isTid(id)) return null;
+  const src = receiptPath(id);
+  const taken = `${src}.${process.pid}.${Date.now()}.take`;
   try {
-    unlinkSync(receiptPath(id));
+    renameSync(src, taken);
   } catch {
-    /* already gone */
+    return null;
   }
-  return rec;
+  try {
+    const rec = JSON.parse(readFileSync(taken, "utf8")) as UploadReceipt;
+    if (!receiptUsable(rec, owner)) {
+      try {
+        renameSync(taken, src);
+      } catch {
+        /* fail closed */
+      }
+      return null;
+    }
+    try {
+      unlinkSync(taken);
+    } catch {
+      /* already gone */
+    }
+    return rec;
+  } catch {
+    try {
+      renameSync(taken, src);
+    } catch {
+      /* fail closed */
+    }
+    return null;
+  }
 }
 
 export function tooLarge(bytes: number): boolean {

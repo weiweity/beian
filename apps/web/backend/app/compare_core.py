@@ -508,7 +508,6 @@ def _surface_job(
             }
         )
 
-    side = None if pages_subdir in ("", ".") else pages_subdir
     # _page_urls with side a/b style: pages/a/name
     if pages_subdir and pages_subdir not in (".",):
         pages = _page_urls(tid, page_metas, pages_subdir)

@@ -199,13 +199,18 @@ export function MockupNewPage({
     if (!file) return;
     if (bytesTooLarge(file.size)) return;
     let cancelled = false;
+    const ac = new AbortController();
     const fd = new FormData();
     fd.append("file", file);
     setUploading(true);
     void api
-      .stageUpload(fd, (n) => {
-        if (!cancelled) setPct(n);
-      })
+      .stageUpload(
+        fd,
+        (n) => {
+          if (!cancelled) setPct(n);
+        },
+        ac.signal,
+      )
       .then((res) => {
         if (cancelled) return;
         setReceipt(res.receipt);
@@ -221,6 +226,7 @@ export function MockupNewPage({
       });
     return () => {
       cancelled = true;
+      ac.abort();
     };
   }, [file, message]);
 

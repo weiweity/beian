@@ -72,6 +72,46 @@ describe("upload then start", () => {
     assert.equal(start.status, 400);
   });
 
+  it("keeps the receipt when start is missing the product name", async () => {
+    const fd = new FormData();
+    fd.append("excel", new File([Buffer.from("PK\x03\x04xxxx")], "a.xlsx"));
+    fd.append("pdf", new File([Buffer.from("%PDF-1.4\n%")], "a.pdf"));
+    const up = await app.request("/api/uploads", { method: "POST", headers: authHeader("ou_empty_name"), body: fd });
+    const staged = (await up.json()) as { receipt?: string };
+    const start = await app.request("/api/tasks/start", {
+      method: "POST",
+      headers: { ...authHeader("ou_empty_name"), "content-type": "application/json" },
+      body: JSON.stringify({ receipt: staged.receipt, product_name: "" }),
+    });
+    assert.equal(start.status, 400);
+    setJobsTestHooks({
+      runCompare: async () => ({ code: 0, stdout: "{}", stderr: "", timedOut: false }),
+    });
+    try {
+      const retry = await app.request("/api/tasks/start", {
+        method: "POST",
+        headers: { ...authHeader("ou_empty_name"), "content-type": "application/json" },
+        body: JSON.stringify({ receipt: staged.receipt, product_name: "喷雾" }),
+      });
+      assert.equal(retry.status, 200);
+    } finally {
+      resetJobsTestHooks();
+    }
+  });
+
+  it("does not start compare from an ai receipt", async () => {
+    const fd = new FormData();
+    fd.append("file", new File([Buffer.from("%PDF-1.4\n%")], "box.ai"));
+    const up = await app.request("/api/uploads", { method: "POST", headers: authHeader("ou_ai_only"), body: fd });
+    const staged = (await up.json()) as { receipt?: string };
+    const start = await app.request("/api/tasks/start", {
+      method: "POST",
+      headers: { ...authHeader("ou_ai_only"), "content-type": "application/json" },
+      body: JSON.stringify({ receipt: staged.receipt, product_name: "喷雾" }),
+    });
+    assert.equal(start.status, 400);
+  });
+
   it("does not let another Feishu account with the same display name read this task", async () => {
     setJobsTestHooks({
       runCompare: async () => ({ code: 0, stdout: "{}", stderr: "", timedOut: false }),

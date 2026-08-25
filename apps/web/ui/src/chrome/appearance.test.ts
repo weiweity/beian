@@ -217,6 +217,10 @@ describe("loadAppearance / saveAppearance", () => {
       saveAppearance({ ...APPEARANCE_DEFAULT, fontPx: 14 }, "ou_b");
       assert.equal(loadAppearance("ou_a").fontPx, 20);
       assert.equal(loadAppearance("ou_b").fontPx, 14);
+      mem.clear();
+      mem.set(APPEARANCE_KEY, JSON.stringify({ fontPx: 18, theme: "dark" }));
+      assert.equal(loadAppearance("ou_legacy").fontPx, 18);
+      assert.equal(loadAppearance("ou_legacy").theme, "dark");
     } finally {
       if (prev) g.localStorage = prev;
       else delete g.localStorage;

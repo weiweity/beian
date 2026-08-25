@@ -15,7 +15,7 @@ _CLI_EPILOG = """stderr: STAGE <name>
 stdout last line = result JSON (no ocr_text)
 do not call save_task；任务 JSON 只由 jobs.ts 写。
 unique HTTP is Hono :8787, not this CLI。
-打样 is NOT a subcommand; jobs.ts calls workers/packaging; HTTP is /api/mockups。"""
+打样 is NOT a subcommand; jobs.ts calls workers/packaging; HTTP is GET /api/mockups and POST /api/mockups/start。"""
 
 
 def _ok(payload: dict) -> int:
