@@ -20,10 +20,6 @@ def _last_json(capsys) -> dict:
     return json.loads(last)
 
 
-def _forbid_save(*_a, **_k):
-    raise AssertionError("save_task must not be called")
-
-
 def test_cli_help_mentions_stage_save_task_packaging(tmp_path):
     env = os.environ.copy()
     env["PYTHONPATH"] = str(BACKEND) + os.pathsep + env.get("PYTHONPATH", "")
@@ -48,10 +44,21 @@ def test_cli_source_does_not_import_http_stack():
     source = (BACKEND / "app" / "cli.py").read_text(encoding="utf-8")
     assert "from app import main" not in source
     assert "fastapi" not in source.lower()
+    assert "save_task(" not in source
+
+
+def test_worker_package_has_no_fastapi_or_main():
+    app_dir = BACKEND / "app"
+    assert not (app_dir / "main.py").exists()
+    for path in sorted(app_dir.glob("*.py")):
+        text = path.read_text(encoding="utf-8").lower()
+        assert "fastapi" not in text, path.name
+        assert "uvicorn" not in text, path.name
+    core = (app_dir / "compare_core.py").read_text(encoding="utf-8")
+    assert "def save_task" not in core
 
 
 def test_cmd_compare_prints_task_json_without_save(monkeypatch, capsys, tmp_path):
-    monkeypatch.setattr("app.main.save_task", _forbid_save)
     monkeypatch.setattr(
         "app.compare_core.run_excel_pdf_job",
         lambda *_a, **_k: {
@@ -90,7 +97,6 @@ def test_cmd_compare_prints_task_json_without_save(monkeypatch, capsys, tmp_path
 
 
 def test_cmd_rework_prints_hits_v2_without_save(monkeypatch, capsys, tmp_path):
-    monkeypatch.setattr("app.main.save_task", _forbid_save)
     monkeypatch.setattr(
         "app.fields.parse_excel_fields",
         lambda _p: [{"field": "净含量", "excel_value": "50ml"}],
@@ -155,7 +161,6 @@ def test_cmd_rework_prints_hits_v2_without_save(monkeypatch, capsys, tmp_path):
 
 
 def test_cmd_rework_same_path_skips_copy2(monkeypatch, capsys, tmp_path):
-    monkeypatch.setattr("app.main.save_task", _forbid_save)
     monkeypatch.setattr(
         "app.fields.parse_excel_fields",
         lambda _p: [{"field": "净含量", "excel_value": "50ml"}],
@@ -211,8 +216,6 @@ def test_emit_stage_writes_stderr(capsys):
 
 
 def test_compare_crash_writes_stderr_json(monkeypatch, capsys, tmp_path):
-    monkeypatch.setattr("app.main.save_task", _forbid_save)
-
     def _boom(*_a, **_k):
         raise RuntimeError("对照阶段失败")
 

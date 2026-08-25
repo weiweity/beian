@@ -34,7 +34,7 @@
 
 ### `apps/web/server/src/workers.ts`
 
-对 Hono 暴露 `compareTask`、`reworkTask`、`runPackaging` 等产品动作，并隐藏 Python 路径、环境变量、子进程、超时、退出码和 stderr。后续应保持接口窄，不把 `app.main` 的内部函数暴露给 TS。
+对 Hono 暴露 `compareTask`、`reworkTask`、`runPackaging` 等产品动作，并隐藏 Python 路径、环境变量、子进程、超时、退出码和 stderr。后续应保持接口窄，不把对照内部函数暴露给 TS。
 
 ### `apps/web/backend/app/cli.py`
 
@@ -50,8 +50,7 @@
 
 ## 已收口的浅模块与仍需避免的泄漏
 
-- `apps/web/backend/app/cli.py` 已改为只依赖零 FastAPI 的 `compare_core.py`；`app.main` 只保留遗留 HTTP 测试兼容壳。
-- Python `app/main.py` 与 TS `auth.ts` 同时保留身份与登录实现，形成双重事实源。
+- `apps/web/backend/app/cli.py` 只依赖 `compare_core.py`。FastAPI `app.main`、Python 会话/OAuth 和遗留 HTTP 测试已删除。身份只在 Hono `auth.ts`。
 - `apps/web/ui/src/api.ts` 已删除未使用的 `loginDisplay`，本机显示名登录只保留服务端 loopback 入口。
 - `apps/web/server/src/auth.ts` 的 `requestLooksLikeFeishu` 未接入真实策略，名称表达了比实现更强的安全承诺。
 - `apps/web/frontend/` 已删除，网页入口只有 `apps/web/ui` + Hono `apps/web/server`。
@@ -84,15 +83,14 @@
 - 写清 `:5173` 仅用于 UI 开发，`:8787` 才是验收入口。
 - 新登录和计费只进入 Hono。
 - 对新增行为覆盖成功与失败路径。
-- 保持 FastAPI 遗留测试壳不再增长；旧前端已经删除，对照核心已从 HTTP 壳迁出。
+- FastAPI HTTP 壳、Python 重复登录和旧前端都已删除。对照只走 `compare_core` + CLI。
 - 验证 Windows 环境；Mac 通过不代表验收完成。
 
 ## 2026-08-31 后
 
 另行设计并审批后，才可考虑：
 
-- 移除 Python 中重复的 OAuth、会话和 HTTP 产品职责。
-- 删除未接入的策略函数；显示名登录客户端和退役前端已经删除。
+- 删除未接入的策略函数。
 - 统一开发入口与启动说明。
 - 根据真实变化模式决定是否继续拆分 `index.ts`，不得只按行数拆分。
 

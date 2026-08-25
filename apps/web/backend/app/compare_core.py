@@ -1,4 +1,4 @@
-"""Excel↔PDF 对照核心。供 CLI 和遗留 FastAPI 壳复用，不依赖 HTTP。"""
+"""Excel↔PDF 对照核心。只给 `python -m app.cli` 用，不依赖 HTTP。"""
 from __future__ import annotations
 
 import json

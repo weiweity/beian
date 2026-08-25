@@ -45,7 +45,7 @@
 
 5173 登录闪或 `/api` 返回 HTML / 空 Content-Type：打开 http://127.0.0.1:8787/，或重启 `npm run dev:ui`。飞书授权失败回到飞书重试，不要把远程验收人指到本机。JSON 404（任务不存在等）不是 Vite 挂了。
 
-不要再跑 `uvicorn app.main:app` 当入口。
+不要跑 uvicorn。没有 `app.main`。产品入口只有 Hono `:8787`。
 
 测服务端、界面和对照 CLI：仓库根目录 `npm test`（Mac；不打外网）。杭州生产只做 health/logo 冒烟，不跑单测。只要服务端：`npm run test -w beian-server`。只要界面：`npm run test -w beian-ui`。
 

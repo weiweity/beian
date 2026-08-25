@@ -39,7 +39,7 @@
 cd apps/web/backend && PYTHONPATH=. .venv/bin/python -m app.cli --help
 ```
 
-禁止：`uvicorn`、新 FastAPI 路由、把 `m.save_task` 抄回 CLI。产品入口仍是 `./scripts/dev-start.sh` → Hono `:8787`。
+禁止：`uvicorn`、把 FastAPI 加回来、把 `save_task` 抄回 CLI。产品入口仍是 `./scripts/dev-start.sh` → Hono `:8787`。
 
 1. CLI 在 `apps/web/backend/app/cli.py`。stderr 打 `STAGE <name>`。stdout 最后一行是结果 JSON（不要 `ocr_text`）。不要 `save_task`。
    打样不是 `app.cli` 子命令；`jobs.ts` 调 `workers/packaging`；HTTP 仍是 `/api/mockups`。packaging stderr 打 `STAGE render_pdf|blender|export`（出图/打样/导出）。平面出图 pymupdf 先，macOS `qlmanage` 只在 pymupdf 失败时兜底。
@@ -104,7 +104,7 @@ MiniMax 未开语义复核是「未用」，不是「可用」；探测是 `GET 
 - L0 单测（Mac，`/ship` 必绿）：仓库根目录 `npm test`
   - 服务端：`npm run test -w beian-server`（`node:test`，`apps/web/server/src/*.test.ts`）
   - 界面：`npm run test -w beian-ui`（`node:test`，`src/**/*.test.ts` 自动发现；纯函数，不引入 RTL）
-  - 对照 worker：`cd apps/web/backend && .venv/bin/python -m pytest -q`（默认 CLI 契约。FastAPI 遗留在 `tests/legacy_fastapi/`，不挡合并）
+  - 对照 worker：`cd apps/web/backend && .venv/bin/python -m pytest -q`（CLI 契约 + 对照/打样单测。没有 FastAPI 测试）
 - L1 冒烟（杭州 `hangzhou-release`）：`release.ps1` 查 health.ok、version==VERSION、`jobs.illustrator`、logo PNG。不跑 `npm test`
 - L2 金标（人核定后）：`apps/web/backend/scripts/run_eval.py`。未核定的 `data/gold` 不进默认 `npm test`
 - 类型：`npm run typecheck -w beian-server` 与 `npm run build -w beian-ui`
@@ -130,7 +130,7 @@ MiniMax 未开语义复核是「未用」，不是「可用」；探测是 `GET 
 - `workers/packaging` 缺 Blender 时必须明确失败，不得静默降级、伪造成功或另建 3D 流水线。
 - 每个非琐碎改动先比较至少两个设计，记录为什么选择接口更小、泄漏更少的方案；预留约 10%–20% 时间做设计。
 - 注释写约束、原因和失败语义，不复述代码；名称必须体现产品边界，如 worker、snapshot、human decision。
-- 沿用已有术语、路径和错误格式；已删除旧 `frontend/`，产品路径只有 React UI + Hono，FastAPI 仅是遗留测试壳。
+- 沿用已有术语、路径和错误格式；已删除旧 `frontend/` 和 FastAPI HTTP 壳，产品路径只有 React UI + Hono，对照只走 `python -m app.cli`。
 - 人工终审不可抽象成机器过审；账单 `charge_status` 必须保持 `unknown`，除非已有可核验的供应商扣费事实。
 
 ## Deploy Configuration (configured by /setup-deploy)

@@ -40,7 +40,7 @@
 
 ```
 apps/web/
-  backend/           Python 对照 worker + 遗留 FastAPI 测试壳
+  backend/           Python 对照 worker（`python -m app.cli`）
   server/            Hono 产品 HTTP :8787
   ui/                新建：Vite + React + TS
     src/
