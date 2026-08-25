@@ -7,7 +7,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from app import main as m
+from app import compare_core
 
 # 任务 JSON 只由 jobs.ts 写；成功时 stdout 最后一行是结果，失败走 _err。
 _CLI_DESCRIPTION = "对照 worker（python -m app.cli）。不是 HTTP，不写任务 JSON。"
@@ -64,9 +64,9 @@ def cmd_probe(args: argparse.Namespace) -> int:
 
 def cmd_compare(args: argparse.Namespace) -> int:
     data = Path(args.data_dir).expanduser().resolve() if args.data_dir else None
-    m.init_paths(data)
+    compare_core.init_paths(data)
     tid = (args.tid or "").strip()
-    if not m.TID_RE.fullmatch(tid):
+    if not compare_core.TID_RE.fullmatch(tid):
         return _err("无效任务 id")
     excel = Path(args.excel).resolve()
     pdf = Path(args.pdf).resolve()
@@ -77,18 +77,18 @@ def cmd_compare(args: argparse.Namespace) -> int:
         return _err("品名必填")
     surface = "膜袋" if args.surface == "pouch" else "花盒"
     title = (args.title or "").strip() or product
-    tdir = m.UPLOADS / tid
+    tdir = compare_core.UPLOADS / tid
     tdir.mkdir(parents=True, exist_ok=True)
     ep, pp = tdir / "source.xlsx", tdir / "artwork.pdf"
     if excel != ep:
         shutil.copy2(excel, ep)
     if pdf != pp:
         shutil.copy2(pdf, pp)
-    task = m.run_excel_pdf_job(
+    task = compare_core.run_excel_pdf_job(
         tid,
         ep,
         pp,
-        m.clamp_max_pages(int(args.max_pages or 2)),
+        compare_core.clamp_max_pages(int(args.max_pages or 2)),
         title,
         pdf_pouch=None,
         surface_a_label=surface,
@@ -102,35 +102,35 @@ def cmd_compare(args: argparse.Namespace) -> int:
     task["created_by"] = args.actor or ""
     task["actor"] = args.actor or ""
     task.setdefault("audit", []).append(
-        {"at": m.now_iso(), "actor": args.actor or "", "action": "create", "via": "ts-cli"}
+        {"at": compare_core.now_iso(), "actor": args.actor or "", "action": "create", "via": "ts-cli"}
     )
     return _result(task)
 
 
 def cmd_rework(args: argparse.Namespace) -> int:
     data = Path(args.data_dir).expanduser().resolve() if args.data_dir else None
-    m.init_paths(data)
+    compare_core.init_paths(data)
     tid = (args.tid or "").strip()
-    task = m.load_task(tid)
+    task = compare_core.load_task(tid)
     pdf = Path(args.pdf).resolve()
     if not pdf.is_file():
         return _err("新 PDF 不存在")
-    dest = m.UPLOADS / tid / "artwork_v2.pdf"
+    dest = compare_core.UPLOADS / tid / "artwork_v2.pdf"
     dest.parent.mkdir(parents=True, exist_ok=True)
     if pdf.resolve() != dest.resolve():
         shutil.copy2(pdf, dest)
-    excel = m.UPLOADS / tid / "source.xlsx"
+    excel = compare_core.UPLOADS / tid / "source.xlsx"
     if not excel.is_file():
         return _err("找不到原 Excel")
     from app.fields import parse_excel_fields
 
     fields = parse_excel_fields(str(excel))
     surface = task.get("label_a") or task.get("pack_surface") or "花盒"
-    result = m._surface_job(
+    result = compare_core._surface_job(
         tid=tid,
         pdf=dest,
         pages_subdir="v2",
-        max_pages=m.clamp_max_pages(int(args.max_pages or 2)),
+        max_pages=compare_core.clamp_max_pages(int(args.max_pages or 2)),
         surface_label=str(surface),
         fields=fields,
         title=str(task.get("title") or ""),
@@ -163,7 +163,7 @@ def cmd_rework(args: argparse.Namespace) -> int:
         )
     task["rework_check"] = rematch
     task.setdefault("audit", []).append(
-        {"at": m.now_iso(), "actor": args.actor or "", "action": "rework_v2"}
+        {"at": compare_core.now_iso(), "actor": args.actor or "", "action": "rework_v2"}
     )
     return _result(task)
 

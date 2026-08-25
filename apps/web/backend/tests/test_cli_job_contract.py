@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from app.cli import cmd_compare, cmd_rework
-from app.main import emit_stage
+from app.compare_core import emit_stage
 
 BACKEND = Path(__file__).resolve().parents[1]
 TID = "0123456789ab"
@@ -44,10 +44,16 @@ def test_cli_help_mentions_stage_save_task_packaging(tmp_path):
     assert "packaging" in blob
 
 
+def test_cli_source_does_not_import_http_stack():
+    source = (BACKEND / "app" / "cli.py").read_text(encoding="utf-8")
+    assert "from app import main" not in source
+    assert "fastapi" not in source.lower()
+
+
 def test_cmd_compare_prints_task_json_without_save(monkeypatch, capsys, tmp_path):
     monkeypatch.setattr("app.main.save_task", _forbid_save)
     monkeypatch.setattr(
-        "app.main.run_excel_pdf_job",
+        "app.compare_core.run_excel_pdf_job",
         lambda *_a, **_k: {
             "id": TID,
             "status": "pending_review",
@@ -90,7 +96,7 @@ def test_cmd_rework_prints_hits_v2_without_save(monkeypatch, capsys, tmp_path):
         lambda _p: [{"field": "净含量", "excel_value": "50ml"}],
     )
     monkeypatch.setattr(
-        "app.main._surface_job",
+        "app.compare_core._surface_job",
         lambda **_k: {
             "pages": [{"name": "page_01.png"}],
             "hits": [{"field": "净含量", "status": "一致", "page": 1}],
@@ -155,7 +161,7 @@ def test_cmd_rework_same_path_skips_copy2(monkeypatch, capsys, tmp_path):
         lambda _p: [{"field": "净含量", "excel_value": "50ml"}],
     )
     monkeypatch.setattr(
-        "app.main._surface_job",
+        "app.compare_core._surface_job",
         lambda **_k: {
             "pages": [{"name": "page_01.png"}],
             "hits": [{"field": "净含量", "status": "一致", "page": 1}],
@@ -210,7 +216,7 @@ def test_compare_crash_writes_stderr_json(monkeypatch, capsys, tmp_path):
     def _boom(*_a, **_k):
         raise RuntimeError("对照阶段失败")
 
-    monkeypatch.setattr("app.main.run_excel_pdf_job", _boom)
+    monkeypatch.setattr("app.compare_core.run_excel_pdf_job", _boom)
     excel = tmp_path / "a.xlsx"
     pdf = tmp_path / "a.pdf"
     excel.write_bytes(b"PK")
