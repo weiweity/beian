@@ -1,6 +1,15 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { historyHasLive, historyMockRow, historyTaskRow } from "./historyRows.js";
+import {
+  filterHistoryRows,
+  historyActors,
+  historyCanDelete,
+  historyHasLive,
+  historyMockRow,
+  historyRowKey,
+  historyTaskRow,
+  type HistoryRow,
+} from "./historyRows.js";
 
 describe("historyTaskRow", () => {
   it("shows live compare progress while the job is running", () => {
@@ -48,6 +57,20 @@ describe("historyTaskRow", () => {
     assert.equal(row.status, "打样中");
     assert.equal(row.live, "打样 · 大约还要 4 分钟");
   });
+
+  it("keeps a stale failed shell locked while its worker slot is still running", () => {
+    const row = historyMockRow({
+      id: "m3",
+      status: "failed",
+      title: "7片装花盒",
+      files: [],
+      job_status: "running",
+      job_stage_label: "导出",
+    });
+    assert.equal(row.status, "打样中");
+    assert.equal(row.color, "processing");
+    assert.equal(historyCanDelete(row), false);
+  });
 });
 
 describe("historyHasLive", () => {
@@ -78,5 +101,95 @@ describe("historyHasLive", () => {
     });
     assert.equal(row.status, "待审核");
     assert.doesNotMatch(row.status, /待她判/);
+  });
+
+  it("已签字后仍按建单人显示和筛选，不把签字人当生成人", () => {
+    const row = historyTaskRow({
+      id: "t3",
+      title: "花盒",
+      type: "pack",
+      status: "completed",
+      owner: "魏炜",
+      completed_by: "籽烨",
+    });
+    assert.equal(row.actor, "魏炜");
+  });
+});
+
+describe("history filters and batch selection", () => {
+  const rows: HistoryRow[] = [
+    {
+      kind: "审稿台",
+      id: "a",
+      title: "喷雾",
+      status: "已签字",
+      color: "success",
+      at: "2026-08-26T02:00:00.000Z",
+      actor: "籽烨",
+      live: null,
+    },
+    {
+      kind: "打样台",
+      id: "b",
+      title: "花盒",
+      status: "已出图",
+      color: "success",
+      at: "2026-08-20T02:00:00.000Z",
+      actor: "魏炜",
+      live: null,
+    },
+    {
+      kind: "审稿台",
+      id: "c",
+      title: "旧单",
+      status: "对照中",
+      color: "processing",
+      at: "2026-07-01T02:00:00.000Z",
+      actor: "籽烨",
+      live: "认字",
+    },
+  ];
+
+  it("combines desk, time and actor filters", () => {
+    const filtered = filterHistoryRows(
+      rows,
+      { kind: "审稿台", time: "近 7 天", actor: "籽烨" },
+      new Date("2026-08-26T12:00:00.000Z"),
+    );
+    assert.deepEqual(filtered.map((row) => row.id), ["a"]);
+  });
+
+  it("uses an explicit date range instead of the preset time chip", () => {
+    const filtered = filterHistoryRows(
+      rows,
+      {
+        kind: "全部",
+        time: "今天",
+        actor: "魏炜",
+        range: {
+          from: new Date("2026-08-19T00:00:00.000Z"),
+          to: new Date("2026-08-21T23:59:59.999Z"),
+        },
+      },
+      new Date("2026-08-26T12:00:00.000Z"),
+    );
+    assert.deepEqual(filtered.map((row) => row.id), ["b"]);
+  });
+
+  it("treats 今天 as the local calendar day and drops invalid timestamps", () => {
+    const invalid = { ...rows[0], id: "bad", at: "not-a-date" };
+    const filtered = filterHistoryRows(
+      [...rows, invalid],
+      { kind: "全部", time: "今天", actor: "" },
+      new Date("2026-08-26T12:00:00.000Z"),
+    );
+    assert.deepEqual(filtered.map((row) => row.id), ["a"]);
+  });
+
+  it("lists unique non-empty actors and keeps running rows out of deletion", () => {
+    assert.deepEqual(historyActors([...rows, { ...rows[0], id: "d", actor: "" }]), ["魏炜", "籽烨"]);
+    assert.equal(historyCanDelete(rows[0]), true);
+    assert.equal(historyCanDelete(rows[2]), false);
+    assert.equal(historyRowKey(rows[0]), "审稿台-a");
   });
 });

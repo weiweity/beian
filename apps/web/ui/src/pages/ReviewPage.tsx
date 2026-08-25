@@ -7,6 +7,12 @@ import { fittedPage, panBy, resetZoom, zoomAt, zoomCss, zoomToBox } from "./canv
 import { doubtLines, excelText, pdfText } from "./hitText";
 import { hitOnPage, overlayFromBox, overlaysForHit, pickHitBox, resolvePageMetrics } from "./pinBox";
 import {
+  enterElementFullscreen,
+  exitElementFullscreen,
+  fullscreenFailureMessage,
+  isElementFullscreen,
+} from "./mockupFullscreen";
+import {
   clampDockBox,
   clampDockPlace,
   dockVisual,
@@ -26,6 +32,7 @@ import {
   type DockPlace,
 } from "./reviewDock";
 import { shouldShowWaitCard } from "./waitCard";
+import { reviewHits, shouldUseReworkView } from "./reviewVersion";
 
 function browserStore(): Storage | null {
   return typeof localStorage === "undefined" ? null : localStorage;
@@ -101,6 +108,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
   const [pinsOn, setPinsOn] = useState(() => readPinsOn(browserStore()));
   const [boxesOn, setBoxesOn] = useState(() => readBoxesOn(browserStore()));
   const [toolsOpen, setToolsOpen] = useState(true);
+  const [reviewFullscreen, setReviewFullscreen] = useState(false);
   const viewRef = useRef<HTMLDivElement>(null);
   const pageRef = useRef<HTMLElement>(null);
   const zoomElRef = useRef<HTMLDivElement>(null);
@@ -146,6 +154,19 @@ export function ReviewPage({ taskId, onBack }: Props) {
     if (typeof window === "undefined") return { w: 800, h: 600 };
     return { w: window.innerWidth, h: window.innerHeight };
   }
+
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    function onFullscreenChange() {
+      setReviewFullscreen(isElementFullscreen(pageRef.current));
+    }
+    document.addEventListener("fullscreenchange", onFullscreenChange);
+    document.addEventListener("webkitfullscreenchange", onFullscreenChange);
+    return () => {
+      document.removeEventListener("fullscreenchange", onFullscreenChange);
+      document.removeEventListener("webkitfullscreenchange", onFullscreenChange);
+    };
+  }, []);
 
   function commitDock(box: DockBox, place?: DockPlace) {
     const room = pageRoom();
@@ -306,8 +327,9 @@ export function ReviewPage({ taskId, onBack }: Props) {
       .then((t) => {
         if (cancelled) return;
         setTask(t);
+        setUseV2(shouldUseReworkView(t));
         const seed: Record<string, string> = {};
-        for (const h of t.hits || []) {
+        for (const h of [...(t.hits || []), ...(t.hits_v2 || [])]) {
           if (h.id && h.note) seed[h.id] = h.note;
         }
         setNotes(seed);
@@ -336,12 +358,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
           if (Object.keys(seed).length) setNotes((prev) => ({ ...seed, ...prev }));
           if (next.conclusion) setConclusion((cur) => cur || next.conclusion || "");
           if (next.job_kind !== "rework" || next.job_status === "failed") return;
-          if (
-            (Array.isArray(next.hits_v2) && next.hits_v2.length > 0) ||
-            (Array.isArray(next.pages_v2) && next.pages_v2.length > 0)
-          ) {
-            setUseV2(true);
-          }
+          if (shouldUseReworkView(next)) setUseV2(true);
           message.success("已对照第二份 PDF。请核对上一轮有错的字段。");
         })
         .catch((err: unknown) => {
@@ -354,7 +371,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
     return () => window.clearInterval(id);
   }, [taskId, waiting]);
 
-  const hits = ((useV2 ? task?.hits_v2 : task?.hits) || []).filter((h) => !skipPackSheetField(h.field));
+  const hits = reviewHits(task, useV2).filter((h) => !skipPackSheetField(h.field));
   const pages = pageList(useV2 ? { ...(task as TaskDetail), pages: task?.pages_v2 } : task);
   const page = pages[pageIdx];
   const signed = task?.status === "completed";
@@ -498,6 +515,17 @@ export function ReviewPage({ taskId, onBack }: Props) {
     }
   }
 
+  async function toggleReviewFullscreen() {
+    const root = pageRef.current;
+    if (!root) return;
+    try {
+      if (isElementFullscreen(root)) await exitElementFullscreen();
+      else await enterElementFullscreen(root);
+    } catch (cause) {
+      message.error(fullscreenFailureMessage(cause));
+    }
+  }
+
   function fitHit(i: number) {
     const h = hits[i];
     const el = viewRef.current;
@@ -543,8 +571,15 @@ export function ReviewPage({ taskId, onBack }: Props) {
     );
   }
 
+  const dockPortalTarget =
+    typeof document === "undefined"
+      ? null
+      : reviewFullscreen && pageRef.current
+        ? pageRef.current
+        : document.body;
+
   return (
-    <section className="review-page" ref={pageRef}>
+    <section className={reviewFullscreen ? "review-page is-fullscreen" : "review-page"} ref={pageRef}>
       <header className="page-head">
         <div>
           <h1 className="page-title">{task?.product_name || task?.title || "核对页"}</h1>
@@ -553,6 +588,14 @@ export function ReviewPage({ taskId, onBack }: Props) {
         <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
           <button type="button" className="btn-ghost" onClick={onBack}>
             返回列表
+          </button>
+          <button
+            type="button"
+            className="btn-ghost review-fullscreen-toggle"
+            aria-pressed={reviewFullscreen}
+            onClick={() => void toggleReviewFullscreen()}
+          >
+            {reviewFullscreen ? "退出全屏" : "全屏核对"}
           </button>
           {Array.isArray(task?.pages_v2) && task.pages_v2.length > 0 ? (
             <button
@@ -599,7 +642,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
               ))
             : null}
           {reviewable ? (
-            <label className="review-conclusion">
+            <label className="review-conclusion review-sign-layer">
               <Input
                 aria-label="结论"
                 placeholder="结论，签字要用"
@@ -609,11 +652,11 @@ export function ReviewPage({ taskId, onBack }: Props) {
               />
             </label>
           ) : signed && conclusion ? (
-            <span className="review-conclusion-done">{conclusion}</span>
+            <span className="review-conclusion-done review-sign-layer">{conclusion}</span>
           ) : null}
           <button
             type="button"
-            className="btn-primary"
+            className="btn-primary review-sign-layer"
             disabled={!reviewable || busy || !conclusion.trim()}
             onClick={() => void signOff()}
           >
@@ -813,7 +856,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
         </div>
 
         </div>
-        {typeof document !== "undefined"
+        {dockPortalTarget
           ? createPortal(
           <aside
             ref={dockRef}
@@ -853,17 +896,33 @@ export function ReviewPage({ taskId, onBack }: Props) {
               </button>
             </div>
             <div className="notes-body" aria-hidden={!dockOpen}>
-            <div className="notes-grid">
+            <div className="notes-grid notes-grid-ordered">
+              <div className="notes-hits notes-hits-first">
+                <p className="field-label" style={{ margin: 0 }}>
+                  疑点列表
+                </p>
+                <div className="hit-list hit-list-wrap">
+                  {hits.map((h, i) => (
+                    <button
+                      key={h.id || i}
+                      type="button"
+                      className={i === active ? "hit-card is-on" : "hit-card"}
+                      onClick={() => pickHit(i)}
+                    >
+                      <div className="hit-now">
+                        <strong style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                          <span className="hit-no">{i + 1}</span>
+                          {h.field || "字段"}
+                        </strong>
+                        {statusTag(h.status)}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
               <div className="notes-field">
                 {current ? (
                   <>
-                    <div className="hit-now">
-                      <strong style={{ fontSize: 18, display: "inline-flex", alignItems: "center", gap: 8 }}>
-                        <span className="hit-no">{active + 1}</span>
-                        {current.field || "字段"}
-                      </strong>
-                      {statusTag(current.status)}
-                    </div>
                     {doubtLines(current).length ? (
                       <div className="pair pair-doubt">
                         <p className="pair-k">疑点 / 错误点</p>
@@ -925,29 +984,6 @@ export function ReviewPage({ taskId, onBack }: Props) {
                   </p>
                 )}
               </div>
-              <div className="notes-hits">
-                <p className="field-label" style={{ margin: 0 }}>
-                  疑点列表
-                </p>
-                <div className="hit-list">
-                  {hits.map((h, i) => (
-                    <button
-                      key={h.id || i}
-                      type="button"
-                      className={i === active ? "hit-card is-on" : "hit-card"}
-                      onClick={() => pickHit(i)}
-                    >
-                      <div className="hit-now">
-                        <strong style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-                          <span className="hit-no">{i + 1}</span>
-                          {h.field || "字段"}
-                        </strong>
-                        {statusTag(h.status)}
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </div>
             </div>
             {task?.rework_check && task.rework_check.length > 0 ? (
               <div className="notes-foot">
@@ -971,7 +1007,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
             {dockHandle("sw")}
             {dockHandle("se")}
           </aside>,
-              document.body,
+              dockPortalTarget,
             )
           : null}
     </section>

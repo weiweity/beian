@@ -22,6 +22,19 @@ describe("parsePath", () => {
     assert.deepEqual(parsePath("/", "?tab=settings"), { view: "settings" });
     assert.deepEqual(parsePath("/", "", "#settings"), { view: "settings" });
   });
+
+  it("只在新建页读取合法上传回执", () => {
+    assert.deepEqual(parsePath("/reviewup/new", "?receipt=AABBCCDDEEFF"), {
+      view: "new",
+      receipt: "aabbccddeeff",
+    });
+    assert.deepEqual(parsePath("/mockup/new", "?receipt=112233445566"), {
+      view: "mockupNew",
+      receipt: "112233445566",
+    });
+    assert.deepEqual(parsePath("/reviewup/new", "?receipt=bad"), { view: "new" });
+    assert.deepEqual(parsePath("/reviewup", "?receipt=aabbccddeeff"), { view: "tasks" });
+  });
 });
 
 describe("hrefOf", () => {
@@ -35,6 +48,12 @@ describe("hrefOf", () => {
     assert.equal(hrefOf({ view: "mockupNew" }), "/mockup/new");
     assert.equal(hrefOf({ view: "mockup", mockupId: null }), "/mockup");
     assert.equal(hrefOf({ view: "mockup", mockupId: "aabbccddeeff" }), "/mockup/aabbccddeeff");
+  });
+
+  it("把合法回执保留到对应新建页", () => {
+    assert.equal(hrefOf({ view: "new", receipt: "AABBCCDDEEFF" }), "/reviewup/new?receipt=aabbccddeeff");
+    assert.equal(hrefOf({ view: "mockupNew", receipt: "112233445566" }), "/mockup/new?receipt=112233445566");
+    assert.equal(hrefOf({ view: "new", receipt: "bad" }), "/reviewup/new");
   });
 });
 

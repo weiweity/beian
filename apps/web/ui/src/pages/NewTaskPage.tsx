@@ -1,81 +1,104 @@
 import { useEffect, useState } from "react";
-import { App } from "antd";
-import { api } from "../api";
+import { Alert, App } from "antd";
+import { api, type PendingUploadReceipt } from "../api";
+import { UploadProgressSlot } from "../chrome/UploadProgressSlot";
 import { UploadWell } from "../chrome/UploadWell";
 import { WaitCard } from "../chrome/WaitCard";
+import {
+  uploadIsBusy,
+  uploadStore,
+  useUploadReceiptRecovery,
+  useUploadSnapshot,
+  type UploadSnapshot,
+} from "../uploadStore";
 import { stemFromFilename } from "./stemName";
-import { UPLOAD_TOO_LARGE, bytesTooLarge } from "../uploadLimit";
 
-type Props = { onCreated: (id: string) => void; onBack: () => void };
+type Props = {
+  canCreate: boolean;
+  receiptId?: string | null;
+  onCreated: (id: string) => void;
+  onBack: () => void;
+};
 
-export function NewTaskPage({ onCreated, onBack }: Props) {
-  const { message } = App.useApp();
-  const [productName, setProductName] = useState("");
-  const [pack, setPack] = useState("carton");
-  const [excel, setExcel] = useState<File | null>(null);
-  const [pdf, setPdf] = useState<File | null>(null);
-  const [receipt, setReceipt] = useState<string | null>(null);
-  const [pct, setPct] = useState(0);
-  const [uploading, setUploading] = useState(false);
+function receiptFromSnapshot(snapshot: UploadSnapshot | null): PendingUploadReceipt | null {
+  if (!snapshot?.receipt || snapshot.phase !== "ready") return null;
+  return {
+    id: snapshot.receipt,
+    files: snapshot.files,
+    bytes: snapshot.files.reduce((sum, file) => sum + file.bytes, 0),
+    created_at: snapshot.createdAt,
+    kind: snapshot.kind,
+  };
+}
+
+export function NewTaskPage({ canCreate, receiptId, onCreated, onBack }: Props) {
+  const { message, modal } = App.useApp();
+  const upload = useUploadSnapshot("compare");
+  const localReceipt = receiptFromSnapshot(upload);
+  const localMatches = Boolean(receiptId && localReceipt?.id === receiptId);
+  const [resumeSource] = useState<"local" | "remote">(() => (!receiptId || localMatches ? "local" : "remote"));
+  const [restoredReceipt, setRestoredReceipt] = useState<PendingUploadReceipt | null>(null);
+  const [resumeError, setResumeError] = useState<string | null>(null);
+  const [productName, setProductName] = useState(resumeSource === "local" ? upload?.productName || "" : "");
+  const [pack, setPack] = useState(resumeSource === "local" ? upload?.packSurface || "carton" : "carton");
   const [submitting, setSubmitting] = useState(false);
+  useUploadReceiptRecovery("compare", upload, canCreate && resumeSource === "local");
 
   useEffect(() => {
-    if (!excel || !pdf) {
-      setReceipt(null);
-      setPct(0);
-      return;
-    }
-    if (bytesTooLarge(excel.size, pdf.size)) {
-      setReceipt(null);
+    if (!canCreate || resumeSource === "local" || !receiptId) {
+      setRestoredReceipt(null);
+      setResumeError(null);
       return;
     }
     let cancelled = false;
-    const ac = new AbortController();
-    const fd = new FormData();
-    fd.append("excel", excel);
-    fd.append("pdf", pdf);
-    setUploading(true);
-    setReceipt(null);
-    setPct(0);
+    setResumeError(null);
     void api
-      .stageUpload(
-        fd,
-        (n) => {
-          if (!cancelled) setPct(n);
-        },
-        ac.signal,
-      )
-      .then((res) => {
+      .uploads()
+      .then((list) => {
         if (cancelled) return;
-        setReceipt(res.receipt);
-        setPct(100);
+        const found = list.find((item) => item.id === receiptId && item.kind === "compare") || null;
+        setRestoredReceipt(found);
+        if (!found) setResumeError("这份上传回执已过期或已经开工，请返回审稿台刷新。");
       })
       .catch((err: unknown) => {
-        if (cancelled) return;
-        setReceipt(null);
-        message.error(err instanceof Error ? err.message : "上传失败");
-      })
-      .finally(() => {
-        if (!cancelled) setUploading(false);
+        if (!cancelled) setResumeError(err instanceof Error ? err.message : "上传回执读取失败");
       });
     return () => {
       cancelled = true;
-      ac.abort();
     };
-  }, [excel, pdf, message]);
+  }, [canCreate, receiptId, resumeSource]);
+
+  const receipt = resumeSource === "local" ? upload?.receipt || null : restoredReceipt?.id || null;
+  const files = resumeSource === "local" ? upload?.files || [] : restoredReceipt?.files || [];
+  const excel = files.find((file) => file.field === "excel");
+  const pdf = files.find((file) => file.field === "pdf");
+  const busy = resumeSource === "local" && uploadIsBusy(upload);
+
+  function updateName(next: string) {
+    setProductName(next);
+    if (resumeSource === "local") uploadStore.updateMeta("compare", { productName: next });
+  }
+
+  function updatePack(next: string) {
+    setPack(next);
+    if (resumeSource === "local") uploadStore.updateMeta("compare", { packSurface: next });
+  }
+
+  function takeFile(field: "excel" | "pdf", file: File | null) {
+    let name = productName;
+    if (file && !name.trim()) {
+      name = stemFromFilename(file.name);
+      setProductName(name);
+    }
+    const next = uploadStore.replaceFile("compare", field, file, { productName: name, packSurface: pack });
+    if (next.phase === "failed" && next.error) message.error(next.error);
+    else if (file) message.success(field === "excel" ? "已选 Excel 确认单" : "已选包装 PDF");
+  }
 
   async function submit() {
     const name = productName.trim();
     if (!name) {
       message.warning("品名必填。");
-      return;
-    }
-    if (!excel || !pdf) {
-      message.warning("请同时选择 Excel 和包装 PDF。");
-      return;
-    }
-    if (bytesTooLarge(excel.size, pdf.size)) {
-      message.error(UPLOAD_TOO_LARGE);
       return;
     }
     if (!receipt) {
@@ -90,6 +113,7 @@ export function NewTaskPage({ onCreated, onBack }: Props) {
         title: name,
         pack_surface: pack,
       });
+      uploadStore.clear("compare", receipt);
       message.success("已开始对照。结论还要你来定。");
       onCreated(task.id);
     } catch (err) {
@@ -98,20 +122,42 @@ export function NewTaskPage({ onCreated, onBack }: Props) {
     }
   }
 
-  function takeExcel(file: File | null) {
-    setExcel(file);
-    if (file) {
-      message.success("已选 Excel 确认单");
-      if (!productName.trim()) setProductName(stemFromFilename(file.name));
-    }
+  function confirmAbandon() {
+    modal.confirm({
+      title: "放弃这次上传？",
+      content: "暂存文件会删除；以后需要时要重新选择并上传。",
+      okText: "放弃上传",
+      okButtonProps: { danger: true },
+      cancelText: "继续保留",
+      onOk: async () => {
+        try {
+          if (resumeSource === "remote" && restoredReceipt) {
+            const result = await api.discardUpload(restoredReceipt.id);
+            if (!result.ok) throw new Error("这份上传已经过期或已经开工");
+            setRestoredReceipt(null);
+          } else {
+            await uploadStore.abandon("compare");
+          }
+          message.success("已放弃这次上传，文件资源已释放。");
+          onBack();
+        } catch (err) {
+          message.error(err instanceof Error ? err.message : "无法放弃这次上传");
+          throw err;
+        }
+      },
+    });
   }
 
-  function takePdf(file: File | null) {
-    setPdf(file);
-    if (file) {
-      message.success("已选包装 PDF");
-      if (!productName.trim()) setProductName(stemFromFilename(file.name));
-    }
+  if (!canCreate) {
+    return (
+      <section className="new-form">
+        <header className="page-head">
+          <h1 className="page-title">新建 Excel↔PDF</h1>
+          <button type="button" className="btn-ghost" onClick={onBack}>返回</button>
+        </header>
+        <Alert type="warning" showIcon title="当前账号只有查看权限，不能上传或新建审核单。" />
+      </section>
+    );
   }
 
   if (submitting) return <WaitCard job="对照" jobStatus="queued" />;
@@ -130,10 +176,10 @@ export function NewTaskPage({ onCreated, onBack }: Props) {
           <button
             type="button"
             className="btn-primary"
-            disabled={!receipt || uploading}
+            disabled={!receipt || busy}
             onClick={() => void submit()}
           >
-            {uploading ? `上传中 ${pct}%` : "开始对照"}
+            {busy ? "上传中" : "开始对照"}
           </button>
         </div>
       </header>
@@ -145,7 +191,7 @@ export function NewTaskPage({ onCreated, onBack }: Props) {
             maxLength={80}
             placeholder="选 Excel 后自动填，可改"
             value={productName}
-            onChange={(e) => setProductName(e.target.value)}
+            onChange={(event) => updateName(event.target.value)}
           />
         </label>
         <div className="new-meta-pack">
@@ -154,14 +200,14 @@ export function NewTaskPage({ onCreated, onBack }: Props) {
             <button
               type="button"
               className={pack === "carton" ? "pack-pill is-on" : "pack-pill"}
-              onClick={() => setPack("carton")}
+              onClick={() => updatePack("carton")}
             >
               花盒
             </button>
             <button
               type="button"
               className={pack === "pouch" ? "pack-pill is-on" : "pack-pill"}
-              onClick={() => setPack("pouch")}
+              onClick={() => updatePack("pouch")}
             >
               膜袋
             </button>
@@ -169,9 +215,14 @@ export function NewTaskPage({ onCreated, onBack }: Props) {
         </div>
       </div>
 
-      {excel && pdf ? (
-        <p className="page-lead">{uploading ? `正在上传 ${pct}%` : receipt ? "上传成功，可以开始对照。" : "等待上传"}</p>
-      ) : null}
+      {resumeError ? <Alert type="error" showIcon title={resumeError} /> : null}
+      <UploadProgressSlot
+        snapshot={resumeSource === "local" ? upload : null}
+        receipt={resumeSource === "remote" ? restoredReceipt : null}
+        readyText="上传成功，可以开始对照"
+        onDiscard={files.length ? confirmAbandon : undefined}
+      />
+
       <div className="upload-row">
         <UploadWell
           icon="/brand/ui/well-excel.svg"
@@ -179,8 +230,9 @@ export function NewTaskPage({ onCreated, onBack }: Props) {
           hint="把 .xlsx 拖进来，或点选取"
           accept=".xlsx"
           fileName={excel?.name}
-          fileBytes={excel?.size}
-          onFile={takeExcel}
+          fileBytes={excel?.bytes}
+          disabled={resumeSource === "remote"}
+          onFile={(file) => takeFile("excel", file)}
           onReject={() => message.warning("Excel 只要 .xlsx。")}
         >
           <span className="upload-well-btn">选取 Excel</span>
@@ -191,8 +243,9 @@ export function NewTaskPage({ onCreated, onBack }: Props) {
           hint="花盒或膜袋展开图"
           accept=".pdf"
           fileName={pdf?.name}
-          fileBytes={pdf?.size}
-          onFile={takePdf}
+          fileBytes={pdf?.bytes}
+          disabled={resumeSource === "remote"}
+          onFile={(file) => takeFile("pdf", file)}
           onReject={() => message.warning("包装稿只要 PDF。")}
         >
           <span className="upload-well-btn">选取 PDF</span>

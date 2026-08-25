@@ -134,7 +134,7 @@ export function rectsOverlap(a: ScreenRect, b: ScreenRect): boolean {
 export function clampDockPlace(place: DockPlace, room: { w: number; h: number }, box: DockBox): DockPlace {
   const maxRight = Math.max(8, Math.round(Number(room.w) || 800) - box.w - 8);
   const maxTop = Math.max(8, Math.round(Number(room.h) || 600) - box.h - 8);
-  const minTop = Math.min(DOCK_BELOW_HEAD, maxTop);
+  const minTop = 8;
   const top = Number(place.top);
   const right = Number(place.right);
   return {
@@ -253,5 +253,5 @@ export function resizeDockHandle(
 }
 
 export function skipPackSheetField(field?: string): boolean {
-  return /^(工艺说明|颜色要求|版本号)($|[\s：:·])/.test(String(field || "").trim());
+  return /^(工艺说明|颜色要求|版本号|更新内容)($|[\s：:·])/.test(String(field || "").trim());
 }

@@ -2,12 +2,13 @@ import { lazy, Suspense, useCallback, useEffect, useState, type ReactNode } from
 import { api, brokenApiMessage, type Me } from "./api";
 import { authFailureAction, feishuLoginHref, shouldAutoRedirectToFeishu } from "./authGate";
 import { Sidebar, type NavKey } from "./chrome/Sidebar";
-import { hrefOf, parsePath, type AppView } from "./appRoute";
+import { hrefOf, parsePath, type AppRoute, type AppView } from "./appRoute";
 import { liveNavPulse } from "./pages/waitCard";
 import { useAppearance } from "./chrome/AppearanceRoot";
 import { NewTaskPage } from "./pages/NewTaskPage";
 import { ReviewPage } from "./pages/ReviewPage";
 import { TasksPage } from "./pages/TasksPage";
+import { uploadStore } from "./uploadStore";
 
 const HistoryPage = lazy(() =>
   import("./pages/HistoryPage").then((m) => ({ default: m.HistoryPage })),
@@ -102,9 +103,16 @@ function readCollapsed() {
 }
 
 function bootRoute() {
-  if (typeof window === "undefined") return { view: "tasks" as View, taskId: null as string | null, mockupId: null as string | null };
+  if (typeof window === "undefined") {
+    return {
+      view: "tasks" as View,
+      taskId: null as string | null,
+      mockupId: null as string | null,
+      receipt: null as string | null,
+    };
+  }
   const r = parsePath(window.location.pathname, window.location.search, window.location.hash);
-  return { view: r.view, taskId: r.taskId ?? null, mockupId: r.mockupId ?? null };
+  return { view: r.view, taskId: r.taskId ?? null, mockupId: r.mockupId ?? null, receipt: r.receipt ?? null };
 }
 
 export function App() {
@@ -116,6 +124,7 @@ export function App() {
   const [apiBroken, setApiBroken] = useState<string | null>(null);
   const [taskId, setTaskId] = useState<string | null>(boot.taskId);
   const [mockupId, setMockupId] = useState<string | null>(boot.mockupId);
+  const [receiptId, setReceiptId] = useState<string | null>(boot.receipt);
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const [livePulse, setLivePulse] = useState({ review: false, mockup: false });
 
@@ -152,6 +161,15 @@ export function App() {
     void refreshMe();
     // 只在进站时拉一次登录态
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const onPageHide = () => uploadStore.abortAll();
+    window.addEventListener("pagehide", onPageHide);
+    return () => {
+      window.removeEventListener("pagehide", onPageHide);
+      uploadStore.abortAll();
+    };
   }, []);
 
   const loggedIn = Boolean(me?.logged_in);
@@ -214,6 +232,7 @@ export function App() {
     setView(r.view);
     setTaskId(r.taskId ?? null);
     setMockupId(r.mockupId ?? null);
+    setReceiptId(r.receipt ?? null);
     const href = hrefOf(r);
     const pathNow = `${window.location.pathname.replace(/\/+$/, "") || "/"}${window.location.search}`;
     const dirtyQuery =
@@ -230,6 +249,7 @@ export function App() {
       setView(r.view);
       setTaskId(r.taskId ?? null);
       setMockupId(r.mockupId ?? null);
+      setReceiptId(r.receipt ?? null);
     }
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
@@ -263,12 +283,13 @@ export function App() {
   }
 
   function goRoute(
-    r: { view: View; taskId?: string | null; mockupId?: string | null },
+    r: AppRoute,
     mode: "push" | "replace" = "push",
   ) {
     setView(r.view);
     setTaskId(r.taskId ?? null);
     setMockupId(r.mockupId ?? null);
+    setReceiptId(r.receipt ?? null);
     const href = hrefOf(r);
     const cur = `${window.location.pathname.replace(/\/+$/, "") || "/"}${window.location.search}`;
     if (mode === "replace") {
@@ -361,17 +382,21 @@ export function App() {
         {view === "mockup" || view === "mockupNew" ? (
           <Suspense fallback={<PaneFallback label="打开打样台…" />}>
             <MockupDesk
+              canCreate={me.perms.includes("create")}
               openId={view === "mockupNew" ? null : mockupId}
               composing={view === "mockupNew"}
+              receiptId={receiptId}
               onOpenJob={(id) => goRoute({ view: "mockup", mockupId: id })}
               onBack={() => goRoute({ view: "mockup" })}
               onCompose={() => goRoute({ view: "mockupNew" })}
+              onResumeReceipt={(receipt) => goRoute({ view: "mockupNew", receipt })}
             />
           </Suspense>
         ) : null}
         {view === "history" ? (
           <Suspense fallback={<PaneFallback label="打开历史记录…" />}>
             <HistoryPage
+              canDelete={me.perms.includes("delete")}
               onOpenTask={(id) => goRoute({ view: "review", taskId: id })}
               onOpenMockup={(id) => goRoute({ view: "mockup", mockupId: id })}
             />
@@ -379,12 +404,17 @@ export function App() {
         ) : null}
         {view === "tasks" ? (
           <TasksPage
+            canCreate={me.perms.includes("create")}
             onCreate={() => goRoute({ view: "new" })}
             onOpen={(id) => goRoute({ view: "review", taskId: id })}
+            onResumeReceipt={(receipt) => goRoute({ view: "new", receipt })}
           />
         ) : null}
         {view === "new" ? (
           <NewTaskPage
+            canCreate={me.perms.includes("create")}
+            key={receiptId || "active"}
+            receiptId={receiptId}
             onCreated={(id) => goRoute({ view: "review", taskId: id })}
             onBack={() => goRoute({ view: "tasks" })}
           />

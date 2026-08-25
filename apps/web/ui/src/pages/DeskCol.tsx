@@ -28,16 +28,25 @@ export function DeskCol({ title, hint, rows, onOpen }: Props) {
         {rows.map((row) => (
           <button key={row.id} type="button" className="review-card" onClick={() => onOpen(row.id)}>
             <div className="review-card-top">
-              <span className="review-card-id">{deskShortId(row.id)}</span>
+              <span className="review-card-id">{row.shortId || deskShortId(row.id)}</span>
               <span className="review-card-actor">{row.actor || "—"}</span>
             </div>
             <div className="review-card-name">{row.title}</div>
             {row.live ? (
               <>
                 <div className="review-card-live">{row.live}</div>
-                <div className="review-card-bar" aria-hidden>
-                  <span />
-                </div>
+                {row.progress == null ? (
+                  <div className="review-card-bar" aria-hidden>
+                    <span />
+                  </div>
+                ) : (
+                  <progress
+                    className="upload-card-progress"
+                    max={100}
+                    value={Math.max(0, Math.min(100, row.progress))}
+                    aria-label={row.live}
+                  />
+                )}
               </>
             ) : null}
             {row.error ? <div className="review-card-err">{row.error}</div> : null}
@@ -54,7 +63,7 @@ export function DeskCol({ title, hint, rows, onOpen }: Props) {
         onCancel={() => setOpen(false)}
         footer={null}
         width={720}
-        destroyOnClose
+        destroyOnHidden
       >
         <Table<DeskCardRow>
           rowKey="id"

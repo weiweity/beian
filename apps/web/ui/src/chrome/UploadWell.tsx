@@ -37,7 +37,11 @@ export function UploadWell({
   }
 
   function onChange(e: ChangeEvent<HTMLInputElement>) {
-    take(e.target.files?.[0] || null, e.target);
+    const input = e.currentTarget;
+    const file = input.files?.[0] || null;
+    take(file, input);
+    // 浏览器不会为同一路径再次触发 change；取走 File 后清空即可安全重选。
+    input.value = "";
   }
 
   function onDrop(e: DragEvent<HTMLLabelElement>) {
