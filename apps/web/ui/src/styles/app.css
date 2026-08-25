@@ -613,6 +613,22 @@ html[data-theme="dark"] .side-item.is-on .side-icon {
   flex-direction: column;
 }
 
+.stage:has(.mockup-sheet),
+.stage:has(.mockup-desk) {
+  background: #ffffff;
+  color: #1c1a1f;
+}
+
+.stage:has(.mockup-sheet) .page-title,
+.stage:has(.mockup-desk) .page-title {
+  color: #1c1a1f;
+}
+
+.stage:has(.mockup-sheet) .page-lead,
+.stage:has(.mockup-desk) .page-lead {
+  color: #6b6572;
+}
+
 html[data-theme="dark"] .workspace {
   box-shadow: 0 8px 48px rgba(0, 0, 0, 0.4);
 }
@@ -631,7 +647,7 @@ html[data-theme="dark"] .workspace {
 
 .page-head {
   position: relative;
-  z-index: 9;
+  z-index: 81;
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
@@ -1980,7 +1996,7 @@ html[data-theme="dark"] .apple-slider::-moz-range-thumb {
   position: absolute;
   top: 12px;
   left: 12px;
-  z-index: 3;
+  z-index: 85;
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
@@ -2103,6 +2119,11 @@ html[data-diff="off"] .hit-box {
   max-height: calc(100% - 16px);
   overflow: hidden;
   isolation: isolate;
+  transition:
+    width 280ms var(--ease-gentle),
+    height 280ms var(--ease-gentle),
+    right 280ms var(--ease-gentle),
+    padding 280ms var(--ease-gentle);
   background:
     linear-gradient(
       165deg,
@@ -2164,6 +2185,86 @@ html[data-diff="off"] .hit-box {
 .notes.is-float > * {
   position: relative;
   z-index: 1;
+}
+
+.notes.is-float.is-busy {
+  transition: none;
+}
+
+.notes.is-float.is-shut {
+  padding: 8px 10px;
+}
+
+.notes.is-float.is-shut .notes-toolbar .field-label {
+  display: none;
+}
+
+.notes.is-float.is-shut .notes-toolbar {
+  justify-content: flex-end;
+}
+
+.notes.is-float.is-shut .notes-resize {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.notes-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  gap: 10px;
+  opacity: 1;
+  transition: opacity 180ms var(--ease-gentle);
+}
+
+.notes.is-float.is-shut .notes-body {
+  flex: 0;
+  height: 0;
+  min-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
+  visibility: hidden;
+}
+
+.notes-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+  color: var(--ink);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.notes-toggle:hover {
+  background: var(--accent-soft);
+}
+
+.notes-toggle-mark {
+  width: 8px;
+  height: 8px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg);
+  transition: transform 280ms var(--ease-gentle);
+}
+
+.notes.is-float.is-shut .notes-toggle-mark {
+  transform: rotate(-135deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .notes.is-float,
+  .notes-body,
+  .notes-toggle-mark {
+    transition: none;
+  }
 }
 
 html[data-theme="dark"] .notes.is-float {
@@ -2333,7 +2434,7 @@ html[data-theme="dark"] .notes.is-float {
   margin: 0;
   padding: 20px;
   border-radius: 20px;
-  background: #fff;
+  background: #ffffff;
   box-shadow: 0 22px 48px rgba(40, 24, 56, 0.16);
 }
 
@@ -2350,6 +2451,7 @@ html[data-theme="dark"] .notes.is-float {
   height: auto;
   max-height: calc(100dvh - 220px);
   object-fit: contain;
+  background: #ffffff;
 }
 
 .mockup-sheet-photo figcaption {
@@ -2363,7 +2465,7 @@ html[data-theme="dark"] .notes.is-float {
   min-height: 280px;
   border-radius: 16px;
   overflow: hidden;
-  background: var(--stage);
+  background: #ffffff;
   border: 1px solid var(--line);
 }
 
@@ -2371,6 +2473,8 @@ html[data-theme="dark"] .notes.is-float {
   width: 100%;
   height: calc(100dvh - 260px);
   min-height: 280px;
+  background: #ffffff;
+  --poster-color: #ffffff;
 }
 
 .mockup-sheet-glb .btn-ghost {

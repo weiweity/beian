@@ -155,21 +155,22 @@ def add_studio(job):
     world.use_nodes = True
     background = world.node_tree.nodes.get("Background")
     background.inputs["Color"].default_value = (1.0, 1.0, 1.0, 1.0)
-    background.inputs["Strength"].default_value = 0.62
+    # AgX + 负曝光会把 1.0 世界光压成灰。略抬强度，地/背板用自发光顶成白底。
+    background.inputs["Strength"].default_value = 1.35
 
     bpy.ops.mesh.primitive_plane_add(size=600, location=(0, 0, -0.8))
     floor = bpy.context.object
     floor.name = "White floor"
     floor_mat = bpy.data.materials.new("MAT_WhiteFloor")
-    floor_mat.diffuse_color = (0.95, 0.95, 0.95, 1)
+    floor_mat.diffuse_color = (1.0, 1.0, 1.0, 1)
     floor_mat.use_nodes = True
-    floor_mat.node_tree.nodes["Principled BSDF"].inputs["Base Color"].default_value = (0.96, 0.96, 0.96, 1)
-    floor_mat.node_tree.nodes["Principled BSDF"].inputs["Roughness"].default_value = 0.82
+    floor_mat.node_tree.nodes["Principled BSDF"].inputs["Base Color"].default_value = (1.0, 1.0, 1.0, 1)
+    floor_mat.node_tree.nodes["Principled BSDF"].inputs["Roughness"].default_value = 1.0
     floor_shader = floor_mat.node_tree.nodes["Principled BSDF"]
     if floor_shader.inputs.get("Emission Color"):
         floor_shader.inputs["Emission Color"].default_value = (1.0, 1.0, 1.0, 1.0)
     if floor_shader.inputs.get("Emission Strength"):
-        floor_shader.inputs["Emission Strength"].default_value = 3.0
+        floor_shader.inputs["Emission Strength"].default_value = 8.0
     floor.data.materials.append(floor_mat)
 
     bpy.ops.mesh.primitive_plane_add(size=520, location=(0, 130, 145), rotation=(math.radians(90), 0, 0))

@@ -3,10 +3,13 @@ import { describe, it } from "node:test";
 import {
   clampDockBox,
   clampDockPlace,
+  dockVisual,
   DOCK_DEFAULT_H,
   DOCK_DEFAULT_W,
   DOCK_MIN_H,
   DOCK_MIN_W,
+  DOCK_SHUT_H,
+  DOCK_SHUT_W,
   readBoxesOn,
   readDockBox,
   readDockOpen,
@@ -14,6 +17,7 @@ import {
   readPinsOn,
   resizeDockCorner,
   resizeDockHandle,
+  sidebarDockPlace,
   skipPackSheetField,
   writeBoxesOn,
   writeDockBox,
@@ -28,6 +32,7 @@ describe("reviewDock", () => {
     assert.equal(readPinsOn(null), true);
     assert.equal(readBoxesOn(null), true);
     assert.equal(readDockPlace(null).top, 104);
+    assert.equal(readDockPlace(null).right, 2400 - DOCK_DEFAULT_W - 20);
     assert.equal(readDockOpen({ getItem: () => "shut" }), false);
     assert.equal(readPinsOn({ getItem: () => "off" }), false);
     assert.equal(readBoxesOn({ getItem: () => "off" }), false);
@@ -144,6 +149,22 @@ describe("reviewDock", () => {
     const overSide = clampDockPlace({ top: 80, right: 2000 }, { w: 1200, h: 800 }, { w: 400, h: 300 });
     assert.equal(overSide.right, 792);
     assert.equal(overSide.top, 80);
+  });
+
+  it("parks the open dock on the left sidebar and keeps left when shutting", () => {
+    const room = { w: 1400, h: 900 };
+    const box = { w: 560, h: 520 };
+    const parked = sidebarDockPlace(room, box, 20);
+    assert.equal(parked.top, 104);
+    assert.equal(parked.right, 1400 - 560 - 20);
+    const shut = dockVisual(false, box, parked, room);
+    assert.equal(shut.box.w, DOCK_SHUT_W);
+    assert.equal(shut.box.h, DOCK_SHUT_H);
+    const openLeft = room.w - parked.right - box.w;
+    const shutLeft = room.w - shut.place.right - shut.box.w;
+    assert.equal(shutLeft, openLeft);
+    const shown = dockVisual(true, box, parked, room);
+    assert.deepEqual(shown, { box, place: parked });
   });
 
   it("skips pack-sheet fields", () => {

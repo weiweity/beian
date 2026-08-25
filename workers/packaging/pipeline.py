@@ -722,33 +722,68 @@ def _sheet_text(page: Any, origin: tuple[float, float], txt: str, size: float, c
             page.insert_text(origin, txt.encode("ascii", "replace").decode(), fontsize=size, color=color)
 
 
-def write_sheet_pdf(job: dict[str, Any]) -> None:
-    """两张白底合成一页 PDF。不依赖 Node / PPT 运行时。"""
-    import pymupdf
+def _fit_white_rgb(path: Path, box_w: int, box_h: int):
+    with Image.open(path) as src:
+        if src.mode in ("RGBA", "LA"):
+            im = src.convert("RGBA")
+            bg = Image.new("RGB", im.size, (255, 255, 255))
+            bg.paste(im, mask=im.getchannel("A"))
+            im = bg
+        else:
+            im = src.convert("RGB")
+        im.thumbnail((box_w, box_h), Image.Resampling.LANCZOS)
+        canvas = Image.new("RGB", (box_w, box_h), (255, 255, 255))
+        canvas.paste(im, ((box_w - im.width) // 2, (box_h - im.height) // 2))
+        return canvas
 
+
+def _write_sheet_pdf_pillow(dest: Path, front: str, back: str | None) -> None:
+    page = Image.new("RGB", (1280, 720), (255, 255, 255))
+    page.paste(_fit_white_rgb(Path(front), 590, 620), (36, 68))
+    if back and Path(back).is_file():
+        page.paste(_fit_white_rgb(Path(back), 590, 620), (654, 68))
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(".pdf.part")
+    page.save(tmp, "PDF", resolution=150.0)
+    tmp.replace(dest)
+
+
+def write_sheet_pdf(job: dict[str, Any]) -> None:
+    """两张白底合成一页 PDF。pymupdf 先（对照同一 .venv），写不出再用 Pillow。不新装包。"""
     outputs = job.setdefault("outputs", {})
     front = outputs.get("front_right")
     back = outputs.get("back_left")
     if not front or not Path(front).is_file():
         return
     dest = Path(job["project_dir"]) / f"{job.get('code') or 'pack'}_white_sheet.pdf"
-    doc = pymupdf.open()
     try:
-        page = doc.new_page(width=1280, height=720)
-        title = str(job.get("display_name") or job.get("code") or "打样单")
-        _sheet_text(page, (36, 32), title[:80], 16, (0.11, 0.10, 0.12))
-        _sheet_text(page, (36, 52), "正面 + 侧面", 11, (0.35, 0.35, 0.4))
-        _sheet_text(page, (654, 52), "反面 + 侧面", 11, (0.35, 0.35, 0.4))
-        page.insert_image(pymupdf.Rect(36, 68, 626, 688), stream=Path(front).read_bytes(), keep_proportion=True)
-        if back and Path(back).is_file():
-            page.insert_image(pymupdf.Rect(654, 68, 1244, 688), stream=Path(back).read_bytes(), keep_proportion=True)
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        tmp = dest.with_suffix(".pdf.part")
-        doc.save(str(tmp))
-        tmp.replace(dest)
-    finally:
-        doc.close()
-    outputs["sheet_pdf"] = str(dest)
+        import pymupdf
+
+        doc = pymupdf.open()
+        try:
+            page = doc.new_page(width=1280, height=720)
+            page.draw_rect(page.rect, color=None, fill=(1, 1, 1))
+            title = str(job.get("display_name") or job.get("code") or "打样单")
+            _sheet_text(page, (36, 32), title[:80], 16, (0.11, 0.10, 0.12))
+            _sheet_text(page, (36, 52), "正面 + 侧面", 11, (0.35, 0.35, 0.4))
+            _sheet_text(page, (654, 52), "反面 + 侧面", 11, (0.35, 0.35, 0.4))
+            page.insert_image(pymupdf.Rect(36, 68, 626, 688), stream=Path(front).read_bytes(), keep_proportion=True)
+            if back and Path(back).is_file():
+                page.insert_image(pymupdf.Rect(654, 68, 1244, 688), stream=Path(back).read_bytes(), keep_proportion=True)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            tmp = dest.with_suffix(".pdf.part")
+            doc.save(str(tmp))
+            tmp.replace(dest)
+        finally:
+            doc.close()
+    except Exception as err:
+        if dest.is_file() and dest.stat().st_size > 0:
+            print(f"打样单 PDF pymupdf 告警已落盘：{err}", file=sys.stderr)
+        else:
+            print(f"打样单 PDF pymupdf 失败，改用 Pillow：{err}", file=sys.stderr)
+            _write_sheet_pdf_pillow(dest, str(front), str(back) if back else None)
+    if dest.is_file() and dest.stat().st_size > 0:
+        outputs["sheet_pdf"] = str(dest)
 
 
 def _xml_text(value: str) -> str:
