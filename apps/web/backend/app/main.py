@@ -56,20 +56,18 @@ DATA: Path
 TASKS: Path
 UPLOADS: Path
 SAMPLES: Path
-FRONTEND: Path
 UI_DIST: Path
 MAX_UPLOAD_MB: int
 
 
 def init_paths(data_dir: Path | None = None) -> Path:
     """初始化遗留 HTTP 壳，并复用 worker 的数据目录规则。"""
-    global DATA, TASKS, UPLOADS, SAMPLES, FRONTEND, UI_DIST, MAX_UPLOAD_MB
+    global DATA, TASKS, UPLOADS, SAMPLES, UI_DIST, MAX_UPLOAD_MB
     DATA = compare_core.init_paths(data_dir)
     TASKS = compare_core.TASKS
     UPLOADS = compare_core.UPLOADS
     samples = os.environ.get("WB_SAMPLES_DIR") or config.get("WB_SAMPLES_DIR")
     SAMPLES = Path(samples).expanduser() if samples else Path()
-    FRONTEND = ROOT.parent / "frontend"
     UI_DIST = ROOT.parent / "ui" / "dist"
     try:
         MAX_UPLOAD_MB = int(os.environ.get("WB_MAX_UPLOAD_MB") or config.get("WB_MAX_UPLOAD_MB") or "200")
@@ -2093,9 +2091,6 @@ pre{{white-space:pre-wrap;margin:0;font-size:12px}}
     return HTMLResponse(html)
 
 
-if FRONTEND.exists():
-    app.mount("/static", StaticFiles(directory=str(FRONTEND / "static")), name="static")
-
 _brand_dir = ROOT.parent / "ui" / "public" / "brand"
 if _brand_dir.is_dir():
     app.mount("/brand", StaticFiles(directory=str(_brand_dir)), name="brand")
@@ -2107,7 +2102,7 @@ if _ui_assets.is_dir():
 
 @app.get("/")
 def index():
-    """验收入口是 React 构建，不要静默回旧 frontend/。"""
+    """验收入口只使用 React 构建。"""
     built = UI_DIST / "index.html"
     if built.is_file():
         return FileResponse(built)

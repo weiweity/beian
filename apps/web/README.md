@@ -3,7 +3,7 @@
 对外 HTTP 是 `server/`（Hono + TypeScript，:8787）。  
 对照引擎在 `backend/`（Python worker）。  
 界面在 `ui/`（React + Ant Design 6）。  
-`frontend/` 已退役。
+旧 `frontend/` 已删除；网页入口只有 `ui/` + Hono `server/`。
 
 ## 启动
 
@@ -41,5 +41,4 @@ chmod 600 backend/.env.baidu backend/.env.secrets
 ui/          React 审稿台 / 打样台 / 历史 / 设置（WaitCard；核对页 CSS transform 缩放 + rAF 拖动，不上 OpenSeadragon；核对窗浮在整页最上面含侧栏，进页展开叠在左侧栏；可随意拖不挤页图；窗不盖签字；收起有动画，边框八向缩放；打样台只交稿，点进度进打样单一屏三图；每张图右上角下载；页头「下载+PPT」；点下载底部提示不挡操作；GLB 全屏居中；打样台/打样单主区白底深字，GLB 中性环境；地址 `/reviewup` `/reviewup/new` `/review/:id` `/mockup` `/mockup/new` `/mockup/:id` `/history` `/settings`；离开后看板/侧栏/历史记录仍显示阶段）
 server/      TypeScript HTTP（jobs.ts 管对照/对红/打样入队；`/brand/*` 挂 `ui/public`）
 backend/     Python worker + 测试（cli 不写任务 JSON）
-frontend/    退役
 ```
