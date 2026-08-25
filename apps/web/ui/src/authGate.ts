@@ -60,8 +60,9 @@ export function isLocalDevHost(host: string): boolean {
   return port === "5173";
 }
 
-/** HTML / empty body from /api: Vite 没转到 :8787，或公网没回 JSON。JSON 404 不当这个。 */
+/** HTML / empty body from /api: Vite 没转到 :8787，或公网没回 JSON。JSON 404 / 413 不当这个。 */
 export function describeBrokenApi(_status: number, contentType: string, host = ""): string | null {
+  if (_status === 413) return null;
   const ct = contentType.toLowerCase();
   if (ct.includes("application/json")) return null;
   if (!(ct.includes("text/html") || ct === "")) return null;

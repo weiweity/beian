@@ -1,5 +1,6 @@
 import { API_DOWN_LOCAL } from "./apiHint";
 import { describeBrokenApi } from "./authGate";
+import { UPLOAD_TOO_LARGE } from "./uploadLimit";
 
 function apiHost(): string {
   return typeof window === "undefined" ? "" : window.location.host;
@@ -32,6 +33,9 @@ async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
     headers,
   });
   const ct = res.headers.get("content-type") || "";
+  if (res.status === 413) {
+    throw new ApiError(413, UPLOAD_TOO_LARGE, false);
+  }
   const hint = describeBrokenApi(res.status, ct, apiHost());
   if (!res.ok) {
     let detail = res.statusText;

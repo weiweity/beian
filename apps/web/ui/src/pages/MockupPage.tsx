@@ -7,6 +7,7 @@ import { WaitCard } from "../chrome/WaitCard";
 import { mockupFailReason, mockupFailTag } from "./mockupError";
 import { liveJobLine, shouldShowWaitCard } from "./waitCard";
 import { stemFromFilename } from "./stemName";
+import { UPLOAD_TOO_LARGE, bytesTooLarge } from "../uploadLimit";
 import { HUD_MS, downloadHudLine, missingPptHud } from "./mockupHud";
 import {
   enterElementFullscreen,
@@ -110,6 +111,10 @@ export function MockupPage({ onOpenJob }: DeskProps) {
     if (busy) return;
     if (!file) {
       message.warning("先选 .ai 稿件");
+      return;
+    }
+    if (bytesTooLarge(file.size)) {
+      message.error(UPLOAD_TOO_LARGE);
       return;
     }
     const fd = new FormData();

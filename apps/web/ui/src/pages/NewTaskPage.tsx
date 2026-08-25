@@ -4,6 +4,7 @@ import { api } from "../api";
 import { UploadWell } from "../chrome/UploadWell";
 import { WaitCard } from "../chrome/WaitCard";
 import { stemFromFilename } from "./stemName";
+import { UPLOAD_TOO_LARGE, bytesTooLarge } from "../uploadLimit";
 
 type Props = { onCreated: (id: string) => void; onBack: () => void };
 
@@ -23,6 +24,10 @@ export function NewTaskPage({ onCreated, onBack }: Props) {
     }
     if (!excel || !pdf) {
       message.warning("请同时选择 Excel 和包装 PDF。");
+      return;
+    }
+    if (bytesTooLarge(excel.size, pdf.size)) {
+      message.error(UPLOAD_TOO_LARGE);
       return;
     }
     const fd = new FormData();

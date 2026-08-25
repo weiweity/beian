@@ -177,4 +177,8 @@ describe("describeBrokenApi", () => {
   it("leaves non-html bodies to the JSON/detail path", () => {
     assert.equal(describeBrokenApi(502, "text/plain"), null);
   });
+
+  it("does not treat a Cloudflare 413 HTML page as a dead API", () => {
+    assert.equal(describeBrokenApi(413, "text/html", "www.jianghua.site"), null);
+  });
 });
