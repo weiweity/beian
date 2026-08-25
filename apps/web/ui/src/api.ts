@@ -206,8 +206,6 @@ export const api = {
   tasks: (q?: string) =>
     request<TaskSummary[]>(q ? `/api/tasks?q=${encodeURIComponent(q)}` : "/api/tasks"),
   task: (id: string) => request<TaskDetail>(`/api/tasks/${id}`),
-  uploadExcelPdf: (fd: FormData) =>
-    request<TaskDetail>("/api/tasks/upload", { method: "POST", body: fd }),
   stageUpload: (fd: FormData, onProgress?: (pct: number) => void) =>
     uploadWithProgress<UploadReceipt>("/api/uploads", fd, onProgress),
   startTask: (body: { receipt: string; product_name: string; title?: string; pack_surface?: string }) =>
@@ -226,16 +224,10 @@ export const api = {
     }),
   rework: (id: string, fd: FormData) =>
     request<TaskDetail>(`/api/tasks/${id}/rework`, { method: "POST", body: fd }),
-  createMockup: (fd: FormData) => request<MockupJob>("/api/mockups", { method: "POST", body: fd }),
   mockups: () => request<MockupJob[]>("/api/mockups"),
   mockup: (id: string) => request<MockupJob>(`/api/mockups/${id}`),
   deleteTask: (id: string) => request<{ ok: boolean }>(`/api/tasks/${id}`, { method: "DELETE" }),
   deleteMockup: (id: string) => request<{ ok: boolean }>(`/api/mockups/${id}`, { method: "DELETE" }),
-  loginDisplay: (display_name: string) =>
-    request<{ token?: string }>("/api/auth/login", {
-      method: "POST",
-      body: JSON.stringify({ display_name }),
-    }),
   settings: () => request<SettingsView>("/api/settings"),
   saveSettings: (values: Record<string, string>) =>
     request<SettingsView & { restart?: boolean }>("/api/settings", {

@@ -16,6 +16,28 @@ const { publicMockup, saveMockup } = await import("./mockup.js");
 
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
+async function stageAi(token: string, name = "art.ai"): Promise<string> {
+  const fd = new FormData();
+  fd.set("file", new File([Buffer.from("%PDF-1.4\n")], name, { type: "application/postscript" }));
+  const res = await app.request("/api/uploads", {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}` },
+    body: fd,
+  });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { receipt?: string };
+  assert.ok(body.receipt);
+  return body.receipt;
+}
+
+function startMockup(token: string, receipt: string) {
+  return app.request("/api/mockups/start", {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ receipt, title: "打样" }),
+  });
+}
+
 function seedOwnedFile(id: string, key: string, name: string, buf: Buffer, owner = "籽烨") {
   const dir = join(DATA_DIR, "mockups", id);
   mkdirSync(dir, { recursive: true });
@@ -181,13 +203,8 @@ describe("mockup post", { concurrency: false }, () => {
     process.env.PATH = "/tmp/beian-no-blender-bin";
     try {
       const sess = issueSession("籽烨", "reviewer", "ou_mockup_post_412", "feishu");
-      const fd = new FormData();
-      fd.set("file", new File([Buffer.from("%PDF-1.4\n")], "art.ai", { type: "application/postscript" }));
-      const res = await app.request("/api/mockups", {
-        method: "POST",
-        headers: { authorization: `Bearer ${sess.token}` },
-        body: fd,
-      });
+      const receipt = await stageAi(sess.token);
+      const res = await startMockup(sess.token, receipt);
       assert.equal(res.status, 412);
       const body = (await res.json()) as { detail?: string };
       assert.match(String(body.detail || ""), /Blender/);
@@ -205,13 +222,8 @@ describe("mockup post", { concurrency: false }, () => {
     delete process.env.ILLUSTRATOR_EXECUTABLE;
     try {
       const sess = issueSession("籽烨", "reviewer", "ou_mockup_post_ai412", "feishu");
-      const fd = new FormData();
-      fd.set("file", new File([Buffer.from("%PDF-1.4\n")], "art.ai", { type: "application/postscript" }));
-      const res = await app.request("/api/mockups", {
-        method: "POST",
-        headers: { authorization: `Bearer ${sess.token}` },
-        body: fd,
-      });
+      const receipt = await stageAi(sess.token);
+      const res = await startMockup(sess.token, receipt);
       assert.equal(res.status, 412);
       const body = (await res.json()) as { detail?: string };
       assert.match(String(body.detail || ""), /Illustrator/);
@@ -232,14 +244,14 @@ describe("mockup post", { concurrency: false }, () => {
       const sess = issueSession("籽烨", "reviewer", "ou_mockup_post_nofile", "feishu");
       const fd = new FormData();
       fd.set("note", "no-file");
-      const res = await app.request("/api/mockups", {
+      const res = await app.request("/api/uploads", {
         method: "POST",
         headers: { authorization: `Bearer ${sess.token}` },
         body: fd,
       });
       assert.equal(res.status, 400);
       const body = (await res.json()) as { detail?: string };
-      assert.match(String(body.detail || ""), /\.ai/);
+      assert.match(String(body.detail || ""), /没有文件/);
     } finally {
       if (prevBin !== undefined) process.env.BLENDER_EXECUTABLE = prevBin;
       else delete process.env.BLENDER_EXECUTABLE;
@@ -257,7 +269,7 @@ describe("mockup post", { concurrency: false }, () => {
       const sess = issueSession("籽烨", "reviewer", "ou_mockup_post_pdf", "feishu");
       const fd = new FormData();
       fd.set("file", new File([Buffer.from("%PDF-1.4\n")], "art.pdf", { type: "application/pdf" }));
-      const res = await app.request("/api/mockups", {
+      const res = await app.request("/api/uploads", {
         method: "POST",
         headers: { authorization: `Bearer ${sess.token}` },
         body: fd,
@@ -287,14 +299,9 @@ describe("mockup post", { concurrency: false }, () => {
     });
     try {
       const sess = issueSession("籽烨", "reviewer", "ou_mockup_post_ok", "feishu");
-      const fd = new FormData();
-      fd.set("file", new File([Buffer.from("%PDF-1.4\n")], "art.ai", { type: "application/postscript" }));
+      const receipt = await stageAi(sess.token);
       const started = Date.now();
-      const res = await app.request("/api/mockups", {
-        method: "POST",
-        headers: { authorization: `Bearer ${sess.token}` },
-        body: fd,
-      });
+      const res = await startMockup(sess.token, receipt);
       const elapsed = Date.now() - started;
       assert.equal(res.status, 200);
       assert.ok(elapsed < 2000, `mockup POST waited ${elapsed}ms`);

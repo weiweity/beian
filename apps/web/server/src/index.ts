@@ -373,60 +373,6 @@ app.post("/api/mockups/start", async (c) => {
   return c.json(decorateQueueAhead([publicMockup(getJob(id) || job)])[0]);
 });
 
-app.post("/api/tasks/upload", async (c) => {
-  const s = need(c, "create");
-  const body = await c.req.parseBody({ all: true });
-  const product = String(body.product_name || "")
-    .replace(/[\u0000-\u001f]/g, "")
-    .trim()
-    .slice(0, 80);
-  if (!product) throw new HTTPException(400, { message: "品名必填" });
-  const excel = body.excel;
-  const pdf = body.pdf;
-  if (!(excel instanceof File) || !(pdf instanceof File)) {
-    throw new HTTPException(400, { message: "需要 excel + 包装 PDF" });
-  }
-  const tid = newTid();
-  const dir = join(DATA_DIR, "uploads", tid);
-  mkdirSync(dir, { recursive: true });
-  const excelPath = join(dir, "source.xlsx");
-  const pdfPath = join(dir, "artwork.pdf");
-  const excelBuf = Buffer.from(await excel.arrayBuffer());
-  const pdfBuf = Buffer.from(await pdf.arrayBuffer());
-  const limit = maxUploadBytes();
-  if (excelBuf.length > limit || pdfBuf.length > limit) {
-    throw new HTTPException(400, { message: `文件超过 ${Math.round(limit / 1024 / 1024)} MB` });
-  }
-  if (excelBuf.length < 4 || excelBuf[0] !== 0x50 || excelBuf[1] !== 0x4b) {
-    throw new HTTPException(400, { message: "Excel 必须是 .xlsx（ZIP 格式）" });
-  }
-  if (pdfBuf.length < 5 || pdfBuf.subarray(0, 4).toString("utf8") !== "%PDF") {
-    throw new HTTPException(400, { message: "不是有效的 PDF" });
-  }
-  writeFileSync(excelPath, excelBuf);
-  writeFileSync(pdfPath, pdfBuf);
-  const title = String(body.title || product);
-  saveTask({
-    id: tid,
-    title,
-    product_name: product,
-    type: "excel_pdf",
-    status: "comparing",
-    created_at: nowIso(),
-    owner: viewerFromSession(s).id,
-    created_by: s.display_name,
-    pack_surface: String(body.pack_surface || "carton"),
-    job_kind: "compare",
-    job_status: "queued",
-  });
-  try {
-    enqueue({ kind: "compare", id: tid });
-  } catch (err) {
-    console.warn("enqueue compare failed:", err instanceof Error ? err.message : err);
-  }
-  return c.json(publicTask(loadTask(tid), viewerFromSession(s)));
-});
-
 app.post("/api/tasks/:tid/decision", async (c) => {
   const s = need(c, "decide");
   const tid = assertTid(c.req.param("tid"));
@@ -652,39 +598,6 @@ app.post("/api/settings/billing/refresh", async (c) => {
 app.get("/api/mockups", (c) => {
   const s = need(c, "read");
   return c.json(decorateQueueAhead(listJobsFor(viewerFromSession(s)).map(publicMockup)));
-});
-
-app.post("/api/mockups", async (c) => {
-  const s = need(c, "create");
-  try {
-    assertBlenderReady();
-    assertIllustratorReady();
-  } catch (e) {
-    boom(e);
-  }
-  const body = await c.req.parseBody();
-  const file = body.file || body.pdf || body.source;
-  if (!(file instanceof File)) throw new HTTPException(400, { message: "需要 .ai 稿件" });
-  if (!/\.ai$/i.test(file.name)) {
-    throw new HTTPException(400, { message: "只收 .ai 稿件。" });
-  }
-  const id = newTid();
-  const dir = join(DATA_DIR, "mockups", id);
-  mkdirSync(dir, { recursive: true });
-  const src = join(dir, file.name.replace(/[^a-zA-Z0-9._-]/g, "_") || "art.ai");
-  const buf = Buffer.from(await file.arrayBuffer());
-  if (buf.length > maxUploadBytes()) {
-    throw new HTTPException(400, { message: `文件超过 ${Math.round(maxUploadBytes() / 1024 / 1024)} MB` });
-  }
-  writeFileSync(src, buf);
-  const title = String(body.title || body.product_name || "").trim();
-  const job = queueMockup({ id, sourcePath: src, ownerId: viewerFromSession(s).id, displayName: s.display_name, title });
-  try {
-    enqueue({ kind: "mockup", id });
-  } catch (err) {
-    console.warn("enqueue mockup failed:", err instanceof Error ? err.message : err);
-  }
-  return c.json(decorateQueueAhead([publicMockup(getJob(id) || job)])[0]);
 });
 
 app.get("/api/mockups/:id", (c) => {

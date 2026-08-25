@@ -600,13 +600,22 @@ describe("review http", () => {
     });
     try {
       const fd = new FormData();
-      fd.set("product_name", "挂机精华");
-      fd.set("title", "挂机精华");
-      fd.set("pack_surface", "carton");
       fd.set("excel", new File([Buffer.from([0x50, 0x4b, 0x03, 0x04])], "a.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
       fd.set("pdf", new File([Buffer.from("%PDF-1.4\n")], "a.pdf", { type: "application/pdf" }));
+      const upload = await app.request("/api/uploads", { method: "POST", headers: authHeader(), body: fd });
+      assert.equal(upload.status, 200);
+      const staged = (await upload.json()) as { receipt?: string };
       const started = Date.now();
-      const res = await app.request("/api/tasks/upload", { method: "POST", headers: authHeader(), body: fd });
+      const res = await app.request("/api/tasks/start", {
+        method: "POST",
+        headers: { ...authHeader(), "content-type": "application/json" },
+        body: JSON.stringify({
+          receipt: staged.receipt,
+          product_name: "挂机精华",
+          title: "挂机精华",
+          pack_surface: "carton",
+        }),
+      });
       const elapsed = Date.now() - started;
       assert.equal(res.status, 200);
       assert.ok(elapsed < 2000, `upload waited ${elapsed}ms`);
