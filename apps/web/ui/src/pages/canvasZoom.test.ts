@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { clampScale, panBy, resetZoom, zoomAt, zoomCss, zoomToBox } from "./canvasZoom.js";
+import { clampScale, fittedPage, panBy, resetZoom, zoomAt, zoomCss, zoomToBox } from "./canvasZoom.js";
 
 describe("clampScale", () => {
   it("stays between 1 and 6", () => {
@@ -54,16 +54,50 @@ describe("zoomToBox", () => {
   });
 
   it("uses page aspect for a tall page", () => {
-    const z = zoomToBox(
-      { left: 50, top: 400, width: 100, height: 100 },
-      { width: 1000, height: 2000 },
-      { width: 400, height: 400 },
-      0.5,
-    );
+    const page = { width: 1000, height: 2000 };
+    const view = { width: 400, height: 400 };
+    const z = zoomToBox({ left: 50, top: 400, width: 100, height: 100 }, page, view, 0.5);
     assert.ok(Number.isFinite(z.x) && Number.isFinite(z.y));
-    const imgH = 400 * (2000 / 1000);
-    const imgCy = (450 / 2000) * imgH;
-    assert.equal(Math.round(z.y + imgCy * z.scale), 200);
+    const laid = fittedPage(page, view);
+    const imgCx = (100 / 1000) * laid.imgW;
+    const imgCy = (450 / 2000) * laid.imgH;
+    assert.equal(Math.round(z.x + laid.offsetX + imgCx * z.scale), 200);
+    assert.equal(Math.round(z.y + laid.offsetY + imgCy * z.scale), 200);
+  });
+
+  it("parks a tall page on the right of the view", () => {
+    const laid = fittedPage({ width: 1000, height: 2000 }, { width: 400, height: 400 });
+    assert.equal(laid.imgW, 200);
+    assert.equal(laid.imgH, 400);
+    assert.equal(laid.offsetX, 200);
+  });
+
+  it("centers a box on a wide parked page", () => {
+    const page = { width: 2000, height: 1000 };
+    const view = { width: 400, height: 400 };
+    const z = zoomToBox({ left: 400, top: 50, width: 100, height: 100 }, page, view, 0.5);
+    const laid = fittedPage(page, view);
+    const imgCx = (450 / 2000) * laid.imgW;
+    const imgCy = (100 / 1000) * laid.imgH;
+    assert.equal(Math.round(z.x + laid.offsetX + imgCx * z.scale), 200);
+    assert.equal(Math.round(z.y + laid.offsetY + imgCy * z.scale), 200);
+  });
+
+  it("centers a wide page with no left offset", () => {
+    const laid = fittedPage({ width: 2000, height: 1000 }, { width: 400, height: 400 });
+    assert.equal(laid.imgW, 400);
+    assert.equal(laid.imgH, 200);
+    assert.equal(laid.offsetX, 0);
+    assert.equal(laid.offsetY, 100);
+  });
+
+  it("returns zeros without real sizes", () => {
+    assert.deepEqual(fittedPage({ width: 1, height: 2000 }, { width: 400, height: 400 }), {
+      imgW: 0,
+      imgH: 0,
+      offsetX: 0,
+      offsetY: 0,
+    });
   });
 
   it("does nothing without real sizes", () => {
