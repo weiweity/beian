@@ -24,10 +24,9 @@ if [[ ! -f "$BACKEND/.env.secrets" ]]; then
 fi
 
 cd "$ROOT"
-if [[ ! -d "$SERVER/node_modules" ]]; then
-  npm install
-fi
-if [[ ! -d "$ROOT/apps/web/ui/node_modules/@google" ]]; then
+if [[ ! -x "$ROOT/node_modules/.bin/tsx" \
+  || ! -x "$ROOT/apps/web/ui/node_modules/.bin/vite" \
+  || ! -d "$ROOT/node_modules/@google/model-viewer" ]]; then
   npm install
 fi
 

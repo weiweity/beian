@@ -22,7 +22,16 @@ import {
   type Task,
   type Viewer,
 } from "./tasks.js";
-import { compareTask, killTree, reworkTask, runPackaging, type RunPythonResult } from "./workers.js";
+import {
+  compareTask,
+  inspectWorkerProcess,
+  killTree,
+  reworkTask,
+  runPackaging,
+  type RunPythonResult,
+  type WorkerProcessIdentity,
+  type WorkerProcessState,
+} from "./workers.js";
 import { rasterAiFile } from "./aiRaster.js";
 
 const STAGE_LABEL: Record<string, string> = {
@@ -74,6 +83,7 @@ export type JobsTestHooks = {
   runRaster?: (opts: { source: string; outDir: string }) => Promise<{ ok: boolean; png?: string; message: string }>;
   notify?: typeof notifyJobFinished;
   killTree?: typeof killTree;
+  inspectWorker?: typeof inspectWorkerProcess;
   bookkeeping?: typeof compareBookkeeping;
 };
 
@@ -163,12 +173,12 @@ export function reclaimOnBoot(): void {
   for (const job of loadAllMockups()) reclaimMockup(job);
   for (const task of loadAllTasks()) {
     if (task.notify_job_id && !task.notify_sent && (task.job_status === "succeeded" || task.job_status === "failed")) {
-      void fireTaskNotify(task, task.job_status === "succeeded");
+      launchNotify(`task ${task.id}`, fireTaskNotify(task, task.job_status === "succeeded"));
     }
   }
   for (const job of loadAllMockups()) {
     if (job.notify_job_id && !job.notify_sent && (job.job_status === "succeeded" || job.job_status === "failed")) {
-      void fireMockupNotify(job, job.job_status === "succeeded");
+      launchNotify(`mockup ${job.id}`, fireMockupNotify(job, job.job_status === "succeeded"));
     }
   }
   tryStart();
@@ -410,7 +420,7 @@ function finishOcr(id: string, startedAt: string, result: RunPythonResult): void
   task.job_status = "succeeded";
   task.job_error = undefined;
   saveTask(task);
-  void fireTaskNotify(task, true);
+  launchNotify(`task ${task.id}`, fireTaskNotify(task, true));
   (hooks.bookkeeping || compareBookkeeping)(true, { task_id: task.id, actor: taskOwner(task) });
   tryStart();
 }
@@ -428,7 +438,7 @@ function markOcrFailed(task: Task, publicMsg: string): void {
   delete task.job_pid;
   attachRenderedPages(task);
   saveTask(task);
-  void fireTaskNotify(task, false);
+  launchNotify(`task ${task.id}`, fireTaskNotify(task, false));
   (hooks.bookkeeping || compareBookkeeping)(false, { task_id: task.id, actor: taskOwner(task) });
   tryStart();
 }
@@ -503,7 +513,7 @@ function finishMockup(id: string, startedAt: string, result: RunPythonResult): v
   job.job_status = "succeeded";
   job.job_error = undefined;
   saveMockup(job);
-  void fireMockupNotify(job, true);
+  launchNotify(`mockup ${job.id}`, fireMockupNotify(job, true));
   tryStart();
 }
 
@@ -515,7 +525,7 @@ function markMockupFailed(job: MockupJob, msg: string): void {
   job.job_finished_at = job.job_finished_at || nowIso();
   delete job.job_pid;
   saveMockup(job);
-  void fireMockupNotify(job, false);
+  launchNotify(`mockup ${job.id}`, fireMockupNotify(job, false));
   tryStart();
 }
 
@@ -618,7 +628,8 @@ async function fireTaskNotify(task: Task, ok: boolean): Promise<void> {
   if (task.notify_sent) return;
   const key = task.notify_job_id || `${task.id}:${task.job_kind}:${task.job_started_at}`;
   if (!task.notify_job_id) {
-    const cur = loadTask(task.id);
+    const cur = loadAllTasks().find((candidate) => candidate.id === task.id);
+    if (!cur) return;
     if (!cur.notify_job_id) {
       cur.notify_job_id = key;
       cur.notify_sent = false;
@@ -634,13 +645,22 @@ async function fireTaskNotify(task: Task, ok: boolean): Promise<void> {
     error: task.job_error,
   });
   if (r.ok || r.skipped) {
-    const fresh = loadTask(task.id);
+    // 已结束任务允许在通知飞行期间删除；晚到的通知只能放弃收尾，不能复活 JSON。
+    const fresh = loadAllTasks().find((candidate) => candidate.id === task.id);
+    if (!fresh) return;
     if (fresh.notify_job_id && fresh.notify_job_id !== key) return;
     fresh.notify_sent = true;
     saveTask(fresh);
   } else {
     console.warn("feishu job notify failed:", r.reason);
   }
+}
+
+function launchNotify(label: string, operation: Promise<void>): void {
+  void operation.catch((err: unknown) => {
+    const cause = err instanceof Error ? err.message : String(err);
+    console.warn(`jobs ${label}: 通知收尾异常。cause=${cause} fix=保留作业结果，启动时重试通知`);
+  });
 }
 
 async function fireMockupNotify(job: MockupJob, ok: boolean): Promise<void> {
@@ -689,8 +709,21 @@ function reclaimTask(task: Task): void {
   }
   if (task.job_status === "queued") return;
   if (task.job_status !== "running") return;
-  const killer = hooks.killTree || killTree;
-  if (task.job_pid) killer(task.job_pid, true);
+  const kind = task.job_kind === "rework" ? "rework" : "compare";
+  if (!clearPersistedWorker(task.job_pid, { kind, id: task.id })) {
+    task.job_status = "failed";
+    task.job_error = "对照中断";
+    task.job_finished_at = nowIso();
+    if (task.job_kind === "rework") task.status = String(task.status_before_job || "pending_review");
+    else {
+      task.status = "compare_failed";
+      task.error = "对照中断";
+    }
+    delete task.job_pid;
+    attachRenderedPages(task);
+    saveTask(task);
+    return;
+  }
   if (timedOut(task.job_started_at, OCR_TIMEOUT_MS)) {
     task.job_status = "failed";
     task.job_error = "超时";
@@ -737,8 +770,16 @@ function reclaimMockup(job: MockupJob): void {
   if (job.status === "failed" && job.job_finished_at) return;
   if (job.job_status === "queued") return;
   if (job.job_status !== "running") return;
-  const killer = hooks.killTree || killTree;
-  if (job.job_pid) killer(job.job_pid, true);
+  if (!clearPersistedWorker(job.job_pid, { kind: "mockup", id: job.id })) {
+    job.status = "failed";
+    job.job_status = "failed";
+    job.job_error = "打样中断";
+    job.error = "打样中断";
+    job.job_finished_at = nowIso();
+    delete job.job_pid;
+    saveMockup(job);
+    return;
+  }
   if (timedOut(job.job_started_at, MOCKUP_TIMEOUT_MS)) {
     job.status = "failed";
     job.job_status = "failed";
@@ -765,6 +806,37 @@ function reclaimMockup(job: MockupJob): void {
   job.job_finished_at = nowIso();
   delete job.job_pid;
   saveMockup(job);
+}
+
+/** A persisted PID is never authority. Retry only after absence or confirmed termination. */
+function clearPersistedWorker(pid: number | undefined, expected: WorkerProcessIdentity): boolean {
+  if (!pid) return true;
+  const inspect = hooks.inspectWorker || inspectWorkerProcess;
+  const probe = (): WorkerProcessState => {
+    try {
+      return inspect(pid, expected);
+    } catch {
+      return "unknown";
+    }
+  };
+  const before = probe();
+  if (before === "missing") return true;
+  if (before !== "owned") {
+    console.warn(
+      `jobs ${expected.id}: 不接管持久化 PID ${pid}。cause=${before === "other" ? "PID 已属于其他进程" : "无法核验进程归属"} fix=不杀进程且不自动重跑`,
+    );
+    return false;
+  }
+  try {
+    (hooks.killTree || killTree)(pid, true);
+  } catch {
+    console.warn(`jobs ${expected.id}: 已确认 worker 但终止失败。cause=killTree 抛错 fix=不自动重跑`);
+    return false;
+  }
+  const after = probe();
+  if (after === "missing" || after === "other") return true;
+  console.warn(`jobs ${expected.id}: worker 终止后仍无法确认退出。cause=${after} fix=不自动重跑`);
+  return false;
 }
 
 function timedOut(started: string | undefined, ms: number): boolean {

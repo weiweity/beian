@@ -35,7 +35,6 @@ import {
   feishuRedirect,
   getSetting,
   publicBase,
-  adminOnlyKeys,
   publicView,
   runProbe,
   saveSettings,
@@ -49,6 +48,7 @@ import {
   displayLoginAllowed,
   exchangeCode,
   getSession,
+  isLoopbackHost,
   logout as dropSession,
   hasPerm,
   permissionsFor,
@@ -130,10 +130,21 @@ function need(c: { get: (k: "session") => Session | undefined }, perm: string): 
   return s;
 }
 
+function safeLogCause(err: unknown): string {
+  const raw = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+  return raw
+    .replace(/https?:\/\/\S+/gi, "[url]")
+    .replace(/Bearer\s+\S+/gi, "Bearer ***")
+    .replace(/((?:token|secret|api[_-]?key|authorization|cookie)\s*[=:]\s*)[^\s,;]+/gi, "$1***")
+    .slice(0, 240);
+}
+
 function boom(err: unknown): never {
   const status = typeof err === "object" && err && "status" in err ? Number((err as { status: number }).status) : 500;
   const message = err instanceof Error ? err.message : String(err);
-  throw new HTTPException((status || 500) as 400, { message });
+  if (status >= 400 && status < 500) throw new HTTPException(status as 400, { message });
+  console.error(`request failed: problem=业务请求异常 cause=${safeLogCause(err)} fix=查看服务端日志定位`);
+  throw new HTTPException(500, { message: "服务器错误" });
 }
 
 function pngMagicAt(path: string): boolean {
@@ -166,28 +177,40 @@ app.onError((err, c) => {
   }
   const status = typeof err === "object" && err && "status" in err ? Number((err as { status: number }).status) : 500;
   const message = err instanceof Error ? err.message : "服务器错误";
-  const code = status >= 400 && status < 600 ? status : 500;
-  return c.json({ detail: message }, code as 400);
+  if (status >= 400 && status < 500) return c.json({ detail: message }, status as 400);
+  console.error(`request failed: problem=未处理异常 cause=${safeLogCause(err)} fix=查看堆栈与对应任务文件`);
+  return c.json({ detail: "服务器错误" }, 500);
 });
 
-app.get("/api/health", (c) =>
-  c.json({
-    ok: true,
-    version: VERSION,
-    runtime: "typescript",
+function liveStatus() {
+  return {
     jobs: queueSnapshot(),
-    feishu_notify: /^(1|true|yes|on)$/i.test(getSetting("FEISHU_ENABLED")) && Boolean(getSetting("FEISHU_OPEN_ID")),
-  }),
-);
+    feishu_notify:
+      /^(1|true|yes|on)$/i.test(getSetting("FEISHU_ENABLED")) && Boolean(getSetting("FEISHU_OPEN_ID")),
+  };
+}
 
-app.get("/api/auth/methods", (c) =>
-  c.json({
-    feishu: oauthReady(),
-    display_login: displayLoginAllowed(c.req.header("host") || ""),
-    login_url: "/api/auth/feishu/login",
-    public_base: publicBase(),
-  }),
-);
+function isDirectLoopbackHealth(c: Context): boolean {
+  // 杭州 release.ps1 直连 127.0.0.1，需要准确队列来阻止带任务升版。
+  // Named Tunnel 会保留公网 Host/转发头；公网匿名探测不触发同步任务扫盘。
+  const forwarded = c.req.header("cf-connecting-ip") || c.req.header("x-forwarded-for");
+  return !forwarded && isLoopbackHost(c.req.header("host") || "");
+}
+
+app.get("/api/health", (c) => {
+  const base = { ok: true, version: VERSION, runtime: "typescript" };
+  if (isDirectLoopbackHealth(c)) return c.json({ ...base, ...liveStatus() });
+  return c.json({
+    ...base,
+    // 公网发版核对保留 jobs.illustrator 存在性合同，但不公开作业数量。
+    jobs: { illustrator: { visibility: "authenticated" } },
+  });
+});
+
+app.get("/api/status", (c) => {
+  need(c, "read");
+  return c.json({ ok: true, version: VERSION, runtime: "typescript", ...liveStatus() });
+});
 
 app.get("/api/auth/me", (c) => {
   const s = c.get("session");
@@ -536,12 +559,18 @@ app.post("/api/tasks/:tid/decision", async (c) => {
 
 app.post("/api/tasks/:tid/complete", async (c) => {
   const s = need(c, "complete");
-  const task = loadTask(c.req.param("tid"));
+  const tid = assertTid(c.req.param("tid"));
+  const body = (await c.req.json().catch(() => ({}))) as { conclusion?: string };
+  // json() 会让出事件循环；另一标签可能已经开始对红或新一轮对照。
+  // 最后一次 await 后再读盘，此后同步落盘，旧对象不能覆盖新的作业状态。
+  const task = loadTask(tid);
   assertCanAccessTask(task, viewerFromSession(s));
+  if (task.job_status === "queued" || task.job_status === "running") {
+    throw new HTTPException(409, { message: "对照还在排队或正在跑，不能签字" });
+  }
   if (!isReviewableStatus(task.status)) {
     throw new HTTPException(400, { message: "当前状态不可签字" });
   }
-  const body = (await c.req.json().catch(() => ({}))) as { conclusion?: string };
   const hits = activeHits(task).filter((h) => !skipPackSheetField(h.field));
   const pending = hits.filter(
     (h) => (h.status === "疑点" || h.status === "缺失") && (h.decision || "pending") === "pending",
@@ -679,7 +708,10 @@ app.get("/api/settings", (c) => {
 });
 
 app.post("/api/settings", async (c) => {
-  const s = need(c, "create");
+  const s = need(c, "read");
+  if (s.role !== "admin") {
+    throw new HTTPException(403, { message: "改系统配置需要管理员" });
+  }
   const body = (await c.req.json().catch(() => ({}))) as { values?: Record<string, string> } & Record<
     string,
     string
@@ -689,10 +721,6 @@ app.post("/api/settings", async (c) => {
   for (const [k, v] of Object.entries(values)) {
     if (k === "values") continue;
     if (typeof v === "string") patch[k] = v;
-  }
-  const locked = adminOnlyKeys().filter((k) => k in patch);
-  if (locked.length && s.role !== "admin") {
-    throw new HTTPException(403, { message: "改本机软件路径需要管理员" });
   }
   const { restart } = saveSettings(patch);
   const billingKeys = [

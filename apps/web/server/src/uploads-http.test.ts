@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it } from "node:test";
+import { makeTestTempDir } from "./testTemp.js";
 
 process.env.VITEST = "1";
-process.env.WB_DATA_DIR = mkdtempSync(join(tmpdir(), "beian-uploads-http-"));
+process.env.WB_DATA_DIR = makeTestTempDir("beian-uploads-http-");
 process.env.WB_HOST = "127.0.0.1";
 process.env.WB_PORT = "0";
 

@@ -1,17 +1,18 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
+import { makeTestTempDir } from "./testTemp.js";
 
 process.env.VITEST = "1";
-process.env.WB_DATA_DIR = mkdtempSync(join(tmpdir(), "beian-mockup-files-"));
+process.env.WB_DATA_DIR = makeTestTempDir("beian-mockup-files-");
 
 const { collectOutputs, isWhiteFile } = await import("./mockup.js");
 
 describe("collectOutputs", () => {
   it("keeps front/back white renders and ignores ai-raster and ppt qa pngs", () => {
-    const root = mkdtempSync(join(tmpdir(), "beian-pack-out-"));
+    const root = makeTestTempDir("beian-pack-out-");
     mkdirSync(join(root, "qa"));
     writeFileSync(join(root, "ai-raster.png"), "nope");
     writeFileSync(join(root, "qa", "slide-01.png"), "nope");
@@ -30,7 +31,7 @@ describe("collectOutputs", () => {
   });
 
   it("does not promote leftover pngs to white_a/white_b", () => {
-    const root = mkdtempSync(join(tmpdir(), "beian-pack-other-"));
+    const root = makeTestTempDir("beian-pack-other-");
     writeFileSync(join(root, "preview.png"), "nope");
     writeFileSync(join(root, "box.glb"), "glb");
     const files = collectOutputs(root);
@@ -52,7 +53,7 @@ describe("collectOutputs", () => {
   });
 
   it("matches white renders case-insensitively and keeps the first key", () => {
-    const root = mkdtempSync(join(tmpdir(), "beian-pack-case-"));
+    const root = makeTestTempDir("beian-pack-case-");
     writeFileSync(join(root, "BOX_FRONT_RIGHT_WHITE.PNG"), "ok");
     writeFileSync(join(root, "BOX.GLB"), "glb");
     writeFileSync(join(root, "extra_front_right.png"), "dup");
@@ -65,7 +66,7 @@ describe("collectOutputs", () => {
   });
 
   it("does not treat a pdf named front_right as a white render", () => {
-    const root = mkdtempSync(join(tmpdir(), "beian-pack-pdf-white-"));
+    const root = makeTestTempDir("beian-pack-pdf-white-");
     writeFileSync(join(root, "foo_front_right.pdf"), "%PDF");
     writeFileSync(join(root, "box.glb"), "glb");
     const files = collectOutputs(root);

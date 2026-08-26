@@ -1,10 +1,8 @@
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { describe, it } from "node:test";
+import { makeTestTempDir } from "./testTemp.js";
 
-process.env.WB_DATA_DIR = mkdtempSync(join(tmpdir(), "beian-bill-"));
+process.env.WB_DATA_DIR = makeTestTempDir("beian-bill-");
 
 const { bceAuthorization } = await import("./bce.js");
 const {

@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it } from "node:test";
+import { makeTestTempDir } from "./testTemp.js";
 
-process.env.WB_DATA_DIR = mkdtempSync(join(tmpdir(), "beian-uploads-"));
+process.env.WB_DATA_DIR = makeTestTempDir("beian-uploads-");
 
 const {
   consumeReceipt,

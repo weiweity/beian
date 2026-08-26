@@ -1,10 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { writeFileSync } from "node:fs";
 import { describe, it, before } from "node:test";
+import { makeTestTempDir } from "./testTemp.js";
 
-process.env.WB_DATA_DIR = mkdtempSync(join(tmpdir(), "beian-ts-"));
+process.env.WB_DATA_DIR = makeTestTempDir("beian-ts-");
 
 const { activeHits, boardColumn, deleteTask, hasReworkPages, isHitDecision, isReviewableStatus, isReworkableStatus, isReworkableTask, listTasks, loadTask, saveTask } = await import("./tasks.js");
 
