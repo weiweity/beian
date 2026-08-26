@@ -56,6 +56,9 @@ Thumbs.db
 node_modules/
 dist/
 **/.vite/
+playwright-report/
+test-results/
+blob-report/
 
 # Local agent/session artifacts
 .context/

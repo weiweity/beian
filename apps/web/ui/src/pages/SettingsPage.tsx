@@ -33,7 +33,6 @@ import {
 type ScanHit = { kind: string; label: string; path: string };
 
 type Props = {
-  canWrite?: boolean;
   canAdmin?: boolean;
   openId?: string;
   displayName?: string | null;
@@ -48,12 +47,12 @@ function readGroupParam(): string {
 }
 
 export function SettingsPage({
-  canWrite = true,
   canAdmin = false,
   openId = "",
   displayName = "",
 }: Props) {
   const { message } = App.useApp();
+  const canWrite = canAdmin;
   const [view, setView] = useState<SettingsView | null>(null);
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
@@ -348,15 +347,20 @@ export function SettingsPage({
         </p>
       </header>
 
-      {error ? <Alert type="error" showIcon message={error} className="settings-alert" /> : null}
+      {error ? <Alert type="error" showIcon title={error} className="settings-alert" /> : null}
       {!canWrite ? (
-        <Alert type="info" showIcon message="只读。改配置需要审核员或管理员。" className="settings-alert" />
+        <Alert
+          type="info"
+          showIcon
+          title="系统配置只允许管理员修改；你仍可检测连通，并给当前登录发送测试消息。"
+          className="settings-alert"
+        />
       ) : null}
       {restart ? (
         <Alert
           type="warning"
           showIcon
-          message="数据目录或公网开关改过，需要重启服务后才完全生效。"
+          title="数据目录或公网开关改过，需要重启服务后才完全生效。"
           className="settings-alert"
         />
       ) : null}

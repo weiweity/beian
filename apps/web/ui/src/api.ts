@@ -59,13 +59,28 @@ async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
 
 export type UploadReceipt = {
   receipt: string;
+  client_upload_id?: string;
   files: { field: string; name: string; bytes: number }[];
 };
 
-function uploadWithProgress<T>(
+export type PendingUploadReceipt = {
+  id: string;
+  files: { field: string; name: string; bytes: number }[];
+  bytes: number;
+  created_at: string;
+  client_upload_id?: string;
+  kind: "compare" | "mockup";
+};
+
+export type UploadProgress = { pct: number; loaded: number; total: number };
+
+// 100 MB 在慢链路上传输可能超过五分钟；超时覆盖传输和服务端落盘确认。
+export const UPLOAD_TIMEOUT_MS = 15 * 60 * 1000;
+
+export function uploadWithProgress<T>(
   path: string,
   fd: FormData,
-  onProgress?: (pct: number) => void,
+  onProgress?: (progress: UploadProgress) => void,
   signal?: AbortSignal,
 ): Promise<T> {
   if (typeof XMLHttpRequest === "undefined") {
@@ -73,24 +88,47 @@ function uploadWithProgress<T>(
   }
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
+    let settled = false;
+    let abortListener: (() => void) | undefined;
+    const cleanup = () => {
+      if (signal && abortListener) signal.removeEventListener("abort", abortListener);
+    };
+    const fail = (err: ApiError) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(err);
+    };
+    const succeed = (body: T) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(body);
+    };
     xhr.open("POST", path);
     xhr.withCredentials = true;
+    xhr.timeout = UPLOAD_TIMEOUT_MS;
     xhr.upload.onprogress = (ev) => {
       if (!onProgress || !ev.lengthComputable || ev.total <= 0) return;
-      onProgress(Math.max(0, Math.min(100, Math.round((ev.loaded / ev.total) * 100))));
+      onProgress({
+        pct: Math.max(0, Math.min(100, Math.round((ev.loaded / ev.total) * 100))),
+        loaded: ev.loaded,
+        total: ev.total,
+      });
     };
     if (signal) {
       if (signal.aborted) {
-        reject(new ApiError(0, "上传中断", true));
+        fail(new ApiError(0, "上传已停止", false));
         return;
       }
-      signal.addEventListener("abort", () => xhr.abort(), { once: true });
+      abortListener = () => xhr.abort();
+      signal.addEventListener("abort", abortListener, { once: true });
     }
-    xhr.onabort = () => reject(new ApiError(0, "上传中断", true));
+    xhr.onabort = () => fail(new ApiError(0, "上传已停止", false));
     xhr.onload = () => {
       const ct = xhr.getResponseHeader("content-type") || "";
       if (xhr.status === 413) {
-        reject(new ApiError(413, UPLOAD_TOO_LARGE, false));
+        fail(new ApiError(413, UPLOAD_TOO_LARGE, false));
         return;
       }
       let detail = xhr.statusText;
@@ -98,8 +136,7 @@ function uploadWithProgress<T>(
         if (ct.includes("application/json") && xhr.responseText) {
           const body = JSON.parse(xhr.responseText) as T & { detail?: unknown };
           if (xhr.status >= 200 && xhr.status < 300) {
-            onProgress?.(100);
-            resolve(body);
+            succeed(body);
             return;
           }
           if (typeof body.detail === "string") detail = body.detail;
@@ -108,9 +145,10 @@ function uploadWithProgress<T>(
         /* keep statusText */
       }
       const hint = describeBrokenApi(xhr.status, ct, apiHost());
-      reject(new ApiError(xhr.status, hint || detail, Boolean(hint)));
+      fail(new ApiError(xhr.status, hint || detail, Boolean(hint)));
     };
-    xhr.onerror = () => reject(new ApiError(0, "上传中断", true));
+    xhr.onerror = () => fail(new ApiError(0, "上传中断。请检查网络后重新上传。", true));
+    xhr.ontimeout = () => fail(new ApiError(0, "上传超时。请检查网络后重新上传。", false));
     xhr.send(fd);
   });
 }
@@ -122,13 +160,6 @@ export type Me = {
   role: string | null;
   open_id?: string;
   perms: string[];
-};
-
-export type AuthMethods = {
-  feishu: boolean;
-  display_login: boolean;
-  login_url: string;
-  public_base: string;
 };
 
 export type HealthView = {
@@ -213,13 +244,15 @@ export type Decision = "confirm" | "issue" | "ignore" | "pending";
 
 export const api = {
   me: () => request<Me>("/api/auth/me"),
-  methods: () => request<AuthMethods>("/api/auth/methods"),
   health: () => request<HealthView>("/api/health"),
+  status: () => request<HealthView>("/api/status"),
   logout: () => request<{ ok: boolean }>("/api/auth/logout", { method: "POST" }),
   tasks: (q?: string) =>
     request<TaskSummary[]>(q ? `/api/tasks?q=${encodeURIComponent(q)}` : "/api/tasks"),
   task: (id: string) => request<TaskDetail>(`/api/tasks/${id}`),
-  stageUpload: (fd: FormData, onProgress?: (pct: number) => void, signal?: AbortSignal) =>
+  uploads: () => request<PendingUploadReceipt[]>("/api/uploads"),
+  discardUpload: (id: string) => request<{ ok: boolean }>(`/api/uploads/${id}`, { method: "DELETE" }),
+  stageUpload: (fd: FormData, onProgress?: (progress: UploadProgress) => void, signal?: AbortSignal) =>
     uploadWithProgress<UploadReceipt>("/api/uploads", fd, onProgress, signal),
   startTask: (body: { receipt: string; product_name: string; title?: string; pack_surface?: string }) =>
     request<TaskDetail>("/api/tasks/start", { method: "POST", body: JSON.stringify(body) }),

@@ -4,6 +4,8 @@
 状态：已接受（用户否决「沿用原生 JS」）。HTTP 产品层见 `docs/adr-002-typescript-http.md`；本机设置见 `docs/adr-003-settings-overlay.md`。视觉 token 以根目录 `DESIGN.md` 为准。  
 覆盖：8/31 第一期网页，不含 3D 查看器
 
+> 2026-08-26 修订：本 ADR 继续约束 React + TypeScript 的栈选择；其中 OpenSeadragon、中性蓝和下方“继承/不继承”表仅记录决策当时的迁移估算与来源比较，不再约束当前视觉。现行审稿缩放采用 CSS `transform` 1–6×，品牌色为 `#805898`，Logo、玻璃材质、圆角、看板与深色主题等全部 UI 合同以 `DESIGN.md` 为准。
+
 ## 决策
 
 1. **前端改为 TypeScript + React 18 + Vite + Ant Design 6。** 本 ADR 决策时后端仍是 FastAPI；之后已按 ADR-002 改为 Hono 产品层。组件 API 以 `@ant-design/cli` / `antd` skill 为准，不要凭记忆写 props。
@@ -18,11 +20,13 @@
 
 ## 代价（必须写进日历）
 
-- 审稿台（左图右表 + OpenSeadragon）要重接，不是换皮肤。
+- 审稿台当时按“左图右表 + OpenSeadragon”估算为重接而非换皮；最终实现选择了接口更小的 CSS `transform` 缩放，不再引入 OpenSeadragon。
 - 相对「只接飞书」，大约多 3–5 个工作日。8/31 仍只保证：登录 + 上传 Excel/PDF + 人终审。
-- Windows 生产要多装 Node 20 LTS 做 `pnpm build`，或在 Mac 构建后只部署 `dist/`。
+- Windows 生产要多装 Node 20 LTS 做 `npm run build`，或在 Mac 构建后只部署 `dist/`。
 
-## 从客服 DESIGN.md 继承什么
+## 决策当时的来源比较（历史）
+
+下表只解释当时为何选 React，不是当前产品的视觉合同；其中品牌、狐狸 Logo、玻璃材质、圆角、看板和主题均已被 `DESIGN.md` 的锁定稿取代。
 
 | 继承 | 不继承 |
 |---|---|
@@ -34,7 +38,7 @@
 | 禁止把「复制/机审」写成「已发送/已过审」 | 客服话术、VOC、达肤妍 Demo 文案 |
 | 浅色工作台 + 一个识别色，不铺渐变、不卡片墙 | 深色主题第一期可不做 |
 
-备案识别色不要用客服紫。第一期用中性墨色 + 一个克制蓝（焦点/主按钮），风险用红/黄并配文字。
+本 ADR 当时设想中性墨色 + 克制蓝；该视觉设想已由锁定稿取代。现行识别色是品牌紫 `#805898`，风险仍用红/黄并配文字，完整 token 只认 `DESIGN.md`。
 
 ## 仓库形状（下一步脚手架）
 

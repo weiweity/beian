@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
+import { makeTestTempDir } from "./testTemp.js";
 
 process.env.VITEST = "1";
-process.env.WB_DATA_DIR = mkdtempSync(join(tmpdir(), "beian-jobs-"));
+process.env.WB_DATA_DIR = makeTestTempDir("beian-jobs-");
 
-const { loadTask, replaceFile, saveTask } = await import("./tasks.js");
+const { deleteTask, loadTask, replaceFile, saveTask } = await import("./tasks.js");
 const {
   decorateQueueAhead,
   enqueue,
@@ -180,6 +180,259 @@ describe("jobs dispatcher", () => {
     assert.equal(t.reclaim_count, 1);
   });
 
+  it("reclaim never kills or reruns a reused pid", () => {
+    let killed = 0;
+    let reran = 0;
+    const id = tid(83);
+    setJobsTestHooks({
+      inspectWorker: (pid, expected) => {
+        assert.equal(pid, 4242);
+        assert.deepEqual(expected, { kind: "compare", id });
+        return "other";
+      },
+      killTree: () => {
+        killed += 1;
+      },
+      runCompare: () => {
+        reran += 1;
+        return new Promise(() => {
+          /* a reused pid must never enqueue this replacement */
+        });
+      },
+    });
+    saveTask({
+      id,
+      title: "x",
+      type: "excel_pdf",
+      status: "comparing",
+      job_kind: "compare",
+      job_status: "running",
+      job_pid: 4242,
+      job_started_at: new Date().toISOString(),
+      created_at: "2026-08-24T10:01:00.000Z",
+    });
+
+    reclaimOnBoot();
+
+    const task = loadTask(id);
+    assert.equal(killed, 0);
+    assert.equal(reran, 0);
+    assert.equal(task.job_status, "failed");
+    assert.equal(task.status, "compare_failed");
+    assert.equal(task.job_error, "对照中断");
+  });
+
+  it("reclaim kills and retries only a confirmed worker from this task", () => {
+    let inspected = 0;
+    let killed = 0;
+    let reran = 0;
+    const id = tid(84);
+    setJobsTestHooks({
+      inspectWorker: (pid, expected) => {
+        inspected += 1;
+        assert.equal(pid, 4343);
+        assert.deepEqual(expected, { kind: "rework", id });
+        return inspected === 1 ? "owned" : "missing";
+      },
+      killTree: (pid, force) => {
+        assert.equal(pid, 4343);
+        assert.equal(force, true);
+        killed += 1;
+      },
+      runRework: () => {
+        reran += 1;
+        return new Promise(() => {
+          /* keep the recovered OCR slot occupied */
+        });
+      },
+    });
+    saveTask({
+      id,
+      title: "x",
+      type: "excel_pdf",
+      status: "comparing",
+      status_before_job: "pending_review",
+      job_kind: "rework",
+      job_status: "running",
+      job_pid: 4343,
+      job_started_at: new Date().toISOString(),
+      created_at: "2026-08-24T10:02:00.000Z",
+    });
+
+    reclaimOnBoot();
+
+    const task = loadTask(id);
+    assert.equal(inspected, 2);
+    assert.equal(killed, 1);
+    assert.equal(reran, 1);
+    assert.equal(task.reclaim_count, 1);
+    assert.equal(task.job_status, "running");
+  });
+
+  it("reclaim fails closed when process ownership cannot be inspected", () => {
+    let killed = 0;
+    let reran = 0;
+    const id = tid(85);
+    setJobsTestHooks({
+      inspectWorker: () => "unknown",
+      killTree: () => {
+        killed += 1;
+      },
+      runCompare: () => {
+        reran += 1;
+        return new Promise(() => {
+          /* inspection failure must not enqueue a duplicate */
+        });
+      },
+    });
+    saveTask({
+      id,
+      title: "x",
+      type: "excel_pdf",
+      status: "comparing",
+      job_kind: "compare",
+      job_status: "running",
+      job_pid: 4444,
+      job_started_at: new Date().toISOString(),
+      created_at: "2026-08-24T10:03:00.000Z",
+    });
+
+    reclaimOnBoot();
+
+    assert.equal(killed, 0);
+    assert.equal(reran, 0);
+    assert.equal(loadTask(id).job_status, "failed");
+  });
+
+  it("reclaim fails closed when killing a confirmed worker throws", () => {
+    let inspected = 0;
+    let killed = 0;
+    let reran = 0;
+    const id = tid(86);
+    setJobsTestHooks({
+      inspectWorker: (pid, expected) => {
+        inspected += 1;
+        assert.equal(pid, 4545);
+        assert.deepEqual(expected, { kind: "compare", id });
+        return "owned";
+      },
+      killTree: () => {
+        killed += 1;
+        throw new Error("synthetic kill failure");
+      },
+      runCompare: () => {
+        reran += 1;
+        return new Promise(() => {
+          /* a failed kill must never enqueue a duplicate */
+        });
+      },
+    });
+    saveTask({
+      id,
+      title: "x",
+      type: "excel_pdf",
+      status: "comparing",
+      job_kind: "compare",
+      job_status: "running",
+      job_pid: 4545,
+      job_started_at: new Date().toISOString(),
+      created_at: "2026-08-24T10:04:00.000Z",
+    });
+
+    reclaimOnBoot();
+
+    assert.equal(inspected, 1);
+    assert.equal(killed, 1);
+    assert.equal(reran, 0);
+    assert.equal(loadTask(id).job_status, "failed");
+    assert.equal(loadTask(id).job_error, "对照中断");
+  });
+
+  it("reclaim fails closed when a confirmed worker is still owned after kill", () => {
+    let inspected = 0;
+    let killed = 0;
+    let reran = 0;
+    const id = tid(87);
+    setJobsTestHooks({
+      inspectWorker: (pid, expected) => {
+        inspected += 1;
+        assert.equal(pid, 4646);
+        assert.deepEqual(expected, { kind: "rework", id });
+        return "owned";
+      },
+      killTree: () => {
+        killed += 1;
+      },
+      runRework: () => {
+        reran += 1;
+        return new Promise(() => {
+          /* a process still alive after kill must never enqueue a duplicate */
+        });
+      },
+    });
+    saveTask({
+      id,
+      title: "x",
+      type: "excel_pdf",
+      status: "comparing",
+      status_before_job: "pending_review",
+      job_kind: "rework",
+      job_status: "running",
+      job_pid: 4646,
+      job_started_at: new Date().toISOString(),
+      created_at: "2026-08-24T10:05:00.000Z",
+    });
+
+    reclaimOnBoot();
+
+    assert.equal(inspected, 2);
+    assert.equal(killed, 1);
+    assert.equal(reran, 0);
+    const task = loadTask(id);
+    assert.equal(task.job_status, "failed");
+    assert.equal(task.status, "pending_review");
+    assert.equal(task.job_error, "对照中断");
+  });
+
+  it("reclaim verifies and kills a mockup pid with the mockup identity", async () => {
+    const { loadMockup, saveMockup } = await import("./mockup.js");
+    let inspected = 0;
+    let killed = 0;
+    const id = tid(88);
+    setJobsTestHooks({
+      inspectWorker: (pid, expected) => {
+        inspected += 1;
+        assert.equal(pid, 4747);
+        assert.deepEqual(expected, { kind: "mockup", id });
+        return inspected === 1 ? "owned" : "missing";
+      },
+      killTree: (pid, force) => {
+        assert.equal(pid, 4747);
+        assert.equal(force, true);
+        killed += 1;
+      },
+    });
+    saveMockup({
+      id,
+      status: "running",
+      created_at: "2026-08-24T10:06:00.000Z",
+      files: [],
+      job_kind: "mockup",
+      job_status: "running",
+      job_pid: 4747,
+      reclaim_count: 1,
+      job_started_at: new Date().toISOString(),
+    });
+
+    reclaimOnBoot();
+
+    assert.equal(inspected, 2);
+    assert.equal(killed, 1);
+    const job = loadMockup(id);
+    assert.equal(job?.job_status, "failed");
+    assert.equal(job?.job_error, "打样中断");
+  });
+
   it("boot retries notify when the key is set but not sent", async () => {
     let calls = 0;
     setJobsTestHooks({
@@ -326,6 +579,46 @@ describe("jobs dispatcher", () => {
     assert.equal(fresh.status, "completed");
     assert.equal(fresh.complete_kind, "signed");
     assert.equal(fresh.notify_sent, true);
+  });
+
+  it("does not recreate a task deleted while its notification is in flight", async () => {
+    let release: ((value: { ok: boolean }) => void) | undefined;
+    let markStarted: (() => void) | undefined;
+    const gate = new Promise<{ ok: boolean }>((resolve) => {
+      release = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      setJobsTestHooks({
+        runCompare: async () => ({
+          code: 0,
+          stdout: JSON.stringify({ status: "pending_review", hits: [] }) + "\n",
+          stderr: "",
+          timedOut: false,
+        }),
+        notify: () => {
+          markStarted?.();
+          return gate;
+        },
+      });
+      const id = tid(58);
+      queuedCompare(id, "2026-08-20T17:01:00.000Z");
+      enqueue({ kind: "compare", id });
+      await started;
+      assert.equal(loadTask(id).job_status, "succeeded");
+      deleteTask(id);
+      release?.({ ok: true });
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      assert.throws(() => loadTask(id), (err: Error & { status?: number }) => err.status === 404);
+      assert.deepEqual(unhandled, []);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
   });
 
   it("third compare stays queued behind two earlier OCR jobs", async () => {

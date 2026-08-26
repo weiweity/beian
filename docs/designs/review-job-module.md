@@ -8,7 +8,7 @@ Mode: Startup
 
 Related: `docs/designs/review-rework-loop.md`（对红循环、签字门、open_issues 仍有效）、`docs/adr-004-ousterhout-design.md`（深模块、唯一 HTTP 仍有效）
 
-本文**取代** `two-desks-review-and-mockup.md` 里这两句：8/31 不要实现 `POST /api/mockups`；8/31 不要通用异步队列。其余两张台设计仍有效。
+本文**取代** `two-desks-review-and-mockup.md` 里这两句：8/31 不要实现 `POST /api/mockups`；8/31 不要通用异步队列。旧文件只保留需求发现历史，不再作为当前 UI、路由或视觉合同；当前合同以本文、`DESIGN.md` 与 `AGENTS.md` 为准。
 
 取代理由：`POST /api/mockups` 已在 v0.10.2 存在；本文把它改成可排队、可落盘，仍不对业务验收 3D。本文的队列是进程内 dispatcher + JSON，**不是**章程禁止的 Redis/SQLite/中间件。页内 GLB 查看器仍禁止当验收项。
 
@@ -100,7 +100,7 @@ Python `cli.py` **不再** `save_task`。对照/对红 CLI 只把结果 JSON 打
 
 任务文件写入一律 tmp + replace（Windows 上 dest 已存在时 POSIX rename 会失败；对齐 Python `os.replace`）。禁止 `jobs.ts` 和 CLI 同时 replace 同一文件。
 
-`POST upload/rework` 只负责：落上传文件、**第一次** `saveTask`（`status=comparing`、`job_status=queued`、对红时写 `status_before_job`）、然后 `enqueue`。入队成功之后，这个 tid 只允许 `jobs.ts` 再写。路由层不得在 worker 跑着时再 `saveTask`。
+`POST /api/uploads` 只落当前用户的待开工回执，不建任务。`POST /api/tasks/start` 或对红路由负责领取文件、**第一次** `saveTask`（`status=comparing`、`job_status=queued`、对红时写 `status_before_job`）、然后 `enqueue`。入队成功之后，这个 tid 只允许 `jobs.ts` 再写。路由层不得在 worker 跑着时再 `saveTask`。
 
 打样持久化：`DATA_DIR/mockups/{id}/job.json`。内存 Map 只作热缓存，开机以磁盘为准。
 
@@ -112,15 +112,17 @@ GET 必须走 `publicTask` / `publicMockup`，剥掉 `job_pid`、磁盘 `path`�
 
 | 方法 | 路径 | 变什么 |
 |---|---|---|
-| POST | `/api/tasks/upload` | 校验、写盘、`task.status=comparing`、`job_status=queued`、入队、立即返回。不再等对照结束。 |
+| POST | `/api/uploads` | 限流并暂存当前用户的 Excel+PDF 或 `.ai`，返回有时限、有额度的回执；不建任务、不入队。 |
+| GET / DELETE | `/api/uploads` / `/api/uploads/:id` | 列出自己的待开工回执，或放弃回执并清掉暂存文件。 |
+| POST | `/api/tasks/start` | 领取回执、写盘、`task.status=comparing`、`job_status=queued`、入队、立即返回；同一 `source_receipt` 重试返回原任务。 |
 | POST | `/api/tasks/:tid/rework` | kind=`rework`。对红门不变。已有 `job_status` 为 queued/running → 409「对红还在排队或正在跑」。 |
 | GET | `/api/tasks` / `/api/tasks/:tid` | 多返回公开作业字段。`board` 仍只看 `task.status`。 |
-| POST | `/api/mockups` | 本机没有 Blender → **当场 412**（不入队、不事后飞书）。有 Blender → 入队，忙则 `queued`，不再 409。 |
+| POST | `/api/mockups/start` | 领取 `.ai` 回执；本机没有 Blender / Illustrator → **当场失败**（不入队、不事后飞书）。依赖齐全则入队，忙时仍是 `queued`；同一 `source_receipt` 重试返回原打样单。 |
 | GET | `/api/mockups` / `/:id` | 读 `job.json`。无 `path`。mockup `status` 仍用现有 `queued\|running\|done\|failed`，不要改成 succeeded。 |
 | GET | `/api/mockups/:id/files/:key` | 只给白底 `front_right`/`back_left`、GLB、PPT、打样单 PDF（`sheet`）。预览 inline，`?download=1` 才附件。`ai-raster`/PPT 质检图或坏 PNG → 415。流式读盘，不一次塞进内存。缺 PPT 或 PDF 时 404，不要假装能下。 |
-| GET | `/api/health` | 可选。8/31 验收不看。 |
+| GET | `/api/health` / `/api/status` | 公网 health 只给发版探活所需字段；登录后的 status 才给准确作业槽和飞书状态。 |
 
-鉴权、设置、账单、飞书登录、页图、`decision` 不变。`complete` 签字门忽略工艺说明 / 颜色要求 / 版本号的 pending（只认字段名开头，避免「执行标准版本号」被误杀）。不迁 FastAPI 的 gold / backup / ai-review / report.pdf / presets。
+鉴权、设置、账单、飞书登录、页图、`decision` 不变。`complete` 签字门忽略工艺说明 / 颜色要求 / 版本号 / 更新内容的 pending（只认字段名开头，避免「备案版本号」「执行标准版本号」被误杀）。不迁 FastAPI 的 gold / backup / ai-review / report.pdf / presets。
 
 `compareBookkeeping` 从 upload/rework 的 try/catch 挪到作业终态（`jobs.ts` 里 succeeded/failed 时记一笔）。
 
@@ -170,7 +172,7 @@ Windows 上 spawn 必须进 Job Object，Node 退出时杀掉子进程树。做�
 
 ### Worker
 
-- 对照 / 对红：`python -m app.cli compare|rework`，最后一行结果 JSON，过程中 `STAGE render_pdf|ocr|match`。不搬 `fields.py`。确认单底部工艺说明 / 颜色要求 / 版本号走 `skip_sheet_field`（字段名开头），不进机审。
+- 对照 / 对红：`python -m app.cli compare|rework`，最后一行结果 JSON，过程中 `STAGE render_pdf|ocr|match`。不搬 `fields.py`。确认单底部工艺说明 / 颜色要求 / 版本号 / 更新内容走 `skip_sheet_field`（字段名开头），不进机审。
 - 打样：`workers/packaging`。POST 时已确认 Blender；跑到一半消失 → failed，写清。stderr 打 `STAGE render_pdf|blender|export`（出图/打样/导出）。入队后 `job_stage` 从 `render_pdf` 开始，不是 `blender`。平面出图用 pymupdf（对照同一 Python），不靠 qlmanage。先读刀线/刀版还原切面；密折痕先密后疏试间距；没有刀线才回退已登记 JSON，不能硬套方盒。PPT 先用两张白底写 OOXML，不依赖 Node；写不出才试演示文稿运行时（stderr `PPT 跳过`）。两张白底合成一页 PDF。缺 PPT/PDF 时白底图和 GLB 仍 `done`/`succeeded`，不要把整单判成「Node不存在」。
 - 超时：对照 180s、打样 420s（已有）。超时 = failed，回收槽。
 - 取消：不做。
@@ -187,12 +189,12 @@ Windows 上 spawn 必须进 Job Object，Node 退出时杀掉子进程树。做�
 
 轮询已有 GET，间隔 2.5s（现成）。
 
-- `NewTaskPage`：POST 立即返回后进入核对页；核对页见 `job_status in {queued,running}` 或 `status===comparing` 就上 WaitCard。
+- `NewTaskPage`：先上传得到回执，再调用 `/api/tasks/start`；开始接口立即返回后进入核对页。核对页见 `job_status in {queued,running}` 或 `status===comparing` 就上 WaitCard。
 - `ReviewPage`：对红 POST 返回 queued 时不要 toast「已对照第二份 PDF」；WaitCard 增加「对红」文案。
-- `MockupPage` / `MockupJobPage`：打样台只交稿和列单。点进度或已出图进打样单；进行中是 WaitCard，完成一屏三图：正面+侧面、反面+侧面、GLB；每张图右上角下载；页头「下载+PPT」（没写成仍显示，点了出「PPT 没写成，白底仍可下」）；有 PDF 时旁边还能下 PDF；点下载底部提示不挡操作；GLB 全屏居中；截图时下载钮藏起来；全屏被拒出「全屏打不开」。不要死等 POST；打样单里轮询 GET `/api/mockups/:id`。`status=done|failed` 不当等待卡。地址 `/mockup`、`/mockup/new` 与 `/mockup/:id`。审稿台看板 `/reviewup`，工作台 `/reviewup/new`，核对页仍 `/review/:id`。
+- `MockupPage` / `MockupJobPage`：打样台只交稿和列单。点进度或已出图进打样单；进行中是 WaitCard，完成一屏三图：正面+侧面、反面+侧面、GLB；每张图右上角下载；页头「下载 PPT」（没写成仍显示，点了出「PPT 没写成，白底仍可下」），不提供 PDF 下载入口；点下载底部提示不挡操作；GLB 全屏居中；截图时下载钮藏起来；全屏被拒出「全屏打不开」。不要死等 POST；打样单里轮询 GET `/api/mockups/:id`。`status=done|failed` 不当等待卡。地址 `/mockup`、`/mockup/new` 与 `/mockup/:id`。审稿台看板 `/reviewup`，工作台 `/reviewup/new`，核对页仍 `/review/:id`。
 - `WaitCard`：吃 `job_stage` / `job_stage_label`、`job_eta_s`、`queue_ahead`。queued 显示「前面还有 N 单」。
 - `TasksPage`：任一 `board==comparing` 时轮询 `/api/tasks`，否则排队卡片会停在旧状态。卡片用 `liveJobLine` 写阶段和大约还要，不要百分比。
-- 侧栏：`liveNavPulse` 看 `/api/health` 的 jobs 槽；审稿台/打样台作业在跑时有圆点。离开核对页再回看板，仍能看到阶段。
+- 侧栏：`liveNavPulse` 看登录后 `/api/status` 的 jobs 槽；审稿台/打样台作业在跑时有圆点。离开核对页再回看板，仍能看到阶段。
 - `HistoryPage`：进行中的审稿/打样也列；行上写 `liveJobLine`（阶段 · 大约还要 / 前面还有 N 单），不要百分比。点进去仍是 WaitCard / 打样单。有 `processing` 行就 2.5s 轮询。
 
 ### 二次开发怎么加功能

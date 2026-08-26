@@ -7,6 +7,8 @@ Status: APPROVED
 Mode: Startup
 Supersedes: hutou-main-design-20260818-225646.md
 
+> 历史范围（2026-08-26）：本文保留需求发现和当时的收窄过程，不再作为当前 UI、路由或视觉合同。`/history`、打样入队、Hono 路径和 `#805898` 等现行事实以根目录 `DESIGN.md`、`AGENTS.md` 与 `docs/designs/review-job-module.md` 为准。
+
 对红交互与 P0 审稿台细则以 `docs/designs/review-rework-loop.md` 为准。本稿只改：隐性知识、3D 在产品里的真实位置、历史不是产品、8/31 打样台不能假装已能上网。不取代那份的状态机、`open_issues` 键、complete 规则、六条 pytest。
 
 ## Problem Statement

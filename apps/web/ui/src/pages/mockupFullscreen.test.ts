@@ -3,11 +3,17 @@ import { describe, it } from "node:test";
 import {
   enterElementFullscreen,
   exitElementFullscreen,
+  fullscreenFailureMessage,
   isElementFullscreen,
   pingViewerAfterFullscreen,
 } from "./mockupFullscreen.js";
 
 describe("glb fullscreen", () => {
+  it("keeps fullscreen failures in concise Chinese", () => {
+    assert.equal(fullscreenFailureMessage(), "全屏打不开");
+    assert.equal(fullscreenFailureMessage(new Error("request rejected")), "全屏打不开");
+  });
+
   it("treats the frame as fullscreen only when it is the fullscreen element", () => {
     const el = { id: "glb" } as unknown as HTMLElement;
     const other = { id: "other" } as unknown as HTMLElement;

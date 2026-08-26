@@ -1,6 +1,7 @@
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DATA_DIR } from "./config.js";
+import { skipPackSheetField } from "./sheetSkip.js";
 
 export type Hit = {
   id?: string;
@@ -81,6 +82,8 @@ export type Task = {
   notify_sent?: boolean;
   reclaim_count?: number;
   status_before_job?: string;
+  /** 仅服务端用于开始接口幂等恢复，不返回前端。 */
+  source_receipt?: string;
   [k: string]: unknown;
 };
 
@@ -159,6 +162,14 @@ export function taskOwner(task: Task): string {
   return String(task.owner || "").trim();
 }
 
+/** 回执属于具体账号；管理员权限也不能跨账号命中别人的幂等键。 */
+export function findTaskBySourceReceipt(receiptId: string, owner: string): Task | undefined {
+  if (!isTid(receiptId) || !owner) return undefined;
+  return loadAllTasks().find(
+    (task) => task.source_receipt === receiptId && taskOwner(task) === owner,
+  );
+}
+
 export function assertCanAccessTask(task: Task, viewer: Viewer): void {
   if (!canAccessOwner(taskOwner(task), viewer)) {
     throw Object.assign(new Error("没有权限"), { status: 403 });
@@ -235,8 +246,8 @@ export function isReworkableTask(task: { status: string; complete_kind?: string;
 }
 
 export function activeHits(task: Task): Hit[] {
-  if (Array.isArray(task.hits_v2) && task.hits_v2.length > 0) return task.hits_v2;
-  return task.hits || [];
+  const hits = Array.isArray(task.hits_v2) && task.hits_v2.length > 0 ? task.hits_v2 : task.hits || [];
+  return hits.filter((hit) => !skipPackSheetField(hit.field));
 }
 
 export function isHitDecision(value: unknown): value is HitDecision {

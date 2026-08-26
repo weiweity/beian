@@ -12,6 +12,18 @@ export type HistoryRow = {
   live: string | null;
 };
 
+export type HistoryKindFilter = "全部" | HistoryRow["kind"];
+export type HistoryTimeFilter = "全部" | "今天" | "近 7 天" | "近 30 天";
+
+export type HistoryFilters = {
+  kind: HistoryKindFilter;
+  time: HistoryTimeFilter;
+  actor: string;
+  range?: { from: Date; to: Date } | null;
+};
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 function taskLive(row: TaskSummary): string | null {
   return liveJobLine({
     job_status: row.job_status,
@@ -58,7 +70,8 @@ export function historyTaskRow(row: TaskSummary): HistoryRow {
     status,
     color,
     at: row.created_at || "",
-    actor: row.completed_by || row.owner || "",
+    // “生成人”始终是建单人；签字人只代表完成动作，不能改写筛选维度。
+    actor: row.owner || "",
     live,
   };
 }
@@ -67,15 +80,20 @@ export function historyMockRow(row: MockupJob): HistoryRow {
   const live = mockLive(row);
   let status = "打样";
   let color: HistoryRow["color"] = "default";
-  if (row.status === "done") {
+  if (
+    row.status === "running" ||
+    row.status === "queued" ||
+    row.job_status === "running" ||
+    row.job_status === "queued"
+  ) {
+    status = "打样中";
+    color = "processing";
+  } else if (row.status === "done") {
     status = "已出图";
     color = "success";
   } else if (row.status === "failed") {
     status = "打样中断";
     color = "error";
-  } else if (row.status === "running" || row.status === "queued") {
-    status = "打样中";
-    color = "processing";
   } else {
     status = row.status;
   }
@@ -93,4 +111,46 @@ export function historyMockRow(row: MockupJob): HistoryRow {
 
 export function historyHasLive(rows: HistoryRow[]): boolean {
   return rows.some((r) => r.color === "processing");
+}
+
+export function historyRowKey(row: HistoryRow): string {
+  return `${row.kind}-${row.id}`;
+}
+
+export function historyCanDelete(row: HistoryRow): boolean {
+  return row.color !== "processing";
+}
+
+export function historyActors(rows: HistoryRow[]): string[] {
+  return [...new Set(rows.map((row) => row.actor.trim()).filter(Boolean))].sort((a, b) =>
+    a.localeCompare(b, "zh-CN"),
+  );
+}
+
+function timeFloor(filter: HistoryTimeFilter, now: Date): number | null {
+  if (filter === "全部") return null;
+  if (filter === "今天") {
+    return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  }
+  return now.getTime() - (filter === "近 7 天" ? 7 : 30) * DAY_MS;
+}
+
+export function filterHistoryRows(
+  rows: HistoryRow[],
+  filters: HistoryFilters,
+  now = new Date(),
+): HistoryRow[] {
+  const customFrom = filters.range?.from.getTime();
+  const customTo = filters.range?.to.getTime();
+  const floor = Number.isFinite(customFrom) ? customFrom! : timeFloor(filters.time, now);
+  const ceiling = Number.isFinite(customTo) ? customTo! : now.getTime();
+  return rows.filter((row) => {
+    if (filters.kind !== "全部" && row.kind !== filters.kind) return false;
+    if (filters.actor && row.actor !== filters.actor) return false;
+    if (floor !== null) {
+      const at = new Date(row.at).getTime();
+      if (!Number.isFinite(at) || at < floor || at > ceiling) return false;
+    }
+    return true;
+  });
 }

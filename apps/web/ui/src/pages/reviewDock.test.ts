@@ -55,7 +55,7 @@ describe("reviewDock", () => {
     assert.equal(readDockOpen(store), false);
     assert.equal(readPinsOn(store), false);
     assert.equal(readBoxesOn(store), false);
-    assert.deepEqual(readDockPlace(store), { top: 104, right: 40 });
+    assert.deepEqual(readDockPlace(store), { top: 24, right: 40 });
     writeDockPlace(store, { top: 120, right: 40 });
     assert.deepEqual(readDockPlace(store), { top: 120, right: 40 });
     writeDockOpen(store, true);
@@ -98,7 +98,7 @@ describe("reviewDock", () => {
     assert.equal(parked.top, 292);
     assert.equal(parked.right, 8);
     const lifted = clampDockPlace({ top: 8, right: 8 }, { w: 1200, h: 900 }, { w: 400, h: 300 });
-    assert.equal(lifted.top, 104);
+    assert.equal(lifted.top, 8);
     const north = resizeDockHandle(
       { w: 400, h: 400 },
       { top: 80, right: 40 },
@@ -107,7 +107,7 @@ describe("reviewDock", () => {
       "n",
     );
     assert.equal(north.box.h, 420);
-    assert.equal(north.place.top, 104);
+    assert.equal(north.place.top, 60);
     const east = resizeDockHandle(
       { w: 400, h: 400 },
       { top: 80, right: 40 },
@@ -125,7 +125,7 @@ describe("reviewDock", () => {
     const place = { top: 80, right: 40 };
     const south = resizeDockHandle(start, place, { dx: 0, dy: 30 }, room, "s");
     assert.equal(south.box.h, 430);
-    assert.equal(south.place.top, 104);
+    assert.equal(south.place.top, 80);
     assert.equal(south.place.right, 40);
     const west = resizeDockHandle(start, place, { dx: -20, dy: 0 }, room, "w");
     assert.equal(west.box.w, 420);
@@ -133,24 +133,24 @@ describe("reviewDock", () => {
     const nw = resizeDockHandle(start, place, { dx: 20, dy: 20 }, room, "nw");
     assert.equal(nw.box.w, 380);
     assert.equal(nw.box.h, 380);
-    assert.equal(nw.place.top, 104);
+    assert.equal(nw.place.top, 100);
     assert.equal(nw.place.right, 40);
     const ne = resizeDockHandle(start, place, { dx: 20, dy: 20 }, room, "ne");
     assert.equal(ne.box.w, 420);
     assert.equal(ne.box.h, 380);
-    assert.equal(ne.place.top, 104);
+    assert.equal(ne.place.top, 100);
     assert.equal(ne.place.right, 20);
     const sw = resizeDockHandle(start, place, { dx: -40, dy: 20 }, room);
     assert.equal(sw.box.w, 440);
     assert.equal(sw.box.h, 420);
     const short = clampDockPlace({ top: 4, right: 8 }, { w: 400, h: 300 }, { w: 320, h: 280 });
-    assert.equal(short.top, 12);
+    assert.equal(short.top, 8);
     const nanTop = clampDockPlace({ top: Number.NaN, right: 8 }, room, { w: 400, h: 300 });
     assert.equal(nanTop.top, 104);
     assert.equal(readDockPlace({ getItem: () => "{" }).top, 104);
     const overSide = clampDockPlace({ top: 80, right: 2000 }, { w: 1200, h: 800 }, { w: 400, h: 300 });
     assert.equal(overSide.right, 792);
-    assert.equal(overSide.top, 104);
+    assert.equal(overSide.top, 80);
   });
 
   it("parks the open dock on the left sidebar and keeps left when shutting", () => {
@@ -194,7 +194,9 @@ describe("reviewDock", () => {
     assert.equal(skipPackSheetField("工艺说明"), true);
     assert.equal(skipPackSheetField("颜色要求"), true);
     assert.equal(skipPackSheetField("版本号"), true);
+    assert.equal(skipPackSheetField("更新内容：调整净含量"), true);
     assert.equal(skipPackSheetField("中文品名"), false);
+    assert.equal(skipPackSheetField("备案版本号"), false);
     assert.equal(skipPackSheetField("执行标准版本号"), false);
     assert.equal(skipPackSheetField(""), false);
   });

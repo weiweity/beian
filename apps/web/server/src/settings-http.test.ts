@@ -1,11 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { describe, it } from "node:test";
+import { makeTestTempDir } from "./testTemp.js";
 
 process.env.VITEST = "1";
-process.env.WB_DATA_DIR = mkdtempSync(join(tmpdir(), "beian-settings-http-"));
+process.env.WB_DATA_DIR = makeTestTempDir("beian-settings-http-");
 process.env.WB_HOST = "127.0.0.1";
 process.env.WB_PORT = "0";
 
@@ -13,6 +11,18 @@ const { app } = await import("./index.js");
 const { issueSession } = await import("./auth.js");
 
 describe("settings http", () => {
+  it("reviewer cannot change ordinary system settings", async () => {
+    const sess = issueSession("审稿", "reviewer", "ou_set_ordinary", "feishu");
+    const res = await app.request("/api/settings", {
+      method: "POST",
+      headers: { authorization: `Bearer ${sess.token}`, "content-type": "application/json" },
+      body: JSON.stringify({ values: { WB_PUBLIC: "true" } }),
+    });
+    assert.equal(res.status, 403);
+    const body = (await res.json()) as { detail?: string };
+    assert.match(String(body.detail || ""), /系统配置.*管理员/);
+  });
+
   it("reviewer cannot write blender path", async () => {
     const sess = issueSession("审稿", "reviewer", "ou_set_http", "feishu");
     const res = await app.request("/api/settings", {
@@ -25,6 +35,19 @@ describe("settings http", () => {
     assert.match(String(body.detail || ""), /管理员/);
   });
 
+  it("admin can save system settings", async () => {
+    const sess = issueSession("魏炜", "admin", "ou_set_admin", "feishu");
+    const res = await app.request("/api/settings", {
+      method: "POST",
+      headers: { authorization: `Bearer ${sess.token}`, "content-type": "application/json" },
+      body: JSON.stringify({ values: { WB_MAX_UPLOAD_MB: "123" } }),
+    });
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as { groups?: Array<{ fields?: Array<{ key?: string; value?: string }> }> };
+    const fields = body.groups?.flatMap((group) => group.fields || []) || [];
+    assert.equal(fields.find((field) => field.key === "WB_MAX_UPLOAD_MB")?.value, "123");
+  });
+
   it("viewer cannot send lark test", async () => {
     const sess = issueSession("只看", "viewer", "ou_viewer_lark", "feishu");
     const res = await app.request("/api/settings/probe", {
@@ -35,8 +58,8 @@ describe("settings http", () => {
     assert.equal(res.status, 403);
   });
 
-  it("display login cannot send lark test without open_id", async () => {
-    const sess = issueSession("管理员", "admin", "", "display");
+  it("reviewer keeps the independent lark test action without open_id", async () => {
+    const sess = issueSession("审稿", "reviewer", "", "display");
     const res = await app.request("/api/settings/probe", {
       method: "POST",
       headers: { authorization: `Bearer ${sess.token}`, "content-type": "application/json" },

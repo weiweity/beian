@@ -45,15 +45,6 @@ def public_mode() -> bool:
     return truthy("WB_PUBLIC", False)
 
 
-def cors_origins() -> list[str]:
-    raw = get(
-        "WB_CORS_ORIGINS",
-        "http://127.0.0.1:5173,http://localhost:5173,http://127.0.0.1:8787,http://localhost:8787,https://www.jianghua.site",
-    )
-    origins = [p.strip() for p in raw.split(",") if p.strip() and p.strip() != "*"]
-    return origins or ["http://127.0.0.1:8787"]
-
-
 def baidu_ak_sk(cfg: dict[str, str] | None = None) -> tuple[str, str]:
     data = cfg if cfg is not None else load_all_env()
     ak = data.get("BAIDU_OCR_API_KEY") or data.get("BAIDU_API_KEY") or ""

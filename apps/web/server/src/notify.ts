@@ -115,28 +115,61 @@ function sendViaCli(
   });
 }
 
-export async function sendText(
+export type TextSendOptions = { force?: boolean };
+
+export type NotifyTransports = {
+  findCli: () => string | null;
+  sendCli: typeof sendViaCli;
+  sendApp: typeof sendViaApp;
+};
+
+/**
+ * 传输选择是一条深边界：生产接真实 CLI/飞书，L0 注入假传输，避免测试环境
+ * 恰好装了 lark-cli 或带凭证时把合成消息发出去。
+ */
+export function createTextSender(transports: NotifyTransports) {
+  return async function sendTextWithTransports(
+    text: string,
+    to?: string,
+    opts: TextSendOptions = {},
+  ): Promise<{ ok: boolean; skipped?: boolean; reason?: string; via?: "cli" | "app" }> {
+    if (!opts.force && !/^(1|true|yes|on)$/i.test(getSetting("FEISHU_ENABLED"))) {
+      return { ok: false, skipped: true, reason: "FEISHU_ENABLED=false" };
+    }
+    const openId = (to || getSetting("FEISHU_OPEN_ID") || "").trim();
+    if (!openId) return { ok: false, skipped: true, reason: "missing FEISHU_OPEN_ID" };
+    const body = clipText(text);
+    const bin = transports.findCli();
+    if (bin) {
+      const cli = await transports.sendCli(bin, openId, body);
+      if (cli.ok) return { ok: true, via: "cli" };
+      const app = await transports.sendApp(openId, body);
+      if (app.ok) return { ok: true, via: "app" };
+      return { ok: false, reason: cli.reason || app.reason };
+    }
+    const app = await transports.sendApp(openId, body);
+    if (app.ok) return { ok: true, via: "app" };
+    return { ok: false, reason: app.reason || "本机没有 lark-cli，用飞书应用发也失败了" };
+  };
+}
+
+const productionTextSender = createTextSender({
+  findCli: whichLark,
+  sendCli: sendViaCli,
+  sendApp: sendViaApp,
+});
+
+export function sendText(
   text: string,
   to?: string,
-  opts: { force?: boolean } = {},
+  opts: TextSendOptions = {},
 ): Promise<{ ok: boolean; skipped?: boolean; reason?: string; via?: "cli" | "app" }> {
-  if (!opts.force && !/^(1|true|yes|on)$/i.test(getSetting("FEISHU_ENABLED"))) {
-    return { ok: false, skipped: true, reason: "FEISHU_ENABLED=false" };
+  // 所有 L0 都共享这条生产出口；在这里失败关闭，避免任一 HTTP 测试因本机
+  // 恰好存在飞书配置而把合成审核消息发给真人。
+  if (process.env.VITEST === "1") {
+    return Promise.resolve({ ok: false, skipped: true, reason: "test notifications disabled" });
   }
-  const openId = (to || getSetting("FEISHU_OPEN_ID") || "").trim();
-  if (!openId) return { ok: false, skipped: true, reason: "missing FEISHU_OPEN_ID" };
-  const body = clipText(text);
-  const bin = whichLark();
-  if (bin) {
-    const cli = await sendViaCli(bin, openId, body);
-    if (cli.ok) return { ok: true, via: "cli" };
-    const app = await sendViaApp(openId, body);
-    if (app.ok) return { ok: true, via: "app" };
-    return { ok: false, reason: cli.reason || app.reason };
-  }
-  const app = await sendViaApp(openId, body);
-  if (app.ok) return { ok: true, via: "app" };
-  return { ok: false, reason: app.reason || "本机没有 lark-cli，用飞书应用发也失败了" };
+  return productionTextSender(text, to, opts);
 }
 
 export async function notifyTaskComplete(task: TaskLike, actor: string): Promise<void> {
