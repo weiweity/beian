@@ -1,0 +1,29 @@
+name: windows-packaging-v2
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "workers/packaging/**"
+      - "scripts/windows/illustrator-jsx-smoke.ps1"
+      - ".github/workflows/windows-packaging-v2.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hangzhou-packaging-v2-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  illustrator-jsx:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, hangzhou]
+    timeout-minutes: 15
+    env:
+      WB_DATA_DIR: C:\supply\data
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify Windows Illustrator COM to JSX bridge
+        shell: cmd
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\windows\illustrator-jsx-smoke.ps1
