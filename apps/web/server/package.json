@@ -1,7 +1,7 @@
 {
   "name": "beian-server",
   "private": true,
-  "version": "0.13.1",
+  "version": "0.13.2",
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
@@ -14,9 +14,11 @@
   },
   "dependencies": {
     "@hono/node-server": "^1.19.0",
+    "busboy": "^1.6.0",
     "hono": "^4.9.6"
   },
   "devDependencies": {
+    "@types/busboy": "^1.5.4",
     "@types/node": "^24.3.0",
     "tsx": "^4.20.5",
     "typescript": "^5.9.2"

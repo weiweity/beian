@@ -7,9 +7,10 @@ type Props = {
   hint: string;
   rows: DeskCardRow[];
   onOpen: (id: string) => void;
+  compact?: boolean;
 };
 
-export function DeskCol({ title, hint, rows, onOpen }: Props) {
+export function DeskCol({ title, hint, rows, onOpen, compact = false }: Props) {
   const [open, setOpen] = useState(false);
   return (
     <div className="review-col">
@@ -26,34 +27,53 @@ export function DeskCol({ title, hint, rows, onOpen }: Props) {
       <div className="review-col-list">
         {rows.length === 0 ? <div className="review-col-empty">没有单</div> : null}
         {rows.map((row) => (
-          <button key={row.id} type="button" className="review-card" onClick={() => onOpen(row.id)}>
-            <div className="review-card-top">
-              <span className="review-card-id">{row.shortId || deskShortId(row.id)}</span>
-              <span className="review-card-actor">{row.actor || "—"}</span>
-            </div>
-            <div className="review-card-name">{row.title}</div>
-            {row.live ? (
+          <button
+            key={row.id}
+            type="button"
+            className={compact ? "review-card is-compact" : "review-card"}
+            onClick={() => onOpen(row.id)}
+          >
+            {compact ? (
               <>
-                <div className="review-card-live">{row.live}</div>
-                {row.progress == null ? (
-                  <div className="review-card-bar" aria-hidden>
-                    <span />
-                  </div>
-                ) : (
-                  <progress
-                    className="upload-card-progress"
-                    max={100}
-                    value={Math.max(0, Math.min(100, row.progress))}
-                    aria-label={row.live}
-                  />
-                )}
+                <div className="review-card-summary">
+                  <span className="review-card-name">{row.title}</span>
+                  <strong className="review-card-summary-state">
+                    {row.progress == null ? row.statusText : `${Math.round(row.progress)}%`}
+                  </strong>
+                </div>
+                <div className="review-card-time">{deskClock(row.at)}</div>
               </>
-            ) : null}
-            {row.error ? <div className="review-card-err">{row.error}</div> : null}
-            <div className="review-card-meta">
-              <Tag color={row.statusColor}>{row.statusText}</Tag>
-            </div>
-            <div className="review-card-time">{deskClock(row.at)}</div>
+            ) : (
+              <>
+                <div className="review-card-top">
+                  <span className="review-card-id">{row.shortId || deskShortId(row.id)}</span>
+                  <span className="review-card-actor">{row.actor || "—"}</span>
+                </div>
+                <div className="review-card-name">{row.title}</div>
+                {row.live ? (
+                  <>
+                    <div className="review-card-live">{row.live}</div>
+                    {row.progress == null ? (
+                      <div className="review-card-bar" aria-hidden>
+                        <span />
+                      </div>
+                    ) : (
+                      <progress
+                        className="upload-card-progress"
+                        max={100}
+                        value={Math.max(0, Math.min(100, row.progress))}
+                        aria-label={row.live}
+                      />
+                    )}
+                  </>
+                ) : null}
+                {row.error ? <div className="review-card-err">{row.error}</div> : null}
+                <div className="review-card-meta">
+                  <Tag color={row.statusColor}>{row.statusText}</Tag>
+                </div>
+                <div className="review-card-time">{deskClock(row.at)}</div>
+              </>
+            )}
           </button>
         ))}
       </div>

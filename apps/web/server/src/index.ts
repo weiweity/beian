@@ -83,9 +83,10 @@ import {
   purgeReceiptFiles,
   receiptOwner,
   restoreReceipt,
-  stageBuffers,
+  stageMultipart,
   tooLarge,
   underReceiptDir,
+  UPLOAD_CONCURRENCY,
   UPLOAD_BODY_TOO_LARGE,
   oversizeMessage,
   uploadTotalTooLarge,
@@ -111,8 +112,15 @@ import {
 type Env = { Variables: { session: Session } };
 
 const app = new Hono<Env>();
-const VERSION = "0.13.1.0";
-const uploadAdmission = createUploadAdmission(1);
+const VERSION = "0.13.2.0";
+/** 浏览器给 100 MB 慢速上传 15 分钟；服务端多留 1 分钟完成落盘和回执。 */
+export const SERVER_HTTP_OPTIONS = {
+  headersTimeout: 60_000,
+  requestTimeout: 16 * 60 * 1000,
+} as const;
+const uploadAdmission = createUploadAdmission(UPLOAD_CONCURRENCY);
+// 对红仍用 Hono parseBody，单独保持单槽；新稿上传已改为双通道流式落盘。
+const reworkUploadAdmission = createUploadAdmission(1);
 
 app.use(compress());
 
@@ -346,43 +354,27 @@ app.post(
     need(c, "create");
     await uploadAdmission.run(next);
   },
-  bodyLimit({
-    maxSize: MAX_UPLOAD_BODY_BYTES,
-    onError: (c) => c.json({ detail: UPLOAD_BODY_TOO_LARGE }, 413),
-  }),
   async (c) => {
     const s = need(c, "create");
-    const body = await c.req.parseBody({ all: true });
-    const selected: { field: string; file: File }[] = [];
-    function take(field: string, file: unknown) {
-      if (!(file instanceof File)) return;
-      selected.push({ field, file });
-    }
-    take("excel", body.excel);
-    take("pdf", body.pdf);
-    take("ai", body.file || body.ai);
-    if (!selected.length) throw new HTTPException(400, { message: "没有文件" });
-    const rawClientUploadId = body.client_upload_id;
-    const clientUploadId =
-      typeof rawClientUploadId === "string" && /^[a-zA-Z0-9_-]{8,80}$/.test(rawClientUploadId)
-        ? rawClientUploadId
-        : undefined;
-    if (uploadTotalTooLarge(selected.map(({ file }) => file.size))) {
+    const declaredBytes = Number(c.req.header("content-length") || "0");
+    if (Number.isFinite(declaredBytes) && declaredBytes > MAX_UPLOAD_BODY_BYTES) {
       throw new HTTPException(413, { message: UPLOAD_BODY_TOO_LARGE });
     }
-    const parts: { field: string; name: string; buf: Buffer }[] = [];
-    for (const { field, file } of selected) {
-      parts.push({ field, name: file.name, buf: Buffer.from(await file.arrayBuffer()) });
-    }
+    const body = c.req.raw.body;
+    if (!body) throw new HTTPException(400, { message: "没有文件" });
     try {
-      const rec = stageBuffers(receiptOwner(s), parts, clientUploadId);
+      const rec = await stageMultipart(
+        receiptOwner(s),
+        body as unknown as AsyncIterable<Uint8Array>,
+        c.req.header("content-type") || "",
+      );
       return c.json({
         receipt: rec.id,
         client_upload_id: rec.client_upload_id,
         files: rec.files.map((f) => ({ field: f.field, name: f.name, bytes: f.bytes })),
       });
     } catch (err) {
-      throw new HTTPException(400, { message: err instanceof Error ? err.message : "上传失败" });
+      boom(err);
     }
   },
 );
@@ -600,7 +592,7 @@ app.post(
     await next();
   },
   async (_c, next) => {
-    await uploadAdmission.run(next);
+    await reworkUploadAdmission.run(next);
   },
   bodyLimit({
     maxSize: MAX_UPLOAD_BODY_BYTES,
@@ -919,7 +911,7 @@ if (process.env.VITEST !== "1") {
   }
   mkdirSync(join(DATA_DIR, "tasks"), { recursive: true });
   reclaimOnBoot();
-  serve({ fetch: app.fetch, hostname: HOST, port: PORT }, (info) => {
+  serve({ fetch: app.fetch, hostname: HOST, port: PORT, serverOptions: SERVER_HTTP_OPTIONS }, (info) => {
     console.log(`beian-server ${VERSION} http://${info.address}:${info.port}`);
   });
 }

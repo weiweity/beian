@@ -193,7 +193,7 @@ Windows 上 spawn 必须进 Job Object，Node 退出时杀掉子进程树。做�
 - `ReviewPage`：对红 POST 返回 queued 时不要 toast「已对照第二份 PDF」；WaitCard 增加「对红」文案。
 - `MockupPage` / `MockupJobPage`：打样台只交稿和列单。点进度或已出图进打样单；进行中是 WaitCard，完成一屏三图：正面+侧面、反面+侧面、GLB；每张图右上角下载；页头「下载 PPT」（没写成仍显示，点了出「PPT 没写成，白底仍可下」），不提供 PDF 下载入口；点下载底部提示不挡操作；GLB 全屏居中；截图时下载钮藏起来；全屏被拒出「全屏打不开」。不要死等 POST；打样单里轮询 GET `/api/mockups/:id`。`status=done|failed` 不当等待卡。地址 `/mockup`、`/mockup/new` 与 `/mockup/:id`。审稿台看板 `/reviewup`，工作台 `/reviewup/new`，核对页仍 `/review/:id`。
 - `WaitCard`：吃 `job_stage` / `job_stage_label`、`job_eta_s`、`queue_ahead`。queued 显示「前面还有 N 单」。
-- `TasksPage`：任一 `board==comparing` 时轮询 `/api/tasks`，否则排队卡片会停在旧状态。卡片用 `liveJobLine` 写阶段和大约还要，不要百分比。
+- `TasksPage`：任一 `board==comparing` 时轮询 `/api/tasks`，否则排队卡片会停在旧状态。审稿台四栏统一用紧凑明细；对照中首行显示品名和由真实阶段映射出的粗粒度百分比，下一行只放日期。WaitCard、历史行和侧栏仍用 `liveJobLine` 写阶段和大约还要，不画假精确百分比。
 - 侧栏：`liveNavPulse` 看登录后 `/api/status` 的 jobs 槽；审稿台/打样台作业在跑时有圆点。离开核对页再回看板，仍能看到阶段。
 - `HistoryPage`：进行中的审稿/打样也列；行上写 `liveJobLine`（阶段 · 大约还要 / 前面还有 N 单），不要百分比。点进去仍是 WaitCard / 打样单。有 `processing` 行就 2.5s 轮询。
 

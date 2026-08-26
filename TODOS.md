@@ -35,9 +35,9 @@
   `notifyJobFinished` 对照走 `/review/:id`，打样走 `/mockup/:id`。前端 History API 换台。  
   **Completed:** v0.12.17.0 (2026-08-25)
 
-- [x] **上传先限体积再读进内存**
-  `/api/uploads` 与对红在 `parseBody()` 前先走 Hono `bodyLimit`，文件聚合上限 100 MB；解析器只放行一份大请求，对红仍尊重更低的 `WB_MAX_UPLOAD_MB`。
-  **Completed:** v0.13.1.0 (2026-08-26)
+- [x] **新稿上传流式限体积并允许两份并发**
+  `/api/uploads` 不再走 `parseBody()` / `File.arrayBuffer()` 整包驻留内存，改为两条通道直接流式落盘；第三份立即 429，文件聚合上限仍为 100 MB。对红保持独立单槽并尊重更低的 `WB_MAX_UPLOAD_MB`。
+  **Completed:** v0.13.2.0 (2026-08-26)
 
 - [x] **未登录 health 不要带队列人数**
   公网 `GET /api/health` 只保留 `ok`、`version` 与发版所需的 Illustrator 可见性标记；准确队列仅给杭州本机直连和已登录 `/api/status`。WaitCard、侧栏阶段脉冲已改走登录接口。

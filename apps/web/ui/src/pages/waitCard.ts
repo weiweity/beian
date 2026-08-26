@@ -1,4 +1,4 @@
-/** WaitCard 文案。百分比禁止；queued 不准写 40 秒。 */
+/** WaitCard 文案不画百分比；queued 不准写 40 秒。审稿台紧凑行的阶段百分比见文末。 */
 
 export type WaitKind = "compare" | "rework" | "mockup";
 
@@ -83,6 +83,29 @@ export function liveJobLine(opts: {
   const fallback = opts.kind === "mockup" ? 240 : 40;
   const eta = formatEta(opts.job_eta_s || fallback);
   return stage ? `${stage} · ${eta}` : eta;
+}
+
+/**
+ * 审稿台紧凑明细只显示一个阶段百分比。它表示机器流程走到哪一段，不伪装成
+ * 字节级精确进度：排队 0%，出图 20%，认字 55%，对照 85%，完成后 100%。
+ * 运行中但没有真实 STAGE 时不猜数字，回退“正在对照”。
+ */
+export function compareBoardProgress(opts: {
+  status?: string;
+  job_status?: string;
+  job_stage?: string;
+  job_stage_label?: string;
+}): number | undefined {
+  if (opts.job_status === "failed" || opts.status === "compare_failed") return undefined;
+  const comparing = opts.status === "comparing" || opts.job_status === "queued" || opts.job_status === "running";
+  if (!comparing) return undefined;
+  if (opts.job_status === "succeeded") return 100;
+  if (opts.job_status === "queued") return 0;
+  const key = `${opts.job_stage || ""} ${opts.job_stage_label || ""}`.trim().toLowerCase();
+  if (/(^|\s)(match|对照)(\s|$)/.test(key)) return 85;
+  if (/(^|\s)(ocr|认字)(\s|$)/.test(key)) return 55;
+  if (/(^|\s)(render_pdf|出图)(\s|$)/.test(key)) return 20;
+  return undefined;
 }
 
 export function waitCardActiveSteps(

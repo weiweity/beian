@@ -7,6 +7,7 @@ import {
   historyHasLive,
   historyMockRow,
   historyRowKey,
+  historySelectionState,
   historyTaskRow,
   type HistoryRow,
 } from "./historyRows.js";
@@ -191,5 +192,20 @@ describe("history filters and batch selection", () => {
     assert.equal(historyCanDelete(rows[0]), true);
     assert.equal(historyCanDelete(rows[2]), false);
     assert.equal(historyRowKey(rows[0]), "审稿台-a");
+  });
+
+  it("selects every deletable visible row and reports the indeterminate state", () => {
+    const selectable = historySelectionState(rows, []);
+    assert.deepEqual(selectable.keys, ["审稿台-a", "打样台-b"]);
+    assert.equal(selectable.all, false);
+    assert.equal(selectable.some, false);
+
+    const partial = historySelectionState(rows, ["审稿台-a"]);
+    assert.equal(partial.all, false);
+    assert.equal(partial.some, true);
+
+    const all = historySelectionState(rows, selectable.keys);
+    assert.equal(all.all, true);
+    assert.equal(all.some, false);
   });
 });

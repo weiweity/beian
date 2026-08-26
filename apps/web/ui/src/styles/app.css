@@ -876,6 +876,41 @@ html[data-theme="dark"] .workspace {
   padding: 12px 14px;
 }
 
+.review-card.is-compact {
+  gap: 5px;
+  min-height: 60px;
+  padding: 10px 12px;
+}
+
+.review-card-summary {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.review-card.is-compact .review-card-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-card-summary-state {
+  flex: none;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+}
+
+.review-card.is-compact .review-card-time {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
 .review-card-top {
   display: flex;
   justify-content: space-between;
@@ -2236,6 +2271,10 @@ html[data-theme="dark"] .apple-slider::-moz-range-thumb {
   opacity: 0.72;
 }
 
+.history-page.is-editing {
+  padding-bottom: 88px;
+}
+
 .history-select-hitbox {
   display: inline-grid;
   width: 44px;
@@ -2249,17 +2288,18 @@ html[data-theme="dark"] .apple-slider::-moz-range-thumb {
 }
 
 .history-bulkbar {
-  position: sticky;
-  z-index: 80;
-  left: 50%;
-  bottom: 12px;
+  position: fixed;
+  z-index: 900;
+  left: 50vw;
+  bottom: max(18px, env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
   display: flex;
   align-items: center;
   gap: 12px;
   width: fit-content;
-  max-width: calc(100% - 24px);
+  max-width: calc(100vw - 32px);
   min-height: 56px;
-  margin: 14px auto 0;
+  margin: 0;
   padding: 8px 10px 8px 18px;
   border: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
   border-radius: 28px;
@@ -3466,7 +3506,7 @@ html[data-theme="dark"] .notes.is-float {
   }
 
   .history-bulkbar {
-    width: calc(100% - 8px);
+    width: calc(100vw - 24px);
     justify-content: space-between;
     border-radius: 22px;
   }
