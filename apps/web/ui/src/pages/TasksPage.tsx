@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Alert, App, Button, Empty, Input, Segmented, Space, Table, Tag } from "antd";
 import { api, ApiError, UPLOAD_TIMEOUT_MS, type PendingUploadReceipt, type TaskSummary } from "../api";
 import { UPLOAD_RECOVERY_INTERVAL_MS, uploadStore, useUploadSnapshot } from "../uploadStore";
-import { liveJobLine } from "./waitCard";
+import { compareBoardProgress, liveJobLine } from "./waitCard";
 import { shouldShowTaskBoard } from "./tasksBoard";
 import { PENDING_REVIEW, deskClock, type DeskCardRow } from "./deskBoard";
 import { DeskCol } from "./DeskCol";
@@ -53,6 +53,7 @@ function toDeskCard(row: TaskSummary): DeskCardRow {
       kind: row.job_kind === "rework" ? "rework" : "compare",
     }),
     error: row.error || row.job_error,
+    progress: columnOf(row) === "comparing" ? compareBoardProgress(row) : undefined,
   };
 }
 
@@ -302,10 +303,11 @@ export function TasksPage({ canCreate, onCreate, onOpen, onResumeReceipt }: Prop
             hint="上传中、待对照或机器运行"
             rows={[...pendingCards, ...board.comparing.map(toDeskCard)]}
             onOpen={openCard}
+            compact
           />
-          <DeskCol title="对照失败" hint="中断了，点开看原因" rows={board.failed.map(toDeskCard)} onOpen={onOpen} />
-          <DeskCol title="待审核" hint="要人写结论" rows={board.review.map(toDeskCard)} onOpen={onOpen} />
-          <DeskCol title="已签字" hint="结论已记下" rows={board.done.map(toDeskCard)} onOpen={onOpen} />
+          <DeskCol title="对照失败" hint="中断了，点开看原因" rows={board.failed.map(toDeskCard)} onOpen={onOpen} compact />
+          <DeskCol title="待审核" hint="要人写结论" rows={board.review.map(toDeskCard)} onOpen={onOpen} compact />
+          <DeskCol title="已签字" hint="结论已记下" rows={board.done.map(toDeskCard)} onOpen={onOpen} compact />
         </div>
       ) : (
         <Table<DeskCardRow>

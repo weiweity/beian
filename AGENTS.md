@@ -46,7 +46,7 @@ cd apps/web/backend && PYTHONPATH=. .venv/bin/python -m app.cli --help
 
 2. 第一次 queued 落盘之后，只有 `apps/web/server/src/jobs.ts` 再写任务文件。`enqueue({ kind, id })`。路由只 save queued 一次，之后这个 tid 归 `jobs.ts`。
 
-3. Hono 动作立即返回。没有 `/api/jobs` 资源。新建审稿/打样先走 `POST /api/uploads` 暂存，再用回执调用 `/api/tasks/start` 或 `/api/mockups/start`；`GET /api/uploads` 只列当前登录自己的待开工回执，`DELETE /api/uploads/:id` 用于放弃。上传解析全局单槽，审稿总量固定不超过 100 MB，回执 30 分钟过期并限制每人/全局数量和字节数。`client_upload_id` 只恢复本次丢响应的上传；开始接口用 `source_receipt` 幂等，领取回执后若准备任务失败要恢复回执。UI 上传状态跨 SPA 换台保留；整页刷新只恢复已经落盘的回执，回执生成前刷新或断网不是字节级续传。
+3. Hono 动作立即返回。没有 `/api/jobs` 资源。新建审稿/打样先走 `POST /api/uploads` 暂存，再用回执调用 `/api/tasks/start` 或 `/api/mockups/start`；`GET /api/uploads` 只列当前登录自己的待开工回执，`DELETE /api/uploads/:id` 用于放弃。新稿上传用两条流式落盘通道，不得退回 `parseBody` / `File.arrayBuffer()` 整包驻留内存；第三份立即 429。审稿总量固定不超过 100 MB，回执 30 分钟过期并限制每人/全局数量和字节数。`client_upload_id` 只恢复本次丢响应的上传；开始接口用 `source_receipt` 幂等，领取回执后若准备任务失败要恢复回执。UI 上传状态跨 SPA 换台保留；整页刷新只恢复已经落盘的回执，回执生成前刷新或断网不是字节级续传。
 
 4. 测试：抄 `jobs.test.ts` 的对照块。必写断言：第二单 queued、GET 无 `job_pid`、没有最后一行 JSON →「对照中断」、对红失败仍可签字。pytest：CLI 不 `save_task`；`--help` 含 `STAGE` / `save_task` / `packaging`。打样出图测 pymupdf（`test_packaging_thumbnail.py`），不要假定有 qlmanage。打样 PDF 测铺白和 Pillow 兜底（`test_packaging_dieline.py`）：pymupdf 已落盘则不覆盖，不要让人再装插件。
 

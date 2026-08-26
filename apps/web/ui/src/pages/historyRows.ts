@@ -121,6 +121,21 @@ export function historyCanDelete(row: HistoryRow): boolean {
   return row.color !== "processing";
 }
 
+export function historySelectionState(rows: HistoryRow[], selected: string[]): {
+  keys: string[];
+  all: boolean;
+  some: boolean;
+} {
+  const keys = rows.filter(historyCanDelete).map(historyRowKey);
+  const chosen = new Set(selected);
+  const selectedCount = keys.reduce((count, key) => count + Number(chosen.has(key)), 0);
+  return {
+    keys,
+    all: keys.length > 0 && selectedCount === keys.length,
+    some: selectedCount > 0 && selectedCount < keys.length,
+  };
+}
+
 export function historyActors(rows: HistoryRow[]): string[] {
   return [...new Set(rows.map((row) => row.actor.trim()).filter(Boolean))].sort((a, b) =>
     a.localeCompare(b, "zh-CN"),

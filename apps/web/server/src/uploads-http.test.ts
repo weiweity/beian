@@ -9,10 +9,15 @@ process.env.WB_DATA_DIR = makeTestTempDir("beian-uploads-http-");
 process.env.WB_HOST = "127.0.0.1";
 process.env.WB_PORT = "0";
 
-const { app } = await import("./index.js");
+const { app, SERVER_HTTP_OPTIONS } = await import("./index.js");
 const { issueSession } = await import("./auth.js");
 const { setJobsTestHooks, resetJobsTestHooks } = await import("./jobs.js");
-const { MAX_UPLOAD_BODY_BYTES, stageBuffers } = await import("./uploads.js");
+const {
+  discardReceipt,
+  MAX_PENDING_RECEIPTS_PER_OWNER,
+  MAX_UPLOAD_BODY_BYTES,
+  stageBuffers,
+} = await import("./uploads.js");
 
 function authHeader(openId = "ou_upload_http", name = "魏炜", role: "admin" | "reviewer" = "admin") {
   const sess = issueSession(name, role, openId, "feishu");
@@ -20,6 +25,11 @@ function authHeader(openId = "ou_upload_http", name = "魏炜", role: "admin" | 
 }
 
 describe("upload then start", () => {
+  it("keeps the server request window longer than the 15-minute browser upload window", () => {
+    assert.ok(SERVER_HTTP_OPTIONS.requestTimeout > 15 * 60 * 1000);
+    assert.equal(SERVER_HTTP_OPTIONS.headersTimeout, 60_000);
+  });
+
   it("refuses start without a receipt", async () => {
     const res = await app.request("/api/tasks/start", {
       method: "POST",
@@ -156,6 +166,44 @@ describe("upload then start", () => {
     });
     assert.equal(res.status, 413);
     assert.deepEqual(await res.json(), { detail: "上传总量超过 100 MB" });
+  });
+
+  it("returns an actionable 400 for a truncated multipart upload", async () => {
+    const boundary = "beian-truncated";
+    const res = await app.request("/api/uploads", {
+      method: "POST",
+      headers: {
+        ...authHeader("ou_truncated"),
+        "content-type": `multipart/form-data; boundary=${boundary}`,
+      },
+      body: [
+        `--${boundary}`,
+        'Content-Disposition: form-data; name="pdf"; filename="broken.pdf"',
+        "Content-Type: application/pdf",
+        "",
+        "%PDF-1.4 without closing boundary",
+      ].join("\r\n"),
+    });
+    assert.equal(res.status, 400);
+    assert.deepEqual(await res.json(), { detail: "上传中断，请重新上传" });
+  });
+
+  it("returns the pending-receipt quota as a 429 instead of a server error", async () => {
+    const owner = "ou_http_quota";
+    const held = Array.from({ length: MAX_PENDING_RECEIPTS_PER_OWNER }, (_, index) =>
+      stageBuffers(owner, [{ field: "ai", name: `held-${index}.ai`, buf: Buffer.from("%PDF") }]),
+    );
+    try {
+      const form = new FormData();
+      form.append("file", new File([Buffer.from("%PDF")], "next.ai"));
+      const res = await app.request("/api/uploads", { method: "POST", headers: authHeader(owner), body: form });
+      assert.equal(res.status, 429);
+      assert.deepEqual(await res.json(), {
+        detail: `待开工上传最多保留 ${MAX_PENDING_RECEIPTS_PER_OWNER} 单，请先开始已有上传`,
+      });
+    } finally {
+      for (const rec of held) discardReceipt(rec.id, owner);
+    }
   });
 
   it("lazily removes expired receipt JSON and files while listing", async () => {
