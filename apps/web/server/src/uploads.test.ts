@@ -20,11 +20,23 @@ const {
   purgeReceiptFiles,
   receiptOwner,
   restoreReceipt,
+  UPLOAD_CONCURRENCY,
+  stageMultipart,
   stageBuffers,
   sweepReceipts,
   tooLarge,
   uploadTotalTooLarge,
 } = await import("./uploads.js");
+
+async function stageFormData(owner: string, form: FormData) {
+  const request = new Request("http://beian.test/api/uploads", { method: "POST", body: form });
+  assert.ok(request.body);
+  return stageMultipart(
+    owner,
+    request.body as unknown as AsyncIterable<Uint8Array>,
+    request.headers.get("content-type") || "",
+  );
+}
 
 describe("uploads staging", () => {
   it("rejects a pdf that is not a pdf", () => {
@@ -202,14 +214,21 @@ describe("uploads staging", () => {
     }
   });
 
-  it("admits only one upload body parser and rejects excess requests with 429", async () => {
-    const gate = createUploadAdmission(1);
+  it("admits two streaming uploads and rejects only the third with 429", async () => {
+    const gate = createUploadAdmission(UPLOAD_CONCURRENCY);
     const entered: string[] = [];
     let releaseFirst!: () => void;
+    let releaseSecond!: () => void;
     const first = gate.run(async () => {
       entered.push("first");
       await new Promise<void>((resolve) => {
         releaseFirst = resolve;
+      });
+    });
+    const second = gate.run(async () => {
+      entered.push("second");
+      await new Promise<void>((resolve) => {
+        releaseSecond = resolve;
       });
     });
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -218,17 +237,30 @@ describe("uploads staging", () => {
         entered.push("overflow");
       }),
       (err: unknown) =>
-        err instanceof Error && /已有文件正在上传/.test(err.message) && (err as Error & { status?: number }).status === 429,
+        err instanceof Error && /同时最多上传 2 份/.test(err.message) && (err as Error & { status?: number }).status === 429,
     );
-    assert.deepEqual(entered, ["first"]);
-    assert.deepEqual(gate.snapshot(), { active: 1, waiting: 0 });
-    releaseFirst();
-    await first;
-    await gate.run(async () => {
-      entered.push("second");
-    });
     assert.deepEqual(entered, ["first", "second"]);
+    assert.deepEqual(gate.snapshot(), { active: 2, waiting: 0 });
+    releaseFirst();
+    releaseSecond();
+    await Promise.all([first, second]);
+    await gate.run(async () => {
+      entered.push("third-after-release");
+    });
+    assert.deepEqual(entered, ["first", "second", "third-after-release"]);
     assert.deepEqual(gate.snapshot(), { active: 0, waiting: 0 });
+  });
+
+  it("rejects duplicate multipart file fields and removes partial streaming files", async () => {
+    const root = join(process.env.WB_DATA_DIR!, "uploads", "receipts");
+    mkdirSync(root, { recursive: true });
+    const before = readdirSync(root).sort();
+    const form = new FormData();
+    form.append("pdf", new File([Buffer.from("%PDF-1.4\nfirst")], "first.pdf"));
+    form.append("pdf", new File([Buffer.from("%PDF-1.4\nsecond")], "second.pdf"));
+
+    await assert.rejects(stageFormData("ou_duplicate_stream", form), /同一文件栏只能上传一个文件/);
+    assert.deepEqual(readdirSync(root).sort(), before);
   });
 
   it("rolls back staging when a later file fails validation", () => {
@@ -299,21 +331,26 @@ describe("uploads staging", () => {
     assert.equal(existsSync(join(root, rec.id)), false);
   });
 
-  it("sweep removes stale orphan directories and abandoned take files", () => {
+  it("sweep removes stale orphan, incoming and abandoned take files", () => {
     const root = join(process.env.WB_DATA_DIR!, "uploads", "receipts");
     mkdirSync(root, { recursive: true });
     const id = "f20000000001";
     const orphan = join(root, id);
+    const incoming = join(root, ".incoming-stale");
     const taken = join(root, `${id}.json.999.0.take`);
     mkdirSync(orphan);
+    mkdirSync(incoming);
     writeFileSync(join(orphan, "ai-orphan.ai"), "%PDF");
+    writeFileSync(join(incoming, "pdf-partial.pdf"), "%PDF");
     writeFileSync(taken, "{}");
     const old = new Date("2020-01-01T00:00:00.000Z");
     utimesSync(orphan, old, old);
+    utimesSync(incoming, old, old);
     utimesSync(taken, old, old);
 
     sweepReceipts();
     assert.equal(existsSync(orphan), false);
+    assert.equal(existsSync(incoming), false);
     assert.equal(existsSync(taken), false);
   });
 });

@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { API_DOWN_LOCAL, API_DOWN_PUBLIC } from "./apiHint.js";
-import { ApiError, UPLOAD_TIMEOUT_MS, api, brokenApiMessage, uploadWithProgress } from "./api.js";
+import {
+  ApiError,
+  UPLOAD_TIMEOUT_MS,
+  api,
+  brokenApiMessage,
+  transientApiFailure,
+  uploadWithProgress,
+} from "./api.js";
 import { UPLOAD_TOO_LARGE } from "./uploadLimit.js";
 
 describe("brokenApiMessage", () => {
@@ -46,6 +53,165 @@ describe("authenticated live status API", () => {
     } finally {
       globalThis.fetch = original;
     }
+  });
+});
+
+describe("GET polling protection", () => {
+  it("coalesces overlapping polls for the same endpoint", async () => {
+    const original = globalThis.fetch;
+    let calls = 0;
+    let release!: () => void;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    try {
+      const first = api.tasks("coalesce-poll");
+      const second = api.tasks("coalesce-poll");
+      assert.equal(calls, 1);
+      release();
+      assert.deepEqual(await Promise.all([first, second]), [[], []]);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  it("backs off after a 524 instead of firing another request on every interval", async () => {
+    const original = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return new Response("gateway timeout", { status: 524, headers: { "content-type": "text/html" } });
+    }) as typeof fetch;
+    try {
+      await assert.rejects(api.tasks("backoff-524"), /审稿服务没回上|8787/);
+      await assert.rejects(api.tasks("backoff-524"), /审稿服务没回上|8787/);
+      assert.equal(calls, 1);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  it("retries after the cooldown and clears the failure state after recovery", async () => {
+    const originalFetch = globalThis.fetch;
+    const originalNow = Date.now;
+    let now = 1_000_000;
+    let calls = 0;
+    Date.now = () => now;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return calls === 1
+        ? new Response("gateway timeout", { status: 524, headers: { "content-type": "text/html" } })
+        : new Response(JSON.stringify([]), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    try {
+      await assert.rejects(api.tasks("recover-after-524"), /审稿服务没回上|8787/);
+      now += 5_001;
+      assert.deepEqual(await api.tasks("recover-after-524"), []);
+      assert.deepEqual(await api.tasks("recover-after-524"), []);
+      assert.equal(calls, 3);
+    } finally {
+      globalThis.fetch = originalFetch;
+      Date.now = originalNow;
+    }
+  });
+
+  it("invalidates an older pending GET after a successful write", async () => {
+    const original = globalThis.fetch;
+    const calls: string[] = [];
+    let releaseOld!: () => void;
+    let releaseFresh!: () => void;
+    let getCalls = 0;
+    globalThis.fetch = (async (_input, init) => {
+      const method = String(init?.method || "GET").toUpperCase();
+      calls.push(method);
+      if (method === "DELETE") {
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      getCalls += 1;
+      if (getCalls === 1) {
+        await new Promise<void>((resolve) => {
+          releaseOld = resolve;
+        });
+        return new Response(JSON.stringify([{ id: "stale" }]), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      await new Promise<void>((resolve) => {
+        releaseFresh = resolve;
+      });
+      return new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    try {
+      const oldPoll = api.tasks("write-invalidation");
+      await api.deleteTask("aaaaaaaaaaaa");
+      const freshPoll = api.tasks("write-invalidation");
+      releaseOld();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      releaseFresh();
+      assert.deepEqual(await Promise.all([oldPoll, freshPoll]), [[], []]);
+      assert.deepEqual(calls, ["GET", "DELETE", "GET"]);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  it("caps exponential backoff at 60 seconds and never caches a 400", async () => {
+    const originalFetch = globalThis.fetch;
+    const originalNow = Date.now;
+    let now = 2_000_000;
+    let timeoutCalls = 0;
+    let badRequestCalls = 0;
+    Date.now = () => now;
+    globalThis.fetch = (async (input) => {
+      if (String(input).includes("non-transient-400")) {
+        badRequestCalls += 1;
+        return new Response(JSON.stringify({ detail: "bad request" }), {
+          status: 400,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      timeoutCalls += 1;
+      return new Response("gateway timeout", { status: 524, headers: { "content-type": "text/html" } });
+    }) as typeof fetch;
+    try {
+      for (const delay of [5_000, 10_000, 20_000, 40_000, 60_000, 60_000]) {
+        await assert.rejects(api.tasks("backoff-cap"), /审稿服务没回上|8787/);
+        const callsAtFailure = timeoutCalls;
+        await assert.rejects(api.tasks("backoff-cap"), /审稿服务没回上|8787/);
+        assert.equal(timeoutCalls, callsAtFailure);
+        now += delay;
+      }
+      await assert.rejects(api.tasks("backoff-cap"), /审稿服务没回上|8787/);
+      assert.equal(timeoutCalls, 7);
+
+      await assert.rejects(api.tasks("non-transient-400"), /bad request/);
+      await assert.rejects(api.tasks("non-transient-400"), /bad request/);
+      assert.equal(badRequestCalls, 2);
+    } finally {
+      globalThis.fetch = originalFetch;
+      Date.now = originalNow;
+    }
+  });
+
+  it("recognizes network, overload and gateway timeout failures as transient", () => {
+    for (const status of [0, 429, 502, 503, 504, 524]) {
+      assert.equal(transientApiFailure(new ApiError(status, "temporary")), true);
+    }
+    assert.equal(transientApiFailure(new ApiError(400, "bad request")), false);
   });
 });
 

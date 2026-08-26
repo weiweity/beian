@@ -22,16 +22,66 @@ export function brokenApiMessage(err: unknown, host = ""): string | null {
   return describeBrokenApi(0, "text/html", host);
 }
 
-async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
+export const GET_TIMEOUT_MS = 15_000;
+const GET_RETRY_BASE_MS = 5_000;
+const GET_RETRY_MAX_MS = 60_000;
+type PendingGet = { epoch: number; promise: Promise<unknown> };
+const pendingGets = new Map<string, PendingGet>();
+const failedGets = new Map<string, { failures: number; retryAt: number; error: unknown }>();
+let getEpoch = 0;
+
+/** 写成功后废弃写前的轮询与退避；旧 GET 会转接到当前代次，不把旧列表交给页面。 */
+function invalidateGetCache(): void {
+  getEpoch += 1;
+  pendingGets.clear();
+  failedGets.clear();
+}
+
+function isGet(opts: RequestInit): boolean {
+  return String(opts.method || "GET").toUpperCase() === "GET";
+}
+
+export function transientApiFailure(err: unknown): boolean {
+  if (err instanceof ApiError) {
+    return err.status === 0 || err.status === 429 || [502, 503, 504, 524].includes(err.status);
+  }
+  return err instanceof TypeError || (err instanceof DOMException && err.name === "AbortError");
+}
+
+async function fetchJson<T>(path: string, opts: RequestInit): Promise<T> {
   const headers = new Headers(opts.headers);
   if (!(opts.body instanceof FormData) && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
-  const res = await fetch(path, {
-    credentials: "same-origin",
-    ...opts,
-    headers,
-  });
+  const controller = isGet(opts) ? new AbortController() : null;
+  let timedOut = false;
+  const abortFromCaller = () => controller?.abort(opts.signal?.reason);
+  if (controller && opts.signal) opts.signal.addEventListener("abort", abortFromCaller, { once: true });
+  const timeout = controller
+    ? globalThis.setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, GET_TIMEOUT_MS)
+    : undefined;
+  let res: Response;
+  try {
+    res = await fetch(path, {
+      credentials: "same-origin",
+      ...opts,
+      signal: controller?.signal || opts.signal,
+      headers,
+    });
+  } catch (err) {
+    if (timedOut) throw new ApiError(0, "审稿服务响应超时，请稍后重试。", true);
+    if (err instanceof TypeError) {
+      const hint = describeBrokenApi(0, "text/html", apiHost()) || "审稿服务没回上。刷新后再试。";
+      throw new ApiError(0, hint, true);
+    }
+    throw err;
+  } finally {
+    if (timeout !== undefined) globalThis.clearTimeout(timeout);
+    if (controller && opts.signal) opts.signal.removeEventListener("abort", abortFromCaller);
+  }
   const ct = res.headers.get("content-type") || "";
   if (res.status === 413) {
     throw new ApiError(413, UPLOAD_TOO_LARGE, false);
@@ -48,13 +98,49 @@ async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
     } catch {
       /* keep statusText */
     }
-    const message = hint || detail;
+    const message = hint || detail || (res.status >= 500 ? "审稿服务暂时不可用，请稍后重试。" : "请求失败");
     throw new ApiError(res.status, message, Boolean(hint) || message === API_DOWN_LOCAL);
   }
   if (!ct.includes("application/json")) {
     throw new ApiError(res.status || 502, hint || "接口没有返回 JSON", true);
   }
   return (await res.json()) as T;
+}
+
+async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
+  if (!isGet(opts)) {
+    const body = await fetchJson<T>(path, opts);
+    invalidateGetCache();
+    return body;
+  }
+
+  const epoch = getEpoch;
+  const failed = failedGets.get(path);
+  if (failed && failed.retryAt > Date.now()) throw failed.error;
+  const pending = pendingGets.get(path);
+  if (pending && pending.epoch === epoch) return pending.promise as Promise<T>;
+
+  let next!: Promise<T>;
+  next = fetchJson<T>(path, opts)
+    .then((body) => {
+      if (epoch !== getEpoch) return request<T>(path, opts);
+      failedGets.delete(path);
+      return body;
+    })
+    .catch((err) => {
+      if (epoch !== getEpoch) return request<T>(path, opts);
+      if (transientApiFailure(err)) {
+        const failures = (failedGets.get(path)?.failures || 0) + 1;
+        const retryDelay = Math.min(GET_RETRY_BASE_MS * 2 ** (failures - 1), GET_RETRY_MAX_MS);
+        failedGets.set(path, { failures, retryAt: Date.now() + retryDelay, error: err });
+      }
+      throw err;
+    })
+    .finally(() => {
+      if (pendingGets.get(path)?.promise === next) pendingGets.delete(path);
+    });
+  pendingGets.set(path, { epoch, promise: next });
+  return next;
 }
 
 export type UploadReceipt = {
@@ -103,6 +189,7 @@ export function uploadWithProgress<T>(
       if (settled) return;
       settled = true;
       cleanup();
+      invalidateGetCache();
       resolve(body);
     };
     xhr.open("POST", path);
