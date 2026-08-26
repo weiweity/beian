@@ -314,3 +314,40 @@ export async function runPackaging(
     onSpawn: hooks?.onSpawn,
   });
 }
+
+export async function preflightPackaging(
+  manifestPath: string,
+  hooks?: { onStderrLine?: (line: string) => void; onSpawn?: (pid: number) => void },
+): Promise<RunPythonResult> {
+  return runPython({
+    args: ["pipeline.py", manifestPath, "--workers", "1", "--preflight-only"],
+    cwd: PACKAGING,
+    timeoutMs: 420_000,
+    onStderrLine: hooks?.onStderrLine,
+    onSpawn: hooks?.onSpawn,
+  });
+}
+
+export async function confirmPackagingStructure(opts: {
+  source: string;
+  resolution: string;
+  decisions: string;
+  output: string;
+}): Promise<RunPythonResult> {
+  return runPython({
+    args: [
+      "-m",
+      "structure_v2.confirmation",
+      "--source",
+      opts.source,
+      "--resolution",
+      opts.resolution,
+      "--decisions",
+      opts.decisions,
+      "--output",
+      opts.output,
+    ],
+    cwd: PACKAGING,
+    timeoutMs: 30_000,
+  });
+}

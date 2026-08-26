@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+from copy import deepcopy
 import hashlib
 import json
 import os
@@ -34,12 +35,17 @@ BLENDER_SCRIPT = ROOT / "blender" / "render_job.py"
 PPT_SCRIPT = ROOT / "ppt" / "build_product_ppt.mjs"
 ILLUSTRATOR_WORKER = ROOT / "illustrator" / "illustrator_worker.py"
 ILLUSTRATOR_JSX = ROOT / "illustrator" / "export_ai.jsx"
+ILLUSTRATOR_STRUCTURE_JSX = ROOT / "illustrator" / "export_structure.jsx"
 ILLUSTRATOR_RUNNER = ROOT / "illustrator" / "run_export.applescript"
+ILLUSTRATOR_WINDOWS_RUNNER = ROOT / "illustrator" / "run_export.vbs"
 DIELINE_SCRIPT = ROOT / "dieline.py"
+STRUCTURE_V2_FILES = tuple(sorted((ROOT / "structure_v2").glob("*.py")))
 
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from dieline import PT_TO_MM, layout_to_template, parse_knife_pdf, pick_knife_layer  # noqa: E402
+from structure_v2 import render_face_assets, resolve_structure  # noqa: E402
+from white_background import composite_rgba_over_white  # noqa: E402
 
 DEFAULT_NODE_MODULES = Path(os.environ.get("RUNTIME_NODE_MODULES", ""))
 DEFAULT_RUNTIME_BIN = Path(os.environ.get("RUNTIME_BIN_DIR", ""))
@@ -56,6 +62,37 @@ DEFAULT_ILLUSTRATOR_APP = Path(
 
 class PipelineError(RuntimeError):
     pass
+
+
+class PipelineHold(PipelineError):
+    """A recoverable V2 product state, not a worker crash."""
+
+    def __init__(
+        self,
+        *,
+        status: str,
+        code: str,
+        message: str,
+        resolution_path: Path,
+        details: dict[str, Any] | None = None,
+    ):
+        super().__init__(message)
+        self.status = status
+        self.code = code
+        self.message = message
+        self.resolution_path = resolution_path
+        self.details = dict(details or {})
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "ok": False,
+            "kind": "structure_resolution",
+            "structure_status": self.status,
+            "code": self.code,
+            "message": self.message,
+            "resolution_path": str(self.resolution_path),
+            "details": self.details,
+        }
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -155,8 +192,11 @@ def job_fingerprint(
         PPT_SCRIPT,
         ILLUSTRATOR_WORKER,
         ILLUSTRATOR_JSX,
+        ILLUSTRATOR_STRUCTURE_JSX,
         ILLUSTRATOR_RUNNER,
+        ILLUSTRATOR_WINDOWS_RUNNER,
         DIELINE_SCRIPT,
+        *STRUCTURE_V2_FILES,
         *extra_paths,
     ):
         if pipeline_file.is_file():
@@ -354,7 +394,7 @@ def run_illustrator_fallback(
     app_path = Path(
         illustrator_config.get("application", str(DEFAULT_ILLUSTRATOR_APP))
     ).expanduser().resolve()
-    if not app_path.is_dir():
+    if not app_path.exists():
         raise PipelineError(f"需要Illustrator兜底，但未找到应用：{app_path}")
 
     normalized_dir = project_dir / "illustrator_normalized"
@@ -390,6 +430,196 @@ def run_illustrator_fallback(
     return result
 
 
+def run_illustrator_structure_export(
+    source: Path,
+    project_dir: Path,
+    illustrator_config: dict[str, Any],
+    semantic_assignments: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """V2 exporter is explicit and object-level; legacy fallback stays unchanged."""
+    app_path = Path(
+        illustrator_config.get("application", str(DEFAULT_ILLUSTRATOR_APP))
+    ).expanduser().resolve()
+    if not app_path.exists():
+        raise PipelineError(f"结构语义导出需要 Illustrator，但未找到应用：{app_path}")
+    normalized_dir = project_dir / "illustrator_semantic"
+    normalized_dir.mkdir(parents=True, exist_ok=True)
+    config_path = normalized_dir / "illustrator_input.json"
+    result_path = normalized_dir / "illustrator_result.json"
+    log_path = normalized_dir / "illustrator.log"
+    worker_config = {
+        "application": str(app_path),
+        "source_ai": str(source),
+        "source_sha256": file_sha256(source),
+        "full_pdf": str(normalized_dir / "full.pdf"),
+        "print_pdf": str(normalized_dir / "artwork.pdf"),
+        "structure_json": str(normalized_dir / "structure.json"),
+        "result_json": str(result_path),
+        "debug_log": str(normalized_dir / "jsx_debug.log"),
+        "semantic_assignments": semantic_assignments or {},
+    }
+    save_json(config_path, worker_config)
+    timeout_seconds = int(illustrator_config.get("timeout_seconds", 420))
+    process = subprocess.run(
+        [
+            sys.executable,
+            str(ILLUSTRATOR_WORKER),
+            str(config_path),
+            "--timeout",
+            str(timeout_seconds),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    log_path.write_text(process.stdout + "\n" + process.stderr, encoding="utf-8")
+    if process.returncode != 0 or not result_path.is_file():
+        raise PipelineError(f"Illustrator 结构语义导出失败，日志={log_path}")
+    result = load_json(result_path)
+    required = ("full_pdf", "print_pdf", "structure_json")
+    if not result.get("success") or any(not Path(result.get(key, "")).is_file() for key in required):
+        raise PipelineError(f"Illustrator 结构语义导出不完整：{result.get('error')}，日志={log_path}")
+    return result
+
+
+def preflight_product_v2(
+    product: dict[str, Any],
+    manifest_dir: Path,
+    output_root: Path,
+    force: bool,
+    illustrator_config: dict[str, Any],
+) -> dict[str, Any]:
+    started = time.perf_counter()
+    source = resolve_from(manifest_dir, product["source_ai"])
+    template_path = resolve_from(manifest_dir, product["template"])
+    if not source.is_file():
+        raise PipelineError(f"找不到AI文件：{source}")
+    if not template_path.is_file():
+        raise PipelineError(f"找不到渲染配置：{template_path}")
+    template = load_json(template_path)
+    code = str(product["code"])
+    slug = str(product["slug"])
+    project_dir = (output_root / code).resolve()
+    assets_dir = project_dir / "assets"
+    project_dir.mkdir(parents=True, exist_ok=True)
+
+    sidecar_value = product.get("structure_sidecar")
+    structure_sidecar = resolve_from(manifest_dir, sidecar_value) if sidecar_value else None
+    artwork_value = product.get("artwork_pdf")
+    artwork_pdf = resolve_from(manifest_dir, artwork_value) if artwork_value else None
+    illustrator_result: dict[str, Any] | None = None
+    if artwork_pdf is None:
+        if not bool(illustrator_config.get("enabled", True)):
+            raise PipelineError("V2 需要对象级清理后的 artwork PDF，但 Illustrator 已禁用")
+        illustrator_result = run_illustrator_structure_export(
+            source,
+            project_dir,
+            illustrator_config,
+            product.get("semantic_assignments"),
+        )
+        artwork_pdf = Path(illustrator_result["print_pdf"])
+        if structure_sidecar is None:
+            structure_sidecar = Path(illustrator_result["structure_json"])
+    if not artwork_pdf.is_file():
+        raise PipelineError(f"对象清理后的 artwork PDF 不存在：{artwork_pdf}")
+
+    resolution = resolve_structure(
+        source,
+        sidecar=structure_sidecar,
+        cache_dir=project_dir / "structure_cache",
+    )
+    resolution_path = project_dir / "structure_resolution.json"
+    save_json(resolution_path, resolution.as_dict())
+    if resolution.status != "ready" or resolution.resolved is None:
+        raise PipelineHold(
+            status=resolution.status,
+            code=resolution.code or "structure_review_required",
+            message=resolution.message or "包装结构需要人工确认。",
+            resolution_path=resolution_path,
+            details={
+                "artwork_pdf": str(artwork_pdf),
+                "structure_sidecar": str(structure_sidecar) if structure_sidecar else None,
+                "source_sha256": file_sha256(source),
+            },
+        )
+    structure_job = resolution.resolved
+    fingerprint_paths = [template_path, artwork_pdf]
+    if structure_sidecar is not None:
+        fingerprint_paths.append(structure_sidecar)
+    fingerprint = job_fingerprint(
+        source,
+        template_path,
+        {**product, "structure_hash": structure_job["structure_hash"]},
+        extra_paths=tuple(fingerprint_paths),
+    )
+    result_path = project_dir / "pipeline_result.json"
+    if not force and result_path.is_file():
+        previous = load_json(result_path)
+        outputs = previous.get("outputs", {})
+        required = [outputs.get(key) for key in ("blend", "glb", "front_right", "back_left")]
+        if previous.get("fingerprint") == fingerprint and all(
+            value and Path(value).is_file() for value in required
+        ):
+            previous["cache_hit"] = True
+            previous["preflight_elapsed_s"] = round(time.perf_counter() - started, 4)
+            return previous
+
+    face_sizes = render_face_assets(
+        artwork_pdf,
+        structure_job,
+        assets_dir,
+        raster_width_px=int(template.get("raster_width_px", 10_000)),
+    )
+    reader = PdfReader(str(artwork_pdf))
+    media = reader.pages[0].mediabox
+    page_size = [float(media.width), float(media.height)]
+    resolved = {
+        "pipeline_version": PIPELINE_VERSION,
+        "fingerprint": fingerprint,
+        "cache_hit": False,
+        "code": code,
+        "slug": slug,
+        "display_name": product["display_name"],
+        "source_ai": str(source),
+        "template_path": str(template_path),
+        "template_id": template.get("template_id", "v2-render-profile"),
+        "project_dir": str(project_dir),
+        "assets_dir": str(assets_dir),
+        "dimensions_mm": structure_job["dimensions_mm"],
+        "render": template["render"],
+        "glb_tolerance_mm": template.get("glb_tolerance_mm", 0.5),
+        "page_size_points": page_size,
+        "layers": illustrator_result.get("layers", []) if illustrator_result else [],
+        "face_texture_sizes": face_sizes,
+        "preflight_elapsed_s": round(time.perf_counter() - started, 4),
+        "input_mode": "illustrator_semantic" if illustrator_result else "semantic_sidecar",
+        "structure_engine": "v2",
+        "structure_schema": structure_job["structure_schema"],
+        "structure_hash": structure_job["structure_hash"],
+        "structure_cache_hit": resolution.cache_hit,
+        "structure_resolution_path": str(resolution_path),
+        "illustrator_invoked": bool(illustrator_result),
+        "illustrator_version": illustrator_result.get("illustrator_version") if illustrator_result else None,
+        "illustrator_elapsed_s": illustrator_result.get("worker_elapsed_s", 0) if illustrator_result else 0,
+        "normalized_full_pdf": illustrator_result.get("full_pdf") if illustrator_result else None,
+        "normalized_print_pdf": str(artwork_pdf),
+        "normalized_structure_sidecar": str(structure_sidecar) if structure_sidecar else None,
+        "assets": {
+            face: str(assets_dir / f"panel_{face}.png")
+            for face in ("front", "right", "back", "left", "top", "bottom")
+        },
+        "outputs": {
+            "blend": str(project_dir / f"{code}_{slug}_white_studio.blend"),
+            "glb": str(project_dir / f"{code}_{slug}.glb"),
+            "front_right": str(project_dir / f"{code}_{slug}_front_right_white.png"),
+            "back_left": str(project_dir / f"{code}_{slug}_back_left_white.png"),
+        },
+    }
+    resolved_path = project_dir / "resolved_job.json"
+    resolved["resolved_job_path"] = str(resolved_path)
+    save_json(resolved_path, resolved)
+    return resolved
+
+
 def preflight_product(
     product: dict[str, Any],
     manifest_dir: Path,
@@ -398,6 +628,14 @@ def preflight_product(
     illustrator_config: dict[str, Any],
     force_illustrator: bool,
 ) -> dict[str, Any]:
+    if product.get("structure_engine") == "v2":
+        return preflight_product_v2(
+            product,
+            manifest_dir,
+            output_root,
+            force,
+            illustrator_config,
+        )
     started = time.perf_counter()
     source = resolve_from(manifest_dir, product["source_ai"])
     template_path = resolve_from(manifest_dir, product["template"])
@@ -426,10 +664,16 @@ def preflight_product(
         app_path = Path(
             illustrator_config.get("application", str(DEFAULT_ILLUSTRATOR_APP))
         ).expanduser().resolve()
-        info_plist = app_path / "Contents" / "Info.plist"
-        if not info_plist.is_file():
-            raise PipelineError(f"需要Illustrator兜底，但应用不完整：{app_path}")
-        fingerprint_extra = (info_plist,)
+        if sys.platform == "win32":
+            if not app_path.is_file():
+                raise PipelineError(f"需要Illustrator兜底，但应用不完整：{app_path}")
+            # Do not hash the large Illustrator executable.  The Windows COM
+            # bridge and shared JSX are already part of job_fingerprint.
+        else:
+            info_plist = app_path / "Contents" / "Info.plist"
+            if not info_plist.is_file():
+                raise PipelineError(f"需要Illustrator兜底，但应用不完整：{app_path}")
+            fingerprint_extra = (info_plist,)
 
     illustrator_result: dict[str, Any] | None = None
     input_mode = "pdf_fast"
@@ -600,6 +844,12 @@ def run_blender_job(job: dict[str, Any], blender_executable: Path) -> dict[str, 
     log_path.write_text(process.stdout + "\n" + process.stderr, encoding="utf-8")
     if process.returncode != 0:
         raise PipelineError(f"Blender任务失败：{job['code']}，日志={log_path}")
+    if bool(job.get("render", {}).get("exact_white_background", True)):
+        for key in ("front_right", "back_left"):
+            output = Path(job["outputs"][key])
+            if not output.is_file():
+                raise PipelineError(f"Blender未生成白底图：{output}")
+            composite_rgba_over_white(output)
     blender_result_path = project_dir / "blender_result.json"
     if not blender_result_path.is_file():
         raise PipelineError(f"Blender未生成结果清单：{blender_result_path}")
@@ -984,6 +1234,11 @@ def main() -> int:
         help="诊断用：即使AI包含PDF数据也强制走Illustrator标准化",
     )
     parser.add_argument("--no-ppt", action="store_true", help="跳过PPT生成")
+    parser.add_argument(
+        "--preflight-only",
+        action="store_true",
+        help="只做结构、贴图和作业预检，不启动 Blender/PPT",
+    )
     args = parser.parse_args()
 
     pipeline_started = time.perf_counter()
@@ -1001,16 +1256,16 @@ def main() -> int:
 
     workers = max(1, int(args.workers or manifest.get("workers", 2)))
     workers = min(workers, len(products))
-    blender_executable = resolve_from(
-        manifest_dir,
-        manifest.get("blender_executable", "blender"),
-    )
-    if not blender_executable.is_file():
+    blender_executable = resolve_from(manifest_dir, manifest.get("blender_executable", "blender"))
+    if not args.preflight_only and not blender_executable.is_file():
         raise PipelineError(f"找不到Blender：{blender_executable}")
     generate_ppt = bool(manifest.get("generate_ppt", True)) and not args.no_ppt
     illustrator_config = manifest.get("illustrator", {"enabled": True})
 
-    emit_stage("render_pdf")
+    if args.preflight_only:
+        emit_stage("structure")
+    else:
+        emit_stage("render_pdf")
     jobs = [
         preflight_product(
             product,
@@ -1022,6 +1277,32 @@ def main() -> int:
         )
         for product in products
     ]
+
+    if args.preflight_only:
+        elapsed = round(time.perf_counter() - pipeline_started, 4)
+        prepared_manifest = deepcopy(manifest)
+        prepared_products: list[dict[str, Any]] = []
+        for product, job in zip(products, jobs):
+            prepared = dict(product)
+            if job.get("structure_engine") == "v2":
+                prepared["structure_sidecar"] = job["normalized_structure_sidecar"]
+                prepared["artwork_pdf"] = job["normalized_print_pdf"]
+            prepared_products.append(prepared)
+        prepared_manifest["products"] = prepared_products
+        prepared_path = output_root / "prepared_manifest.json"
+        save_json(prepared_path, prepared_manifest)
+        report = {
+            "pipeline_version": PIPELINE_VERSION,
+            "mode": "preflight",
+            "manifest": str(manifest_path),
+            "products": jobs,
+            "prepared_manifest": str(prepared_path),
+            "elapsed_s": elapsed,
+            "success": True,
+        }
+        save_json(output_root / "preflight_report.json", report)
+        print(json.dumps(report, ensure_ascii=False, separators=(",", ":")))
+        return 0
 
     blender_jobs = [job for job in jobs if not job.get("cache_hit")]
     if blender_jobs:
@@ -1098,6 +1379,9 @@ def _err_json(msg: object) -> None:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
+    except PipelineHold as hold:
+        print(json.dumps(hold.as_dict(), ensure_ascii=False, separators=(",", ":")), file=sys.stderr)
+        raise SystemExit(3)
     except PipelineError as error:
         _err_json(error)
         raise SystemExit(2)

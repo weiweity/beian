@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { makeTestTempDir } from "./testTemp.js";
@@ -8,6 +8,7 @@ process.env.VITEST = "1";
 process.env.WB_DATA_DIR = makeTestTempDir("beian-mockup-http-");
 process.env.WB_HOST = "127.0.0.1";
 process.env.WB_PORT = "0";
+process.env.PACKAGING_STRUCTURE_V2_ENABLED = "true";
 
 const { app } = await import("./index.js");
 const { issueSession } = await import("./auth.js");
@@ -208,15 +209,114 @@ describe("publicMockup", () => {
       status: "done",
       created_at: "2026-08-20T00:00:00Z",
       files: [{ key: "glb", path: "/secret/data/mockups/m1/box.glb", name: "box.glb" }],
+      structure_status: "review_required",
+      structure_code: "structure_face_mapping_incomplete",
+      structure_message: "请确认六个盒面。",
+      structure_resolution_path: "/secret/data/mockups/m1/structure_resolution.json",
+      structure_sidecar_path: "/secret/data/mockups/m1/structure.json",
+      structure_artwork_path: "/secret/data/mockups/m1/artwork.pdf",
     });
     assert.equal(out.id, "m1");
     assert.deepEqual(out.files, [{ key: "glb", name: "box.glb" }]);
     assert.equal(JSON.stringify(out).includes("/secret/"), false);
     assert.equal("path" in out.files[0], false);
+    assert.equal(out.structure_status, "review_required");
+    assert.equal(JSON.stringify(out).includes("structure_resolution.json"), false);
+  });
+});
+
+describe("mockup structure confirmation http", () => {
+  it("requires an admin before accepting any face decisions", async () => {
+    const id = "faceac100001";
+    saveMockup({
+      id,
+      status: "review_required",
+      created_at: "2026-08-27T00:00:00Z",
+      files: [],
+      owner: "ou_structure_owner",
+      job_kind: "mockup",
+      job_status: "waiting_input",
+      structure_engine: "v2",
+      structure_status: "review_required",
+    });
+    const reviewer = issueSession("审稿", "reviewer", "ou_structure_owner", "feishu");
+    const res = await app.request(`/api/mockups/${id}/structure`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${reviewer.token}`, "content-type": "application/json" },
+      body: JSON.stringify({ faces: [] }),
+    });
+    assert.equal(res.status, 403);
+    const body = (await res.json()) as { detail?: string };
+    assert.match(String(body.detail || ""), /管理员/);
+  });
+
+  it("rejects an incomplete six-face decision before invoking the worker", async () => {
+    const id = "faceba000002";
+    saveMockup({
+      id,
+      status: "review_required",
+      created_at: "2026-08-27T00:00:01Z",
+      files: [],
+      owner: "ou_structure_admin",
+      job_kind: "mockup",
+      job_status: "waiting_input",
+      structure_engine: "v2",
+      structure_status: "review_required",
+    });
+    const admin = issueSession("魏炜", "admin", "ou_structure_admin", "feishu");
+    const res = await app.request(`/api/mockups/${id}/structure`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${admin.token}`, "content-type": "application/json" },
+      body: JSON.stringify({ faces: [{ id: "one", role: "front", quarter_turns: 0 }] }),
+    });
+    assert.equal(res.status, 400);
+    const body = (await res.json()) as { detail?: string };
+    assert.match(String(body.detail || ""), /六个盒面/);
   });
 });
 
 describe("mockup post", { concurrency: false }, () => {
+  it("keeps the production legacy path until the V2 rollout gate is explicitly enabled", async () => {
+    const { setJobsTestHooks, resetJobsTestHooks } = await import("./jobs.js");
+    const prevBin = process.env.BLENDER_EXECUTABLE;
+    const prevAi = process.env.ILLUSTRATOR_EXECUTABLE;
+    const prevGate = process.env.PACKAGING_STRUCTURE_V2_ENABLED;
+    process.env.BLENDER_EXECUTABLE = process.execPath;
+    process.env.ILLUSTRATOR_EXECUTABLE = process.execPath;
+    process.env.PACKAGING_STRUCTURE_V2_ENABLED = "false";
+    setJobsTestHooks({
+      runRaster: () =>
+        new Promise(() => {
+          /* keep the legacy Illustrator slot occupied */
+        }),
+    });
+    try {
+      const sess = issueSession("籽烨", "reviewer", "ou_mockup_legacy_gate", "feishu");
+      const receipt = await stageAi(sess.token);
+      const res = await startMockup(sess.token, receipt);
+      assert.equal(res.status, 200);
+      const body = (await res.json()) as { id?: string; structure_engine?: string };
+      assert.ok(body.id);
+      assert.equal(body.structure_engine, undefined);
+      const manifest = JSON.parse(
+        readFileSync(join(DATA_DIR, "mockups", body.id, "manifest.json"), "utf8"),
+      ) as {
+        illustrator?: { enabled?: boolean; application?: string };
+        products?: Array<{ structure_engine?: string }>;
+      };
+      assert.deepEqual(manifest.illustrator, { enabled: false });
+      assert.equal(manifest.products?.[0]?.structure_engine, undefined);
+    } finally {
+      resetJobsTestHooks();
+      if (prevBin !== undefined) process.env.BLENDER_EXECUTABLE = prevBin;
+      else delete process.env.BLENDER_EXECUTABLE;
+      if (prevAi !== undefined) process.env.ILLUSTRATOR_EXECUTABLE = prevAi;
+      else delete process.env.ILLUSTRATOR_EXECUTABLE;
+      if (prevGate !== undefined) process.env.PACKAGING_STRUCTURE_V2_ENABLED = prevGate;
+      else delete process.env.PACKAGING_STRUCTURE_V2_ENABLED;
+    }
+  });
+
   it("returns 412 without enqueueing when Blender is missing", async () => {
     const prevBin = process.env.BLENDER_EXECUTABLE;
     const prevPath = process.env.PATH;
@@ -306,6 +406,10 @@ describe("mockup post", { concurrency: false }, () => {
     process.env.BLENDER_EXECUTABLE = process.execPath;
     process.env.ILLUSTRATOR_EXECUTABLE = process.execPath;
     setJobsTestHooks({
+      runStructure: () =>
+        new Promise(() => {
+          /* keep the V2 structure slot occupied */
+        }),
       runPack: () =>
         new Promise(() => {
           /* hang */
@@ -393,6 +497,10 @@ describe("mockup post", { concurrency: false }, () => {
     process.env.BLENDER_EXECUTABLE = process.execPath;
     process.env.ILLUSTRATOR_EXECUTABLE = process.execPath;
     setJobsTestHooks({
+      runStructure: () =>
+        new Promise(() => {
+          /* keep the V2 structure slot occupied */
+        }),
       runPack: () =>
         new Promise(() => {
           /* hang until process exit */
@@ -406,10 +514,23 @@ describe("mockup post", { concurrency: false }, () => {
       const elapsed = Date.now() - started;
       assert.equal(res.status, 200);
       assert.ok(elapsed < 2000, `mockup POST waited ${elapsed}ms`);
-      const body = (await res.json()) as { status?: string; job_status?: string; job_pid?: number };
+      const body = (await res.json()) as {
+        id?: string;
+        status?: string;
+        job_status?: string;
+        job_pid?: number;
+      };
       assert.ok(body.job_status === "queued" || body.job_status === "running");
       assert.ok(body.status === "queued" || body.status === "running");
       assert.equal("job_pid" in body, false);
+      assert.ok(body.id);
+      const manifest = JSON.parse(
+        readFileSync(join(DATA_DIR, "mockups", body.id, "manifest.json"), "utf8"),
+      ) as { illustrator?: { enabled?: boolean; application?: string } };
+      assert.deepEqual(manifest.illustrator, {
+        enabled: true,
+        application: process.execPath,
+      });
 
       // 服务端若已建单但响应丢了，重试同一回执应命中原单；恢复不再依赖此刻的本机工具探测。
       delete process.env.BLENDER_EXECUTABLE;

@@ -4,7 +4,7 @@ import { makeTestTempDir } from "./testTemp.js";
 
 process.env.WB_DATA_DIR = makeTestTempDir("beian-set-");
 
-const { saveSettings, getSetting, publicView, runProbe } = await import("./settings.js");
+const { saveSettings, getSetting, packagingStructureV2Enabled, publicView, runProbe } = await import("./settings.js");
 
 describe("settings mask", () => {
   it("secret never echoed", () => {
@@ -55,6 +55,15 @@ describe("settings mask", () => {
     const keys = adminOnlyKeys();
     assert.ok(keys.includes("BLENDER_EXECUTABLE"));
     assert.ok(keys.includes("ILLUSTRATOR_EXECUTABLE"));
+    assert.ok(keys.includes("PACKAGING_STRUCTURE_V2_ENABLED"));
+  });
+
+  it("keeps packaging structure V2 behind an explicit rollout gate", () => {
+    assert.equal(packagingStructureV2Enabled(), false);
+    saveSettings({ PACKAGING_STRUCTURE_V2_ENABLED: "true" });
+    assert.equal(packagingStructureV2Enabled(), true);
+    saveSettings({ PACKAGING_STRUCTURE_V2_ENABLED: "false" });
+    assert.equal(packagingStructureV2Enabled(), false);
   });
 
   it("illustrator probe does not claim isolated 通", async () => {

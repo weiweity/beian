@@ -156,6 +156,15 @@ function Test-DataDirInsideRepo([string]$DataDir, [string]$RepoRoot) {
   return $d.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)
 }
 
+function Get-RecentIncomingUploadCount {
+  $root = Join-Path $env:WB_DATA_DIR "uploads\receipts"
+  if (-not (Test-Path $root)) { return 0 }
+  $cutoff = [DateTime]::UtcNow.AddMinutes(-18)
+  $dirs = Get-ChildItem -Path $root -Directory -Filter ".incoming-*" -ErrorAction SilentlyContinue |
+    Where-Object { $_.LastWriteTimeUtc -ge $cutoff }
+  return @($dirs).Count
+}
+
 function Assert-SlotsIdle($HealthObj, [string]$When) {
   if (-not $HealthObj) { throw "$When : health 为空，拒绝升版" }
   if (-not $HealthObj.jobs) { throw "$When : health 没有 jobs，拒绝升版" }
@@ -166,6 +175,27 @@ function Assert-SlotsIdle($HealthObj, [string]$When) {
     if ($running -gt 0 -or $queued -gt 0) {
       throw "$When : 对照或打样在跑或排队。$name running=$running queued=$queued"
     }
+  }
+  if ($HealthObj.uploads) {
+    $activeUploads = [int]$HealthObj.uploads.active
+    $waitingUploads = [int]$HealthObj.uploads.waiting
+    if ($activeUploads -gt 0 -or $waitingUploads -gt 0) {
+      throw "$When : 上传仍在进行。uploads active=$activeUploads waiting=$waitingUploads"
+    }
+    return
+  }
+
+  # 首次部署本闸门时，旧 0.13.x health 还没有 uploads 字段。只允许它通过
+  # 最近 incoming 目录的兼容检查；0.14+ 缺字段一律失败，避免永久静默降级。
+  try { $healthVersion = [version]([string]$HealthObj.version) } catch {
+    throw "$When : health.version 无法解析且缺少 uploads，拒绝升版"
+  }
+  if ($healthVersion -ge [version]"0.14.0.0") {
+    throw "$When : health 缺少 uploads，拒绝升版"
+  }
+  $legacyUploads = Get-RecentIncomingUploadCount
+  if ($legacyUploads -gt 0) {
+    throw "$When : 旧版本检测到 $legacyUploads 个正在落盘的上传，拒绝升版"
   }
 }
 

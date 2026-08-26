@@ -677,6 +677,7 @@ describe("review http", () => {
         blender?: { running: number; queued: number };
         illustrator?: { running: number; queued: number };
       };
+      uploads?: { active: number; waiting: number };
     };
     assert.match(String(body.version), /^\d+\.\d+\.\d+\.\d+$/);
     assert.equal(typeof body.jobs?.ocr?.running, "number");
@@ -685,6 +686,8 @@ describe("review http", () => {
     assert.equal(typeof body.jobs?.blender?.queued, "number");
     assert.equal(typeof body.jobs?.illustrator?.running, "number");
     assert.equal(typeof body.jobs?.illustrator?.queued, "number");
+    assert.equal(typeof body.uploads?.active, "number");
+    assert.equal(typeof body.uploads?.waiting, "number");
   });
 
   it("public health does not expose or scan live queue counts", async () => {
@@ -695,12 +698,14 @@ describe("review http", () => {
     const body = (await res.json()) as {
       version?: string;
       feishu_notify?: boolean;
+      uploads?: unknown;
       jobs?: Record<string, { visibility?: string }>;
     };
     assert.match(String(body.version), /^\d+\.\d+\.\d+\.\d+$/);
     assert.deepEqual(Object.keys(body.jobs || {}), ["illustrator"]);
     assert.equal(body.jobs?.illustrator?.visibility, "authenticated");
     assert.equal("feishu_notify" in body, false);
+    assert.equal("uploads" in body, false);
   });
 
   it("only exposes live health for an unforwarded loopback Host", async () => {

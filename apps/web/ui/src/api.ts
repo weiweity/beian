@@ -345,6 +345,18 @@ export const api = {
     request<TaskDetail>("/api/tasks/start", { method: "POST", body: JSON.stringify(body) }),
   startMockup: (body: { receipt: string; title?: string; product_name?: string }) =>
     request<MockupJob>("/api/mockups/start", { method: "POST", body: JSON.stringify(body) }),
+  confirmMockupStructure: (
+    id: string,
+    faces: Array<{
+      id: string;
+      role: "front" | "right" | "back" | "left" | "top" | "bottom";
+      quarter_turns: 0 | 1 | 2 | 3;
+    }>,
+  ) =>
+    request<MockupJob>(`/api/mockups/${id}/structure`, {
+      method: "POST",
+      body: JSON.stringify({ faces }),
+    }),
   decide: (id: string, body: { hit_id: string; decision: Decision; note?: string }) =>
     request<TaskDetail>(`/api/tasks/${id}/decision`, {
       method: "POST",
@@ -457,7 +469,7 @@ export type ProbeResult = { id: string; ok: boolean; message: string };
 
 export type MockupJob = {
   id: string;
-  status: "queued" | "running" | "done" | "failed";
+  status: "queued" | "running" | "review_required" | "unsupported" | "done" | "failed";
   title?: string;
   error?: string;
   created_at?: string;
@@ -472,4 +484,18 @@ export type MockupJob = {
   job_started_at?: string;
   job_finished_at?: string;
   queue_ahead?: number;
+  structure_engine?: "v2";
+  structure_status?: "analyzing" | "review_required" | "unsupported" | "ready";
+  structure_code?: string;
+  structure_message?: string;
+  structure_preview?: {
+    faces: Array<{
+      id: string;
+      bounds_mm: [number, number, number, number];
+      centroid_mm: [number, number];
+      size_mm?: [number, number];
+      points_mm?: Array<[number, number]>;
+      rectangular: boolean;
+    }>;
+  };
 };
