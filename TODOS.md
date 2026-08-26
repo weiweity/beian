@@ -39,8 +39,9 @@
   `/api/uploads` 与对红在 `parseBody()` 前先走 Hono `bodyLimit`，文件聚合上限 100 MB；解析器只放行一份大请求，对红仍尊重更低的 `WB_MAX_UPLOAD_MB`。
   **Completed:** v0.13.1.0 (2026-08-26)
 
-- [ ] **未登录 health 不要带队列人数**  
-  `GET /api/health` 现把 `jobs` 槽位和 `feishu_notify` 公开。隧道探测够用 `ok`/`version`。WaitCard 的飞书开关改走已登录接口。
+- [x] **未登录 health 不要带队列人数**
+  公网 `GET /api/health` 只保留 `ok`、`version` 与发版所需的 Illustrator 可见性标记；准确队列仅给杭州本机直连和已登录 `/api/status`。WaitCard、侧栏阶段脉冲已改走登录接口。
+  **Completed:** v0.13.1.0 (2026-08-26)
 
 ## P1 — 对红（金标门，不进本周 P0）
 
