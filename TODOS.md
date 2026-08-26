@@ -60,6 +60,11 @@
 - [ ] **领取回执的进程崩溃窗口**
   普通 copy/save 失败会恢复回执；但 Node 若恰在 `consumeReceipt` 后、任务 JSON 落盘前退出，仍需重新上传。后续可把 claim 保留到任务持久化成功再 finalize，并在启动时恢复残留 claim。
 
+## P1 — 包装语义结构 V2 上线闸门
+
+- [ ] **真实稿结构真值与杭州 L2**
+  `0.14.0.0` 已提供语义结构、六面确认、精确贴图和 Windows Illustrator L1，但私有 Phase 0 的 13 份真实稿仍为 `pending_manual`。逐份由管理员确认或明确判为不支持，并为每个受支持结构族保留至少一份黄金样本；杭州真实 Illustrator + Blender L2 通过前，`PACKAGING_STRUCTURE_V2_ENABLED` 必须保持关闭。V2 打开并稳定一个发布周期后，删除旧控制路径和临时闸门。
+
 ## P2 — 开工板向导页画面（设计审查 2026-08-21）
 
 - [x] **百度 / 飞书 / MiniMax 向导页 mockup**  
@@ -76,7 +81,9 @@
 - [x] **qlmanage 替换（平面出图）**  
   打样 PDF 栅格走 pymupdf（对照同一 `.venv`）；macOS qlmanage 仅兜底。杭州不依赖 Quick Look。  
   **Completed:** v0.12.11.0 (2026-08-24)
-- [ ] Illustrator COM 替换（非 PDF 兼容 `.ai` 仍走本机 Illustrator；杭州 COM 未接线）
+- [x] **Illustrator COM 接线**
+  macOS AppleScript 与 Windows VBScript/COM 共用 `export_structure.jsx`；PR 的杭州自托管 L1 会验证 COM → JSX 调用，不改生产工作树、不重启 8787。真实稿仍由上面的 V2 L2 闸门验收。
+  **Completed:** v0.14.0.0 (2026-08-27)
 - [ ] Windows 开机自启 + Tunnel 掉线告警
 - [ ] SQLite / 异步通用队列
 - [ ] 压测并继续优化现有 CSS `transform` 1–6× 审稿缩放；保持当前轻量方案，不引入 OpenSeadragon

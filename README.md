@@ -11,7 +11,7 @@
 | `apps/web/ui` | React + Ant Design 6 审稿台 / 打样台 / 历史 / 设置 |
 | `apps/web/server` | Hono + TypeScript，对外 HTTP `:8787` |
 | `apps/web/backend` | Python 对照 worker（TS 用 `python -m app.cli` 调用） |
-| `workers/packaging/` | 2D→3D CLI，打样台调用。先读稿上刀线还原盒面（密折痕先密后疏）；平面出图用 pymupdf（对照同一 Python）；杭州不需要 macOS qlmanage。PPT 用两张白底写 OOXML，不依赖 Node；写不出才试演示文稿运行时。两张白底再合成一页 PDF（页底先铺白，槽按源图比例 contain；pymupdf 写不出且还没落盘才用已装 Pillow，不盖掉已写成的文件）。缺 PPT/PDF 仍算出图 |
+| `workers/packaging/` | 2D→3D CLI，打样台调用。V2 只接受显式 `cut/crease/...` 语义并形成 `PackagingStructure`；拓扑歧义进入管理员六面确认，不再按颜色、图层名或 bbox 猜刀线。平面出图用 pymupdf（对照同一 Python）；杭州不需要 macOS qlmanage。PPT 用两张白底写 OOXML；两张白底再合成一页 PDF。缺 PPT/PDF 仍算出图 |
 | `docs/` | 章程、ADR、设计 |
 
 旧 `apps/web/frontend` 已删除。网页入口只有 `apps/web/ui` + Hono `apps/web/server`；对照规则和 Blender 仍是 Python。见 `docs/adr-002-typescript-http.md`。
@@ -25,13 +25,14 @@
 | `docs/adr-002-typescript-http.md` | 为什么对外 HTTP 是 TypeScript |
 | `docs/adr-003-settings-overlay.md` | 本机设置覆盖密钥文件 |
 | `docs/adr-004-ousterhout-design.md` | 深模块、唯一入口、8/31 前不拆引擎 |
+| `docs/adr-005-packaging-structure-v2.md` | 包装语义 IR、人工确认闸门与 V1 退场条件 |
 | `docs/risks.md` | 密钥、Tunnel、3D 验收门 |
 | `docs/designs/` | 对红循环、两张台、作业模块（对照/对红/打样入队） |
 | `CHANGELOG.md` | 已发布版本 |
 | `TODOS.md` | 未做项 |
 | `AGENTS.md` | 给代理的硬约束、加长作业合同、易忘约定（MICRO 不改 `package.json` 三位；禁止 `git add -A`） |
 | `scripts/windows/README.md` | 杭州 Windows 生产备忘 |
-| `workers/packaging/README.md` | 打样 CLI、刀线还原盒面（密折痕先密后疏）、pymupdf 平面出图（不靠 qlmanage）；PPT 用白底写 OOXML；两张白底合成 PDF（槽 contain；pymupdf 写不出且未落盘才用 Pillow）；棚只提亮，不改盒子材质 |
+| `workers/packaging/README.md` | 打样 CLI、`PackagingStructure` 语义合同、管理员六面确认、pymupdf 平面出图、白底/PPT/GLB 产物合同 |
 
 ## 本机启动
 
@@ -44,6 +45,7 @@
 - 台地址：`/reviewup` 审稿台、`/reviewup/new` 审稿工作台、`/review/:id` 核对页、`/mockup` 打样台、`/mockup/new` 打样工作台、`/mockup/:id` 打样单、`/history`、`/settings`。旧 `/` `/new` `/review` 会转到新地址。后退换台。
 - 审稿双井或打样 `.ai` 选齐后会先上传。进度到 100% 只表示浏览器已发完，看到「服务器确认中」后还要等「待开工」；这时切去别页再回来仍可继续。要换一组稿先点「放弃上传」，会同时清掉服务器上的待开工回执。回执已生成时，整页刷新后可从台面的待开工卡继续；回执生成前刷新或断网仍需重新选择文件。
 - 打样台可按品名/文件名搜索，并在看板与表格之间切换。新稿支持两份同时流式上传，第三份会提示等待其中一份完成。历史记录可按审稿/打样、时间和生成人筛选；有删除权限时点「编辑」可全选并批量删除已结束的单，进行中的单不能删除。核对页默认打开已完成的第二版（如有），可切回上一版，也可用「全屏核对」。
+- 语义结构 V2 由管理员设置 `PACKAGING_STRUCTURE_V2_ENABLED` 控制，发布默认关闭，真实稿金标与杭州 Windows L1/L2 通过后才打开。打开后结构状态分开显示：`识别结构中` → `待确认结构` / `当前不支持` → `打样中`。只有显式结构语义能够形成闭合六面时才进 Blender；角色或方向有歧义时由管理员看真实多边形并确认六面。没有语义的旧 AI 会提示在 Illustrator 对象备注、对象名或图层名写 `packaging:cut` / `packaging:crease` 后重传，不会静默套模板。
 
 5173 登录闪或 `/api` 返回 HTML / 空 Content-Type：打开 http://127.0.0.1:8787/，或重启 `npm run dev:ui`。飞书授权失败回到飞书重试，不要把远程验收人指到本机。JSON 404（任务不存在等）不是 Vite 挂了。
 
@@ -72,7 +74,7 @@ docker compose --env-file .env.container up --build
 docker buildx build --platform linux/amd64 -t beian:review-amd64 --load .
 ```
 
-这不是 3D 打样容器：打样台仍要求宿主机 Blender，Illustrator/AppleScript 也不随镜像提供。容器能启动不代表 Windows 3D 流水线已验收。
+这不是 3D 打样容器：打样台仍要求宿主机 Blender 与 Illustrator；macOS AppleScript、Windows VBScript/COM 都只负责启动同一份 JSX 语义导出器，不随镜像提供。容器能启动不代表 Windows 3D 流水线已验收。
 
 </details>
 
