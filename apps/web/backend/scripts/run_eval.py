@@ -61,6 +61,10 @@ def main() -> int:
                     f"exp={row['expected']} pred={row['predicted']}"
                 )
 
+    if not reports:
+        print("No evaluable gold cases: every case was missing a usable task")
+        return 1
+
     agg = eval_gold.aggregate_reports(reports)
     print("---")
     print(json.dumps(agg, ensure_ascii=False, indent=2))
