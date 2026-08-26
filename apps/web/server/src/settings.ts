@@ -195,6 +195,15 @@ export const CATALOG: SettingField[] = [
   },
   {
     group: "本机依赖",
+    key: "PACKAGING_STRUCTURE_V2_ENABLED",
+    label: "语义结构 V2",
+    kind: "toggle",
+    default: "false",
+    adminOnly: true,
+    help: "仅在真实稿金标和杭州 Windows 验收完成后打开；关闭时继续使用现有打样结构入口。",
+  },
+  {
+    group: "本机依赖",
     key: "WB_MAX_UPLOAD_MB",
     label: "上传上限 MB",
     kind: "text",
@@ -335,6 +344,10 @@ export function blenderBin(): string {
 
 export function illustratorBin(): string {
   return getSetting("ILLUSTRATOR_EXECUTABLE");
+}
+
+export function packagingStructureV2Enabled(): boolean {
+  return /^(1|true|yes|on)$/i.test(getSetting("PACKAGING_STRUCTURE_V2_ENABLED"));
 }
 
 export function adminOnlyKeys(): string[] {

@@ -6,6 +6,8 @@ import { UploadProgressSlot } from "../chrome/UploadProgressSlot";
 import { UploadWell } from "../chrome/UploadWell";
 import { WaitCard } from "../chrome/WaitCard";
 import { mockupFailReason, mockupFailTag } from "./mockupError";
+import { StructureConfirmPanel } from "./StructureConfirmPanel";
+import { structureIssueCopy, structureStatusLabel } from "./mockupStructure";
 import { liveJobLine, shouldShowWaitCard } from "./waitCard";
 import { stemFromFilename } from "./stemName";
 import { HUD_MS, downloadHudLine, missingPptHud } from "./mockupHud";
@@ -47,6 +49,8 @@ type Layout = "board" | "table";
 
 function mockLabel(row: MockupJob) {
   if (row.status === "done") return { text: "已出图", color: "success" as const };
+  if (row.structure_status === "review_required") return { text: "待确认结构", color: "warning" as const };
+  if (row.structure_status === "unsupported") return { text: "结构暂不支持", color: "error" as const };
   if (row.status === "failed") return { text: mockupFailTag(), color: "error" as const };
   if (row.status === "queued" || row.status === "running") return { text: "打样中", color: "processing" as const };
   return { text: row.status, color: "default" as const };
@@ -54,7 +58,7 @@ function mockLabel(row: MockupJob) {
 
 function mockCol(row: MockupJob): "running" | "failed" | "done" {
   if (row.status === "done") return "done";
-  if (row.status === "failed" || row.job_status === "failed") return "failed";
+  if (row.status === "failed" || row.status === "unsupported" || row.job_status === "failed") return "failed";
   return "running";
 }
 
@@ -72,6 +76,7 @@ export function MockupDesk({
   composing,
   receiptId,
   canCreate,
+  canAdmin,
   onOpenJob,
   onBack,
   onCompose,
@@ -81,6 +86,7 @@ export function MockupDesk({
   composing?: boolean;
   receiptId?: string | null;
   canCreate: boolean;
+  canAdmin: boolean;
   onOpenJob: (id: string) => void;
   onBack: () => void;
   onCompose?: () => void;
@@ -88,7 +94,7 @@ export function MockupDesk({
 }) {
   let content: ReactNode;
   if (openId) {
-    content = <MockupJobPage jobId={openId} onBack={onBack} />;
+    content = <MockupJobPage jobId={openId} canAdmin={canAdmin} onBack={onBack} />;
   } else if (composing) {
     content = <MockupNewPage key={receiptId || "active"} canCreate={canCreate} receiptId={receiptId} onCreated={onOpenJob} onBack={onBack} />;
   } else {
@@ -123,7 +129,14 @@ function toMockCard(row: MockupJob): DeskCardRow {
     actor: row.owner,
     at: row.job_started_at || row.created_at,
     live: liveJobLine({ ...row, kind: "mockup" }),
-    error: row.status === "failed" ? mockupFailReason(row.error || row.job_error) : null,
+    error:
+      row.structure_status === "review_required"
+        ? structureIssueCopy(row)
+        : row.structure_status === "unsupported"
+          ? structureIssueCopy(row)
+          : row.status === "failed"
+            ? mockupFailReason(row.error || row.job_error)
+            : null,
   };
 }
 
@@ -180,7 +193,7 @@ export function MockupPage({
     };
   }, [canCreate, reload]);
 
-  const boardLive = rows.some((r) => mockCol(r) === "running");
+  const boardLive = rows.some((row) => row.job_status === "queued" || row.job_status === "running");
   useEffect(() => {
     if (!boardLive) return;
     const id = window.setInterval(() => {
@@ -614,7 +627,7 @@ export function MockupNewPage({
   );
 }
 
-export function MockupJobPage({ jobId, onBack }: JobProps) {
+export function MockupJobPage({ jobId, canAdmin, onBack }: JobProps & { canAdmin: boolean }) {
   const { message } = App.useApp();
   const [job, setJob] = useState<MockupJob | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -658,6 +671,9 @@ export function MockupJobPage({ jobId, onBack }: JobProps) {
 
   useEffect(() => {
     let cancelled = false;
+    setJob(null);
+    setError(null);
+    announced.current = "";
     void api
       .mockup(jobId)
       .then((next) => {
@@ -748,6 +764,30 @@ export function MockupJobPage({ jobId, onBack }: JobProps) {
           stage={job.job_stage}
           stageLabel={job.job_stage_label}
           etaS={job.job_eta_s}
+        />
+      </section>
+    );
+  }
+
+  if (job.structure_status === "review_required" || job.structure_status === "unsupported") {
+    return (
+      <section className="mockup-sheet">
+        <header className="page-head">
+          <div>
+            <h1 className="page-title">{mockTitle(job)}</h1>
+            <p className="page-lead">
+              {structureStatusLabel(job)}。结构确认前不会启动 Blender，也不会把这单记成上传失败。
+            </p>
+          </div>
+          <button type="button" className="btn-ghost" onClick={onBack}>
+            返回打样台
+          </button>
+        </header>
+        <StructureConfirmPanel
+          key={job.id}
+          job={job}
+          canAdmin={canAdmin}
+          onConfirmed={setJob}
         />
       </section>
     );

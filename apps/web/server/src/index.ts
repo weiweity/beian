@@ -34,6 +34,7 @@ import {
 import {
   feishuRedirect,
   getSetting,
+  packagingStructureV2Enabled,
   publicBase,
   publicView,
   runProbe,
@@ -61,7 +62,9 @@ import {
 } from "./auth.js";
 import {
   assertBlenderReady,
+  acceptStructureConfirmation,
   assertCanAccessMockup,
+  beginStructureConfirmation,
   deleteMockup,
   fileOf,
   findMockupBySourceReceipt,
@@ -69,9 +72,13 @@ import {
   isWhiteFile,
   listJobsFor,
   publicMockup,
+  prepareStructureConfirmation,
   queueMockup,
+  finishStructureConfirmation,
+  type StructureFaceDecision,
 } from "./mockup.js";
 import { assertIllustratorReady } from "./aiRaster.js";
+import { confirmPackagingStructure } from "./workers.js";
 import { skipPackSheetField } from "./sheetSkip.js";
 import {
   consumeReceipt,
@@ -112,7 +119,7 @@ import {
 type Env = { Variables: { session: Session } };
 
 const app = new Hono<Env>();
-const VERSION = "0.13.2.0";
+const VERSION = "0.14.0.0";
 /** 浏览器给 100 MB 慢速上传 15 分钟；服务端多留 1 分钟完成落盘和回执。 */
 export const SERVER_HTTP_OPTIONS = {
   headersTimeout: 60_000,
@@ -145,6 +152,21 @@ function safeLogCause(err: unknown): string {
     .replace(/Bearer\s+\S+/gi, "Bearer ***")
     .replace(/((?:token|secret|api[_-]?key|authorization|cookie)\s*[=:]\s*)[^\s,;]+/gi, "$1***")
     .slice(0, 240);
+}
+
+function finalJsonObject(text: string): Record<string, unknown> | null {
+  const lines = text.trim().split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    try {
+      const value = JSON.parse(lines[index]) as unknown;
+      if (value && typeof value === "object" && !Array.isArray(value)) {
+        return value as Record<string, unknown>;
+      }
+    } catch {
+      /* next line */
+    }
+  }
+  return null;
 }
 
 function boom(err: unknown): never {
@@ -191,8 +213,14 @@ app.onError((err, c) => {
 });
 
 function liveStatus() {
+  const primaryUploads = uploadAdmission.snapshot();
+  const reworkUploads = reworkUploadAdmission.snapshot();
   return {
     jobs: queueSnapshot(),
+    uploads: {
+      active: primaryUploads.active + reworkUploads.active,
+      waiting: primaryUploads.waiting + reworkUploads.waiting,
+    },
     feishu_notify:
       /^(1|true|yes|on)$/i.test(getSetting("FEISHU_ENABLED")) && Boolean(getSetting("FEISHU_OPEN_ID")),
   };
@@ -469,9 +497,10 @@ app.post("/api/mockups/start", async (c) => {
     purgeReceiptFiles(receiptId);
     return c.json(decorateQueueAhead([publicMockup(existing)])[0]);
   }
+  let illustratorExecutable: string;
   try {
     assertBlenderReady();
-    assertIllustratorReady();
+    illustratorExecutable = assertIllustratorReady();
   } catch (e) {
     boom(e);
   }
@@ -503,6 +532,8 @@ app.post("/api/mockups/start", async (c) => {
       sourceReceipt: receiptId,
       ownerId: viewerFromSession(s).id,
       displayName: s.display_name,
+      illustratorExecutable,
+      structureEngine: packagingStructureV2Enabled() ? "v2" : "legacy",
       title,
     });
   } catch (err) {
@@ -524,6 +555,78 @@ app.post("/api/mockups/start", async (c) => {
     console.warn("enqueue mockup failed:", err instanceof Error ? err.message : err);
   }
   return c.json(decorateQueueAhead([publicMockup(getJob(id) || job)])[0]);
+});
+
+app.post("/api/mockups/:id/structure", async (c) => {
+  const session = need(c, "create");
+  if (session.role !== "admin") {
+    throw new HTTPException(403, { message: "确认包装结构需要管理员" });
+  }
+  const id = assertTid(c.req.param("id"));
+  const job = getJob(id);
+  if (!job) throw new HTTPException(404, { message: "没有这单打样" });
+  assertCanAccessMockup(job, viewerFromSession(session));
+  if (job.structure_status !== "review_required" || job.job_status !== "waiting_input") {
+    throw new HTTPException(409, { message: "这单当前没有待确认的包装结构" });
+  }
+  const body = (await c.req.json().catch(() => ({}))) as { faces?: unknown };
+  if (!Array.isArray(body.faces) || body.faces.length !== 6) {
+    throw new HTTPException(400, { message: "请确认六个盒面" });
+  }
+  const roles = new Set(["front", "right", "back", "left", "top", "bottom"]);
+  const faces: StructureFaceDecision[] = body.faces.map((raw) => {
+    if (!raw || typeof raw !== "object") throw new HTTPException(400, { message: "盒面确认格式不对" });
+    const value = raw as Record<string, unknown>;
+    const role = String(value.role || "");
+    const turns = Number(value.quarter_turns ?? 0);
+    if (!roles.has(role) || !Number.isInteger(turns) || turns < 0 || turns > 3) {
+      throw new HTTPException(400, { message: "盒面角色或方向不对" });
+    }
+    return {
+      id: String(value.id || ""),
+      role: role as StructureFaceDecision["role"],
+      quarter_turns: turns as StructureFaceDecision["quarter_turns"],
+    };
+  });
+  beginStructureConfirmation(job);
+  try {
+    const files = prepareStructureConfirmation(job, faces);
+    const result = await confirmPackagingStructure(files);
+    if (result.timedOut) throw new HTTPException(504, { message: "结构确认超时，请再试一次" });
+    const output = finalJsonObject(result.stdout);
+    if (result.code !== 0 || output?.ok !== true || typeof output.sidecar !== "string") {
+      const failure = finalJsonObject(result.stderr);
+      const message = typeof failure?.message === "string" ? failure.message.slice(0, 120) : "结构确认不能形成闭合盒";
+      console.warn("confirm packaging structure failed", {
+        problem: "管理员提交了六面确认，但 V2 resolver 没有接受",
+        cause: typeof failure?.code === "string" ? failure.code : `worker_exit_${result.code}`,
+        fix: "保留待确认状态，调整盒面角色或方向后重试",
+      });
+      throw new HTTPException(400, { message });
+    }
+    const fresh = getJob(id);
+    if (!fresh) throw new HTTPException(404, { message: "打样单已删除" });
+    assertCanAccessMockup(fresh, viewerFromSession(session));
+    if (
+      fresh.structure_status !== "review_required" ||
+      fresh.structure_resolution_path !== job.structure_resolution_path ||
+      fresh.structure_source_sha256 !== job.structure_source_sha256
+    ) {
+      if (fresh.structure_status === "ready") {
+        return c.json(decorateQueueAhead([publicMockup(fresh)])[0]);
+      }
+      throw new HTTPException(409, { message: "源稿或结构状态已变化，请刷新后再确认" });
+    }
+    acceptStructureConfirmation(fresh, output.sidecar);
+    try {
+      enqueue({ kind: "mockup", id });
+    } catch (error) {
+      console.warn("enqueue confirmed mockup failed:", error instanceof Error ? error.message : error);
+    }
+    return c.json(decorateQueueAhead([publicMockup(getJob(id) || fresh)])[0]);
+  } finally {
+    finishStructureConfirmation(id);
+  }
 });
 
 app.post("/api/tasks/:tid/decision", async (c) => {
