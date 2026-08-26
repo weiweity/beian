@@ -579,7 +579,11 @@ export function ReviewPage({ taskId, onBack }: Props) {
         : document.body;
 
   return (
-    <section className={reviewFullscreen ? "review-page is-fullscreen" : "review-page"} ref={pageRef}>
+    <section
+      className={reviewFullscreen ? "review-page is-fullscreen" : "review-page"}
+      data-testid="review-root"
+      ref={pageRef}
+    >
       <header className="page-head">
         <div>
           <h1 className="page-title">{task?.product_name || task?.title || "核对页"}</h1>
@@ -860,6 +864,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
           ? createPortal(
           <aside
             ref={dockRef}
+            data-testid="review-dock"
             className={dockOpen ? "notes glass-pane is-float" : "notes glass-pane is-float is-shut"}
             style={(() => {
               const shown = dockVisual(dockOpen, dockBox, dockPlace, pageRoom());

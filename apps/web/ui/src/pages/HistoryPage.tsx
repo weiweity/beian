@@ -23,6 +23,13 @@ type Props = {
 
 type Row = HistoryRow;
 
+export type HistoryRowAction = "open-task" | "open-mockup" | "toggle" | "blocked";
+
+export function historyRowAction(row: Row, editing: boolean): HistoryRowAction {
+  if (!editing) return row.kind === "审稿台" ? "open-task" : "open-mockup";
+  return historyCanDelete(row) ? "toggle" : "blocked";
+}
+
 function clock(iso: string) {
   if (!iso) return "—";
   const d = new Date(iso);
@@ -111,6 +118,13 @@ export function HistoryPage({ canDelete, onOpenTask, onOpenMockup }: Props) {
     if (!historyCanDelete(row)) return;
     const key = historyRowKey(row);
     setSelected((keys) => (keys.includes(key) ? keys.filter((item) => item !== key) : [...keys, key]));
+  }
+
+  function activateRow(row: Row) {
+    const action = historyRowAction(row, editing);
+    if (action === "toggle") toggle(row);
+    else if (action === "open-task") onOpenTask(row.id);
+    else if (action === "open-mockup") onOpenMockup(row.id);
   }
 
   async function removeMany(targets: Row[]) {
@@ -232,11 +246,7 @@ export function HistoryPage({ canDelete, onOpenTask, onOpenMockup }: Props) {
               locale={{ emptyText: "没有符合筛选的记录" }}
               rowClassName={(row) => (!historyCanDelete(row) && editing ? "history-row-locked" : "")}
               onRow={(row) => ({
-                onClick: () => {
-                  if (editing) toggle(row);
-                  else if (row.kind === "审稿台") onOpenTask(row.id);
-                  else onOpenMockup(row.id);
-                },
+                onClick: () => activateRow(row),
                 style: { cursor: editing && !historyCanDelete(row) ? "not-allowed" : "pointer" },
               })}
               columns={[
@@ -265,7 +275,26 @@ export function HistoryPage({ canDelete, onOpenTask, onOpenMockup }: Props) {
                     ]
                   : []),
                 { title: "类型", dataIndex: "kind", width: 100 },
-                { title: "品名", dataIndex: "title" },
+                {
+                  title: "品名",
+                  dataIndex: "title",
+                  render: (_: unknown, row: Row) =>
+                    editing ? (
+                      <span>{row.title}</span>
+                    ) : (
+                      <button
+                        type="button"
+                        className="history-record-button"
+                        aria-label={`打开${row.kind}记录：${row.title}`}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          activateRow(row);
+                        }}
+                      >
+                        {row.title}
+                      </button>
+                    ),
+                },
                 { title: "生成时间", dataIndex: "at", width: 180, render: (v: string) => clock(v) },
                 {
                   title: "状态",

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { API_DOWN_LOCAL, API_DOWN_PUBLIC } from "./apiHint.js";
-import { ApiError, UPLOAD_TIMEOUT_MS, brokenApiMessage, uploadWithProgress } from "./api.js";
+import { ApiError, UPLOAD_TIMEOUT_MS, api, brokenApiMessage, uploadWithProgress } from "./api.js";
 import { UPLOAD_TOO_LARGE } from "./uploadLimit.js";
 
 describe("brokenApiMessage", () => {
@@ -25,6 +25,27 @@ describe("brokenApiMessage", () => {
   it("does not treat a 413 as a dead review service", () => {
     const err = new ApiError(413, UPLOAD_TOO_LARGE, false);
     assert.equal(brokenApiMessage(err, "www.jianghua.site"), null);
+  });
+});
+
+describe("authenticated live status API", () => {
+  it("uses /api/status instead of the public health endpoint", async () => {
+    const original = globalThis.fetch;
+    const calls: Array<{ input: string; credentials?: RequestCredentials }> = [];
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      calls.push({ input: String(input), credentials: init?.credentials });
+      return new Response(JSON.stringify({ ok: true, jobs: { ocr: { running: 1, queued: 0 } } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    try {
+      const body = await api.status();
+      assert.equal(body.ok, true);
+      assert.deepEqual(calls, [{ input: "/api/status", credentials: "same-origin" }]);
+    } finally {
+      globalThis.fetch = original;
+    }
   });
 });
 

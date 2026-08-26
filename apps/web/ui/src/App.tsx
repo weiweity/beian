@@ -180,7 +180,7 @@ export function App() {
     const tick = () => {
       if (typeof document !== "undefined" && document.hidden) return;
       void api
-        .health()
+        .status()
         .then((h) => {
           if (cancelled) return;
           const next = liveNavPulse(h);
@@ -372,7 +372,6 @@ export function App() {
         {view === "settings" ? (
           <Suspense fallback={<PaneFallback label="打开设置…" />}>
             <SettingsPage
-              canWrite={Boolean(me.perms.includes("create"))}
               canAdmin={me.role === "admin"}
               openId={me.open_id || ""}
               displayName={me.display_name}

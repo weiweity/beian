@@ -162,13 +162,6 @@ export type Me = {
   perms: string[];
 };
 
-export type AuthMethods = {
-  feishu: boolean;
-  display_login: boolean;
-  login_url: string;
-  public_base: string;
-};
-
 export type HealthView = {
   ok?: boolean;
   jobs?: unknown;
@@ -251,8 +244,8 @@ export type Decision = "confirm" | "issue" | "ignore" | "pending";
 
 export const api = {
   me: () => request<Me>("/api/auth/me"),
-  methods: () => request<AuthMethods>("/api/auth/methods"),
   health: () => request<HealthView>("/api/health"),
+  status: () => request<HealthView>("/api/status"),
   logout: () => request<{ ok: boolean }>("/api/auth/logout", { method: "POST" }),
   tasks: (q?: string) =>
     request<TaskSummary[]>(q ? `/api/tasks?q=${encodeURIComponent(q)}` : "/api/tasks"),

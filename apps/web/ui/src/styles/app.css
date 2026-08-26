@@ -1822,6 +1822,16 @@ html[data-theme="dark"] .apple-slider::-moz-range-thumb {
   display: none;
 }
 
+.upload-well:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 58%, transparent);
+  outline-offset: 4px;
+}
+
+.upload-well.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.64;
+}
+
 .upload-well-icon {
   display: block;
   width: 36px;
@@ -2193,6 +2203,33 @@ html[data-theme="dark"] .apple-slider::-moz-range-thumb {
 
 .history-table-shell .ant-table-thead > tr > th {
   background: color-mix(in srgb, var(--accent-soft) 44%, var(--surface));
+}
+
+.history-record-button {
+  display: inline-flex;
+  align-items: center;
+  min-height: 40px;
+  max-width: 100%;
+  margin: -4px -6px;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  word-break: break-word;
+  cursor: pointer;
+}
+
+.history-record-button:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.history-record-button:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 58%, transparent);
+  outline-offset: 2px;
 }
 
 .history-row-locked {

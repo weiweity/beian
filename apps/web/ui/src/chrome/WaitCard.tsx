@@ -48,7 +48,7 @@ export function WaitCard({
     }
     let cancelled = false;
     void api
-      .health()
+      .status()
       .then((h) => {
         if (!cancelled) setReady(feishuReadyFromHealth(h));
       })

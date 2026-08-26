@@ -146,7 +146,7 @@ export function waitCardCopy(opts: WaitCardCopyOpts): { title: string; eta: stri
   return { title, eta, hint };
 }
 
-/** GET /api/health 有 feishu_notify 才算能飞书叫人；没有字段就是 false。 */
+/** 鉴权状态接口有 feishu_notify 才算能飞书叫人；没有字段就是 false。 */
 export function feishuReadyFromHealth(body: { feishu_notify?: boolean } | null | undefined): boolean {
   return body?.feishu_notify === true;
 }
