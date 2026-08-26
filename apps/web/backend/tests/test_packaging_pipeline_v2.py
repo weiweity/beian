@@ -1,0 +1,290 @@
+from __future__ import annotations
+
+import hashlib
+import importlib.util
+import json
+from pathlib import Path
+import subprocess
+import sys
+
+from PIL import Image
+import pymupdf
+import pytest
+
+from packaging_structure_fixture import semantic_box
+
+
+PACKAGING = Path(__file__).resolve().parents[4] / "workers" / "packaging"
+
+
+def pipeline_module():
+    spec = importlib.util.spec_from_file_location("packaging_pipeline_v2", PACKAGING / "pipeline.py")
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def write_artwork(path: Path) -> Path:
+    mm_to_pt = 72.0 / 25.4
+    document = pymupdf.open()
+    page = document.new_page(width=120 * mm_to_pt, height=90 * mm_to_pt)
+    page.draw_rect(
+        pymupdf.Rect(50 * mm_to_pt, 20 * mm_to_pt, 80 * mm_to_pt, 70 * mm_to_pt),
+        color=None,
+        fill=(117 / 255, 35 / 255, 46 / 255),
+    )
+    document.save(path)
+    document.close()
+    return path
+
+
+def prepare_v2_product(tmp_path: Path) -> tuple[dict, Path]:
+    source = tmp_path / "source.ai"
+    source.write_bytes(b"private-ai-fixture")
+    source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
+    sidecar = tmp_path / "source.ai.structure.json"
+    sidecar.write_text(json.dumps(semantic_box(source_hash=source_hash)), encoding="utf-8")
+    artwork = write_artwork(tmp_path / "artwork.pdf")
+    template = tmp_path / "render-profile.json"
+    template.write_text(
+        json.dumps(
+            {
+                "template_id": "v2-test-render-profile",
+                "raster_width_px": 1200,
+                "render": {
+                    "resolution_x": 800,
+                    "resolution_y": 900,
+                    "camera_ortho_scale_mm": 80,
+                    "front_rotation_deg": 0,
+                    "back_rotation_deg": 180,
+                },
+                "glb_tolerance_mm": 0.5,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return (
+        {
+            "code": "V2BOX",
+            "slug": "semantic",
+            "display_name": "语义结构测试盒",
+            "source_ai": source.name,
+            "template": template.name,
+            "structure_engine": "v2",
+            "structure_sidecar": sidecar.name,
+            "artwork_pdf": artwork.name,
+        },
+        source,
+    )
+
+
+def test_pipeline_v2_uses_resolved_geometry_and_exact_artwork(tmp_path: Path):
+    pipeline = pipeline_module()
+    product, _source = prepare_v2_product(tmp_path)
+    output = tmp_path / "output"
+    job = pipeline.preflight_product(
+        product,
+        tmp_path,
+        output,
+        False,
+        {"enabled": False},
+        False,
+    )
+    assert job["structure_engine"] == "v2"
+    assert job["dimensions_mm"] == {"width": 30.0, "depth": 20.0, "height": 50.0}
+    assert job["input_mode"] == "semantic_sidecar"
+    assert job["illustrator_invoked"] is False
+    assert all(Path(path).is_file() for path in job["assets"].values())
+    with Image.open(job["assets"]["front"]).convert("RGB") as image:
+        red = image.getpixel((image.width // 2, image.height // 2))
+    assert red == pytest.approx((117, 35, 46), abs=2)
+    resolution = json.loads(Path(job["structure_resolution_path"]).read_text(encoding="utf-8"))
+    assert resolution["status"] == "ready"
+
+    for path in job["outputs"].values():
+        Path(path).write_bytes(b"cached-output")
+    pipeline.save_json(Path(job["project_dir"]) / "pipeline_result.json", job)
+    cached = pipeline.preflight_product(
+        product,
+        tmp_path,
+        output,
+        False,
+        {"enabled": False},
+        False,
+    )
+    assert cached["cache_hit"] is True
+
+
+def test_pipeline_v2_never_falls_back_to_layer_name_guessing(tmp_path: Path):
+    pipeline = pipeline_module()
+    product, source = prepare_v2_product(tmp_path)
+    product.pop("structure_sidecar")
+    source.with_name(source.name + ".structure.json").unlink()
+    with pytest.raises(pipeline.PipelineHold) as raised:
+        pipeline.preflight_product(
+            product,
+            tmp_path,
+            tmp_path / "output",
+            False,
+            {"enabled": False},
+            False,
+        )
+    assert raised.value.code == "structure_semantics_missing"
+    assert raised.value.status == "review_required"
+
+
+def test_illustrator_structure_export_accepts_a_windows_executable_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    pipeline = pipeline_module()
+    source = tmp_path / "source.ai"
+    source.write_bytes(b"ai")
+    illustrator = tmp_path / "Illustrator.exe"
+    illustrator.write_bytes(b"exe")
+
+    def fake_run(command, capture_output, text):
+        config_path = Path(command[2])
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        for key in ("full_pdf", "print_pdf", "structure_json"):
+            Path(config[key]).write_bytes(b"output")
+        Path(config["result_json"]).write_text(
+            json.dumps(
+                {
+                    "success": True,
+                    "full_pdf": config["full_pdf"],
+                    "print_pdf": config["print_pdf"],
+                    "structure_json": config["structure_json"],
+                }
+            ),
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(command, 0, "ok", "")
+
+    monkeypatch.setattr(pipeline.subprocess, "run", fake_run)
+    result = pipeline.run_illustrator_structure_export(
+        source,
+        tmp_path / "project",
+        {"application": str(illustrator)},
+    )
+    assert result["success"] is True
+
+
+def test_legacy_illustrator_fallback_accepts_a_windows_executable_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    pipeline = pipeline_module()
+    source = tmp_path / "source.ai"
+    source.write_bytes(b"not-pdf-compatible")
+    template = tmp_path / "template.json"
+    template.write_text("{}", encoding="utf-8")
+    illustrator = tmp_path / "Illustrator.exe"
+    illustrator.write_bytes(b"exe")
+
+    class ReachedWorker(RuntimeError):
+        pass
+
+    def reached_worker(*_args, **_kwargs):
+        raise ReachedWorker("legacy Windows worker reached")
+
+    monkeypatch.setattr(pipeline.sys, "platform", "win32")
+    monkeypatch.setattr(pipeline, "run_illustrator_fallback", reached_worker)
+    with pytest.raises(ReachedWorker, match="worker reached"):
+        pipeline.preflight_product(
+            {
+                "code": "LEGACY",
+                "slug": "windows",
+                "display_name": "Windows legacy fallback",
+                "source_ai": source.name,
+                "template": template.name,
+            },
+            tmp_path,
+            tmp_path / "output",
+            False,
+            {"enabled": True, "application": str(illustrator)},
+            False,
+        )
+
+
+def test_windows_illustrator_bridge_changes_invalidate_pipeline_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    pipeline = pipeline_module()
+    source = tmp_path / "source.ai"
+    template = tmp_path / "template.json"
+    runner = tmp_path / "run_export.vbs"
+    source.write_bytes(b"ai")
+    template.write_text("{}", encoding="utf-8")
+    runner.write_text("bridge-v1", encoding="utf-8")
+    monkeypatch.setattr(pipeline, "ILLUSTRATOR_WINDOWS_RUNNER", runner)
+
+    first = pipeline.job_fingerprint(source, template, {"structure_engine": "v2"})
+    runner.write_text("bridge-v2", encoding="utf-8")
+    second = pipeline.job_fingerprint(source, template, {"structure_engine": "v2"})
+
+    assert first != second
+
+
+def test_preflight_cli_writes_a_prepared_manifest_without_starting_blender(tmp_path: Path):
+    product, _source = prepare_v2_product(tmp_path)
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "output_root": str(tmp_path / "output"),
+                "blender_executable": str(tmp_path / "missing-blender"),
+                "illustrator": {"enabled": False},
+                "generate_ppt": False,
+                "products": [product],
+            }
+        ),
+        encoding="utf-8",
+    )
+    process = subprocess.run(
+        [sys.executable, str(PACKAGING / "pipeline.py"), str(manifest), "--preflight-only"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert process.returncode == 0, process.stderr
+    report = json.loads(process.stdout.strip().splitlines()[-1])
+    assert report["mode"] == "preflight"
+    prepared_path = Path(report["prepared_manifest"])
+    assert prepared_path.is_file()
+    prepared = json.loads(prepared_path.read_text(encoding="utf-8"))
+    assert prepared["products"][0]["structure_engine"] == "v2"
+    assert Path(prepared["products"][0]["structure_sidecar"]).is_file()
+    assert Path(prepared["products"][0]["artwork_pdf"]).is_file()
+    assert "STAGE structure" in process.stderr
+
+
+def test_preflight_cli_returns_recoverable_structure_control_json(tmp_path: Path):
+    product, source = prepare_v2_product(tmp_path)
+    product.pop("structure_sidecar")
+    source.with_name(source.name + ".structure.json").unlink()
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "output_root": str(tmp_path / "output"),
+                "illustrator": {"enabled": False},
+                "products": [product],
+            }
+        ),
+        encoding="utf-8",
+    )
+    process = subprocess.run(
+        [sys.executable, str(PACKAGING / "pipeline.py"), str(manifest), "--preflight-only"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert process.returncode == 3
+    control = json.loads(process.stderr.strip().splitlines()[-1])
+    assert control["kind"] == "structure_resolution"
+    assert control["structure_status"] == "review_required"
+    assert control["code"] == "structure_semantics_missing"
+    assert Path(control["resolution_path"]).is_file()

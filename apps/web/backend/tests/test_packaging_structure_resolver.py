@@ -1,0 +1,179 @@
+from __future__ import annotations
+
+from copy import deepcopy
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+
+PACKAGING = Path(__file__).resolve().parents[4] / "workers" / "packaging"
+if str(PACKAGING) not in sys.path:
+    sys.path.insert(0, str(PACKAGING))
+
+from structure_v2 import adapt_structure, resolve_structure, resolve_structure_payload  # noqa: E402
+from packaging_structure_fixture import semantic_box  # noqa: E402
+
+
+def test_resolver_builds_explicit_dimensions_and_six_faces():
+    result = resolve_structure_payload(semantic_box())
+    assert result.status == "ready"
+    assert result.resolved is not None
+    assert result.resolved["dimensions_mm"] == {"width": 30.0, "depth": 20.0, "height": 50.0}
+    assert set(result.resolved["faces"]) == {"front", "right", "back", "left", "top", "bottom"}
+    assert result.resolved["validation"]["status"] == "accepted"
+
+
+def test_resolver_requires_complete_face_mapping_before_blender():
+    payload = semantic_box()
+    payload["faces"] = [face for face in payload["faces"] if face["role"] != "bottom"]
+    payload["folds"] = [
+        fold
+        for fold in payload["folds"]
+        if fold["left_face"] != "face-bottom" and fold["right_face"] != "face-bottom"
+    ]
+    result = resolve_structure_payload(payload)
+    assert result.status == "review_required"
+    assert result.code == "structure_face_mapping_incomplete"
+    assert result.resolved is None
+
+
+def test_resolver_rejects_disconnected_fold_graph():
+    payload = semantic_box()
+    payload["folds"] = payload["folds"][:-1]
+    result = resolve_structure_payload(payload)
+    assert result.status == "review_required"
+    assert result.code == "structure_fold_graph_invalid"
+
+
+def test_only_ready_results_enter_atomic_cache(tmp_path: Path):
+    payload = semantic_box()
+    first = resolve_structure_payload(payload, cache_dir=tmp_path)
+    second = resolve_structure_payload(payload, cache_dir=tmp_path)
+    assert first.status == second.status == "ready"
+    assert first.cache_hit is False
+    assert second.cache_hit is True
+    cache_files = list(tmp_path.glob("*.json"))
+    assert len(cache_files) == 1
+    cached = json.loads(cache_files[0].read_text(encoding="utf-8"))
+    assert cached["schema"] == "packaging-structure-cache/1"
+
+    bad = semantic_box(source_hash="e" * 64)
+    bad["edges"] = bad["edges"][:-1]
+    review = resolve_structure_payload(bad, cache_dir=tmp_path)
+    assert review.status == "review_required"
+    assert len(list(tmp_path.glob("*.json"))) == 1
+
+
+def test_sidecar_adapter_binds_exact_source_hash(tmp_path: Path):
+    source = tmp_path / "box.ai"
+    source.write_bytes(b"private-ai-placeholder")
+    source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
+    sidecar = source.with_name(source.name + ".structure.json")
+    sidecar.write_text(json.dumps(semantic_box(source_hash=source_hash)), encoding="utf-8")
+
+    adapted = adapt_structure(source)
+    assert adapted.status == "adapted"
+    resolved = resolve_structure(source)
+    assert resolved.status == "ready"
+
+    source.write_bytes(b"changed-source")
+    stale = adapt_structure(source)
+    assert stale.status == "review_required"
+    assert stale.code == "structure_source_mismatch"
+
+
+def test_plain_legacy_ai_never_auto_accepts_from_filename_or_layers(tmp_path: Path):
+    source = tmp_path / "包装-刀线-花盒.ai"
+    source.write_bytes("%PDF fake layer 刀线".encode("utf-8"))
+    result = resolve_structure(source)
+    assert result.status == "review_required"
+    assert result.code == "structure_semantics_missing"
+
+
+def test_corrupted_cache_is_ignored_and_rebuilt(tmp_path: Path):
+    payload = semantic_box()
+    first = resolve_structure_payload(payload, cache_dir=tmp_path)
+    assert first.status == "ready"
+    cache_file = next(tmp_path.glob("*.json"))
+    cache_file.write_text("{broken", encoding="utf-8")
+    rebuilt = resolve_structure_payload(deepcopy(payload), cache_dir=tmp_path)
+    assert rebuilt.status == "ready"
+    assert rebuilt.cache_hit is False
+
+
+def test_semantic_linework_derives_faces_but_waits_for_explicit_roles():
+    payload = semantic_box()
+    expected_bounds = {
+        face["role"]: tuple(
+            next(
+                item["bounds_mm"]
+                for item in resolve_structure_payload(payload).resolved["faces"].values()
+                if item["face_id"] == face["id"]
+            )
+        )
+        for face in payload["faces"]
+    }
+    payload["faces"] = []
+    payload["folds"] = []
+    payload["root_face"] = None
+    payload["validation"] = {"status": "review_required", "errors": [], "warnings": []}
+
+    proposed = resolve_structure_payload(payload)
+    assert proposed.status == "review_required"
+    assert proposed.code == "structure_face_mapping_incomplete"
+    assert proposed.structure is not None
+    assert len(proposed.structure["faces"]) == 6
+    assert all(
+        all(ref.startswith("fixture:") for ref in edge["source_refs"])
+        for edge in proposed.structure["edges"]
+    )
+    preview = proposed.topology["face_proposal"]
+    assert all(face["rectangular"] for face in preview)
+
+    role_by_bounds = {bounds: role for role, bounds in expected_bounds.items()}
+    proposal_by_id = {face["id"]: face for face in preview}
+    approved = deepcopy(proposed.structure)
+    approved.pop("structure_hash", None)
+    for face in approved["faces"]:
+        bounds = tuple(proposal_by_id[face["id"]]["bounds_mm"])
+        face["role"] = role_by_bounds[bounds]
+    approved["root_face"] = next(face["id"] for face in approved["faces"] if face["role"] == "front")
+    approved["validation"] = {"status": "accepted", "errors": [], "warnings": []}
+
+    resolved = resolve_structure_payload(approved)
+    assert resolved.status == "ready"
+    assert resolved.resolved["dimensions_mm"] == {"width": 30.0, "depth": 20.0, "height": 50.0}
+
+
+def test_role_mapping_without_approval_never_reaches_blender_contract():
+    payload = semantic_box()
+    payload["validation"] = {
+        "status": "review_required",
+        "errors": ["human_confirmation_missing"],
+        "warnings": [],
+    }
+    result = resolve_structure_payload(payload)
+    assert result.status == "review_required"
+    assert result.code == "structure_approval_required"
+    assert result.resolved is None
+
+
+def test_ready_cache_never_bypasses_current_approval_status(tmp_path: Path):
+    accepted = semantic_box()
+    primed = resolve_structure_payload(accepted, cache_dir=tmp_path)
+    assert primed.status == "ready"
+
+    pending = deepcopy(accepted)
+    pending.pop("structure_hash", None)
+    pending["validation"] = {
+        "status": "review_required",
+        "errors": ["human_confirmation_missing"],
+        "warnings": [],
+    }
+    result = resolve_structure_payload(pending, cache_dir=tmp_path)
+
+    assert result.status == "review_required"
+    assert result.code == "structure_approval_required"
+    assert result.resolved is None
+    assert result.cache_hit is False
