@@ -1,17 +1,51 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it } from "node:test";
+import { makeTestTempDir } from "./testTemp.js";
 
-process.env.WB_DATA_DIR = mkdtempSync(join(tmpdir(), "beian-auth-"));
+process.env.WB_DATA_DIR = makeTestTempDir("beian-auth-");
 process.env.FEISHU_APP_ID = "cli_test_app";
 process.env.FEISHU_APP_SECRET = "test-secret";
 
 const auth = await import("./auth.js");
 
 describe("feishu authorize", () => {
+  it("prunes expired sessions from memory and disk when issuing a new session", (t) => {
+    let at = Date.now();
+    t.mock.method(Date, "now", () => at);
+    const expired = auth.issueSession("旧会话", "reviewer", "ou_expired_session", "feishu");
+
+    at += 7 * 24 * 3600 * 1000;
+    const fresh = auth.issueSession("新会话", "reviewer", "ou_fresh_session", "feishu");
+    const persisted = JSON.parse(
+      readFileSync(join(process.env.WB_DATA_DIR as string, "sessions.json"), "utf8"),
+    ) as Record<string, unknown>;
+
+    assert.equal(auth.getSession(expired.token), null);
+    assert.equal(auth.getSession(fresh.token)?.display_name, "新会话");
+    assert.equal(expired.token in persisted, false);
+    assert.equal(fresh.token in persisted, true);
+  });
+
+  it("getSession directly removes an expired session from memory and disk", (t) => {
+    let at = Date.now();
+    t.mock.method(Date, "now", () => at);
+    const expired = auth.issueSession("直接过期", "reviewer", "ou_direct_expiry", "feishu");
+
+    at = expired.expires_at * 1000;
+    assert.equal(auth.getSession(expired.token), null);
+    const persisted = JSON.parse(
+      readFileSync(join(process.env.WB_DATA_DIR as string, "sessions.json"), "utf8"),
+    ) as Record<string, unknown>;
+    assert.equal(expired.token in persisted, false);
+
+    // 时间回拨后仍取不到，证明不是每次临时判断过期，而是已经从内存删除。
+    at = expired.created_at * 1000;
+    assert.equal(auth.getSession(expired.token), null);
+  });
+
   it("omits contact user.base scope and includes PKCE S256", () => {
     const { state, challenge } = auth.beginOAuth();
     const url = auth.authorizeUrl("https://www.jianghua.site/api/auth/feishu/callback", state, challenge);
@@ -23,6 +57,7 @@ describe("feishu authorize", () => {
     assert.match(url, /code_challenge=/);
     assert.ok(state.length > 8);
     assert.ok(challenge.length > 8);
+    assert.ok(auth.consumeOAuthState(state));
   });
 
   it("consumes state once and returns verifier", () => {
@@ -56,6 +91,39 @@ describe("feishu authorize", () => {
     assert.ok(row);
     assert.equal(row.next, "/?tab=settings&group=开工板");
     assert.equal(auth.consumeOAuth(state), null);
+  });
+
+  it("caps pending OAuth states at 1024 and admits a new login after expiry", (t) => {
+    let at = Date.now();
+    t.mock.method(Date, "now", () => at);
+    try {
+      for (let i = 0; i < auth.OAUTH_STATE_LIMIT; i++) auth.beginOAuth(`/review/${i}`);
+      assert.throws(
+        () => auth.beginOAuth("/reviewup"),
+        (err: unknown) => {
+          const e = err as Error & { status?: number };
+          assert.equal(e.status, 429);
+          assert.match(e.message, /登录请求太多/);
+          return true;
+        },
+      );
+
+      at += 600_001;
+      const fresh = auth.beginOAuth("/reviewup");
+      assert.ok(auth.consumeOAuthState(fresh.state));
+    } finally {
+      // 即使断言失败，也把本测试创建的临时 state 清掉，避免污染后续用例。
+      at += 600_001;
+      auth.consumeOAuthState("cleanup");
+    }
+  });
+
+  it("rejects a state at its exact expiry boundary", (t) => {
+    let at = Date.now();
+    t.mock.method(Date, "now", () => at);
+    const { state } = auth.beginOAuth("/reviewup");
+    at += 600_000;
+    assert.equal(auth.consumeOAuthState(state), null);
   });
 
   it("display login stays on loopback only", () => {

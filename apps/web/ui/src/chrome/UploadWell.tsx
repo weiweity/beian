@@ -1,4 +1,4 @@
-import type { ChangeEvent, DragEvent, ReactNode } from "react";
+import { useRef, type ChangeEvent, type DragEvent, type KeyboardEvent, type ReactNode } from "react";
 import { fileMatchesAccept } from "./fileAccept";
 import { formatBytes } from "../pages/stemName";
 
@@ -15,6 +15,10 @@ type Props = {
   children?: ReactNode;
 };
 
+export function shouldActivateUploadWell(key: string, disabled = false): boolean {
+  return !disabled && (key === "Enter" || key === " ");
+}
+
 export function UploadWell({
   icon,
   title,
@@ -27,6 +31,8 @@ export function UploadWell({
   onReject,
   children,
 }: Props) {
+  const inputRef = useRef<HTMLInputElement>(null);
+
   function take(file: File | null, input?: HTMLInputElement) {
     if (file && !fileMatchesAccept(file, accept)) {
       if (input) input.value = "";
@@ -37,7 +43,11 @@ export function UploadWell({
   }
 
   function onChange(e: ChangeEvent<HTMLInputElement>) {
-    take(e.target.files?.[0] || null, e.target);
+    const input = e.currentTarget;
+    const file = input.files?.[0] || null;
+    take(file, input);
+    // 浏览器不会为同一路径再次触发 change；取走 File 后清空即可安全重选。
+    input.value = "";
   }
 
   function onDrop(e: DragEvent<HTMLLabelElement>) {
@@ -46,13 +56,32 @@ export function UploadWell({
     take(e.dataTransfer.files?.[0] || null);
   }
 
+  function onKeyDown(e: KeyboardEvent<HTMLLabelElement>) {
+    if (e.target !== e.currentTarget || !shouldActivateUploadWell(e.key, disabled)) return;
+    e.preventDefault();
+    inputRef.current?.click();
+  }
+
   return (
     <label
-      className={fileName ? "upload-well has-file" : "upload-well"}
+      className={["upload-well", fileName ? "has-file" : "", disabled ? "is-disabled" : ""]
+        .filter(Boolean)
+        .join(" ")}
+      role="button"
+      tabIndex={disabled ? -1 : 0}
+      aria-disabled={disabled || undefined}
       onDragOver={(e) => e.preventDefault()}
       onDrop={onDrop}
+      onKeyDown={onKeyDown}
     >
-      <input type="file" accept={accept} disabled={disabled} onChange={onChange} />
+      <input
+        ref={inputRef}
+        type="file"
+        accept={accept}
+        aria-label={`${title}文件`}
+        disabled={disabled}
+        onChange={onChange}
+      />
       <img className="upload-well-icon" src={icon} alt="" width={36} height={36} />
       <strong className="upload-well-title">{title}</strong>
       {fileName ? (

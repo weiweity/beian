@@ -6,6 +6,7 @@ export type AppRoute = {
   view: AppView;
   taskId?: string | null;
   mockupId?: string | null;
+  receipt?: string | null;
 };
 
 const TID = /^[0-9a-f]{12}$/i;
@@ -14,17 +15,22 @@ const SPA =
 
 export function parsePath(pathname: string, search = "", hash = ""): AppRoute {
   const p = pathname.replace(/\/+$/, "") || "/";
-  if (p === "/reviewup/new" || p === "/new") return { view: "new" };
+  const q = new URLSearchParams(search);
+  const receipt = q.get("receipt") || "";
+  if (p === "/reviewup/new" || p === "/new") {
+    return TID.test(receipt) ? { view: "new", receipt: receipt.toLowerCase() } : { view: "new" };
+  }
   if (p === "/history") return { view: "history" };
   if (p === "/settings") return { view: "settings" };
   const review = p.match(/^\/review\/([0-9a-f]{12})$/i);
   if (review) return { view: "review", taskId: review[1].toLowerCase() };
   if (p === "/reviewup" || p === "/review") return { view: "tasks" };
-  if (p === "/mockup/new") return { view: "mockupNew" };
+  if (p === "/mockup/new") {
+    return TID.test(receipt) ? { view: "mockupNew", receipt: receipt.toLowerCase() } : { view: "mockupNew" };
+  }
   const mock = p.match(/^\/mockup\/([0-9a-f]{12})$/i);
   if (mock) return { view: "mockup", mockupId: mock[1].toLowerCase() };
   if (p === "/mockup") return { view: "mockup", mockupId: null };
-  const q = new URLSearchParams(search);
   const qTask = q.get("task") || "";
   if (TID.test(qTask)) return { view: "review", taskId: qTask.toLowerCase() };
   const qMock = q.get("mockup") || "";
@@ -36,11 +42,12 @@ export function parsePath(pathname: string, search = "", hash = ""): AppRoute {
 }
 
 export function hrefOf(route: AppRoute): string {
-  if (route.view === "new") return "/reviewup/new";
+  const receipt = route.receipt && TID.test(route.receipt) ? `?receipt=${route.receipt.toLowerCase()}` : "";
+  if (route.view === "new") return `/reviewup/new${receipt}`;
   if (route.view === "history") return "/history";
   if (route.view === "settings") return "/settings";
   if (route.view === "review") return route.taskId ? `/review/${route.taskId}` : "/reviewup";
-  if (route.view === "mockupNew") return "/mockup/new";
+  if (route.view === "mockupNew") return `/mockup/new${receipt}`;
   if (route.view === "mockup") return route.mockupId ? `/mockup/${route.mockupId}` : "/mockup";
   return "/reviewup";
 }

@@ -6,6 +6,8 @@ Repo: weiweity/beian
 Status: APPROVED
 Mode: Startup
 
+> 历史范围（2026-08-26）：本文的真实改稿金标门、对红语义和稳定 issue 分析仍供追溯；旧 `main.py`、旧主色、禁止 `/history`、不接打样等实现描述已被根目录 `DESIGN.md`、`AGENTS.md` 与 `docs/designs/review-job-module.md` 取代，不可当当前实施命令。
+
 ## Problem Statement
 
 刘籽烨对包装/备案稿不是「审一次」。她从头到尾一个字一个字对，发现错就通知设计改、导出新 PDF，再从头对。经常性错误是漏字、少字、少空格。漏了会备案打回或印刷返工。

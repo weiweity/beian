@@ -35,11 +35,13 @@
   `notifyJobFinished` 对照走 `/review/:id`，打样走 `/mockup/:id`。前端 History API 换台。  
   **Completed:** v0.12.17.0 (2026-08-25)
 
-- [ ] **上传先限体积再读进内存**  
-  `upload` / `rework` / `mockups` 现在 `arrayBuffer()` 之后才比 `maxUploadBytes()`。单进程 OOM 会拖死对照槽。下次：Hono `bodyLimit` 与 `maxUploadBytes` 对齐。
+- [x] **上传先限体积再读进内存**
+  `/api/uploads` 与对红在 `parseBody()` 前先走 Hono `bodyLimit`，文件聚合上限 100 MB；解析器只放行一份大请求，对红仍尊重更低的 `WB_MAX_UPLOAD_MB`。
+  **Completed:** v0.13.1.0 (2026-08-26)
 
-- [ ] **未登录 health 不要带队列人数**  
-  `GET /api/health` 现把 `jobs` 槽位和 `feishu_notify` 公开。隧道探测够用 `ok`/`version`。WaitCard 的飞书开关改走已登录接口。
+- [x] **未登录 health 不要带队列人数**
+  公网 `GET /api/health` 只保留 `ok`、`version` 与发版所需的 Illustrator 可见性标记；准确队列仅给杭州本机直连和已登录 `/api/status`。WaitCard、侧栏阶段脉冲已改走登录接口。
+  **Completed:** v0.13.1.0 (2026-08-26)
 
 ## P1 — 对红（金标门，不进本周 P0）
 
@@ -49,6 +51,14 @@
   还缺：`open_issues` 用 `field+expected_text+observed_text`；默认队列只复检上一轮 issue；对红比较保留空白。  
   不做：历史中心、第三份 PDF、改 `normalize()` 去空白、旧新 PDF 全量 diff。  
   入口：`docs/designs/review-rework-loop.md` Recommended Approach。
+
+## P2 — 上传续传与崩溃恢复
+
+- [ ] **字节级分片断点续传**
+  当前支持 SPA 切页继续上传，以及服务端已落回执后的响应丢失与整页刷新恢复；回执生成前刷新或断网仍需重新选择并完整上传。若真稿经常接近 100 MB，再设计分片协议与断点校验，不把“页面切换不断”误称为字节级续传。
+
+- [ ] **领取回执的进程崩溃窗口**
+  普通 copy/save 失败会恢复回执；但 Node 若恰在 `consumeReceipt` 后、任务 JSON 落盘前退出，仍需重新上传。后续可把 claim 保留到任务持久化成功再 finalize，并在启动时恢复残留 claim。
 
 ## P2 — 开工板向导页画面（设计审查 2026-08-21）
 
@@ -69,7 +79,7 @@
 - [ ] Illustrator COM 替换（非 PDF 兼容 `.ai` 仍走本机 Illustrator；杭州 COM 未接线）
 - [ ] Windows 开机自启 + Tunnel 掉线告警
 - [ ] SQLite / 异步通用队列
-- [ ] React 审稿台接 OpenSeadragon（若 8/31 冻结了换栈）
+- [ ] 压测并继续优化现有 CSS `transform` 1–6× 审稿缩放；保持当前轻量方案，不引入 OpenSeadragon
 - [ ] 飞书机器人收文件回报告（网页路径的备选）
 
 ## Completed

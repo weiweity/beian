@@ -2,7 +2,7 @@
 
 ## 一句话
 
-2026-08-31 前，让刘籽烨不靠 VPN、不靠人盯屏，自己完成一单真实 Excel↔PDF 终审。3D 进仓不接线。
+2026-08-31 前，让刘籽烨不靠 VPN、不靠人盯屏，自己完成一单真实 Excel↔PDF 终审。3D 已同仓并由打样台接线，但不纳入 8/31 业务验收。
 
 ## 前提
 
@@ -17,11 +17,13 @@
 
 - HTTP 产品层：TypeScript + Hono（`apps/web/server`），挂 React 静态资源。
 - 对照引擎 / 3D 流水线：Python worker（`apps/web/backend`、`workers/packaging`），不重写规则。
-- 设计：对齐客服 Demo 的内部工具纪律（见根目录 `DESIGN.md`），不搬 Electron / 狐狸 / Dashboard。
+- 设计：只借用客服 Demo 的内部工具纪律，不复制它的 Electron 产品壳或 Dashboard；当前 Shine Mage 狐狸 Logo 与全部视觉以根目录 `DESIGN.md` 锁定稿为准。
 - 暴露：Cloudflare Named Tunnel。飞书网页应用（OAuth 已接）。不买云，不映射端口。
 
 详见 `docs/adr-001-frontend-stack.md`。实现约束见 `docs/adr-004-ousterhout-design.md`（不改变已批准的路径 A 和 8/31 验收范围）。
 
-## 不做（8/31）
+## 不作为 8/31 验收门槛
 
-Illustrator COM、qlmanage 替换、GLB 旋转验收、10 分钟 SLA、Windows 开机自启、SQLite、异步队列、PPT 重写、飞书正式发版、ERP/BI/自动过审。
+这是一条验收边界，不等于其中能力都未实现：平面出图已改用 pymupdf、页内 GLB 查看与 OOXML PPT 已落地，但仍不作为刘籽烨 8/31 Excel↔PDF 终审的签收条件。
+
+Illustrator COM 的杭州实机验收、GLB 旋转业务验收、10 分钟 SLA、Windows 开机自启、SQLite、通用异步队列、飞书正式发版、ERP/BI/自动过审。

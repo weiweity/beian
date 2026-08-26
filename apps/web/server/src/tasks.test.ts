@@ -1,10 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { writeFileSync } from "node:fs";
 import { describe, it, before } from "node:test";
+import { makeTestTempDir } from "./testTemp.js";
 
-process.env.WB_DATA_DIR = mkdtempSync(join(tmpdir(), "beian-ts-"));
+process.env.WB_DATA_DIR = makeTestTempDir("beian-ts-");
 
 const { activeHits, boardColumn, deleteTask, hasReworkPages, isHitDecision, isReviewableStatus, isReworkableStatus, isReworkableTask, listTasks, loadTask, saveTask } = await import("./tasks.js");
 
@@ -133,16 +132,19 @@ describe("review gates", () => {
       isReworkableTask({ status: "completed", complete_kind: "rework", pages_v2: [{ url: "/x.png" }] }),
       false,
     );
-    assert.equal(
+    assert.deepEqual(
       activeHits({
         id: "aaaaaaaaaaaa",
         title: "x",
         type: "excel_pdf",
         status: "in_review",
         hits: [{ id: "h1" }],
-        hits_v2: [{ id: "v2_h1" }],
-      })[0]?.id,
-      "v2_h1",
+        hits_v2: [
+          { id: "v2_h1", field: "中文品名" },
+          { id: "v2_h2", field: "更新内容：第二版" },
+        ],
+      }).map((hit) => hit.id),
+      ["v2_h1"],
     );
     assert.equal(
       activeHits({
@@ -154,6 +156,21 @@ describe("review gates", () => {
         hits_v2: [],
       })[0]?.id,
       "h1",
+    );
+    assert.deepEqual(
+      activeHits({
+        id: "aaaaaaaaaaaa",
+        title: "x",
+        type: "excel_pdf",
+        status: "in_review",
+        hits: [
+          { id: "h1", field: "中文品名" },
+          { id: "h2", field: "更新内容：第二版" },
+          { id: "h3", field: "备案版本号" },
+          { id: "h4", field: "执行标准版本号" },
+        ],
+      }).map((hit) => hit.id),
+      ["h1", "h3", "h4"],
     );
   });
 });

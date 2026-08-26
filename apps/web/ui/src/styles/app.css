@@ -615,6 +615,15 @@ html[data-theme="dark"] .side-item.is-on .side-icon {
 
 .stage:has(.mockup-sheet),
 .stage:has(.mockup-desk) {
+  --surface: #ffffff;
+  --stage: #ffffff;
+  --col: #f6f3f8;
+  --ink: #1c1a1f;
+  --muted: #6b6572;
+  --line: #e7e2ec;
+  --accent: #805898;
+  --accent-soft: #f6f1f8;
+  --accent-mist: #ede7f1;
   background: #ffffff;
   color: #1c1a1f;
 }
@@ -922,6 +931,40 @@ html[data-theme="dark"] .workspace {
   border-radius: inherit;
   background: var(--accent);
   animation: wait-slide 1.6s ease-in-out infinite;
+}
+
+.upload-card-progress,
+.upload-progress-meter {
+  width: 100%;
+  overflow: hidden;
+  border: 0;
+  border-radius: 999px;
+  background: var(--accent-mist);
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.upload-card-progress {
+  height: 4px;
+}
+
+.upload-progress-meter {
+  display: block;
+  height: 6px;
+}
+
+.upload-card-progress::-webkit-progress-bar,
+.upload-progress-meter::-webkit-progress-bar {
+  border-radius: inherit;
+  background: var(--accent-mist);
+}
+
+.upload-card-progress::-webkit-progress-value,
+.upload-progress-meter::-webkit-progress-value,
+.upload-card-progress::-moz-progress-bar,
+.upload-progress-meter::-moz-progress-bar {
+  border-radius: inherit;
+  background: var(--accent);
 }
 
 .review-card:hover {
@@ -1247,6 +1290,17 @@ html[data-theme="dark"] .workspace {
 }
 
 @media (max-width: 720px) {
+  .upload-progress-detail {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .upload-progress-files {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
   .settings-body {
     grid-template-columns: 1fr;
   }
@@ -1667,6 +1721,86 @@ html[data-theme="dark"] .apple-slider::-moz-range-thumb {
   min-height: 280px;
 }
 
+.upload-row.is-single {
+  grid-template-columns: 1fr;
+}
+
+.upload-progress-slot {
+  display: grid;
+  gap: 10px;
+  flex-shrink: 0;
+  padding: 14px 16px;
+  border: 1px solid color-mix(in srgb, var(--line) 76%, transparent);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--surface) 86%, transparent);
+  box-shadow: 0 10px 30px rgba(128, 88, 152, 0.08);
+}
+
+.upload-progress-slot.is-ready {
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--line));
+  background: color-mix(in srgb, var(--accent-soft) 46%, var(--surface));
+}
+
+.upload-progress-slot.is-failed {
+  border-color: color-mix(in srgb, var(--danger) 36%, var(--line));
+}
+
+.upload-progress-head,
+.upload-progress-detail {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
+}
+
+.upload-progress-head strong {
+  color: var(--ink);
+  font-size: 15px;
+}
+
+.upload-progress-actions > span,
+.upload-progress-bytes {
+  flex: none;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.upload-progress-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.upload-progress-discard {
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid color-mix(in srgb, var(--danger) 28%, var(--line));
+  border-radius: 14px;
+  color: var(--danger);
+  background: var(--surface);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.upload-progress-discard:hover {
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+}
+
+.upload-progress-files {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.upload-progress-bytes {
+  font-size: 13px;
+}
+
 .upload-well {
   display: flex;
   flex-direction: column;
@@ -1686,6 +1820,16 @@ html[data-theme="dark"] .apple-slider::-moz-range-thumb {
 
 .upload-well input {
   display: none;
+}
+
+.upload-well:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 58%, transparent);
+  outline-offset: 4px;
+}
+
+.upload-well.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.64;
 }
 
 .upload-well-icon {
@@ -1995,8 +2139,206 @@ html[data-theme="dark"] .apple-slider::-moz-range-thumb {
   margin-bottom: 4px;
 }
 
+.history-filterbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-height: 64px;
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--line) 78%, transparent);
+  border-radius: 20px;
+  background: color-mix(in srgb, var(--surface) 94%, var(--accent-soft));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.78),
+    0 10px 28px rgba(128, 88, 152, 0.06);
+}
+
+.history-filterbar .ant-segmented,
+.history-filterbar .ant-select-selector,
+.history-filterbar .ant-picker,
+.history-edit {
+  min-height: 40px;
+}
+
+.history-filterbar .ant-segmented-item-label {
+  min-height: 36px;
+  line-height: 36px;
+  padding-inline: 12px;
+}
+
+.history-edit {
+  min-width: 72px;
+  border-radius: 20px;
+}
+
+.history-actor {
+  min-width: 148px;
+}
+
+.history-range {
+  min-width: 244px;
+}
+
+.history-filter-count {
+  margin-left: auto;
+  padding: 0 8px;
+  color: var(--muted);
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+.history-table-shell {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  background: var(--surface);
+}
+
+.history-table-shell .ant-table,
+.history-table-shell .ant-table-container {
+  background: transparent;
+}
+
+.history-table-shell .ant-table-thead > tr > th {
+  background: color-mix(in srgb, var(--accent-soft) 44%, var(--surface));
+}
+
+.history-record-button {
+  display: inline-flex;
+  align-items: center;
+  min-height: 40px;
+  max-width: 100%;
+  margin: -4px -6px;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  word-break: break-word;
+  cursor: pointer;
+}
+
+.history-record-button:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.history-record-button:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 58%, transparent);
+  outline-offset: 2px;
+}
+
+.history-row-locked {
+  opacity: 0.72;
+}
+
+.history-select-hitbox {
+  display: inline-grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  border-radius: 14px;
+}
+
+.history-select-hitbox:hover {
+  background: var(--accent-soft);
+}
+
+.history-bulkbar {
+  position: sticky;
+  z-index: 80;
+  left: 50%;
+  bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: fit-content;
+  max-width: calc(100% - 24px);
+  min-height: 56px;
+  margin: 14px auto 0;
+  padding: 8px 10px 8px 18px;
+  border: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+  border-radius: 28px;
+  background: color-mix(in srgb, var(--surface) 92%, var(--accent-soft));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.8),
+    0 14px 34px rgba(28, 26, 31, 0.14);
+}
+
+.history-bulkbar > span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.history-bulkbar .ant-btn {
+  min-height: 40px;
+  border-radius: 20px;
+}
+
+html[data-theme="dark"] .history-filterbar,
+html[data-theme="dark"] .history-bulkbar {
+  background: color-mix(in srgb, var(--surface) 92%, var(--accent-mist));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 14px 34px rgba(0, 0, 0, 0.28);
+}
+
+.history-delete-modal .ant-modal-content {
+  border: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+  border-radius: 24px;
+  background: color-mix(in srgb, var(--surface) 94%, var(--accent-soft));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.8),
+    0 18px 48px rgba(28, 26, 31, 0.18);
+}
+
 .review-page {
   position: relative;
+}
+
+/* Dock 可越过标题与普通页头按钮；人工结论和签字始终留在它上面。 */
+.review-page > .page-head {
+  z-index: auto;
+}
+
+.review-sign-layer {
+  position: relative;
+  z-index: 221;
+}
+
+.review-page.is-fullscreen,
+.review-page:fullscreen,
+.review-page:-webkit-full-screen {
+  display: flex;
+  flex-direction: column;
+  width: 100vw;
+  height: 100vh;
+  min-height: 100vh;
+  overflow: hidden;
+  padding:
+    max(16px, env(safe-area-inset-top, 0px))
+    max(16px, env(safe-area-inset-right, 0px))
+    max(16px, env(safe-area-inset-bottom, 0px))
+    max(16px, env(safe-area-inset-left, 0px));
+  background: var(--stage);
+  color: var(--ink);
+}
+
+.review-page.is-fullscreen .review-desk,
+.review-page:fullscreen .review-desk,
+.review-page:-webkit-full-screen .review-desk {
+  flex: 1;
+  height: auto;
+  min-height: 0;
+}
+
+.review-fullscreen-toggle {
+  min-width: 80px;
+  min-height: 40px;
 }
 
 .review-desk {
@@ -2167,8 +2509,8 @@ html[data-diff="off"] .hit-box {
 
 .notes.is-float {
   position: fixed;
-  z-index: 90;
-  top: 104px;
+  z-index: 220;
+  top: 8px;
   right: 8px;
   bottom: auto;
   width: 560px;
@@ -2794,6 +3136,31 @@ html[data-theme="dark"] .notes.is-float {
   overflow: hidden;
 }
 
+.notes-grid.notes-grid-ordered {
+  grid-template-areas: "field hits";
+}
+
+.notes-grid-ordered .notes-hits-first {
+  grid-area: hits;
+}
+
+.notes-grid-ordered .notes-field {
+  grid-area: field;
+}
+
+.hit-list.hit-list-wrap {
+  flex: none;
+  min-height: 0;
+  overflow: visible;
+  flex-flow: row wrap;
+}
+
+.hit-list-wrap .hit-card {
+  width: auto;
+  max-width: 100%;
+  flex: 0 1 auto;
+}
+
 .notes-field,
 .notes-hits {
   min-height: 0;
@@ -2958,6 +3325,18 @@ html[data-theme="dark"] .notes.is-float {
     grid-template-columns: 1fr;
   }
 
+  .notes-grid.notes-grid-ordered {
+    grid-template-areas:
+      "hits"
+      "field";
+    overflow: auto;
+  }
+
+  .notes-grid-ordered .notes-hits-first,
+  .notes-grid-ordered .notes-field {
+    overflow: visible;
+  }
+
   .hit-list {
     max-height: 280px;
   }
@@ -3064,6 +3443,36 @@ html[data-theme="dark"] .notes.is-float {
 
   .apple-slider {
     width: 140px;
+  }
+
+  .history-filterbar {
+    align-items: stretch;
+    padding: 10px;
+  }
+
+  .history-filterbar .ant-segmented {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+
+  .history-range {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .history-filter-count {
+    margin-left: 0;
+    align-self: center;
+  }
+
+  .history-bulkbar {
+    width: calc(100% - 8px);
+    justify-content: space-between;
+    border-radius: 22px;
+  }
+
+  .history-bulkbar > span {
+    display: none;
   }
 }
 

@@ -26,17 +26,15 @@
 ## 评测
 
 ```bash
-cd backend
+cd apps/web/backend
 .venv/bin/python scripts/run_eval.py
-# 或 API（需登录 token）
-# POST /api/eval/run
-# GET  /api/eval/gold
-# POST /api/tasks/{id}/export-gold
 ```
+
+没有金标，或金标对应的任务都不存在时，命令必须非零退出；不能把 0 案例当成评测通过。
 
 ## 扩充
 
-1. 完成一单人审后：`POST /api/tasks/{id}/export-gold`  
-2. 人工改 `expected_status`  
-3. 把 `task_id` 绑到该任务  
-4. 再跑 `run_eval.py`
+1. 完成一单人审后，在隔离副本中用 `app.eval_gold.export_gold_from_task` 生成草稿；不要提交 `data/tasks` 运行时文件。
+2. 人工逐字段核定 `expected_status`，未核定草稿不能当金标。
+3. 把 `task_id` 绑到该任务。
+4. 再跑 `run_eval.py`。

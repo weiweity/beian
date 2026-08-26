@@ -15,6 +15,8 @@ export type MockupJob = {
   owner?: string;
   created_by?: string;
   source_path?: string;
+  /** 仅服务端用于开始接口幂等恢复，不返回前端。 */
+  source_receipt?: string;
   manifest_path?: string;
   job_kind?: "mockup";
   job_status?: "queued" | "running" | "succeeded" | "failed";
@@ -32,6 +34,21 @@ export type MockupJob = {
 };
 
 const cache = new Map<string, MockupJob>();
+export const MAX_MOCKUP_CACHE_ITEMS = 256;
+
+function rememberMockup(job: MockupJob): void {
+  cache.delete(job.id);
+  cache.set(job.id, job);
+  while (cache.size > MAX_MOCKUP_CACHE_ITEMS) {
+    const oldest = cache.keys().next().value as string | undefined;
+    if (!oldest) break;
+    cache.delete(oldest);
+  }
+}
+
+export function mockupCacheSize(): number {
+  return cache.size;
+}
 
 export function resetMockupCache(): void {
   cache.clear();
@@ -63,7 +80,7 @@ export function saveMockup(job: MockupJob): void {
   const dir = join(mockupRoot(), job.id);
   mkdirSync(dir, { recursive: true });
   replaceFile(jobPath(job.id), JSON.stringify(job, null, 2));
-  cache.set(job.id, job);
+  rememberMockup(job);
 }
 
 export function loadMockup(id: string): MockupJob | undefined {
@@ -74,10 +91,13 @@ export function loadMockup(id: string): MockupJob | undefined {
     return undefined;
   }
   const hit = cache.get(id);
-  if (hit) return hit;
+  if (hit) {
+    rememberMockup(hit);
+    return hit;
+  }
   try {
     const job = JSON.parse(readFileSync(p, "utf8")) as MockupJob;
-    cache.set(id, job);
+    rememberMockup(job);
     return job;
   } catch {
     cache.delete(id);
@@ -101,6 +121,14 @@ export function assertCanAccessMockup(job: MockupJob, viewer: Viewer): void {
 
 export function listJobsFor(viewer: Viewer): MockupJob[] {
   return listJobs().filter((job) => canAccessOwner(mockupOwner(job), viewer));
+}
+
+/** 回执属于具体账号；管理员权限也不能跨账号命中别人的幂等键。 */
+export function findMockupBySourceReceipt(receiptId: string, owner: string): MockupJob | undefined {
+  if (!isTid(receiptId) || !owner) return undefined;
+  return loadAllMockups().find(
+    (job) => job.source_receipt === receiptId && mockupOwner(job) === owner,
+  );
 }
 
 export function loadAllMockups(): MockupJob[] {
@@ -246,6 +274,7 @@ export function deleteMockup(id: string): void {
 export function queueMockup(opts: {
   id: string;
   sourcePath: string;
+  sourceReceipt?: string;
   ownerId: string;
   displayName: string;
   title?: string;
@@ -282,6 +311,7 @@ export function queueMockup(opts: {
     owner: opts.ownerId,
     created_by: opts.displayName,
     source_path: opts.sourcePath,
+    source_receipt: opts.sourceReceipt,
     manifest_path: manifestPath,
     job_kind: "mockup",
     job_status: "queued",

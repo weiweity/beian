@@ -16,7 +16,7 @@
 - 不得自行改 DNS、发布飞书版本、购买云、映射公网端口。
 - 公网/Tunnel 后禁止显示名裸登录。
 - Mac 绿灯不等于 Windows 已验收。杭州生产怎么升版见文末「Deploy Configuration」。合 `main` 后 runner 自动跑 `release.ps1`；Actions 红或公网 health 对不上 VERSION 时不要报已上线。
-- 对照失败或已完成的单不能签字；干净签字单不能再对红；对红后优先读非空 `hits_v2`（空数组回退第一轮）。工艺说明 / 颜色要求 / 版本号的 pending 不挡签字。
+- 对照失败或已完成的单不能签字；干净签字单不能再对红；对红后优先读非空 `hits_v2`（空数组回退第一轮）。工艺说明 / 颜色要求 / 版本号 / 更新内容的 pending 不挡签字。
 - 飞书授权失败回到飞书，不要把远程验收人送到本机 `:8787`。JSON 404 不是 Vite 挂了；只有 HTML 或空 Content-Type 才当开发页没转到 8787。
 
 ## 目录
@@ -46,11 +46,11 @@ cd apps/web/backend && PYTHONPATH=. .venv/bin/python -m app.cli --help
 
 2. 第一次 queued 落盘之后，只有 `apps/web/server/src/jobs.ts` 再写任务文件。`enqueue({ kind, id })`。路由只 save queued 一次，之后这个 tid 归 `jobs.ts`。
 
-3. Hono 动作立即返回。没有 `/api/jobs` 资源。
+3. Hono 动作立即返回。没有 `/api/jobs` 资源。新建审稿/打样先走 `POST /api/uploads` 暂存，再用回执调用 `/api/tasks/start` 或 `/api/mockups/start`；`GET /api/uploads` 只列当前登录自己的待开工回执，`DELETE /api/uploads/:id` 用于放弃。上传解析全局单槽，审稿总量固定不超过 100 MB，回执 30 分钟过期并限制每人/全局数量和字节数。`client_upload_id` 只恢复本次丢响应的上传；开始接口用 `source_receipt` 幂等，领取回执后若准备任务失败要恢复回执。UI 上传状态跨 SPA 换台保留；整页刷新只恢复已经落盘的回执，回执生成前刷新或断网不是字节级续传。
 
 4. 测试：抄 `jobs.test.ts` 的对照块。必写断言：第二单 queued、GET 无 `job_pid`、没有最后一行 JSON →「对照中断」、对红失败仍可签字。pytest：CLI 不 `save_task`；`--help` 含 `STAGE` / `save_task` / `packaging`。打样出图测 pymupdf（`test_packaging_thumbnail.py`），不要假定有 qlmanage。打样 PDF 测铺白和 Pillow 兜底（`test_packaging_dieline.py`）：pymupdf 已落盘则不覆盖，不要让人再装插件。
 
-5. UI 等待：`shouldShowWaitCard`（`queued` | `running` | `comparing`；`done`/`failed`/`completed` 不当等待）。离开核对页后，看板 `liveJobLine` 和侧栏 `liveNavPulse` 仍显示阶段。打样台只交稿；点进度/已出图进单独打样单（WaitCard 或一屏三图：正面+侧面、反面+侧面、GLB），不要在打样台底下摊开结果。下载提示走 `mockupHud.ts`（不挡点击）；GLB 全屏走 `mockupFullscreen.ts`。等待圆盘是 `WaitLoader`（对照中 / 对红中 / 打样中，不要英文 Generating）。核对页框在 `pinBox.ts`：有 bbox 才画真框，钉在框中心，不编造顶排钉；隐藏钉只藏圆圈；显示框单独开关，拖动画布暂时藏框。缩放在 `canvasZoom.ts`：CSS `transform` 1–6×（滚轮、放大/缩小/复位、点序号放大该框），拖动走 rAF 且禁止 img 原生拖拽，不上 OpenSeadragon。核对窗 `reviewDock.ts` 液态玻璃浮在整页最上面（含侧栏），进页展开并叠在左侧栏上，可随意拖，不挤页图；窗 z 最高可盖画布，夹住不盖页头签字；收起/展开 280ms 动画，可拖，边框上下左右和四个斜角都能缩放；左列当前字段顶栏是疑点/错误点（有才出现）再 Excel 应印 / 稿上 OCR，右列疑点列表；结论在页头签字旁。确认单底部工艺说明 / 颜色要求 / 版本号不进机审（只认字段名开头，不要误杀「执行标准版本号」；旧单假疑点签字时也跳过）。离开核对页或打样台后，历史记录仍列出进行中的单并显示 `liveJobLine`，点进去仍是 WaitCard / 打样单。稿上 OCR 走 `hitText.ts`（`coverage.hit` 回退，并列出 `coverage.miss` 和命中项数；品名/品牌/logo 没字就说明稿上多半是图）。打样先读稿上的刀线/刀版还原切面；密折痕先密后疏试间距；没有刀线才回退已登记 JSON。不能按比例硬套方盒。下载白底只给 `front_right` / `back_left`，不要把 `ai-raster` 或 PPT 质检 PNG 当成白底。预览 inline，点下载才附件。地址按台分开：`/reviewup` `/reviewup/new` `/review/:id` `/mockup` `/mockup/new` `/mockup/:id` `/history` `/settings`，后退换台。旧 `/` `/new` `/review` 302 到审稿台新地址。
+5. UI 等待：`shouldShowWaitCard`（`queued` | `running` | `comparing`；`done`/`failed`/`completed` 不当等待）。离开核对页后，看板 `liveJobLine` 和侧栏 `liveNavPulse` 仍显示阶段。打样台只交稿；点进度/已出图进单独打样单（WaitCard 或一屏三图：正面+侧面、反面+侧面、GLB），不要在打样台底下摊开结果。下载提示走 `mockupHud.ts`（不挡点击）；GLB 全屏走 `mockupFullscreen.ts`。等待圆盘是 `WaitLoader`（对照中 / 对红中 / 打样中，不要英文 Generating）。核对页框在 `pinBox.ts`：有 bbox 才画真框，钉在框中心，不编造顶排钉；隐藏钉只藏圆圈；显示框单独开关，拖动画布暂时藏框。缩放在 `canvasZoom.ts`：CSS `transform` 1–6×（滚轮、放大/缩小/复位、点序号放大该框），拖动走 rAF 且禁止 img 原生拖拽，不上 OpenSeadragon。核对窗 `reviewDock.ts` 液态玻璃浮在整页最上面（含侧栏），进页展开并叠在左侧栏上，可随意拖，不挤页图；窗 z 最高可盖画布，夹住不盖页头签字；收起/展开 280ms 动画，可拖，边框上下左右和四个斜角都能缩放；左列当前字段顶栏是疑点/错误点（有才出现）再 Excel 应印 / 稿上 OCR，右列疑点列表；结论在页头签字旁。确认单底部工艺说明 / 颜色要求 / 版本号 / 更新内容不进机审（只认字段名开头，不要误杀「备案版本号」「执行标准版本号」；旧单假疑点签字时也跳过）。离开核对页或打样台后，历史记录仍列出进行中的单并显示 `liveJobLine`，点进去仍是 WaitCard / 打样单。稿上 OCR 走 `hitText.ts`（`coverage.hit` 回退，并列出 `coverage.miss` 和命中项数；品名/品牌/logo 没字就说明稿上多半是图）。打样先读稿上的刀线/刀版还原切面；密折痕先密后疏试间距；没有刀线才回退已登记 JSON。不能按比例硬套方盒。下载白底只给 `front_right` / `back_left`，不要把 `ai-raster` 或 PPT 质检 PNG 当成白底。预览 inline，点下载才附件。地址按台分开：`/reviewup` `/reviewup/new` `/review/:id` `/mockup` `/mockup/new` `/mockup/:id` `/history` `/settings`，后退换台。旧 `/` `/new` `/review` 302 到审稿台新地址。
 
 调试：对外 `job_error` 用短中文。Node 日志写 problem + cause + fix。打开 `DATA_DIR/tasks/{tid}.json`。不要新 FastAPI 路由。
 
@@ -81,7 +81,7 @@ MiniMax 未开语义复核是「未用」，不是「可用」；探测是 `GET 
 
 开工板是线性进度 + 7 行清单，不要画成圆环仪表，不要用「通 / 不通」当状态字。界面单测只测纯函数，不引入 RTL。
 
-杭州打样平面出图走 pymupdf（对照同一 `.venv`），不要让人装 qlmanage。macOS Quick Look 只在 pymupdf 失败时兜底。打样先读稿上的刀线/刀版还原切面，密折痕先密后疏试间距，没有刀线才回退已登记 JSON，不能按比例硬套方盒。离开核对页后看板/侧栏/历史记录仍看阶段，不要只把进度画在 WaitCard 上。核对页缩放用 CSS transform，不要接 OpenSeadragon。核对窗液态玻璃浮在整页最上面（含侧栏），进页展开并叠在左侧栏上，可随意拖，不挤页图；窗不盖签字；收起/展开有动画，可拖，边框上下左右和斜角都能缩放；隐藏钉只藏圆圈；显示框单独开关。打样台和打样单主区白底深字（深色主题也是）；GLB 中性环境；每张图右上角下载；页头「下载+PPT」（没写成仍显示，点了出「PPT 没写成，白底仍可下」）；有 PDF 时旁边还能下 PDF；点下载底部提示不挡操作；GLB 全屏居中；截图时下载钮藏起来；全屏被拒写「全屏打不开」。已经出过的白底图要重新打样才会变。PDF 槽按源图比例 contain。打样 PPT 先用两张白底写 OOXML，不依赖 Node；写不出才试演示文稿运行时。缺 PPT 不要把整单判失败；两张白底仍合成 PDF（页底先铺白；pymupdf 写不出且还没落盘才用已装 Pillow，不要盖掉已写成的文件，不要新装包）。
+杭州打样平面出图走 pymupdf（对照同一 `.venv`），不要让人装 qlmanage。macOS Quick Look 只在 pymupdf 失败时兜底。打样先读稿上的刀线/刀版还原切面，密折痕先密后疏试间距，没有刀线才回退已登记 JSON，不能按比例硬套方盒。离开核对页后看板/侧栏/历史记录仍看阶段，不要只把进度画在 WaitCard 上。核对页缩放用 CSS transform，不要接 OpenSeadragon。核对窗液态玻璃浮在整页最上面（含侧栏），进页展开并叠在左侧栏上，可随意拖，不挤页图；窗不盖签字；收起/展开有动画，可拖，边框上下左右和斜角都能缩放；隐藏钉只藏圆圈；显示框单独开关。打样台和打样单主区白底深字（深色主题也是）；GLB 中性环境；每张图右上角下载；页头「下载 PPT」（没写成仍显示，点了出「PPT 没写成，白底仍可下」），不提供 PDF 下载入口；点下载底部提示不挡操作；GLB 全屏居中；截图时下载钮藏起来；全屏被拒写「全屏打不开」。已经出过的白底图要重新打样才会变。打样 PPT 先用两张白底写 OOXML，不依赖 Node；写不出才试演示文稿运行时。缺 PPT 不要把整单判失败；内部仍用两张白底合成 PDF（页底先铺白；pymupdf 写不出且还没落盘才用已装 Pillow，不要盖掉已写成的文件，不要新装包）。
 
 ## Design System
 
@@ -95,7 +95,7 @@ MiniMax 未开语义复核是「未用」，不是「可用」；探测是 `GET 
 - 空审核单不画三栏。设置里有「外观」：主题、13–28px 字号（可手写）、侧栏材质（实心 / 毛玻璃 / 液态玻璃）、侧栏雾面对比度滑条、差异标记。只写 `localStorage`。深色走品牌紫雾，不是灰黑中台。
 - 审稿：专属核对页，画布吃满宽度。钉和框分开关；「隐藏钉」只藏编号圆圈。左图 CSS transform 缩放（1–6×），拖动走 rAF，禁止原生图片拖拽，不上 OpenSeadragon。核对窗浮在整页最上面（含侧栏），进页展开并叠在左侧栏上，可随意拖，不挤页图；窗不盖签字。收起/展开有动画，可拖，边框上下左右和斜角都能缩放。左列先疑点再 Excel 应印。结论写在页头签字旁。禁止「AI 已过审」。
 - 历史记录是侧栏 tab，不是第三张台。进行中的审稿/打样也列在里面，点进去看进度。
-- 打样台 8/31 不对业务开放。打样台和打样单主区白底深字（不是紫雾台，深色主题也是）；每张图右上角下载，页头「下载+PPT」；截图时下载钮藏起来。QA 时标出任何与 `DESIGN.md` 不符的实现。
+- 打样台 8/31 不对业务开放。打样台和打样单主区白底深字（不是紫雾台，深色主题也是）；每张图右上角下载，页头「下载 PPT」且不提供 PDF 下载入口；截图时下载钮藏起来。QA 时标出任何与 `DESIGN.md` 不符的实现。
 
 ## Testing
 
@@ -108,6 +108,7 @@ MiniMax 未开语义复核是「未用」，不是「可用」；探测是 `GET 
 - L1 冒烟（杭州 `hangzhou-release`）：`release.ps1` 查 health.ok、version==VERSION、`jobs.illustrator`、logo PNG。不跑 `npm test`
 - L2 金标（人核定后）：`apps/web/backend/scripts/run_eval.py`。未核定的 `data/gold` 不进默认 `npm test`
 - 类型：`npm run typecheck -w beian-server` 与 `npm run build -w beian-ui`
+- 浏览器交互（Mac）：`npm run test:e2e`（Vite + 合成 API，只验证页面行为，不替代真实 Hono / Windows L1）
 - 新逻辑要有行为测试（含失败路径）。不要把密钥写进测试。
 
 ## 设计哲学

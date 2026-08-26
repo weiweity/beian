@@ -42,16 +42,21 @@
 - 产品 / 验收：http://127.0.0.1:8787/ （先 `cd apps/web/ui && npm run build`）
 - 开发 UI：http://127.0.0.1:5173/ （`npm run dev:ui`；Vite 听本机网卡，`/api` 反代到 8787，端口占用即失败）
 - 台地址：`/reviewup` 审稿台、`/reviewup/new` 审稿工作台、`/review/:id` 核对页、`/mockup` 打样台、`/mockup/new` 打样工作台、`/mockup/:id` 打样单、`/history`、`/settings`。旧 `/` `/new` `/review` 会转到新地址。后退换台。
+- 审稿双井或打样 `.ai` 选齐后会先上传。进度到 100% 只表示浏览器已发完，看到「服务器确认中」后还要等「待开工」；这时切去别页再回来仍可继续。要换一组稿先点「放弃上传」，会同时清掉服务器上的待开工回执。回执已生成时，整页刷新后可从台面的待开工卡继续；回执生成前刷新或断网仍需重新选择文件。
+- 打样台可按品名/文件名搜索，并在看板与表格之间切换。历史记录可按审稿/打样、时间和生成人筛选；有删除权限时点「编辑」可批量删除已结束的单，进行中的单不能删除。核对页默认打开已完成的第二版（如有），可切回上一版，也可用「全屏核对」。
 
 5173 登录闪或 `/api` 返回 HTML / 空 Content-Type：打开 http://127.0.0.1:8787/，或重启 `npm run dev:ui`。飞书授权失败回到飞书重试，不要把远程验收人指到本机。JSON 404（任务不存在等）不是 Vite 挂了。
 
 不要跑 uvicorn。没有 `app.main`。产品入口只有 Hono `:8787`。
 
-测服务端、界面和对照 CLI：仓库根目录 `npm test`（Mac；不打外网）。杭州生产只做 health/logo 冒烟，不跑单测。只要服务端：`npm run test -w beian-server`。只要界面：`npm run test -w beian-ui`。
+测服务端、界面和对照 CLI：仓库根目录 `npm test`（Mac；不打外网）。浏览器交互回归另跑 `npm run test:e2e`；它使用 Vite + 合成 API，验证页面行为，不替代真实 Hono `:8787` 或杭州 Windows L1。杭州生产只做 health/logo 冒烟，不跑单测。只要服务端：`npm run test -w beian-server`。只要界面：`npm run test -w beian-ui`。
 
-## Docker（审稿台/对照 worker）
+## Docker（当前未交付）
 
-项目已提供 `Dockerfile` 与 `compose.yaml`。容器版覆盖 TypeScript `:8787` 产品入口和 Python 对照 worker；数据写入名为 `beian-data` 的 Docker volume，密钥不写进镜像。
+当前仓库没有 `Dockerfile`、`compose.yaml` 或 `.env.container.example`，所以下面的旧容器化计划**不能执行，也不代表已验收**。当前可执行入口仍是 `./scripts/dev-start.sh` → Hono `:8787`；若以后恢复容器化，必须连同这三个文件和跨架构验证一起交付。
+
+<details>
+<summary>历史容器化计划（仅供追溯，不可执行）</summary>
 
 ```bash
 cp .env.container.example .env.container
@@ -69,9 +74,11 @@ docker buildx build --platform linux/amd64 -t beian:review-amd64 --load .
 
 这不是 3D 打样容器：打样台仍要求宿主机 Blender，Illustrator/AppleScript 也不随镜像提供。容器能启动不代表 Windows 3D 流水线已验收。
 
+</details>
+
 ## 给别人用：设置页
 
-登录后点侧栏「设置」。飞书、百度 OCR、MiniMax、Python、Blender 都在这里填。开工板看登录/审稿/打样能不能干活；费用账单进页再拉，不轮询。外观（主题、字号、侧栏材质：实心 / 毛玻璃 / 液态玻璃）只写这台浏览器，不进密钥文件。
+登录后点侧栏「设置」。管理员可在这里保存飞书、百度 OCR、MiniMax、Python、Blender 配置并扫描本机程序；其他审核员可看状态和运行允许的探测，但不能改系统配置或扫描电脑。开工板看登录/审稿/打样能不能干活；费用账单进页再拉，不轮询。外观（主题、字号、侧栏材质：实心 / 毛玻璃 / 液态玻璃）只写这台浏览器，不进密钥文件。
 
 - 密钥只写到本机数据目录（默认 `apps/web/backend/data/settings.secrets.json`，0600，不进 git；可用 `WB_DATA_DIR` 改）
 - 界面只显示是否已填

@@ -2,7 +2,7 @@
 """CLI: 金标评测（对照已有任务 hits）
 
 用法:
-  cd backend && .venv/bin/python scripts/run_eval.py
+  cd apps/web/backend && .venv/bin/python scripts/run_eval.py
   .venv/bin/python scripts/run_eval.py --task-id c7a545a40404
 """
 from __future__ import annotations
@@ -60,6 +60,10 @@ def main() -> int:
                     f"  {row['cell']:2} {row['field'][:40]!r} "
                     f"exp={row['expected']} pred={row['predicted']}"
                 )
+
+    if not reports:
+        print("No evaluable gold cases: every case was missing a usable task")
+        return 1
 
     agg = eval_gold.aggregate_reports(reports)
     print("---")

@@ -1,17 +1,33 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Alert, App, Button, Empty } from "antd";
-import { api, type MockupJob } from "../api";
+import { Alert, App, Button, ConfigProvider, Empty, Input, Segmented, Space, Table, Tag, theme as antdTheme } from "antd";
+import { api, UPLOAD_TIMEOUT_MS, type MockupJob, type PendingUploadReceipt } from "../api";
+import { UploadProgressSlot } from "../chrome/UploadProgressSlot";
 import { UploadWell } from "../chrome/UploadWell";
 import { WaitCard } from "../chrome/WaitCard";
 import { mockupFailReason, mockupFailTag } from "./mockupError";
 import { liveJobLine, shouldShowWaitCard } from "./waitCard";
 import { stemFromFilename } from "./stemName";
-import { UPLOAD_TOO_LARGE, bytesTooLarge } from "../uploadLimit";
 import { HUD_MS, downloadHudLine, missingPptHud } from "./mockupHud";
-import { type DeskCardRow } from "./deskBoard";
+import { deskClock, type DeskCardRow } from "./deskBoard";
 import { DeskCol } from "./DeskCol";
 import { shouldShowTaskBoard } from "./tasksBoard";
+import {
+  uploadIsBusy,
+  UPLOAD_RECOVERY_INTERVAL_MS,
+  uploadStore,
+  useUploadReceiptRecovery,
+  useUploadSnapshot,
+  type UploadSnapshot,
+} from "../uploadStore";
+import {
+  matchesDeskQuery,
+  loadDeskReceipts,
+  pendingUploadCard,
+  pendingUploadItems,
+  shouldReconcileUpload,
+  type PendingUploadItem,
+} from "./uploadDesk";
 import {
   enterElementFullscreen,
   exitElementFullscreen,
@@ -20,8 +36,14 @@ import {
 } from "./mockupFullscreen";
 import "@google/model-viewer";
 
-type DeskProps = { onOpenJob: (id: string) => void };
+type DeskProps = {
+  canCreate: boolean;
+  onOpenJob: (id: string) => void;
+  onCompose: () => void;
+  onResumeReceipt: (receipt: string) => void;
+};
 type JobProps = { jobId: string; onBack: () => void };
+type Layout = "board" | "table";
 
 function mockLabel(row: MockupJob) {
   if (row.status === "done") return { text: "已出图", color: "success" as const };
@@ -48,21 +70,47 @@ function fileHref(jobId: string, key: string, download = false) {
 export function MockupDesk({
   openId,
   composing,
+  receiptId,
+  canCreate,
   onOpenJob,
   onBack,
   onCompose,
+  onResumeReceipt,
 }: {
   openId?: string | null;
   composing?: boolean;
+  receiptId?: string | null;
+  canCreate: boolean;
   onOpenJob: (id: string) => void;
   onBack: () => void;
   onCompose?: () => void;
+  onResumeReceipt: (receipt: string) => void;
 }) {
-  if (openId) return <MockupJobPage jobId={openId} onBack={onBack} />;
-  if (composing) {
-    return <MockupNewPage onCreated={onOpenJob} onBack={onBack} />;
+  let content: ReactNode;
+  if (openId) {
+    content = <MockupJobPage jobId={openId} onBack={onBack} />;
+  } else if (composing) {
+    content = <MockupNewPage key={receiptId || "active"} canCreate={canCreate} receiptId={receiptId} onCreated={onOpenJob} onBack={onBack} />;
+  } else {
+    content = (
+      <MockupPage
+        canCreate={canCreate}
+        onOpenJob={onOpenJob}
+        onCompose={onCompose || (() => undefined)}
+        onResumeReceipt={onResumeReceipt}
+      />
+    );
   }
-  return <MockupPage onOpenJob={onOpenJob} onCompose={onCompose || (() => undefined)} />;
+  return (
+    <ConfigProvider
+      theme={{
+        algorithm: antdTheme.defaultAlgorithm,
+        token: { colorPrimary: "#805898", colorText: "#1c1a1f", colorBgBase: "#ffffff" },
+      }}
+    >
+      {content}
+    </ConfigProvider>
+  );
 }
 
 function toMockCard(row: MockupJob): DeskCardRow {
@@ -80,10 +128,21 @@ function toMockCard(row: MockupJob): DeskCardRow {
 }
 
 export function MockupPage({
+  canCreate,
   onOpenJob,
   onCompose,
-}: DeskProps & { onCompose: () => void }) {
+  onResumeReceipt,
+}: DeskProps) {
+  const { message, modal } = App.useApp();
+  const localUpload = useUploadSnapshot("mockup");
   const [rows, setRows] = useState<MockupJob[]>([]);
+  const [receipts, setReceipts] = useState<PendingUploadReceipt[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [q, setQ] = useState("");
+  const [submitted, setSubmitted] = useState("");
+  const [layout, setLayout] = useState<Layout>("board");
+  const [reload, setReload] = useState(0);
   const listGen = useRef(0);
 
   function refreshList() {
@@ -101,17 +160,25 @@ export function MockupPage({
   useEffect(() => {
     let cancelled = false;
     const gen = ++listGen.current;
-    void api
-      .mockups()
-      .then((list) => {
+    setLoading(true);
+    setError(null);
+    void Promise.all([api.mockups(), loadDeskReceipts(canCreate, api.uploads)])
+      .then(([list, pending]) => {
         if (cancelled || gen !== listGen.current) return;
         setRows(list);
+        for (const receipt of pending) uploadStore.recover("mockup", receipt);
+        setReceipts(pending);
       })
-      .catch(() => undefined);
+      .catch((err: unknown) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : "加载失败，再试一次");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [canCreate, reload]);
 
   const boardLive = rows.some((r) => mockCol(r) === "running");
   useEffect(() => {
@@ -122,15 +189,103 @@ export function MockupPage({
     return () => window.clearInterval(id);
   }, [boardLive]);
 
+  const reconcileUpload = shouldReconcileUpload("mockup", localUpload, receipts);
+  useEffect(() => {
+    if (!canCreate || !reconcileUpload) return;
+    let cancelled = false;
+    const reconcile = () => {
+      void api
+        .uploads()
+        .then((pending) => {
+          if (cancelled) return;
+          for (const receipt of pending) uploadStore.recover("mockup", receipt);
+          setReceipts(pending);
+        })
+        .catch(() => undefined);
+    };
+    reconcile();
+    const interval = window.setInterval(reconcile, UPLOAD_RECOVERY_INTERVAL_MS);
+    const stop = window.setTimeout(() => window.clearInterval(interval), UPLOAD_TIMEOUT_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      window.clearTimeout(stop);
+    };
+  }, [canCreate, localUpload?.clientUploadId, localUpload?.phase, reconcileUpload]);
+
+  const filteredRows = useMemo(
+    () =>
+      rows.filter((row) =>
+        matchesDeskQuery(submitted, mockTitle(row), ...row.files.map((file) => file.name)),
+      ),
+    [rows, submitted],
+  );
+  const allPendingItems = useMemo(
+    () => pendingUploadItems("mockup", localUpload, receipts),
+    [localUpload, receipts],
+  );
+  const pendingItems = useMemo(
+    () => pendingUploadItems("mockup", localUpload, receipts, submitted),
+    [localUpload, receipts, submitted],
+  );
+  const pendingCards = useMemo(
+    () => pendingItems.map((item) => pendingUploadCard(item, "待打样")),
+    [pendingItems],
+  );
+  const pendingByKey = useMemo(() => new Map(pendingItems.map((item) => [item.key, item])), [pendingItems]);
   const board = useMemo(
     () => ({
-      running: rows.filter((r) => mockCol(r) === "running"),
-      failed: rows.filter((r) => mockCol(r) === "failed"),
-      done: rows.filter((r) => mockCol(r) === "done"),
+      running: filteredRows.filter((row) => mockCol(row) === "running"),
+      failed: filteredRows.filter((row) => mockCol(row) === "failed"),
+      done: filteredRows.filter((row) => mockCol(row) === "done"),
     }),
-    [rows],
+    [filteredRows],
   );
-  const showBoard = shouldShowTaskBoard(rows.length, "");
+  const totalCount = filteredRows.length + pendingItems.length;
+  const allCount = rows.length + allPendingItems.length;
+  const showSearch = Boolean(submitted) || allCount > 0;
+  const showBoard = shouldShowTaskBoard(totalCount, submitted) && totalCount > 0;
+  const tableRows = useMemo(
+    () => [...pendingCards, ...filteredRows.map(toMockCard)],
+    [pendingCards, filteredRows],
+  );
+
+  function openPending(item: PendingUploadItem) {
+    if (!item.receipt) {
+      onCompose();
+      return;
+    }
+    if (!item.productName) {
+      onResumeReceipt(item.receipt);
+      return;
+    }
+    const receipt = item.receipt;
+    const productName = item.productName;
+    modal.confirm({
+      title: "开始打样这单？",
+      content: `品名：${productName}。上传文件已由服务器确认，开始后会进入打样队列。`,
+      okText: "开始打样",
+      cancelText: "先不开始",
+      onOk: async () => {
+        try {
+          const next = await api.startMockup({ receipt, title: productName, product_name: productName });
+          uploadStore.clear("mockup", receipt);
+          setReceipts((current) => current.filter((saved) => saved.id !== receipt));
+          message.success("已开始打样。");
+          onOpenJob(next.id);
+        } catch (err) {
+          message.error(err instanceof Error ? err.message : "无法开始打样");
+          throw err;
+        }
+      },
+    });
+  }
+
+  function openCard(id: string) {
+    const pending = pendingByKey.get(id);
+    if (pending) openPending(pending);
+    else onOpenJob(id);
+  }
 
   return (
     <section className="mockup-desk">
@@ -139,125 +294,267 @@ export function MockupPage({
           <h1 className="page-title">打样台</h1>
           <p className="page-lead">交差「盒子长什么样」。点进度或已出图进打样单。</p>
         </div>
-        <Button type="primary" onClick={onCompose}>
-          进入工作台
-        </Button>
+        <Space wrap>
+          {showSearch ? (
+            <Input.Search
+              allowClear
+              placeholder="搜品名或文件名"
+              value={q}
+              onChange={(event) => setQ(event.target.value)}
+              onClear={() => {
+                setQ("");
+                setSubmitted("");
+              }}
+              onSearch={(value) => setSubmitted(value.trim())}
+              style={{ width: 240 }}
+            />
+          ) : null}
+          {showBoard ? (
+            <Segmented
+              value={layout}
+              onChange={(value) => setLayout(value as Layout)}
+              options={[
+                { label: "看板", value: "board" },
+                { label: "表格", value: "table" },
+              ]}
+            />
+          ) : null}
+          {canCreate ? (
+            <Button type="primary" onClick={onCompose}>
+              进入工作台
+            </Button>
+          ) : null}
+        </Space>
       </div>
+      {error ? (
+        <Alert
+          type="error"
+          showIcon
+          style={{ marginBottom: 16 }}
+          title={error}
+          action={
+            <Button size="small" onClick={() => setReload((count) => count + 1)}>
+              再试一次
+            </Button>
+          }
+        />
+      ) : null}
       {!showBoard ? (
         <div className="desk-empty">
           <Empty
             image={Empty.PRESENTED_IMAGE_SIMPLE}
             description={
-              <div>
-                <div>还没有打样单</div>
-                <div className="desk-empty-hint">右上角进入工作台，交一份 .ai 平面稿</div>
-              </div>
+              loading ? (
+                <div>读取打样单…</div>
+              ) : submitted ? (
+                <div>没有找到这个品名或文件名</div>
+              ) : (
+                <div>
+                  <div>还没有打样单</div>
+                  <div className="desk-empty-hint">右上角进入工作台，交一份 .ai 平面稿</div>
+                </div>
+              )
             }
           >
-            <Button type="primary" onClick={onCompose}>
-              进入工作台
-            </Button>
+            {loading ? null : submitted ? (
+              <Button
+                onClick={() => {
+                  setQ("");
+                  setSubmitted("");
+                }}
+              >
+                清空
+              </Button>
+            ) : canCreate ? (
+              <Button type="primary" onClick={onCompose}>
+                进入工作台
+              </Button>
+            ) : null}
           </Empty>
         </div>
-      ) : (
+      ) : layout === "board" ? (
         <div className="review-board">
-          <DeskCol title="打样中" hint="点进去看进度" rows={board.running.map(toMockCard)} onOpen={onOpenJob} />
+          <DeskCol
+            title="打样中"
+            hint="上传中、待打样或机器运行"
+            rows={[...pendingCards, ...board.running.map(toMockCard)]}
+            onOpen={openCard}
+          />
           <DeskCol title="打样失败" hint="点进去看原因" rows={board.failed.map(toMockCard)} onOpen={onOpenJob} />
           <DeskCol title="已出图" hint="点进去打开打样单" rows={board.done.map(toMockCard)} onOpen={onOpenJob} />
         </div>
+      ) : (
+        <Table<DeskCardRow>
+          rowKey="id"
+          loading={loading}
+          dataSource={tableRows}
+          pagination={false}
+          scroll={{ x: 760 }}
+          onRow={(row) => ({ onClick: () => openCard(row.id), style: { cursor: "pointer" } })}
+          columns={[
+            { title: "品名 / 文件", dataIndex: "title" },
+            {
+              title: "状态",
+              width: 180,
+              render: (_, row) => (
+                <div>
+                  <Tag color={row.statusColor}>{row.statusText}</Tag>
+                  {row.live ? <div className="review-card-live">{row.live}</div> : null}
+                </div>
+              ),
+            },
+            { title: "工作时间", dataIndex: "at", width: 180, render: (value: string) => deskClock(value) },
+            { title: "使用人", dataIndex: "actor", width: 100, render: (value: string) => value || "—" },
+            { title: "", key: "open", width: 100, render: () => <Button type="link">打开</Button> },
+          ]}
+        />
       )}
     </section>
   );
 }
 
+function receiptFromSnapshot(snapshot: UploadSnapshot | null): PendingUploadReceipt | null {
+  if (!snapshot?.receipt || snapshot.phase !== "ready") return null;
+  return {
+    id: snapshot.receipt,
+    files: snapshot.files,
+    bytes: snapshot.files.reduce((sum, file) => sum + file.bytes, 0),
+    created_at: snapshot.createdAt,
+    kind: snapshot.kind,
+  };
+}
+
 export function MockupNewPage({
+  canCreate,
+  receiptId,
   onCreated,
   onBack,
 }: {
+  canCreate: boolean;
+  receiptId?: string | null;
   onCreated: (id: string) => void;
   onBack: () => void;
 }) {
-  const { message } = App.useApp();
-  const [file, setFile] = useState<File | null>(null);
-  const [productName, setProductName] = useState("");
-  const [receipt, setReceipt] = useState<string | null>(null);
-  const [pct, setPct] = useState(0);
-  const [uploading, setUploading] = useState(false);
-  const [busy, setBusy] = useState(false);
-
-  function takeFile(next: File | null) {
-    setFile(next);
-    setReceipt(null);
-    setPct(0);
-    if (next) {
-      message.success("已选平面稿");
-      if (!productName.trim()) setProductName(stemFromFilename(next.name));
-    }
-  }
+  const { message, modal } = App.useApp();
+  const upload = useUploadSnapshot("mockup");
+  const localReceipt = receiptFromSnapshot(upload);
+  const localMatches = Boolean(receiptId && localReceipt?.id === receiptId);
+  const [resumeSource] = useState<"local" | "remote">(() => (!receiptId || localMatches ? "local" : "remote"));
+  const [restoredReceipt, setRestoredReceipt] = useState<PendingUploadReceipt | null>(null);
+  const [resumeError, setResumeError] = useState<string | null>(null);
+  const [productName, setProductName] = useState(resumeSource === "local" ? upload?.productName || "" : "");
+  const [submitting, setSubmitting] = useState(false);
+  useUploadReceiptRecovery("mockup", upload, canCreate && resumeSource === "local");
 
   useEffect(() => {
-    if (!file) return;
-    if (bytesTooLarge(file.size)) return;
+    if (!canCreate || resumeSource === "local" || !receiptId) {
+      setRestoredReceipt(null);
+      setResumeError(null);
+      return;
+    }
     let cancelled = false;
-    const ac = new AbortController();
-    const fd = new FormData();
-    fd.append("file", file);
-    setUploading(true);
+    setResumeError(null);
     void api
-      .stageUpload(
-        fd,
-        (n) => {
-          if (!cancelled) setPct(n);
-        },
-        ac.signal,
-      )
-      .then((res) => {
+      .uploads()
+      .then((list) => {
         if (cancelled) return;
-        setReceipt(res.receipt);
-        setPct(100);
+        const found = list.find((item) => item.id === receiptId && item.kind === "mockup") || null;
+        setRestoredReceipt(found);
+        if (!found) setResumeError("这份上传回执已过期或已经开工，请返回打样台刷新。");
       })
       .catch((err: unknown) => {
-        if (cancelled) return;
-        setReceipt(null);
-        message.error(err instanceof Error ? err.message : "上传失败");
-      })
-      .finally(() => {
-        if (!cancelled) setUploading(false);
+        if (!cancelled) setResumeError(err instanceof Error ? err.message : "上传回执读取失败");
       });
     return () => {
       cancelled = true;
-      ac.abort();
     };
-  }, [file, message]);
+  }, [canCreate, receiptId, resumeSource]);
+
+  const receipt = resumeSource === "local" ? upload?.receipt || null : restoredReceipt?.id || null;
+  const files = resumeSource === "local" ? upload?.files || [] : restoredReceipt?.files || [];
+  const ai = files.find((file) => file.field === "file" || file.field === "ai");
+  const busy = resumeSource === "local" && uploadIsBusy(upload);
+
+  function updateName(next: string) {
+    setProductName(next);
+    if (resumeSource === "local") uploadStore.updateMeta("mockup", { productName: next });
+  }
+
+  function takeFile(next: File | null) {
+    let name = productName;
+    if (next && !name.trim()) {
+      name = stemFromFilename(next.name);
+      setProductName(name);
+    }
+    const state = uploadStore.replaceFile("mockup", "ai", next, { productName: name });
+    if (state.phase === "failed" && state.error) message.error(state.error);
+    else if (next) message.success("已选平面稿");
+  }
 
   async function run() {
-    if (busy) return;
-    if (!file) {
-      message.warning("先选 .ai 稿件");
-      return;
-    }
-    if (bytesTooLarge(file.size)) {
-      message.error(UPLOAD_TOO_LARGE);
+    const name = productName.trim();
+    if (!name) {
+      message.warning("品名必填。");
       return;
     }
     if (!receipt) {
       message.warning("请先等文件传完。");
       return;
     }
-    setBusy(true);
+    setSubmitting(true);
     try {
       const next = await api.startMockup({
         receipt,
-        title: productName.trim() || stemFromFilename(file.name),
+        title: name,
+        product_name: name,
       });
+      uploadStore.clear("mockup", receipt);
       onCreated(next.id);
     } catch (err) {
       message.error(err instanceof Error ? err.message : "打样失败");
-      setBusy(false);
+      setSubmitting(false);
     }
   }
 
-  if (busy) return <WaitCard job="打样" jobStatus="queued" />;
+  function confirmAbandon() {
+    modal.confirm({
+      title: "放弃这次上传？",
+      content: "暂存文件会删除；以后需要时要重新选择并上传。",
+      okText: "放弃上传",
+      okButtonProps: { danger: true },
+      cancelText: "继续保留",
+      onOk: async () => {
+        try {
+          if (resumeSource === "remote" && restoredReceipt) {
+            const result = await api.discardUpload(restoredReceipt.id);
+            if (!result.ok) throw new Error("这份上传已经过期或已经开工");
+            setRestoredReceipt(null);
+          } else {
+            await uploadStore.abandon("mockup");
+          }
+          message.success("已放弃这次上传，文件资源已释放。");
+          onBack();
+        } catch (err) {
+          message.error(err instanceof Error ? err.message : "无法放弃这次上传");
+          throw err;
+        }
+      },
+    });
+  }
+
+  if (!canCreate) {
+    return (
+      <section className="new-form mockup-desk">
+        <header className="page-head">
+          <h1 className="page-title">打样工作台</h1>
+          <button type="button" className="btn-ghost" onClick={onBack}>返回</button>
+        </header>
+        <Alert type="warning" showIcon title="当前账号只有查看权限，不能上传或新建打样单。" />
+      </section>
+    );
+  }
+
+  if (submitting) return <WaitCard job="打样" jobStatus="queued" />;
 
   return (
     <section className="new-form mockup-desk">
@@ -273,10 +570,10 @@ export function MockupNewPage({
           <button
             type="button"
             className="btn-primary"
-            disabled={busy || !receipt || uploading}
+            disabled={!receipt || busy}
             onClick={() => void run()}
           >
-            {uploading ? `上传中 ${pct}%` : "开始打样"}
+            {busy ? "上传中" : "开始打样"}
           </button>
         </div>
       </header>
@@ -287,23 +584,30 @@ export function MockupNewPage({
             maxLength={80}
             placeholder="选平面稿后自动填，可改"
             value={productName}
-            onChange={(e) => setProductName(e.target.value)}
+            onChange={(event) => updateName(event.target.value)}
           />
         </label>
       </div>
-      <div className="upload-row" style={{ gridTemplateColumns: "1fr" }}>
+      {resumeError ? <Alert type="error" showIcon title={resumeError} /> : null}
+      <UploadProgressSlot
+        snapshot={resumeSource === "local" ? upload : null}
+        receipt={resumeSource === "remote" ? restoredReceipt : null}
+        readyText="上传成功，可以开始打样"
+        onDiscard={files.length ? confirmAbandon : undefined}
+      />
+      <div className="upload-row is-single">
         <UploadWell
           icon="/brand/ui/well-pdf.svg"
           title="平面稿"
           hint="把 .ai 拖到这里"
           accept=".ai"
-          fileName={file?.name}
-          fileBytes={file?.size}
-          disabled={busy}
+          fileName={ai?.name}
+          fileBytes={ai?.bytes}
+          disabled={resumeSource === "remote"}
           onFile={takeFile}
           onReject={() => message.warning("只收 .ai 稿件。")}
         >
-          <span className="upload-well-btn">{file ? "更换平面稿" : "选取平面稿"}</span>
+          <span className="upload-well-btn">{ai ? "更换平面稿" : "选取平面稿"}</span>
         </UploadWell>
       </div>
     </section>
@@ -623,5 +927,3 @@ function WhiteShot({
     </figure>
   );
 }
-
-

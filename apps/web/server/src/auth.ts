@@ -1,4 +1,4 @@
-import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DATA_DIR } from "./config.js";
@@ -43,7 +43,15 @@ export function formatAccountLabel(name: string, nickname = ""): string {
 const TTL = 7 * 24 * 3600;
 const sessions = new Map<string, Session>();
 const oauthStates = new Map<string, { exp: number; verifier: string; next?: string }>();
+export const OAUTH_STATE_LIMIT = 1024;
+const OAUTH_STATE_TTL_MS = 600_000;
 let tenantCache: { key: string; exp: number } | null = null;
+
+function pruneOAuthStates(at: number): void {
+  for (const [state, row] of oauthStates) {
+    if (row.exp <= at) oauthStates.delete(state);
+  }
+}
 
 function sessionsPath() {
   return join(DATA_DIR, "sessions.json");
@@ -75,6 +83,17 @@ function saveSessions(): void {
   const obj: Record<string, Session> = {};
   for (const [k, v] of sessions) obj[k] = v;
   writeFileSync(sessionsPath(), JSON.stringify(obj, null, 2), { mode: 0o600 });
+}
+
+function pruneExpiredSessions(atSeconds: number): boolean {
+  let changed = false;
+  for (const [token, session] of sessions) {
+    if (session.expires_at <= atSeconds) {
+      sessions.delete(token);
+      changed = true;
+    }
+  }
+  return changed;
 }
 
 type User = { name?: string; role?: string; open_id?: string; note?: string };
@@ -177,6 +196,7 @@ export function issueSession(
   ident: { avatar_url?: string } = {},
 ): Session {
   const now = Date.now() / 1000;
+  pruneExpiredSessions(now);
   const sess: Session = {
     token: randomBytes(18).toString("base64url"),
     display_name: name.slice(0, 40),
@@ -255,8 +275,9 @@ export function getSession(token: string | undefined | null): Session | null {
   const t = token.toLowerCase().startsWith("bearer ") ? token.slice(7).trim() : token.trim();
   const s = sessions.get(t);
   if (!s) return null;
-  if (s.expires_at < Date.now() / 1000) {
+  if (s.expires_at <= Date.now() / 1000) {
     sessions.delete(t);
+    saveSessions();
     return null;
   }
   if (s.open_id) {
@@ -287,15 +308,13 @@ export function hasPerm(role: Role, perm: string): boolean {
   return PERMS[role]?.includes(perm) ?? false;
 }
 
+export function permissionsFor(role: Role): string[] {
+  return [...(PERMS[role] || [])];
+}
+
 export function isLoopbackHost(hostHeader: string): boolean {
   const host = (hostHeader || "").split(":")[0].replace(/^\[|\]$/g, "");
   return host === "localhost" || host === "127.0.0.1" || host === "::1";
-}
-
-/** 飞书客户端 UA，或本机回环。公网普通浏览器不能发起授权。 */
-export function requestLooksLikeFeishu(userAgent: string, hostHeader: string): boolean {
-  if (/Lark|Feishu/i.test(userAgent || "")) return true;
-  return isLoopbackHost(hostHeader);
 }
 
 export function displayLoginAllowed(hostHeader = ""): boolean {
@@ -332,9 +351,14 @@ export function sanitizeNext(raw: string): string {
 }
 
 export function beginOAuth(next = ""): { state: string; challenge: string } {
+  const at = Date.now();
+  pruneOAuthStates(at);
+  if (oauthStates.size >= OAUTH_STATE_LIMIT) {
+    throw Object.assign(new Error("登录请求太多，请稍后再试。"), { status: 429 });
+  }
   const state = randomBytes(18).toString("base64url");
   const { verifier, challenge } = pkcePair();
-  oauthStates.set(state, { exp: Date.now() + 600_000, verifier, next: sanitizeNext(next) });
+  oauthStates.set(state, { exp: at + OAUTH_STATE_TTL_MS, verifier, next: sanitizeNext(next) });
   return { state, challenge };
 }
 
@@ -344,9 +368,11 @@ export function consumeOAuthState(state: string): string | null {
 }
 
 export function consumeOAuth(state: string): { verifier: string; next: string } | null {
+  const at = Date.now();
+  pruneOAuthStates(at);
   const row = oauthStates.get(state);
   oauthStates.delete(state);
-  if (!row || row.exp < Date.now()) return null;
+  if (!row || row.exp <= at) return null;
   return { verifier: row.verifier, next: row.next || "/" };
 }
 
@@ -506,18 +532,6 @@ export async function resolveAllowedTenantKey(): Promise<string> {
   } catch {
     return "";
   }
-}
-
-/** 防测试里误用常量比较 cookie。 */
-export function signHint(token: string): string {
-  return createHmac("sha256", "beian-session").update(token).digest("hex").slice(0, 8);
-}
-
-export function sameToken(a: string, b: string): boolean {
-  const ba = Buffer.from(a);
-  const bb = Buffer.from(b);
-  if (ba.length !== bb.length) return false;
-  return timingSafeEqual(ba, bb);
 }
 
 loadSessions();

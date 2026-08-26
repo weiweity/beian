@@ -20,6 +20,7 @@ export type DeskStatusColor = "default" | "warning" | "error" | "processing" | "
 
 export type DeskCardRow = {
   id: string;
+  shortId?: string;
   title: string;
   statusText: string;
   statusColor: DeskStatusColor;
@@ -27,4 +28,5 @@ export type DeskCardRow = {
   at?: string;
   live?: string | null;
   error?: string | null;
+  progress?: number;
 };

@@ -14,6 +14,11 @@ function currentDoc(): FullscreenDoc | null {
   return typeof document === "undefined" ? null : document;
 }
 
+/** 全屏 API 的浏览器异常不直接泄漏给业务界面。 */
+export function fullscreenFailureMessage(_cause?: unknown): string {
+  return "全屏打不开";
+}
+
 export function isElementFullscreen(el: HTMLElement | null, doc?: FullscreenDoc | null): boolean {
   if (!el) return false;
   const d = doc ?? currentDoc();

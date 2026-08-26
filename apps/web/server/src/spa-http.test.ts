@@ -1,11 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { describe, it } from "node:test";
+import { makeTestTempDir } from "./testTemp.js";
 
 process.env.VITEST = "1";
-process.env.WB_DATA_DIR = mkdtempSync(join(tmpdir(), "beian-spa-http-"));
+process.env.WB_DATA_DIR = makeTestTempDir("beian-spa-http-");
 process.env.WB_HOST = "127.0.0.1";
 process.env.WB_PORT = "0";
 process.env.WB_PUBLIC = "1";
@@ -17,6 +15,16 @@ const { issueSession } = await import("./auth.js");
 const { COOKIE } = await import("./config.js");
 
 describe("GET / spa gate", () => {
+  it("returns the real viewer permission set instead of exposing delete actions", async () => {
+    const sess = issueSession("只看", "viewer", "ou_spa_viewer", "feishu");
+    const res = await app.request("/api/auth/me", {
+      headers: { authorization: `Bearer ${sess.token}` },
+    });
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as { perms?: string[] };
+    assert.deepEqual(body.perms, ["read", "export"]);
+  });
+
   it("sends the old review desk root to /reviewup", async () => {
     const res = await app.request("/", { headers: { host: "www.jianghua.site" } });
     assert.equal(res.status, 302);

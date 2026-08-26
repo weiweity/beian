@@ -52,7 +52,7 @@
 
 - `apps/web/backend/app/cli.py` 只依赖 `compare_core.py`。FastAPI `app.main`、Python 会话/OAuth 和遗留 HTTP 测试已删除。身份只在 Hono `auth.ts`。
 - `apps/web/ui/src/api.ts` 已删除未使用的 `loginDisplay`，本机显示名登录只保留服务端 loopback 入口。
-- `apps/web/server/src/auth.ts` 的 `requestLooksLikeFeishu` 未接入真实策略，名称表达了比实现更强的安全承诺。
+- 未接入真实策略的 `requestLooksLikeFeishu` 与无人调用的 `/api/auth/methods` 已删除；本机显示名登录仍只保留受 loopback 与 `WB_PUBLIC` 约束的服务端兼容入口。
 - `apps/web/frontend/` 已删除，网页入口只有 `apps/web/ui` + Hono `apps/web/server`。
 - `:5173` 与 `:8787` 两个开发入口若没有明确用途，会把代理失败误判为产品故障。现网：UI 只在 HTML/空 Content-Type 时提示去 `:8787`；飞书授权失败留在飞书；JSON 404 不当成 Vite 挂了。
 - 按审稿台、打样台或设置页各建一套服务/package，会制造浅层转发和重复身份逻辑。

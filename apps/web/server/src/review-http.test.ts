@@ -1,18 +1,19 @@
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it } from "node:test";
+import { makeTestTempDir } from "./testTemp.js";
 
 process.env.VITEST = "1";
-process.env.WB_DATA_DIR = mkdtempSync(join(tmpdir(), "beian-review-http-"));
+process.env.WB_DATA_DIR = makeTestTempDir("beian-review-http-");
 process.env.WB_HOST = "127.0.0.1";
 process.env.WB_PORT = "0";
 
 const { app } = await import("./index.js");
 const { issueSession } = await import("./auth.js");
-const { saveTask } = await import("./tasks.js");
+const { loadTask, saveTask } = await import("./tasks.js");
 const { resetJobsTestHooks, setJobsTestHooks } = await import("./jobs.js");
+const { saveSettings } = await import("./settings.js");
 
 type SeedHit = {
   id?: string;
@@ -34,6 +35,7 @@ type SeedTask = {
   hits_v2?: SeedHit[];
   pages_v2?: Array<{ url?: string }>;
   owner?: string;
+  job_status?: "queued" | "running" | "succeeded" | "failed";
 };
 
 function authHeader() {
@@ -57,6 +59,20 @@ function hit(over: Partial<SeedHit> = {}) {
 }
 
 describe("review http", () => {
+  it("does not expose parser or filesystem details for an unexpected 500", async () => {
+    const tid = "efefefefefef";
+    const tasksDir = join(process.env.WB_DATA_DIR as string, "tasks");
+    mkdirSync(tasksDir, { recursive: true });
+    writeFileSync(join(tasksDir, `${tid}.json`), "{broken-json", "utf8");
+
+    const res = await app.request(`/api/tasks/${tid}`, { headers: authHeader() });
+    assert.equal(res.status, 500);
+    const body = (await res.json()) as { detail?: string };
+    assert.equal(body.detail, "服务器错误");
+    assert.equal(JSON.stringify(body).includes("JSON"), false);
+    assert.equal(JSON.stringify(body).includes(tasksDir), false);
+  });
+
   it("rejects an illegal decision value", async () => {
     const tid = seed({
       id: "aaaaaaaaaaaa",
@@ -114,6 +130,85 @@ describe("review http", () => {
     assert.equal(res.status, 400);
     const body = (await res.json()) as { detail?: string };
     assert.match(String(body.detail || ""), /当前状态不可签字/);
+  });
+
+  it("rejects signing while a compare is queued or running", async () => {
+    for (const [tid, jobStatus] of [
+      ["b1b1b1b1b1b1", "queued"],
+      ["b2b2b2b2b2b2", "running"],
+    ] as const) {
+      seed({
+        id: tid,
+        title: `作业${jobStatus}`,
+        product_name: `作业${jobStatus}`,
+        type: "excel_pdf",
+        status: "pending_review",
+        job_status: jobStatus,
+        hits: [hit({ status: "一致", decision: "confirm" })],
+      });
+      const res = await app.request(`/api/tasks/${tid}/complete`, {
+        method: "POST",
+        headers: { ...authHeader(), "content-type": "application/json" },
+        body: JSON.stringify({ conclusion: "不能覆盖作业" }),
+      });
+      assert.equal(res.status, 409);
+      const body = (await res.json()) as { detail?: string };
+      assert.match(String(body.detail || ""), /排队或正在跑/);
+    }
+  });
+
+  it("reloads the task after a slow sign-off body so a queued rework wins the race", async () => {
+    const tid = seed({
+      id: "b3b3b3b3b3b3",
+      title: "慢签字竞态",
+      product_name: "慢签字竞态",
+      type: "excel_pdf",
+      status: "pending_review",
+      hits: [hit({ status: "一致", decision: "confirm" })],
+    });
+    let markBodyRead!: () => void;
+    let releaseBody!: () => void;
+    const bodyRead = new Promise<void>((resolve) => {
+      markBodyRead = resolve;
+    });
+    const bodyGate = new Promise<void>((resolve) => {
+      releaseBody = resolve;
+    });
+    const stream = new ReadableStream<Uint8Array>(
+      {
+        async pull(controller) {
+          markBodyRead();
+          await bodyGate;
+          controller.enqueue(new TextEncoder().encode(JSON.stringify({ conclusion: "旧标签页签字" })));
+          controller.close();
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    const request = new Request(`http://localhost/api/tasks/${tid}/complete`, {
+      method: "POST",
+      headers: { ...authHeader(), "content-type": "application/json" },
+      body: stream,
+      duplex: "half",
+    } as RequestInit & { duplex: "half" });
+    const pendingResponse = app.request(request);
+
+    await bodyRead;
+    const concurrent = loadTask(tid);
+    concurrent.status_before_job = concurrent.status;
+    concurrent.status = "comparing";
+    concurrent.job_kind = "rework";
+    concurrent.job_status = "queued";
+    saveTask(concurrent);
+    releaseBody();
+
+    const res = await pendingResponse;
+    assert.equal(res.status, 409);
+    const persisted = loadTask(tid);
+    assert.equal(persisted.status, "comparing");
+    assert.equal(persisted.job_kind, "rework");
+    assert.equal(persisted.job_status, "queued");
+    assert.equal(persisted.conclusion, undefined);
   });
 
   it("records a human sign-off on a pending_review task", async () => {
@@ -572,8 +667,8 @@ describe("review http", () => {
     assert.match(String(body.detail || ""), /还在跑/);
   });
 
-  it("health includes job queue snapshot", async () => {
-    const res = await app.request("/api/health");
+  it("direct loopback health keeps the release queue contract", async () => {
+    const res = await app.request("/api/health", { headers: { host: "127.0.0.1:8787" } });
     assert.equal(res.status, 200);
     const body = (await res.json()) as {
       version?: string;
@@ -590,6 +685,80 @@ describe("review http", () => {
     assert.equal(typeof body.jobs?.blender?.queued, "number");
     assert.equal(typeof body.jobs?.illustrator?.running, "number");
     assert.equal(typeof body.jobs?.illustrator?.queued, "number");
+  });
+
+  it("public health does not expose or scan live queue counts", async () => {
+    const res = await app.request("/api/health", {
+      headers: { host: "www.jianghua.site", "cf-connecting-ip": "203.0.113.10" },
+    });
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as {
+      version?: string;
+      feishu_notify?: boolean;
+      jobs?: Record<string, { visibility?: string }>;
+    };
+    assert.match(String(body.version), /^\d+\.\d+\.\d+\.\d+$/);
+    assert.deepEqual(Object.keys(body.jobs || {}), ["illustrator"]);
+    assert.equal(body.jobs?.illustrator?.visibility, "authenticated");
+    assert.equal("feishu_notify" in body, false);
+  });
+
+  it("only exposes live health for an unforwarded loopback Host", async () => {
+    const cases = [
+      { name: "IPv4 loopback", headers: { host: "127.0.0.1:8787" }, live: true },
+      { name: "localhost", headers: { host: "localhost:8787" }, live: true },
+      { name: "public Host", headers: { host: "www.jianghua.site" }, live: false },
+      {
+        name: "Cloudflare forwarded loopback",
+        headers: { host: "127.0.0.1:8787", "cf-connecting-ip": "203.0.113.10" },
+        live: false,
+      },
+      {
+        name: "generic proxy forwarded loopback",
+        headers: { host: "localhost:8787", "x-forwarded-for": "203.0.113.11" },
+        live: false,
+      },
+    ] as const;
+
+    for (const row of cases) {
+      const res = await app.request("/api/health", { headers: row.headers });
+      assert.equal(res.status, 200, row.name);
+      const body = (await res.json()) as {
+        feishu_notify?: boolean;
+        jobs?: {
+          ocr?: { running?: number };
+          illustrator?: { visibility?: string };
+        };
+      };
+      assert.equal(typeof body.jobs?.ocr?.running === "number", row.live, row.name);
+      assert.equal(body.jobs?.illustrator?.visibility, row.live ? undefined : "authenticated", row.name);
+      assert.equal("feishu_notify" in body, row.live, row.name);
+    }
+  });
+
+  it("authenticated status carries the live queue used by sidebar pulses", async () => {
+    saveSettings({ FEISHU_ENABLED: "true", FEISHU_OPEN_ID: "ou_status_test" });
+    try {
+      const denied = await app.request("/api/status");
+      assert.equal(denied.status, 401);
+
+      const res = await app.request("/api/status", { headers: authHeader() });
+      assert.equal(res.status, 200);
+      const body = (await res.json()) as {
+        feishu_notify?: boolean;
+        jobs?: {
+          ocr?: { running?: number; queued?: number };
+          blender?: { running?: number; queued?: number };
+          illustrator?: { running?: number; queued?: number };
+        };
+      };
+      assert.equal(typeof body.jobs?.ocr?.running, "number");
+      assert.equal(typeof body.jobs?.blender?.queued, "number");
+      assert.equal(typeof body.jobs?.illustrator?.running, "number");
+      assert.equal(body.feishu_notify, true);
+    } finally {
+      saveSettings({ FEISHU_ENABLED: "false", FEISHU_OPEN_ID: "" });
+    }
   });
 
   it("upload returns comparing before the worker finishes", async () => {
@@ -718,5 +887,138 @@ describe("review http", () => {
     assert.equal(res.status, 400);
     const body = (await res.json()) as { detail?: string };
     assert.match(String(body.detail || ""), /不是有效的 PDF/);
+  });
+
+  it("honors a lower WB_MAX_UPLOAD_MB limit for rework", async () => {
+    const { saveSettings } = await import("./settings.js");
+    const tid = seed({
+      id: "151515151519",
+      title: "低上限改稿",
+      product_name: "低上限改稿",
+      type: "excel_pdf",
+      status: "completed",
+      complete_kind: "rework",
+      conclusion: "待设计改稿",
+      hits: [hit({ decision: "issue" })],
+    });
+    saveSettings({ WB_MAX_UPLOAD_MB: "1" });
+    try {
+      const bytes = Buffer.alloc(1024 * 1024 + 1);
+      bytes.write("%PDF-1.4");
+      const fd = new FormData();
+      fd.set("pdf", new File([bytes], "large.pdf", { type: "application/pdf" }));
+      const res = await app.request(`/api/tasks/${tid}/rework`, {
+        method: "POST",
+        headers: authHeader(),
+        body: fd,
+      });
+      assert.equal(res.status, 400);
+      assert.match(String(((await res.json()) as { detail?: string }).detail || ""), /文件超过 1 MB/);
+    } finally {
+      saveSettings({ WB_MAX_UPLOAD_MB: "" });
+    }
+  });
+
+  it("does not resurrect a task deleted while a slow rework body is parsing", async () => {
+    const tid = seed({
+      id: "151515151520",
+      title: "并发删除改稿",
+      product_name: "并发删除改稿",
+      type: "excel_pdf",
+      status: "completed",
+      complete_kind: "rework",
+      conclusion: "待设计改稿",
+      hits: [hit({ decision: "issue" })],
+    });
+    const boundary = "beian-slow-rework";
+    const encoder = new TextEncoder();
+    let releaseBody!: () => void;
+    let bodyStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      bodyStarted = resolve;
+    });
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(
+          `--${boundary}\r\nContent-Disposition: form-data; name="pdf"; filename="slow.pdf"\r\nContent-Type: application/pdf\r\n\r\n`,
+        ));
+        bodyStarted();
+        void new Promise<void>((resolve) => {
+          releaseBody = resolve;
+        }).then(() => {
+          controller.enqueue(encoder.encode("%PDF-1.4\n%slow\r\n"));
+          controller.enqueue(encoder.encode(`--${boundary}--\r\n`));
+          controller.close();
+        });
+      },
+    });
+    const request = new Request(`http://localhost/api/tasks/${tid}/rework`, {
+      method: "POST",
+      headers: { ...authHeader(), "content-type": `multipart/form-data; boundary=${boundary}` },
+      body,
+      duplex: "half",
+    } as RequestInit & { duplex: "half" });
+    const rework = app.request(request);
+    await started;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const removed = await app.request(`/api/tasks/${tid}`, { method: "DELETE", headers: authHeader() });
+    assert.equal(removed.status, 200);
+    releaseBody();
+
+    const result = await rework;
+    assert.equal(result.status, 404);
+    const get = await app.request(`/api/tasks/${tid}`, { headers: authHeader() });
+    assert.equal(get.status, 404);
+  });
+
+  it("rejects an oversized rework body before parsing it", async () => {
+    const { MAX_UPLOAD_BODY_BYTES } = await import("./uploads.js");
+    const tid = seed({
+      id: "151515151516",
+      title: "大改稿",
+      product_name: "大改稿",
+      type: "excel_pdf",
+      status: "completed",
+      complete_kind: "rework",
+      conclusion: "待设计改稿",
+      hits: [hit({ decision: "issue" })],
+    });
+    const boundary = "beian-rework-over-limit";
+    const res = await app.request(`/api/tasks/${tid}/rework`, {
+      method: "POST",
+      headers: {
+        ...authHeader(),
+        "content-type": `multipart/form-data; boundary=${boundary}`,
+        "content-length": String(MAX_UPLOAD_BODY_BYTES + 1),
+      },
+      body: `--${boundary}--\r\n`,
+    });
+    assert.equal(res.status, 413);
+    assert.deepEqual(await res.json(), { detail: "上传总量超过 100 MB" });
+  });
+
+  it("checks rework ownership before accepting or sizing the request body", async () => {
+    const { MAX_UPLOAD_BODY_BYTES } = await import("./uploads.js");
+    const tid = seed({
+      id: "151515151517",
+      title: "别人的改稿",
+      product_name: "别人的改稿",
+      type: "excel_pdf",
+      status: "completed",
+      complete_kind: "rework",
+      conclusion: "待设计改稿",
+      hits: [hit({ decision: "issue" })],
+    });
+    const other = issueSession("路人", "reviewer", "ou_rework_body_other", "feishu");
+    const res = await app.request(`/api/tasks/${tid}/rework`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${other.token}`,
+        "content-type": "multipart/form-data; boundary=foreign-large-body",
+        "content-length": String(MAX_UPLOAD_BODY_BYTES + 1),
+      },
+      body: "--foreign-large-body--\r\n",
+    });
+    assert.equal(res.status, 403);
   });
 });
