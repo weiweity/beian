@@ -7,6 +7,8 @@ Status: APPROVED
 Mode: Startup
 Related: `DESIGN.md`（设置 = 外观 / 开工板 / 费用 / 密钥）、`docs/00-charter.md`、`docs/designs/review-job-module.md`
 
+> 历史范围（2026-08-26）：本文的评审图和未勾选任务记录的是批准时快照，不代表当前发布状态。现行实现已将设置写入和本机扫描统一限制为 admin；接口、权限与杭州发版合同以 `AGENTS.md`、`README.md` 和 `scripts/windows/README.md` 为准。
+
 本文**不取代** 8/31 人终审。刘籽烨签完一单真实 Excel↔PDF 仍是章程验收。本文覆盖魏炜怎么把杭州 Windows 点绿，以及打样台遇到 `.ai` 时怎么用本机 Illustrator 转栅格。
 
 ## Problem Statement
@@ -462,5 +464,4 @@ _No new tasks from Pass 4 slop beyond T1 删 health-card._
 - **CROSS-MODEL:** 设计要傻瓜进度，Codex 要诚实探测合同。已采用文案修正。T8 用户先选全做，后接受推迟。
 - **VERDICT:** ENG + DESIGN CLEARED — implement T1–T4+T7 on a **new** branch. Do not ship `feat/health-read-version-file`. Do not Hangzhou pull.
 NO UNRESOLVED DECISIONS
-
 
