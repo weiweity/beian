@@ -95,6 +95,12 @@ describe("windows release.ps1 contract", () => {
     assert.match(script, /:8787 在听但 \/api\/health 失败，拒绝当空闲/);
     assert.match(script, /没有 python\/blender\/illustrator，当作空机继续/);
     assert.match(script, /Get-SlotCount \$HealthObj \$name "queued"/);
+    assert.match(script, /\$HealthObj\.uploads\.active/);
+    assert.match(script, /上传仍在进行/);
+    assert.match(script, /health 缺少 uploads，拒绝升版/);
+    assert.match(script, /Get-RecentIncomingUploadCount/);
+    assert.match(script, /\.incoming-\*/);
+    assert.ok(indexOf(/Get-RecentIncomingUploadCount/) < indexOf(/taskkill\.exe \/T \/F \/PID/));
   });
 
   it("kills only the 8787 tree, never all node.exe, never cloudflared", () => {
@@ -171,5 +177,22 @@ describe("windows release.ps1 contract", () => {
     assert.match(script, /Invoke-Git merge --ff-only origin\/main/);
     assert.doesNotMatch(script, /Write-Host.*GITHUB_TOKEN/);
     assert.match(script, /GITHUB_TOKEN/);
+  });
+
+  it("runs the packaging V2 JSX bridge on the Hangzhou runner before merge", () => {
+    const root = join(dirname(fileURLToPath(import.meta.url)), "../../../..");
+    const workflow = readFileSync(join(root, ".github/workflows/windows-packaging-v2.yml"), "utf8");
+    const smoke = readFileSync(join(root, "scripts/windows/illustrator-jsx-smoke.ps1"), "utf8");
+    assert.match(workflow, /pull_request:/);
+    assert.match(workflow, /runs-on: \[self-hosted, hangzhou\]/);
+    assert.match(workflow, /head\.repo\.full_name == github\.repository/);
+    assert.match(workflow, /illustrator-jsx-smoke\.ps1/);
+    assert.doesNotMatch(workflow, /release\.ps1/);
+    assert.doesNotMatch(workflow, /npm test/);
+    assert.match(smoke, /127\.0\.0\.1:8787\/api\/health/);
+    assert.match(smoke, /jobs\.illustrator\.running/);
+    assert.match(smoke, /run_export\.vbs/);
+    assert.match(smoke, /Illustrator has an open document; refusing smoke/);
+    assert.match(smoke, /WINDOWS_ILLUSTRATOR_JSX_SMOKE ok/);
   });
 });

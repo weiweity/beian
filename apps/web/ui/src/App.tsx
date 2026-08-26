@@ -382,6 +382,7 @@ export function App() {
           <Suspense fallback={<PaneFallback label="打开打样台…" />}>
             <MockupDesk
               canCreate={me.perms.includes("create")}
+              canAdmin={me.role === "admin"}
               openId={view === "mockupNew" ? null : mockupId}
               composing={view === "mockupNew"}
               receiptId={receiptId}

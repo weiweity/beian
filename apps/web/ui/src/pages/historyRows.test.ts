@@ -59,6 +59,21 @@ describe("historyTaskRow", () => {
     assert.equal(row.live, "打样 · 大约还要 4 分钟");
   });
 
+  it("keeps structure review recoverable instead of calling it upload failure", () => {
+    const row = historyMockRow({
+      id: "structure1",
+      title: "花盒",
+      status: "review_required",
+      structure_status: "review_required",
+      job_status: "waiting_input",
+      files: [],
+    });
+    assert.equal(row.status, "待确认结构");
+    assert.equal(row.color, "warning");
+    assert.equal(row.live, null);
+    assert.equal(historyCanDelete(row), true);
+  });
+
   it("keeps a stale failed shell locked while its worker slot is still running", () => {
     const row = historyMockRow({
       id: "m3",

@@ -766,6 +766,149 @@ describe("jobs dispatcher", () => {
     assert.equal(loadTask(tid(38)).notify_sent, true);
   });
 
+  it("V2 structure review is recoverable and never enters Blender", async () => {
+    const { saveMockup, loadMockup } = await import("./mockup.js");
+    const root = join(process.env.WB_DATA_DIR || "", "mockups", tid(84));
+    mkdirSync(root, { recursive: true });
+    const resolutionPath = join(root, "structure_resolution.json");
+    const artworkPath = join(root, "artwork.pdf");
+    const sidecarPath = join(root, "structure.json");
+    writeFileSync(resolutionPath, "{}");
+    writeFileSync(artworkPath, "%PDF");
+    writeFileSync(sidecarPath, "{}");
+    let blenderCalls = 0;
+    let notifyCalls = 0;
+    setJobsTestHooks({
+      runStructure: async () => ({
+        code: 3,
+        stdout: "",
+        stderr:
+          JSON.stringify({
+            ok: false,
+            kind: "structure_resolution",
+            structure_status: "review_required",
+            code: "structure_face_mapping_incomplete",
+            message: "请确认六个盒面。",
+            resolution_path: resolutionPath,
+            details: {
+              artwork_pdf: artworkPath,
+              structure_sidecar: sidecarPath,
+              source_sha256: "a".repeat(64),
+            },
+          }) + "\n",
+        timedOut: false,
+      }),
+      runPack: async () => {
+        blenderCalls += 1;
+        return { code: 1, stdout: "", stderr: "should not run", timedOut: false };
+      },
+      notify: async () => {
+        notifyCalls += 1;
+        return { ok: true };
+      },
+    });
+    saveMockup({
+      id: tid(84),
+      status: "queued",
+      created_at: "2026-08-27T00:00:00.000Z",
+      files: [],
+      job_kind: "mockup",
+      job_status: "queued",
+      structure_engine: "v2",
+      structure_status: "analyzing",
+    });
+    enqueue({ kind: "mockup", id: tid(84) });
+    for (let index = 0; index < 50 && loadMockup(tid(84))?.job_status !== "waiting_input"; index += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    const job = loadMockup(tid(84));
+    assert.equal(job?.status, "review_required");
+    assert.equal(job?.job_status, "waiting_input");
+    assert.equal(job?.structure_status, "review_required");
+    assert.equal(job?.structure_code, "structure_face_mapping_incomplete");
+    assert.equal(job?.structure_message, "请确认六个盒面。");
+    assert.equal(job?.job_finished_at, undefined);
+    assert.equal(blenderCalls, 0);
+    assert.equal(notifyCalls, 0);
+    assert.equal(queueSnapshot().blender.running, 0);
+  });
+
+  it("V2 structure ready hands one prepared manifest to Blender", async () => {
+    const { saveMockup, loadMockup } = await import("./mockup.js");
+    const root = join(process.env.WB_DATA_DIR || "", "mockups", tid(85));
+    mkdirSync(root, { recursive: true });
+    const preparedManifest = join(root, "prepared_manifest.json");
+    writeFileSync(preparedManifest, "{}");
+    let receivedManifest = "";
+    setJobsTestHooks({
+      runStructure: async () => ({
+        code: 0,
+        stdout: JSON.stringify({ success: true, prepared_manifest: preparedManifest }) + "\n",
+        stderr: "STAGE structure\n",
+        timedOut: false,
+      }),
+      runPack: (manifest) => {
+        receivedManifest = manifest;
+        return new Promise(() => {
+          /* prove the Blender slot was claimed */
+        });
+      },
+    });
+    saveMockup({
+      id: tid(85),
+      status: "queued",
+      created_at: "2026-08-27T00:00:01.000Z",
+      files: [],
+      job_kind: "mockup",
+      job_status: "queued",
+      structure_engine: "v2",
+      structure_status: "analyzing",
+    });
+    enqueue({ kind: "mockup", id: tid(85) });
+    for (let index = 0; index < 50 && loadMockup(tid(85))?.job_stage !== "render_pdf"; index += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    const job = loadMockup(tid(85));
+    assert.equal(job?.structure_status, "ready");
+    assert.equal(job?.job_status, "running");
+    assert.equal(job?.job_stage, "render_pdf");
+    assert.equal(job?.manifest_path, preparedManifest);
+    assert.equal(receivedManifest, preparedManifest);
+  });
+
+  it("V2 refuses a prepared manifest outside its own job directory", async () => {
+    const { saveMockup, loadMockup } = await import("./mockup.js");
+    let blenderCalls = 0;
+    setJobsTestHooks({
+      runStructure: async () => ({
+        code: 0,
+        stdout: JSON.stringify({ success: true, prepared_manifest: "/tmp/outside-job.json" }) + "\n",
+        stderr: "STAGE structure\n",
+        timedOut: false,
+      }),
+      runPack: async () => {
+        blenderCalls += 1;
+        return { code: 0, stdout: "{}", stderr: "", timedOut: false };
+      },
+    });
+    saveMockup({
+      id: tid(86),
+      status: "queued",
+      created_at: "2026-08-27T00:00:02.000Z",
+      files: [],
+      job_kind: "mockup",
+      job_status: "queued",
+      structure_engine: "v2",
+      structure_status: "analyzing",
+    });
+    enqueue({ kind: "mockup", id: tid(86) });
+    for (let index = 0; index < 50 && loadMockup(tid(86))?.job_status !== "failed"; index += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(loadMockup(tid(86))?.job_error, "结构识别没有返回可继续的作业清单");
+    assert.equal(blenderCalls, 0);
+  });
+
   it("second mockup stays queued while the Blender slot is full", async () => {
     const { saveMockup, loadMockup } = await import("./mockup.js");
     setJobsTestHooks({

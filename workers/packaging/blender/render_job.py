@@ -11,6 +11,7 @@ _PACKAGING = Path(__file__).resolve().parents[1]
 if str(_PACKAGING) not in sys.path:
     sys.path.insert(0, str(_PACKAGING))
 from camera_frame import aabb_after_z_rotation, camera_fit_after_yaw, camera_location_mm, camera_ortho_scale_mm, camera_target_mm
+from glb_verify import compare_glb_dimensions
 
 
 def job_path_from_argv():
@@ -37,7 +38,7 @@ def clean_scene():
                 collection.remove(item)
 
 
-def make_material(name, image_path, roughness=0.43):
+def make_material(name, image_path, roughness=0.52, specular_ior=0.08):
     material = bpy.data.materials.new(name)
     material.use_nodes = True
     nodes = material.node_tree.nodes
@@ -52,7 +53,7 @@ def make_material(name, image_path, roughness=0.43):
     texture.image = image
     texture.interpolation = "Linear"
     shader.inputs["Roughness"].default_value = roughness
-    shader.inputs["Specular IOR Level"].default_value = 0.28
+    shader.inputs["Specular IOR Level"].default_value = specular_ior
     links.new(texture.outputs["Color"], shader.inputs["Base Color"])
     links.new(texture.outputs["Alpha"], shader.inputs["Alpha"])
     links.new(shader.outputs["BSDF"], output.inputs["Surface"])
@@ -101,7 +102,12 @@ def add_box(job):
     depth = float(dims["depth"])
     height = float(dims["height"])
     assets = {name: Path(path) for name, path in job["assets"].items()}
-    mats = {name: make_material(f"MAT_{name}", path) for name, path in assets.items()}
+    roughness = float(job["render"].get("material_roughness", 0.52))
+    specular_ior = float(job["render"].get("material_specular_ior", 0.08))
+    mats = {
+        name: make_material(f"MAT_{name}", path, roughness, specular_ior)
+        for name, path in assets.items()
+    }
     root = bpy.data.objects.new(f"{job['code']}_Model_Root", None)
     bpy.context.collection.objects.link(root)
     root["source_ai"] = job["source_ai"]
@@ -143,49 +149,54 @@ def look_at(obj, target=(0, 0, 0)):
 
 def add_studio(job):
     scene = bpy.context.scene
+    render_config = job["render"]
+    exact_white_background = bool(render_config.get("exact_white_background", True))
     scene.render.engine = "BLENDER_EEVEE"
-    scene.render.resolution_x = int(job["render"]["resolution_x"])
-    scene.render.resolution_y = int(job["render"]["resolution_y"])
+    scene.render.resolution_x = int(render_config["resolution_x"])
+    scene.render.resolution_y = int(render_config["resolution_y"])
     scene.render.resolution_percentage = 100
     scene.render.image_settings.file_format = "PNG"
     scene.render.image_settings.color_mode = "RGBA"
-    scene.render.film_transparent = False
+    scene.render.film_transparent = exact_white_background
     scene.render.image_settings.compression = 35
     scene.render.image_settings.color_depth = "8"
-    scene.view_settings.look = "None"
-    scene.view_settings.exposure = 0.0
+    scene.view_settings.view_transform = str(render_config.get("view_transform", "Standard"))
+    scene.view_settings.look = str(render_config.get("look", "None"))
+    scene.view_settings.exposure = float(render_config.get("exposure", 0.0))
     scene.world.color = (1.0, 1.0, 1.0)
 
     world = scene.world
     world.use_nodes = True
     background = world.node_tree.nodes.get("Background")
     background.inputs["Color"].default_value = (1.0, 1.0, 1.0, 1.0)
-    background.inputs["Strength"].default_value = 2.4
+    background.inputs["Strength"].default_value = float(render_config.get("world_strength", 0.62))
 
-    bpy.ops.mesh.primitive_plane_add(size=600, location=(0, 0, -0.8))
-    floor = bpy.context.object
-    floor.name = "White floor"
-    floor_mat = bpy.data.materials.new("MAT_WhiteFloor")
-    floor_mat.diffuse_color = (1.0, 1.0, 1.0, 1)
-    floor_mat.use_nodes = True
-    floor_mat.node_tree.nodes["Principled BSDF"].inputs["Base Color"].default_value = (1.0, 1.0, 1.0, 1)
-    floor_mat.node_tree.nodes["Principled BSDF"].inputs["Roughness"].default_value = 1.0
-    floor_shader = floor_mat.node_tree.nodes["Principled BSDF"]
-    if floor_shader.inputs.get("Emission Color"):
-        floor_shader.inputs["Emission Color"].default_value = (1.0, 1.0, 1.0, 1.0)
-    if floor_shader.inputs.get("Emission Strength"):
-        floor_shader.inputs["Emission Strength"].default_value = 1.15
-    floor.data.materials.append(floor_mat)
+    if not exact_white_background:
+        bpy.ops.mesh.primitive_plane_add(size=600, location=(0, 0, -0.8))
+        floor = bpy.context.object
+        floor.name = "White floor"
+        floor_mat = bpy.data.materials.new("MAT_WhiteFloor")
+        floor_mat.diffuse_color = (0.95, 0.95, 0.95, 1)
+        floor_mat.use_nodes = True
+        floor_mat.node_tree.nodes["Principled BSDF"].inputs["Base Color"].default_value = (0.96, 0.96, 0.96, 1)
+        floor_mat.node_tree.nodes["Principled BSDF"].inputs["Roughness"].default_value = 0.82
+        floor_shader = floor_mat.node_tree.nodes["Principled BSDF"]
+        if floor_shader.inputs.get("Emission Color"):
+            floor_shader.inputs["Emission Color"].default_value = (1.0, 1.0, 1.0, 1.0)
+        if floor_shader.inputs.get("Emission Strength"):
+            floor_shader.inputs["Emission Strength"].default_value = 3.0
+        floor.data.materials.append(floor_mat)
 
-    bpy.ops.mesh.primitive_plane_add(size=520, location=(0, 130, 145), rotation=(math.radians(90), 0, 0))
-    backdrop = bpy.context.object
-    backdrop.name = "White backdrop"
-    backdrop.data.materials.append(floor_mat)
+        bpy.ops.mesh.primitive_plane_add(size=520, location=(0, 130, 145), rotation=(math.radians(90), 0, 0))
+        backdrop = bpy.context.object
+        backdrop.name = "White backdrop"
+        backdrop.data.materials.append(floor_mat)
 
     bpy.ops.object.light_add(type="AREA", location=(-135, -190, 275))
     key = bpy.context.object
     key.name = "Key softbox"
-    key.data.energy = 105000
+    light_scale = float(render_config.get("light_energy_scale", 4.0))
+    key.data.energy = 105000 * light_scale
     key.data.shape = "RECTANGLE"
     key.data.size = 120
     key.data.size_y = 150
@@ -194,14 +205,14 @@ def add_studio(job):
     bpy.ops.object.light_add(type="AREA", location=(155, -120, 175))
     fill = bpy.context.object
     fill.name = "Fill softbox"
-    fill.data.energy = 62000
+    fill.data.energy = 62000 * light_scale
     fill.data.size = 110
     look_at(fill, (0, 0, 90))
 
     bpy.ops.object.light_add(type="AREA", location=(0, 15, 315))
     rim = bpy.context.object
     rim.name = "Rim softbox"
-    rim.data.energy = 72000
+    rim.data.energy = 72000 * light_scale
     rim.data.size = 95
     look_at(rim, (0, 0, 90))
 
@@ -321,22 +332,18 @@ def verify_glb(job):
         raise RuntimeError("GLB verification failed: no printed artwork textures")
     mins = [min(point[i] for point in points) for i in range(3)]
     maxs = [max(point[i] for point in points) for i in range(3)]
-    measured_m = sorted([maxs[i] - mins[i] for i in range(3)])
-    expected_mm = sorted(
-        [
-            float(job["dimensions_mm"]["width"]),
-            float(job["dimensions_mm"]["depth"]),
-            float(job["dimensions_mm"]["height"]),
-        ]
+    report = compare_glb_dimensions(
+        [maxs[i] - mins[i] for i in range(3)],
+        job["dimensions_mm"],
+        float(job["glb_tolerance_mm"]),
     )
-    measured_mm = [value * 1000.0 for value in measured_m]
-    tolerance = float(job["glb_tolerance_mm"])
-    errors = [abs(actual - expected) for actual, expected in zip(measured_mm, expected_mm)]
-    if max(errors) > tolerance:
+    if not report["ok"]:
         raise RuntimeError(
-            f"GLB dimension mismatch: measured={measured_mm}, expected={expected_mm}, tolerance={tolerance}"
+            "GLB axis dimension mismatch: "
+            f"measured={report['measured_mm']}, expected={report['expected_mm']}, "
+            f"tolerance={report['tolerance_mm']}"
         )
-    return measured_mm, errors
+    return report
 
 
 def main():
@@ -350,12 +357,21 @@ def main():
     add_studio(job)
     render_views(job, root)
     export_model(job, root, model_objects)
-    measured_mm, errors = verify_glb(job)
+    dimension_report = verify_glb(job)
+    measured_sorted = sorted(dimension_report["measured_mm"].values())
+    errors_sorted = sorted(dimension_report["error_mm"].values())
     result = {
         "code": job["code"],
         "outputs": job["outputs"],
-        "glb_dimensions_mm_sorted": [round(value, 4) for value in measured_mm],
-        "glb_dimension_error_mm_sorted": [round(value, 4) for value in errors],
+        "glb_dimensions_mm": {
+            key: round(value, 4) for key, value in dimension_report["measured_mm"].items()
+        },
+        "glb_dimension_error_mm": {
+            key: round(value, 4) for key, value in dimension_report["error_mm"].items()
+        },
+        # Compatibility fields remain, but they no longer decide pass/fail.
+        "glb_dimensions_mm_sorted": [round(value, 4) for value in measured_sorted],
+        "glb_dimension_error_mm_sorted": [round(value, 4) for value in errors_sorted],
         "render_resolution": [job["render"]["resolution_x"], job["render"]["resolution_y"]],
         "blender_elapsed_s": round(time.perf_counter() - started, 3),
     }

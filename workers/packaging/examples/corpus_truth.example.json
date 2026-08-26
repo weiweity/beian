@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "thresholds": {
+    "endpoint_snap_pt": 1.0,
+    "paired_panel_relative_tolerance": 0.03,
+    "outline_gap_pt": 1.0,
+    "curve_linearization_error_pt": 0.5,
+    "max_paths": 100000,
+    "max_path_points": 1000000,
+    "max_structure_candidates": 8
+  },
+  "samples": [
+    {
+      "filename": "approved-rectangular-carton.ai",
+      "sha256": "replace-with-real-sha256",
+      "truth_status": "approved",
+      "expected_geometry": {
+        "family": "rectangular_carton",
+        "family_id": "straight-tuck-carton-v1",
+        "dimensions_mm": {
+          "width": 31.0,
+          "depth": 31.0,
+          "height": 108.0
+        },
+        "face_mapping_status": "approved",
+        "faces": {
+          "front": {
+            "source_panel": "panel-2",
+            "rotation_deg": 0
+          },
+          "right": {
+            "source_panel": "panel-3",
+            "rotation_deg": 0
+          },
+          "back": {
+            "source_panel": "panel-4",
+            "rotation_deg": 0
+          },
+          "left": {
+            "source_panel": "panel-1",
+            "rotation_deg": 0
+          },
+          "top": {
+            "source_panel": "top-main-flap",
+            "rotation_deg": 0
+          },
+          "bottom": {
+            "source_panel": "bottom-main-flap",
+            "rotation_deg": 0
+          }
+        }
+      },
+      "golden_sample": true,
+      "approved_by": "human-reviewer",
+      "notes": "Dimensions and all six faces were checked against the source dieline."
+    },
+    {
+      "filename": "unsupported-pouch.ai",
+      "truth_status": "unsupported",
+      "unsupported_reason": "pouch is outside the first rectangular-carton scope",
+      "golden_sample": false,
+      "approved_by": "human-reviewer"
+    },
+    {
+      "filename": "pending-manual-review.ai",
+      "truth_status": "pending_manual",
+      "notes": "Do not use this sample to tune an auto-accept threshold yet."
+    }
+  ]
+}

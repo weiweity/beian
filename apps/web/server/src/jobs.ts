@@ -5,6 +5,7 @@ import { compareBookkeeping } from "./billing.js";
 import { notifyJobFinished } from "./notify.js";
 import {
   collectOutputs,
+  isMockupJobFile,
   loadAllMockups,
   loadMockup,
   resetMockupCache,
@@ -26,6 +27,7 @@ import {
   compareTask,
   inspectWorkerProcess,
   killTree,
+  preflightPackaging,
   reworkTask,
   runPackaging,
   type RunPythonResult,
@@ -35,6 +37,7 @@ import {
 import { rasterAiFile } from "./aiRaster.js";
 
 const STAGE_LABEL: Record<string, string> = {
+  structure: "识别结构",
   render_pdf: "出图",
   ocr: "认字",
   match: "对照",
@@ -80,6 +83,7 @@ export type JobsTestHooks = {
   runCompare?: typeof compareTask;
   runRework?: typeof reworkTask;
   runPack?: typeof runPackaging;
+  runStructure?: typeof preflightPackaging;
   runRaster?: (opts: { source: string; outDir: string }) => Promise<{ ok: boolean; png?: string; message: string }>;
   notify?: typeof notifyJobFinished;
   killTree?: typeof killTree;
@@ -110,8 +114,8 @@ export function queueSnapshot(): {
   const mocks = loadAllMockups();
   const ocrQueued = tasks.filter((t) => isOcr(t.job_kind) && t.job_status === "queued").length;
   const ocrRunning = tasks.filter((t) => isOcr(t.job_kind) && t.job_status === "running").length;
-  const ai = mocks.filter((j) => needsRaster(j));
-  const rest = mocks.filter((j) => !needsRaster(j));
+  const ai = mocks.filter((j) => needsIllustrator(j));
+  const rest = mocks.filter((j) => !needsIllustrator(j));
   const bQueued = rest.filter((j) => j.job_status === "queued").length;
   const bRunning = rest.filter((j) => j.job_status === "running" && j.job_stage !== "illustrator").length;
   return {
@@ -218,19 +222,32 @@ function oldestOcrQueued(): Task | undefined {
     .sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || "")))[0];
 }
 
+function needsStructure(job: MockupJob): boolean {
+  return job.structure_engine === "v2" && job.structure_status === "analyzing";
+}
+
 function needsRaster(job: MockupJob): boolean {
-  return /\.ai$/i.test(job.source_path || "") && !job.raster_png;
+  return job.structure_engine !== "v2" && /\.ai$/i.test(job.source_path || "") && !job.raster_png;
+}
+
+function needsIllustrator(job: MockupJob): boolean {
+  return needsStructure(job) || needsRaster(job);
 }
 
 function oldestAiQueued(): MockupJob | undefined {
   return loadAllMockups()
-    .filter((j) => j.job_status === "queued" && needsRaster(j))
+    .filter((j) => j.job_status === "queued" && needsIllustrator(j))
     .sort((a, b) => a.created_at.localeCompare(b.created_at))[0];
 }
 
 function oldestMockupQueued(): MockupJob | undefined {
   return loadAllMockups()
-    .filter((j) => j.job_status === "queued" && !needsRaster(j))
+    .filter(
+      (j) =>
+        j.job_status === "queued" &&
+        !needsIllustrator(j) &&
+        (j.structure_engine !== "v2" || j.structure_status === "ready"),
+    )
     .sort((a, b) => a.created_at.localeCompare(b.created_at))[0];
 }
 
@@ -280,6 +297,7 @@ function claimMockup(job: MockupJob): void {
   job.job_stage_label = STAGE_LABEL.render_pdf;
   job.job_eta_s = 240;
   job.job_error = undefined;
+  delete job.job_finished_at;
   delete job.job_pid;
   if (!job.notify_job_id) {
     job.notify_job_id = `${job.id}:mockup:${job.job_started_at}`;
@@ -295,14 +313,156 @@ function claimAi(job: MockupJob): void {
   job.job_status = "running";
   job.status = "running";
   job.job_started_at = nowIso();
-  job.job_stage = "illustrator";
-  job.job_stage_label = "转图";
-  job.job_eta_s = 60;
+  const structure = needsStructure(job);
+  job.job_stage = structure ? "structure" : "illustrator";
+  job.job_stage_label = structure ? STAGE_LABEL.structure : "转图";
+  job.job_eta_s = structure ? 120 : 60;
   job.job_error = undefined;
+  delete job.job_finished_at;
   saveMockup(job);
   live.illustrator = job.id;
   const startedAt = job.job_started_at;
-  void runAi(job.id, startedAt);
+  if (structure) void runStructure(job.id, startedAt);
+  else void runAi(job.id, startedAt);
+}
+
+type StructureControl = {
+  kind: "structure_resolution";
+  structure_status: "review_required" | "unsupported";
+  code?: string;
+  message?: string;
+  resolution_path?: string;
+  details?: {
+    artwork_pdf?: string | null;
+    structure_sidecar?: string | null;
+    source_sha256?: string | null;
+  };
+};
+
+function structureControl(stderr: string): StructureControl | null {
+  const lines = stderr.trim().split(/\n/).map((line) => line.trim()).filter(Boolean);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    try {
+      const value = JSON.parse(lines[index]) as Partial<StructureControl>;
+      if (
+        value.kind === "structure_resolution" &&
+        (value.structure_status === "review_required" || value.structure_status === "unsupported")
+      ) {
+        return value as StructureControl;
+      }
+    } catch {
+      /* next line */
+    }
+  }
+  return null;
+}
+
+function preparedManifest(payload: Record<string, unknown> | null): string | null {
+  const value = payload?.prepared_manifest;
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+async function runStructure(id: string, startedAt: string): Promise<void> {
+  const job = loadMockup(id);
+  if (!job || job.job_started_at !== startedAt) return;
+  const manifest = job.manifest_path || join(DATA_DIR, "mockups", id, "manifest.json");
+  const run = hooks.runStructure || preflightPackaging;
+  let result: RunPythonResult;
+  try {
+    result = await run(manifest, {
+      onSpawn: (pid) => {
+        const current = loadMockup(id);
+        if (!current || current.job_started_at !== startedAt) return;
+        current.job_pid = pid;
+        saveMockup(current);
+      },
+      onStderrLine: (line) => {
+        const match = /^STAGE\s+(\S+)/.exec(line);
+        if (!match || match[1] !== "structure") return;
+        const current = loadMockup(id);
+        if (!current || current.job_started_at !== startedAt) return;
+        current.job_stage = "structure";
+        current.job_stage_label = STAGE_LABEL.structure;
+        current.job_eta_s = 120;
+        saveMockup(current);
+      },
+    });
+  } catch (error) {
+    result = {
+      code: 1,
+      stdout: "",
+      stderr: error instanceof Error ? error.message : String(error),
+      timedOut: false,
+    };
+  }
+  finishStructure(id, startedAt, result);
+}
+
+function finishStructure(id: string, startedAt: string, result: RunPythonResult): void {
+  const job = loadMockup(id);
+  if (!job || job.job_started_at !== startedAt) {
+    tryStart();
+    return;
+  }
+  if (live.illustrator === id) live.illustrator = null;
+  delete job.job_pid;
+  job.job_finished_at = nowIso();
+  if (result.timedOut) {
+    markMockupFailed(job, "结构识别超时");
+    return;
+  }
+  const control = structureControl(result.stderr);
+  if (control) {
+    const controlPaths = [
+      control.resolution_path,
+      control.details?.artwork_pdf,
+      control.details?.structure_sidecar,
+    ].filter((path): path is string => Boolean(path));
+    if (
+      !isMockupJobFile(job.id, control.resolution_path) ||
+      controlPaths.some((path) => !isMockupJobFile(job.id, path))
+    ) {
+      markMockupFailed(job, "结构识别返回了无效文件");
+      return;
+    }
+    job.structure_status = control.structure_status;
+    job.structure_code = String(control.code || "structure_review_required");
+    job.structure_message = String(control.message || "包装结构需要人工确认。");
+    job.structure_resolution_path = control.resolution_path;
+    job.structure_sidecar_path = control.details?.structure_sidecar || undefined;
+    job.structure_artwork_path = control.details?.artwork_pdf || undefined;
+    job.structure_source_sha256 = control.details?.source_sha256 || undefined;
+    job.status = control.structure_status;
+    job.job_status = "waiting_input";
+    job.job_error = undefined;
+    delete job.job_finished_at;
+    saveMockup(job);
+    tryStart();
+    return;
+  }
+  if (result.code !== 0) {
+    markMockupFailed(job, publicJobError(cliError(result.stderr)) || "结构识别中断");
+    return;
+  }
+  const payload = lastJson(result.stdout);
+  const nextManifest = preparedManifest(payload);
+  if (!isMockupJobFile(job.id, nextManifest)) {
+    markMockupFailed(job, "结构识别没有返回可继续的作业清单");
+    return;
+  }
+  job.manifest_path = nextManifest;
+  job.structure_status = "ready";
+  job.structure_code = undefined;
+  job.structure_message = undefined;
+  job.status = "queued";
+  job.job_status = "queued";
+  job.job_stage = undefined;
+  job.job_stage_label = undefined;
+  job.job_eta_s = undefined;
+  job.reclaim_count = 0;
+  delete job.job_finished_at;
+  saveMockup(job);
+  tryStart();
 }
 
 async function runAi(id: string, startedAt: string): Promise<void> {

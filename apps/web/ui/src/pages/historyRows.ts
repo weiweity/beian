@@ -91,6 +91,12 @@ export function historyMockRow(row: MockupJob): HistoryRow {
   } else if (row.status === "done") {
     status = "已出图";
     color = "success";
+  } else if (row.structure_status === "review_required") {
+    status = "待确认结构";
+    color = "warning";
+  } else if (row.structure_status === "unsupported") {
+    status = "结构暂不支持";
+    color = "error";
   } else if (row.status === "failed") {
     status = "打样中断";
     color = "error";
