@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  compareBoardProgress,
   feishuReadyFromHealth,
   liveJobLine,
   liveNavPulse,
@@ -10,6 +11,24 @@ import {
   waitCardCopy,
   waitLoaderLetters,
 } from "./waitCard.js";
+
+describe("compareBoardProgress", () => {
+  it("maps queue and compare stages to a compact board percentage", () => {
+    assert.equal(compareBoardProgress({ status: "comparing", job_status: "queued" }), 0);
+    assert.equal(compareBoardProgress({ status: "comparing", job_status: "running", job_stage: "render_pdf" }), 20);
+    assert.equal(compareBoardProgress({ status: "comparing", job_status: "running", job_stage_label: "认字" }), 55);
+    assert.equal(compareBoardProgress({ status: "comparing", job_status: "running", job_stage: "match" }), 85);
+    assert.equal(compareBoardProgress({ status: "comparing", job_status: "succeeded" }), 100);
+  });
+
+  it("does not invent a percentage for failed or non-running records", () => {
+    assert.equal(compareBoardProgress({ status: "compare_failed", job_status: "failed" }), undefined);
+    assert.equal(compareBoardProgress({ status: "comparing", job_status: "running" }), undefined);
+    assert.equal(compareBoardProgress({ status: "pending_review" }), undefined);
+    assert.equal(compareBoardProgress({ status: "pending_review", job_status: "succeeded" }), undefined);
+    assert.equal(compareBoardProgress({ status: "completed" }), undefined);
+  });
+});
 
 describe("shouldShowWaitCard", () => {
   it("hides when there is no task", () => {

@@ -9,6 +9,7 @@ import {
   historyHasLive,
   historyMockRow,
   historyRowKey,
+  historySelectionState,
   historyTaskRow,
   type HistoryKindFilter,
   type HistoryRow,
@@ -104,6 +105,7 @@ export function HistoryPage({ canDelete, onOpenTask, onOpenMockup }: Props) {
       }),
     [actor, kind, range, rows, time],
   );
+  const selection = useMemo(() => historySelectionState(visibleRows, selected), [selected, visibleRows]);
 
   useEffect(() => {
     if (actor && !actors.includes(actor)) setActor("");
@@ -118,6 +120,10 @@ export function HistoryPage({ canDelete, onOpenTask, onOpenMockup }: Props) {
     if (!historyCanDelete(row)) return;
     const key = historyRowKey(row);
     setSelected((keys) => (keys.includes(key) ? keys.filter((item) => item !== key) : [...keys, key]));
+  }
+
+  function toggleAll(checked: boolean) {
+    setSelected(checked ? selection.keys : []);
   }
 
   function activateRow(row: Row) {
@@ -157,6 +163,7 @@ export function HistoryPage({ canDelete, onOpenTask, onOpenMockup }: Props) {
     if (!chosen.length) return;
     modal.confirm({
       className: "history-delete-modal",
+      centered: true,
       title: `删除这 ${chosen.length} 条记录？`,
       content: "会删除选中的记录及其本地稿件或结果文件；已经发出的飞书消息不会撤回。删除后不能恢复。",
       okText: "删除记录",
@@ -167,7 +174,7 @@ export function HistoryPage({ canDelete, onOpenTask, onOpenMockup }: Props) {
   }
 
   return (
-    <section>
+    <section className={`history-page${editing ? " is-editing" : ""}`}>
       <header className="page-head">
         <div>
           <h1 className="page-title">历史记录</h1>
@@ -253,21 +260,29 @@ export function HistoryPage({ canDelete, onOpenTask, onOpenMockup }: Props) {
                 ...(editing
                   ? [
                       {
-                        title: "选择",
+                        title: (
+                          <Checkbox
+                            aria-label="全选可删除记录"
+                            checked={selection.all}
+                            indeterminate={selection.some}
+                            disabled={!selection.keys.length}
+                            onChange={(event) => toggleAll(event.target.checked)}
+                          >
+                            全选
+                          </Checkbox>
+                        ),
                         key: "select",
-                        width: 64,
+                        width: 104,
                         render: (_: unknown, row: Row) => (
                           <span
                             className="history-select-hitbox"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              if (historyCanDelete(row)) toggle(row);
-                            }}
+                            onClick={(event) => event.stopPropagation()}
                           >
                             <Checkbox
                               aria-label={`选择 ${row.title}`}
                               checked={selected.includes(historyRowKey(row))}
                               disabled={!historyCanDelete(row)}
+                              onChange={() => toggle(row)}
                             />
                           </span>
                         ),
@@ -311,11 +326,19 @@ export function HistoryPage({ canDelete, onOpenTask, onOpenMockup }: Props) {
               ]}
             />
           </div>
-          {editing && selected.length ? (
-            <div className="history-bulkbar" role="status">
+          {editing ? (
+            <div className="history-bulkbar" role="toolbar" aria-label="批量删除记录">
+              <Checkbox
+                checked={selection.all}
+                indeterminate={selection.some}
+                disabled={!selection.keys.length}
+                onChange={(event) => toggleAll(event.target.checked)}
+              >
+                全选
+              </Checkbox>
               <strong>已选 {selected.length} 条</strong>
               <span>进行中的记录不会被选中</span>
-              <Button danger type="primary" loading={busy} onClick={confirmRemove}>
+              <Button danger type="primary" loading={busy} disabled={!selected.length} onClick={confirmRemove}>
                 删除
               </Button>
             </div>
