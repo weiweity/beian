@@ -301,7 +301,10 @@ export type FieldHit = {
 
 export type TaskPage = {
   url?: string;
+  raster_url?: string;
   name?: string;
+  review_name?: string;
+  review_format?: "svg" | "png";
   page?: number;
   width?: number;
   height?: number;

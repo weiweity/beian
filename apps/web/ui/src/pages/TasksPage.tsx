@@ -303,11 +303,10 @@ export function TasksPage({ canCreate, onCreate, onOpen, onResumeReceipt }: Prop
             hint="上传中、待对照或机器运行"
             rows={[...pendingCards, ...board.comparing.map(toDeskCard)]}
             onOpen={openCard}
-            compact
           />
-          <DeskCol title="对照失败" hint="中断了，点开看原因" rows={board.failed.map(toDeskCard)} onOpen={onOpen} compact />
-          <DeskCol title="待审核" hint="要人写结论" rows={board.review.map(toDeskCard)} onOpen={onOpen} compact />
-          <DeskCol title="已签字" hint="结论已记下" rows={board.done.map(toDeskCard)} onOpen={onOpen} compact />
+          <DeskCol title="对照失败" hint="中断了，点开看原因" rows={board.failed.map(toDeskCard)} onOpen={onOpen} />
+          <DeskCol title="待审核" hint="要人写结论" rows={board.review.map(toDeskCard)} onOpen={onOpen} />
+          <DeskCol title="已签字" hint="结论已记下" rows={board.done.map(toDeskCard)} onOpen={onOpen} />
         </div>
       ) : (
         <Table<DeskCardRow>

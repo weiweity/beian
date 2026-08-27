@@ -17,6 +17,13 @@ describe("doubtLines", () => {
     const long = "漏".repeat(140);
     assert.equal(doubtLines({ status: "缺失", evidence: long })[0]?.length, 120);
   });
+
+  it("treats pending human confirmation as an issue when evidence explains it", () => {
+    assert.deepEqual(
+      doubtLines({ status: "待人工确认", evidence: "OCR 没读全，需要人眼确认" }),
+      ["OCR 没读全，需要人眼确认"],
+    );
+  });
 });
 
 describe("excelText", () => {
@@ -46,15 +53,14 @@ describe("pdfText", () => {
     assert.equal(pdfText({}), "没读到");
   });
 
-  it("lists coverage misses even when no hits", () => {
-    assert.match(pdfText({ coverage: { miss: ["香柠檬"] } }), /未在稿上读到：香柠檬/);
+  it("keeps misses out of OCR text because the issue column owns them", () => {
+    assert.equal(pdfText({ coverage: { miss: ["香柠檬"] } }), "没读到");
   });
 
-  it("lists coverage misses next to hits and the tally", () => {
-    assert.match(
-      pdfText({ coverage: { hit: ["积雪草"], miss: ["烟酰胺", "水"], matched: 8, total: 36 } }),
-      /积雪草[\s\S]*稿上命中 8\/36 项[\s\S]*未在稿上读到：烟酰胺 水/,
-    );
+  it("shows hits and tally without duplicating issue phrases", () => {
+    const text = pdfText({ coverage: { hit: ["积雪草"], miss: ["烟酰胺", "水"], matched: 8, total: 36 } });
+    assert.match(text, /积雪草[\s\S]*稿上命中 8\/36 项/);
+    assert.doesNotMatch(text, /烟酰胺|未在稿上读到/);
   });
 
   it("explains image-only brand fields", () => {
@@ -65,9 +71,9 @@ describe("pdfText", () => {
     assert.equal(isImageOnlyField("成分"), false);
   });
 
-  it("keeps image note and coverage misses together", () => {
+  it("keeps image note concise and leaves misses to doubtLines", () => {
     const text = pdfText({ coverage: { miss: ["香柠檬"] } }, "中文品名");
     assert.match(text, /是图/);
-    assert.match(text, /未在稿上读到：香柠檬/);
+    assert.doesNotMatch(text, /香柠檬/);
   });
 });

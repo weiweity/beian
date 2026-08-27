@@ -1,10 +1,9 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Alert, App, Button, Empty, Input, Space, Tag } from "antd";
+import { Alert, App, Button, Empty, Input } from "antd";
 import { ApiError, api, type Decision, type FieldHit, type TaskDetail, type TaskPage } from "../api";
 import { WaitCard } from "../chrome/WaitCard";
 import { fittedPage, panBy, resetZoom, zoomAt, zoomCss, zoomToBox } from "./canvasZoom";
-import { doubtLines, excelText, pdfText } from "./hitText";
 import { hitOnPage, overlayFromBox, overlaysForHit, pickHitBox, resolvePageMetrics } from "./pinBox";
 import {
   enterElementFullscreen,
@@ -15,9 +14,11 @@ import {
 import {
   clampDockBox,
   clampDockPlace,
+  dockTopAfterHeader,
   dockVisual,
   readBoxesOn,
   readDockBox,
+  readStoredDockPlace,
   readPinsOn,
   resizeDockHandle,
   sidebarDockPlace,
@@ -33,6 +34,8 @@ import {
 } from "./reviewDock";
 import { shouldShowWaitCard } from "./waitCard";
 import { reviewHits, shouldUseReworkView } from "./reviewVersion";
+import { ReviewDockPanel } from "./ReviewDockPanel";
+import { buildRevisionList, withLocalNotes } from "./reviewEvidence";
 
 function browserStore(): Storage | null {
   return typeof localStorage === "undefined" ? null : localStorage;
@@ -54,32 +57,10 @@ function isReworkable(task: TaskDetail | null) {
   return task.status === "completed" && task.complete_kind === "rework";
 }
 
-function statusTag(status?: string) {
-  const s = status || "";
-  if (s.includes("待人工") || s.includes("不清")) return <Tag color="warning">待人工确认</Tag>;
-  if (s.includes("疑")) return <Tag color="warning">{s}</Tag>;
-  if (s.includes("缺") || s.includes("误")) return <Tag color="error">{s}</Tag>;
-  if (s.includes("一致")) return <Tag>{s}</Tag>;
-  return <Tag>{s || "—"}</Tag>;
-}
-
 function pageList(task: TaskDetail | null): TaskPage[] {
   const raw = task?.pages;
   if (!Array.isArray(raw)) return [];
   return raw.filter((p) => p && (p.url || p.name));
-}
-
-function buildList(productName: string, hits: FieldHit[]) {
-  const issues = hits.filter((h) => h.decision === "issue");
-  const lines = [
-    "待设计改稿",
-    `品名：${productName || "—"}`,
-    ...issues.map((h, i) => {
-      const note = h.note ? `（${h.note}）` : "";
-      return `${i + 1}. ${h.field || "字段"} / 第${h.page ?? "?"}页 / Excel：${excelText(h)} / 稿上：${pdfText(h)}${note}`;
-    }),
-  ];
-  return { text: lines.join("\n"), count: issues.length };
 }
 
 function statusLead(task: TaskDetail | null, pageIdx: number, pages: TaskPage[]) {
@@ -102,6 +83,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
   const [busy, setBusy] = useState(false);
   const [useV2, setUseV2] = useState(false);
   const [nat, setNat] = useState<{ width: number; height: number } | null>(null);
+  const [reviewImageFallback, setReviewImageFallback] = useState<string | null>(null);
   const [viewSize, setViewSize] = useState<{ width: number; height: number } | null>(null);
   const [zoom, setZoom] = useState(resetZoom);
   const [dockOpen, setDockOpen] = useState(true);
@@ -116,6 +98,9 @@ export function ReviewPage({ taskId, onBack }: Props) {
   const zoomRef = useRef(zoom);
   const laidRef = useRef({ imgW: 0, imgH: 0, offsetX: 0, offsetY: 0 });
   const dockOpenRef = useRef(true);
+  const dockPlaceModeRef = useRef<"default" | "user">(
+    readStoredDockPlace(browserStore()) ? "user" : "default",
+  );
   const [dockBox, setDockBox] = useState<DockBox>(() => readDockBox(browserStore()));
   const [dockPlace, setDockPlace] = useState<DockPlace>(() =>
     sidebarDockPlace(typeof window === "undefined" ? { w: 1200, h: 800 } : { w: window.innerWidth, h: window.innerHeight }, readDockBox(browserStore())),
@@ -133,7 +118,19 @@ export function ReviewPage({ taskId, onBack }: Props) {
   const dockDrag = useRef<{ x: number; y: number; place: DockPlace } | null>(null);
   const pendingFit = useRef<number | null>(null);
   const fitHitRef = useRef<(i: number) => void>(() => undefined);
+  const busyDepthRef = useRef(0);
+  const decisionQueueRef = useRef<Promise<boolean>>(Promise.resolve(true));
   const waiting = shouldShowWaitCard(task);
+
+  function beginBusy() {
+    busyDepthRef.current += 1;
+    setBusy(true);
+  }
+
+  function endBusy() {
+    busyDepthRef.current = Math.max(0, busyDepthRef.current - 1);
+    if (busyDepthRef.current === 0) setBusy(false);
+  }
 
   function paintZoom(next: typeof zoom) {
     const el = zoomElRef.current;
@@ -155,6 +152,17 @@ export function ReviewPage({ taskId, onBack }: Props) {
     return { w: window.innerWidth, h: window.innerHeight };
   }
 
+  function dockMinimumTop() {
+    const head = pageRef.current?.querySelector(":scope > .page-head");
+    return dockTopAfterHeader(head instanceof HTMLElement ? head.getBoundingClientRect().bottom : Number.NaN);
+  }
+
+  function defaultDockPlace(room: { w: number; h: number }, box: DockBox, minimumTop: number) {
+    const side = document.querySelector(".sidebar");
+    const dockLeft = side instanceof HTMLElement ? Math.round(side.getBoundingClientRect().left) : 20;
+    return sidebarDockPlace(room, box, dockLeft, minimumTop);
+  }
+
   useEffect(() => {
     if (typeof document === "undefined") return;
     function onFullscreenChange() {
@@ -170,8 +178,10 @@ export function ReviewPage({ taskId, onBack }: Props) {
 
   function commitDock(box: DockBox, place?: DockPlace) {
     const room = pageRoom();
-    const nextBox = clampDockBox(box, room);
-    const nextPlace = clampDockPlace(place || dockPlace, room, nextBox);
+    const minimumTop = dockMinimumTop();
+    const nextBox = clampDockBox(box, room, minimumTop);
+    const nextPlace = clampDockPlace(place || dockPlace, room, nextBox, minimumTop);
+    dockPlaceModeRef.current = "user";
     setDockBox(nextBox);
     setDockPlace(nextPlace);
     writeDockBox(browserStore(), nextBox);
@@ -193,7 +203,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
   function paintDock(next: { box: DockBox; place: DockPlace }) {
     const el = dockRef.current;
     if (!el) return;
-    const shown = dockVisual(dockOpenRef.current, next.box, next.place, pageRoom());
+    const shown = dockVisual(dockOpenRef.current, next.box, next.place, pageRoom(), dockMinimumTop());
     el.style.width = `${shown.box.w}px`;
     el.style.height = `${shown.box.h}px`;
     el.style.top = `${shown.place.top}px`;
@@ -214,13 +224,20 @@ export function ReviewPage({ taskId, onBack }: Props) {
   function onDockResizeMove(e: React.PointerEvent) {
     const start = dockResize.current;
     if (!start) return;
-    const next = resizeDockHandle(
+    const room = pageRoom();
+    const minimumTop = dockMinimumTop();
+    const resized = resizeDockHandle(
       start.box,
       start.place,
       { dx: e.clientX - start.x, dy: e.clientY - start.y },
-      pageRoom(),
+      room,
       start.corner,
+      minimumTop,
     );
+    const next = {
+      box: resized.box,
+      place: clampDockPlace(resized.place, room, resized.box, minimumTop),
+    };
     paintDock(next);
   }
 
@@ -234,6 +251,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
       },
       pageRoom(),
       dockBox,
+      dockMinimumTop(),
     );
     paintDock({ box: dockBox, place: next });
   }
@@ -271,25 +289,31 @@ export function ReviewPage({ taskId, onBack }: Props) {
 
   useLayoutEffect(() => {
     const room = pageRoom();
-    const box = clampDockBox(readDockBox(browserStore()), room);
-    const side = document.querySelector(".sidebar");
-    const dockLeft =
-      side instanceof HTMLElement ? Math.round(side.getBoundingClientRect().left) : 20;
-    const place = sidebarDockPlace(room, box, dockLeft);
+    const minimumTop = dockMinimumTop();
+    const box = clampDockBox(readDockBox(browserStore()), room, minimumTop);
+    const storedPlace = readStoredDockPlace(browserStore());
+    dockPlaceModeRef.current = storedPlace ? "user" : "default";
+    const place = storedPlace
+      ? clampDockPlace(storedPlace, room, box, minimumTop)
+      : defaultDockPlace(room, box, minimumTop);
     dockOpenRef.current = true;
     setDockOpen(true);
     writeDockOpen(browserStore(), true);
     setDockBox(box);
     setDockPlace(place);
-    writeDockPlace(browserStore(), place);
   }, []);
 
   useEffect(() => {
     function fit() {
       const room = pageRoom();
+      const minimumTop = dockMinimumTop();
       setDockBox((cur) => {
-        const nextBox = clampDockBox(cur, room);
-        setDockPlace((p) => clampDockPlace(p, room, nextBox));
+        const nextBox = clampDockBox(cur, room, minimumTop);
+        setDockPlace((p) =>
+          dockPlaceModeRef.current === "default"
+            ? defaultDockPlace(room, nextBox, minimumTop)
+            : clampDockPlace(p, room, nextBox, minimumTop),
+        );
         return nextBox;
       });
     }
@@ -379,6 +403,37 @@ export function ReviewPage({ taskId, onBack }: Props) {
   const reworkable = isReworkable(task);
   const current = hits[active];
 
+  useLayoutEffect(() => {
+    const head = pageRef.current?.querySelector(":scope > .page-head");
+    if (!(head instanceof HTMLElement)) return;
+    const keepBelowHeader = () => {
+      const room = pageRoom();
+      const minimumTop = dockMinimumTop();
+      setDockBox((currentBox) => {
+        const nextBox = clampDockBox(currentBox, room, minimumTop);
+        setDockPlace((currentPlace) => {
+          const nextPlace =
+            dockPlaceModeRef.current === "default"
+              ? defaultDockPlace(room, nextBox, minimumTop)
+              : clampDockPlace(
+                  { ...currentPlace, top: Math.max(currentPlace.top, minimumTop) },
+                  room,
+                  nextBox,
+                  minimumTop,
+                );
+          const placeChanged = nextPlace.top !== currentPlace.top || nextPlace.right !== currentPlace.right;
+          return placeChanged ? nextPlace : currentPlace;
+        });
+        const boxChanged = nextBox.w !== currentBox.w || nextBox.h !== currentBox.h;
+        return boxChanged ? nextBox : currentBox;
+      });
+    };
+    keepBelowHeader();
+    const observer = new ResizeObserver(keepBelowHeader);
+    observer.observe(head);
+    return () => observer.disconnect();
+  }, [dockBox.w, dockBox.h, task?.status, reviewFullscreen]);
+
   const pageNo = Number(page?.page || pageIdx + 1);
   const metrics = resolvePageMetrics(page, nat);
   const laid = metrics && viewSize ? fittedPage(metrics, viewSize) : { imgW: 0, imgH: 0, offsetX: 0, offsetY: 0 };
@@ -390,6 +445,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
 
   useEffect(() => {
     setNat(null);
+    setReviewImageFallback(null);
     commitZoom(resetZoom());
   }, [page?.url]);
 
@@ -455,26 +511,37 @@ export function ReviewPage({ taskId, onBack }: Props) {
     );
   }
 
-  async function decide(hit: FieldHit, decision: Decision) {
-    if (!task || !hit.id || !reviewable) return;
-    setBusy(true);
-    try {
-      const next = await api.decide(task.id, {
-        hit_id: hit.id,
-        decision,
-        note: notes[hit.id],
-      });
-      setTask(next);
-    } catch (err) {
-      message.error(err instanceof Error ? err.message : "记录失败");
-    } finally {
-      setBusy(false);
-    }
+  function decide(hit: FieldHit, decision: Decision, note = ""): Promise<boolean> {
+    const targetTaskId = task?.id;
+    if (!targetTaskId || !hit.id || !reviewable) return Promise.resolve(false);
+    const hitId = hit.id;
+    const operation = decisionQueueRef.current.then(async () => {
+      beginBusy();
+      try {
+        const next = await api.decide(targetTaskId, {
+          hit_id: hitId,
+          decision,
+          note,
+        });
+        setTask((currentTask) => (currentTask?.id === targetTaskId ? next : currentTask));
+        return true;
+      } catch (err) {
+        message.error(err instanceof Error ? err.message : "记录失败");
+        return false;
+      } finally {
+        endBusy();
+      }
+    });
+    decisionQueueRef.current = operation;
+    return operation;
   }
 
   async function copyList() {
     if (!task) return;
-    const { text, count } = buildList(task.product_name || task.title, hits);
+    const { text, count } = buildRevisionList(
+      task.product_name || task.title,
+      withLocalNotes(hits, notes),
+    );
     try {
       await navigator.clipboard.writeText(text);
       message.success(`已复制 ${count} 条给设计`);
@@ -485,9 +552,13 @@ export function ReviewPage({ taskId, onBack }: Props) {
 
   async function uploadRework(file: File) {
     if (!task || !reworkable) return;
+    if (!(await decisionQueueRef.current)) {
+      message.error("字段结论或备注还没保存，暂不能对红");
+      return;
+    }
     const fd = new FormData();
     fd.append("pdf", file);
-    setBusy(true);
+    beginBusy();
     try {
       const next = await api.rework(task.id, fd);
       setTask(next);
@@ -497,13 +568,17 @@ export function ReviewPage({ taskId, onBack }: Props) {
     } catch (err) {
       message.error(err instanceof Error ? err.message : "对红失败");
     } finally {
-      setBusy(false);
+      endBusy();
     }
   }
 
   async function signOff() {
     if (!task || !reviewable) return;
-    setBusy(true);
+    if (!(await decisionQueueRef.current)) {
+      message.error("字段结论或备注还没保存，暂不能签字");
+      return;
+    }
+    beginBusy();
     try {
       const next = await api.complete(task.id, { conclusion });
       setTask(next);
@@ -511,7 +586,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
     } catch (err) {
       message.error(err instanceof Error ? err.message : "还不能签字");
     } finally {
-      setBusy(false);
+      endBusy();
     }
   }
 
@@ -725,10 +800,15 @@ export function ReviewPage({ taskId, onBack }: Props) {
                 }}
               >
                 <img
-                  src={page.url}
+                  src={reviewImageFallback || page.url}
                   alt=""
                   draggable={false}
                   onDragStart={(e) => e.preventDefault()}
+                  onError={() => {
+                    if (page.raster_url && page.raster_url !== page.url) {
+                      setReviewImageFallback(page.raster_url);
+                    }
+                  }}
                   onLoad={(e) => {
                     const img = e.currentTarget;
                     if (img.naturalWidth > 1 && img.naturalHeight > 1) {
@@ -867,7 +947,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
             data-testid="review-dock"
             className={dockOpen ? "notes glass-pane is-float" : "notes glass-pane is-float is-shut"}
             style={(() => {
-              const shown = dockVisual(dockOpen, dockBox, dockPlace, pageRoom());
+              const shown = dockVisual(dockOpen, dockBox, dockPlace, pageRoom(), dockMinimumTop());
               return {
                 width: shown.box.w,
                 height: shown.box.h,
@@ -901,107 +981,30 @@ export function ReviewPage({ taskId, onBack }: Props) {
               </button>
             </div>
             <div className="notes-body" aria-hidden={!dockOpen}>
-            <div className="notes-grid notes-grid-ordered">
-              <div className="notes-hits notes-hits-first">
-                <p className="field-label" style={{ margin: 0 }}>
-                  疑点列表
-                </p>
-                <div className="hit-list hit-list-wrap">
-                  {hits.map((h, i) => (
-                    <button
-                      key={h.id || i}
-                      type="button"
-                      className={i === active ? "hit-card is-on" : "hit-card"}
-                      onClick={() => pickHit(i)}
-                    >
-                      <div className="hit-now">
-                        <strong style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-                          <span className="hit-no">{i + 1}</span>
-                          {h.field || "字段"}
-                        </strong>
-                        {statusTag(h.status)}
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div className="notes-field">
-                {current ? (
-                  <>
-                    {doubtLines(current).length ? (
-                      <div className="pair pair-doubt">
-                        <p className="pair-k">疑点 / 错误点</p>
-                        <ul className="doubt-list">
-                          {doubtLines(current).map((line) => (
-                            <li key={line}>{line}</li>
-                          ))}
-                        </ul>
-                      </div>
-                    ) : null}
-                    <div className="pair">
-                      <p className="pair-k">Excel 应印</p>
-                      <p className="pair-v mono">{excelText(current)}</p>
-                    </div>
-                    <div className="pair">
-                      <p className="pair-k">稿上 OCR</p>
-                      <p className="pair-v mono">{pdfText(current, current.field)}</p>
-                    </div>
-                    <p className="pair-k">
-                      {currentBox
-                        ? `包装定位 · 页 ${current.page ?? "?"} · 点定位`
-                        : "包装定位 · 这一条没有图上位置"}
-                    </p>
-                    {reviewable && current.id ? (
-                      <Space wrap>
-                        <Button size="small" onClick={() => void decide(current, "confirm")}>
-                          一致
-                        </Button>
-                        <Button size="small" danger onClick={() => void decide(current, "issue")}>
-                          有错
-                        </Button>
-                        <Button size="small" onClick={() => void decide(current, "ignore")}>
-                          忽略
-                        </Button>
-                        <Button size="small" onClick={() => void copyList()}>
-                          复制改稿清单
-                        </Button>
-                      </Space>
-                    ) : (
-                      <Button size="small" onClick={() => void copyList()}>
-                        复制改稿清单
-                      </Button>
-                    )}
-                    <Input
-                      placeholder="给你自己看的话，会进改稿清单"
-                      value={current.id ? notes[current.id] || "" : ""}
-                      disabled={!reviewable || !current.id}
-                      onChange={(e) => {
-                        if (!current.id) return;
-                        setNotes((prev) => ({ ...prev, [current.id as string]: e.target.value }));
-                      }}
-                    />
-                  </>
-                ) : (
-                  <p className="page-lead">
-                    {task?.status === "compare_failed" || task?.job_status === "failed"
-                      ? "对照没跑完，没有机审条目。"
-                      : "没有机审条目。仍请翻页看一遍。"}
-                  </p>
-                )}
-              </div>
-            </div>
-            {task?.rework_check && task.rework_check.length > 0 ? (
-              <div className="notes-foot">
-                <p className="field-label">对红</p>
-                {task.rework_check.map((row) => (
-                  <div key={row.field} className="hit-card">
-                    <strong>{row.field}</strong>
-                    <div>上一版：{row.v1_status}</div>
-                    <div>这一版：{row.v2_status}</div>
-                  </div>
-                ))}
-              </div>
-            ) : null}
+              <ReviewDockPanel
+                hits={hits}
+                active={active}
+                current={current}
+                fullscreen={reviewFullscreen}
+                currentHasBox={Boolean(currentBox)}
+                reviewable={reviewable}
+                busy={busy}
+                note={current?.id ? notes[current.id] || "" : ""}
+                emptyMessage={
+                  task?.status === "compare_failed" || task?.job_status === "failed"
+                    ? "对照没跑完，没有机审条目。"
+                    : "没有机审条目。仍请翻页看一遍。"
+                }
+                reworkCheck={task?.rework_check}
+                onPick={pickHit}
+                onDecide={(hit, decision, note) => void decide(hit, decision, note)}
+                onNoteCommit={(hit, decision, note) => void decide(hit, decision, note)}
+                onCopy={() => void copyList()}
+                onNoteChange={(value) => {
+                  if (!current?.id) return;
+                  setNotes((prev) => ({ ...prev, [current.id as string]: value }));
+                }}
+              />
             </div>
             {dockHandle("n")}
             {dockHandle("s")}

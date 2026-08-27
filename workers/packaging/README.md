@@ -15,7 +15,7 @@
 3. 印刷层与完整图层分别高速栅格化（pymupdf 出图，杭州不靠 macOS qlmanage）；
 4. 按切面切片纹理（膜袋只印正反，其余面空白纸面补齐）；
 5. 多产品并行调用 Blender 后台建模、渲染并导出 .blend / .glb；
-6. GLB 尺寸自动复核；
+6. GLB 自动复核轴向、毫米尺寸，以及 front/right/back/left/top/bottom 六面贴图来源、方向和镜像；
 7. 用两张白底写成 1 页 OOXML PPT（正面+侧面、反面+侧面），不依赖 Node；写不出才试演示文稿运行时。stderr 打 `PPT 跳过` 时白底图、PDF 和 GLB 仍算成功，不要把整单判失败。`--no-ppt` 同样跳过 PPT。
 8. 两张白底合成一页 PDF（页底先铺白，槽按源图比例 contain，标题用中文字体）。pymupdf 写不出且还没落盘再用已装的 Pillow，不另装包，不要盖掉已经写出的文件。缺 PDF 不当失败。
 
@@ -46,7 +46,7 @@ V2 任务在产品项中写 `"structure_engine": "v2"`。显式 sidecar 可写 `
 - Illustrator 冷启动和复杂转曲稿解析可能较慢，建议保持应用常驻并批量处理异常稿；兜底 Worker 默认 7 分钟硬超时。
 - 相同结构只需新增任务记录即可并行处理；缓存键包含源稿、结构 sidecar、清理后的 artwork 和流程版本。
 - `structure_v2` 用 Shapely/GEOS 做单位归一、吸附、noding、polygonize 和拓扑诊断。结构可闭合但六面角色/方向有歧义时返回 `review_required`，由管理员确认；缺语义、曲线路径需专用适配器或超过安全上限时返回可执行的 `review_required` / `unsupported`，不会进入 Blender。
-- 只有 `validation.status=accepted`、源稿 SHA-256 匹配、六面角色唯一且拓扑闭合的结构才能形成 `ResolvedPackagingJob`。人工确认结果写成新的批准 sidecar，再进入现有建模、渲染、PPT 和 GLB 合同。
+- 只有 `validation.status=accepted`、源稿 SHA-256 匹配、六面角色唯一且拓扑闭合的结构才能形成 `ResolvedPackagingJob`。人工确认结果写成新的批准 sidecar，再进入现有建模、渲染、PPT 和 GLB 合同。GLB 导出后还要逐面核对已确认 artwork 绑定；底面缺图、方向错误或镜像错误都判失败。
 - Blender MCP 只保留给交互调试。稳定生产通过独立 Blender 后台进程并行执行，避免界面串行和上下文开销。
 
 ## Illustrator 兜底验证
@@ -63,7 +63,7 @@ V2 任务在产品项中写 `"structure_engine": "v2"`。显式 sidecar 可写 `
 每个产品目录包含：
 
 - .blend：可编辑 Blender 文件；
-- .glb：可旋转查看的通用 3D 文件；
+- .glb：可旋转查看的通用 3D 文件；六个已确认面都通过贴图来源、方向、镜像和尺寸复核后才交付；
 - 正面/右侧面和背面/左侧面白底渲染图（棚只提亮产品和接触阴影，不改盒子材质。已经出过的图要重新打样或加 `--force` 才会变）；
 - 打样单 PDF（两张白底一页，页底先铺白，槽按源图比例 contain。pymupdf 写不出且还没落盘再用已装的 Pillow，不另装包、不盖掉已写成的文件；跳过时没有，也不当失败）；
 - 独立 .pptx（一页两张白底：正面+侧面、反面+侧面；先写 OOXML，不依赖 Node。跳过 PPT 时没有这一项，也不当失败）；
