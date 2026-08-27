@@ -37,8 +37,8 @@ def test_structure_export_hides_objects_not_whole_layers():
 
 def test_explicit_ignore_objects_are_removed_from_artwork_without_becoming_edges():
     source = EXPORTER.read_text(encoding="utf-8")
-    semantic_push = source.index("semanticItems.push(item)")
-    ignore_guard = source.index('if (assignment === "ignore")')
+    semantic_push = source.index("semanticItems.push(record.item)")
+    ignore_guard = source.index('if (record.assignment === "ignore")')
     edge_export = source.index("exportSemanticPath(", ignore_guard)
     assert semantic_push < ignore_guard < edge_export
 
@@ -50,6 +50,22 @@ def test_semantics_require_exact_tags_or_explicit_config():
     assert 'configuredAssignment(config, "spots"' in source
     assert "刀线" not in source
     assert "刀版" not in source
+
+
+def test_legacy_proposal_layers_only_offer_stroke_only_paths_for_human_confirmation():
+    source = EXPORTER.read_text(encoding="utf-8")
+    assert "configuredProposalLayer(item, config)" in source
+    assert "item.stroked && !item.filled" in source
+    assert 'adapter = "illustrator-stroke-proposal/1"' in source
+    assert '"structure_proposal_requires_confirmation"' in source
+    assert "explicitRecords.length > 0 ? explicitRecords : proposalRecords" in source
+
+
+def test_proposal_paths_are_cleaned_from_artwork_without_hiding_the_whole_layer():
+    source = EXPORTER.read_text(encoding="utf-8")
+    assert "chosenRecords" in source
+    assert "semanticItems.push(record.item)" in source
+    assert "documentRef.layers[layerIndex].visible =" not in source
 
 
 def test_windows_bridge_runs_the_same_bound_jsx_exporter(tmp_path: Path):
