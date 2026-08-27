@@ -71,22 +71,27 @@ import {
   publicMockup,
   queueMockup,
 } from "./mockup.js";
-import { assertIllustratorReady } from "./aiRaster.js";
+import { assertIllustratorReady, isPdfCompatibleAi } from "./aiRaster.js";
 import { skipPackSheetField } from "./sheetSkip.js";
 import {
+  appendUploadChunk,
+  completeUploadSession,
   consumeReceipt,
   createUploadAdmission,
+  discardPendingUpload,
   discardReceipt,
-  listReceipts,
+  listPendingUploads,
   loadReceipt,
   MAX_UPLOAD_BODY_BYTES,
   purgeReceiptFiles,
   receiptOwner,
   restoreReceipt,
+  startUploadSession,
   stageMultipart,
   tooLarge,
   underReceiptDir,
   UPLOAD_CONCURRENCY,
+  UPLOAD_CHUNK_BYTES,
   UPLOAD_BODY_TOO_LARGE,
   oversizeMessage,
   uploadTotalTooLarge,
@@ -193,6 +198,7 @@ app.onError((err, c) => {
 function liveStatus() {
   return {
     jobs: queueSnapshot(),
+    uploads: uploadAdmission.snapshot(),
     feishu_notify:
       /^(1|true|yes|on)$/i.test(getSetting("FEISHU_ENABLED")) && Boolean(getSetting("FEISHU_OPEN_ID")),
   };
@@ -329,7 +335,16 @@ app.get("/api/tasks/:tid", (c) => {
 app.delete("/api/tasks/:tid", (c) => {
   const s = need(c, "delete");
   try {
-    const task = loadTask(c.req.param("tid"));
+    const tid = assertTid(c.req.param("tid"));
+    let task: ReturnType<typeof loadTask>;
+    try {
+      task = loadTask(tid);
+    } catch (err) {
+      if (typeof err === "object" && err && "status" in err && Number((err as { status: number }).status) === 404) {
+        return c.json({ ok: true, already_deleted: true });
+      }
+      throw err;
+    }
     assertCanAccessTask(task, viewerFromSession(s));
     deleteTask(task.id);
     return c.json({ ok: true });
@@ -340,12 +355,54 @@ app.delete("/api/tasks/:tid", (c) => {
 
 app.get("/api/uploads", (c) => {
   const s = need(c, "create");
-  return c.json(listReceipts(receiptOwner(s)));
+  return c.json(listPendingUploads(receiptOwner(s)));
 });
 
 app.delete("/api/uploads/:id", (c) => {
   const s = need(c, "create");
-  return c.json({ ok: discardReceipt(c.req.param("id"), receiptOwner(s)) });
+  return c.json({ ok: discardPendingUpload(c.req.param("id"), receiptOwner(s)) });
+});
+
+app.post("/api/uploads/sessions", async (c) => {
+  const s = need(c, "create");
+  try {
+    const body = await c.req.json();
+    return c.json({ upload: startUploadSession(receiptOwner(s), body) });
+  } catch (err) {
+    boom(err);
+  }
+});
+
+app.put(
+  "/api/uploads/sessions/:id/files/:field",
+  bodyLimit({
+    maxSize: UPLOAD_CHUNK_BYTES,
+    onError: (c) => c.json({ detail: "上传分片超过 1 MB" }, 413),
+  }),
+  async (c) => {
+    const s = need(c, "create");
+    try {
+      const chunk = Buffer.from(await c.req.arrayBuffer());
+      const offset = Number(c.req.header("x-upload-offset") || "NaN");
+      const sha256 = c.req.header("x-upload-sha256") || "";
+      const upload = await uploadAdmission.run(async () =>
+        appendUploadChunk(c.req.param("id"), receiptOwner(s), c.req.param("field"), offset, chunk, sha256),
+      );
+      return c.json({ upload });
+    } catch (err) {
+      boom(err);
+    }
+  },
+);
+
+app.post("/api/uploads/sessions/:id/complete", async (c) => {
+  const s = need(c, "create");
+  try {
+    const upload = await uploadAdmission.run(async () => completeUploadSession(c.req.param("id"), receiptOwner(s)));
+    return c.json({ upload });
+  } catch (err) {
+    boom(err);
+  }
 });
 
 app.post(
@@ -471,13 +528,20 @@ app.post("/api/mockups/start", async (c) => {
   }
   try {
     assertBlenderReady();
-    assertIllustratorReady();
   } catch (e) {
     boom(e);
   }
   const peeked = loadReceipt(receiptId, owner);
   if (!peeked) throw new HTTPException(400, { message: "上传已过期，请重新传文件" });
-  if (!peeked.files.some((f) => f.field === "ai")) throw new HTTPException(400, { message: "需要 .ai 稿件" });
+  const peekedAi = peeked.files.find((f) => f.field === "ai");
+  if (!peekedAi) throw new HTTPException(400, { message: "需要 .ai 稿件" });
+  if (!isPdfCompatibleAi(peekedAi.path)) {
+    try {
+      assertIllustratorReady();
+    } catch (e) {
+      boom(e);
+    }
+  }
   const rec = consumeReceipt(receiptId, owner);
   if (!rec) {
     const recovered = findMockupBySourceReceipt(receiptId, owner);
@@ -798,8 +862,9 @@ app.get("/api/mockups/:id", (c) => {
 app.delete("/api/mockups/:id", (c) => {
   const s = need(c, "delete");
   try {
-    const job = getJob(assertTid(c.req.param("id")));
-    if (!job) throw new HTTPException(404, { message: "没有这单打样" });
+    const id = assertTid(c.req.param("id"));
+    const job = getJob(id);
+    if (!job) return c.json({ ok: true, already_deleted: true });
     assertCanAccessMockup(job, viewerFromSession(s));
     deleteMockup(job.id);
     return c.json({ ok: true });

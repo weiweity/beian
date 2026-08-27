@@ -16,9 +16,9 @@ const { publicMockup, saveMockup } = await import("./mockup.js");
 
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
-async function stageAi(token: string, name = "art.ai"): Promise<string> {
+async function stageAi(token: string, name = "art.ai", bytes = Buffer.from("%PDF-1.4\n")): Promise<string> {
   const fd = new FormData();
-  fd.set("file", new File([Buffer.from("%PDF-1.4\n")], name, { type: "application/postscript" }));
+  fd.set("file", new File([bytes], name, { type: "application/postscript" }));
   const res = await app.request("/api/uploads", {
     method: "POST",
     headers: { authorization: `Bearer ${token}` },
@@ -175,6 +175,12 @@ describe("mockup get", () => {
       headers: { authorization: `Bearer ${owner.token}` },
     });
     assert.equal(ok.status, 200);
+    const retried = await app.request("/api/mockups/dddddddddddd", {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${owner.token}` },
+    });
+    assert.equal(retried.status, 200);
+    assert.equal(((await retried.json()) as { already_deleted?: boolean }).already_deleted, true);
     const gone = await app.request("/api/mockups/dddddddddddd", {
       headers: { authorization: `Bearer ${owner.token}` },
     });
@@ -236,18 +242,36 @@ describe("mockup post", { concurrency: false }, () => {
     }
   });
 
-  it("returns 412 when Illustrator is missing for .ai", async () => {
+  it("returns 412 when Illustrator is missing for a non-PDF-compatible .ai", async () => {
     const prevBin = process.env.BLENDER_EXECUTABLE;
     const prevAi = process.env.ILLUSTRATOR_EXECUTABLE;
     process.env.BLENDER_EXECUTABLE = process.execPath;
     delete process.env.ILLUSTRATOR_EXECUTABLE;
     try {
       const sess = issueSession("籽烨", "reviewer", "ou_mockup_post_ai412", "feishu");
-      const receipt = await stageAi(sess.token);
+      const receipt = await stageAi(sess.token, "native.ai", Buffer.from("%!PS-Adobe-3.0\n"));
       const res = await startMockup(sess.token, receipt);
       assert.equal(res.status, 412);
       const body = (await res.json()) as { detail?: string };
       assert.match(String(body.detail || ""), /Illustrator/);
+    } finally {
+      if (prevBin !== undefined) process.env.BLENDER_EXECUTABLE = prevBin;
+      else delete process.env.BLENDER_EXECUTABLE;
+      if (prevAi !== undefined) process.env.ILLUSTRATOR_EXECUTABLE = prevAi;
+      else delete process.env.ILLUSTRATOR_EXECUTABLE;
+    }
+  });
+
+  it("does not require Illustrator for a PDF-compatible .ai", async () => {
+    const prevBin = process.env.BLENDER_EXECUTABLE;
+    const prevAi = process.env.ILLUSTRATOR_EXECUTABLE;
+    process.env.BLENDER_EXECUTABLE = process.execPath;
+    delete process.env.ILLUSTRATOR_EXECUTABLE;
+    try {
+      const sess = issueSession("籽烨", "reviewer", "ou_mockup_pdf_ai", "feishu");
+      const receipt = await stageAi(sess.token);
+      const res = await startMockup(sess.token, receipt);
+      assert.equal(res.status, 200);
     } finally {
       if (prevBin !== undefined) process.env.BLENDER_EXECUTABLE = prevBin;
       else delete process.env.BLENDER_EXECUTABLE;

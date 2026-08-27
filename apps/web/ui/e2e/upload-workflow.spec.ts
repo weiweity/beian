@@ -66,7 +66,7 @@ test("上传到 100% 后等待服务器回执，确认后才能开始对照", as
   await page.getByLabel("Excel 确认单文件").setInputFiles({ ...excelFile, name: "confirming-e2e.xlsx" });
   await page.getByLabel("包装 PDF文件").setInputFiles({ ...pdfFile, name: "confirming-e2e.pdf" });
 
-  const progress = page.getByRole("progressbar", { name: "服务器确认中" });
+  const progress = page.getByRole("progressbar", { name: "文件已传完，服务器正在确认" });
   await expect(progress).toBeVisible();
   await expect(progress).toHaveJSProperty("value", 100);
   await expect(page.getByRole("button", { name: "上传中" })).toBeDisabled();
@@ -82,7 +82,7 @@ test("上传到 100% 后等待服务器回执，确认后才能开始对照", as
   expect(call?.body).toMatchObject({ product_name: "confirming e2e" });
 });
 
-test("服务端已落盘但上传响应丢失时，按本次 client id 回查回执并恢复开工", async ({
+test("服务端已落盘但完成响应丢失时，按同一上传身份恢复开工", async ({
   page,
   syntheticApi,
 }) => {
@@ -94,7 +94,13 @@ test("服务端已落盘但上传响应丢失时，按本次 client id 回查回
   await expect(page.getByText("上传成功，可以开始对照")).toBeVisible();
   const receipt = syntheticApi.receipts.find((item) => item.kind === "compare");
   expect(receipt?.client_upload_id).toBeTruthy();
-  expect(syntheticApi.calls.some((item) => item.method === "GET" && item.path === "/api/uploads")).toBe(true);
+  const completeCalls = syntheticApi.calls.filter(
+    (item) => item.method === "POST" && item.path === `/api/uploads/sessions/${receipt?.id}/complete`,
+  ).length;
+  const recoveredByList = syntheticApi.calls.some(
+    (item) => item.method === "GET" && item.path === "/api/uploads",
+  );
+  expect(completeCalls >= 2 || recoveredByList).toBe(true);
 
   await page.getByRole("button", { name: "开始对照" }).click();
   await expect(page).toHaveURL(/\/review\/c[0-9a-f]{11}$/);
@@ -127,7 +133,7 @@ test("回执生成后整页刷新，仍可从审稿台进入恢复页并放弃�
   await expect(page.locator(".upload-filechip-name").filter({ hasText: "reload-e2e.xlsx" })).toBeVisible();
   await expect(page.locator(".upload-filechip-name").filter({ hasText: "reload-e2e.pdf" })).toBeVisible();
 
-  await page.getByRole("button", { name: "放弃上传" }).click();
+  await page.getByRole("button", { name: "删除暂存" }).click();
   await page.getByRole("dialog").getByRole("button", { name: "放弃上传" }).click();
 
   await expect(page).toHaveURL(/\/reviewup$/);

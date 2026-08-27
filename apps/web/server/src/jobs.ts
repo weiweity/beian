@@ -32,7 +32,7 @@ import {
   type WorkerProcessIdentity,
   type WorkerProcessState,
 } from "./workers.js";
-import { rasterAiFile } from "./aiRaster.js";
+import { isPdfCompatibleAi, rasterAiFile } from "./aiRaster.js";
 
 const STAGE_LABEL: Record<string, string> = {
   render_pdf: "出图",
@@ -219,7 +219,7 @@ function oldestOcrQueued(): Task | undefined {
 }
 
 function needsRaster(job: MockupJob): boolean {
-  return /\.ai$/i.test(job.source_path || "") && !job.raster_png;
+  return /\.ai$/i.test(job.source_path || "") && !job.raster_png && !isPdfCompatibleAi(job.source_path || "");
 }
 
 function oldestAiQueued(): MockupJob | undefined {

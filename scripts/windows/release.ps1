@@ -156,9 +156,43 @@ function Test-DataDirInsideRepo([string]$DataDir, [string]$RepoRoot) {
   return $d.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)
 }
 
+function Assert-LegacyUploadsIdle([string]$When) {
+  # 首次升级时，旧 8787 还没有 health.uploads。旧版 multipart 会在请求一进入
+  # 就创建 .incoming-*；检查目录及子文件最近写入，既不打断正在落盘的旧请求，
+  # 也不会让 30 分钟前已经中断的残留永久卡住升级。
+  $dataDir = $env:WB_DATA_DIR
+  if (-not $dataDir) { $dataDir = "C:\supply\data" }
+  $receiptRoot = Join-Path $dataDir "uploads\receipts"
+  $cutoff = (Get-Date).ToUniversalTime().AddMinutes(-30)
+  $recent = @(Get-ChildItem -LiteralPath $receiptRoot -Directory -Filter ".incoming-*" -ErrorAction SilentlyContinue | Where-Object {
+    $latest = $_.LastWriteTimeUtc
+    Get-ChildItem -LiteralPath $_.FullName -File -ErrorAction SilentlyContinue | ForEach-Object {
+      if ($_.LastWriteTimeUtc -gt $latest) { $latest = $_.LastWriteTimeUtc }
+    }
+    $latest -ge $cutoff
+  })
+  if ($recent.Count -gt 0) {
+    throw "$When : health 没有 uploads，拒绝升版：30 分钟内仍有 multipart 暂存"
+  }
+  Write-Host "$When : 旧版 health 没有 uploads，未发现近 30 分钟 multipart 暂存"
+}
+
 function Assert-SlotsIdle($HealthObj, [string]$When) {
   if (-not $HealthObj) { throw "$When : health 为空，拒绝升版" }
   if (-not $HealthObj.jobs) { throw "$When : health 没有 jobs，拒绝升版" }
+  if (-not $HealthObj.uploads) {
+    Assert-LegacyUploadsIdle $When
+  } else {
+    $uploadFields = @($HealthObj.uploads.PSObject.Properties.Name)
+    if (-not ($uploadFields -contains "active") -or -not ($uploadFields -contains "waiting")) {
+      throw "$When : health.uploads 不完整，拒绝升版"
+    }
+    $activeUploads = [int]$HealthObj.uploads.active
+    $waitingUploads = [int]$HealthObj.uploads.waiting
+    if ($activeUploads -gt 0 -or $waitingUploads -gt 0) {
+      throw "$When : 上传正在进行。uploads active=$activeUploads waiting=$waitingUploads"
+    }
+  }
   foreach ($name in @("ocr", "blender", "illustrator")) {
     if (-not $HealthObj.jobs.$name) { throw "$When : health.jobs.$name 缺失，拒绝升版" }
     $running = Get-SlotCount $HealthObj $name "running"

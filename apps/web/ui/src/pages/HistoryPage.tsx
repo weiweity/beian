@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, App, Button, Checkbox, DatePicker, Empty, Segmented, Select, Table, Tag } from "antd";
 import type { Dayjs } from "dayjs";
-import { api, ApiError, type MockupJob, type TaskSummary } from "../api";
+import { api, ApiError, transientApiFailure, type MockupJob, type PendingUploadReceipt, type TaskSummary } from "../api";
+import { uploadStore, useUploadSnapshot, type UploadKind } from "../uploadStore";
 import {
   filterHistoryRows,
   historyActors,
@@ -11,23 +12,30 @@ import {
   historyRowKey,
   historySelectionState,
   historyTaskRow,
+  historyUploadRow,
   type HistoryKindFilter,
   type HistoryRow,
   type HistoryTimeFilter,
 } from "./historyRows";
+import { pendingUploadItems } from "./uploadDesk";
 
 type Props = {
+  canCreate: boolean;
   canDelete: boolean;
   onOpenTask: (id: string) => void;
   onOpenMockup: (id: string) => void;
+  onOpenUpload: (kind: UploadKind, id?: string | null) => void;
 };
 
 type Row = HistoryRow;
 
-export type HistoryRowAction = "open-task" | "open-mockup" | "toggle" | "blocked";
+export type HistoryRowAction = "open-task" | "open-mockup" | "open-upload" | "toggle" | "blocked";
 
 export function historyRowAction(row: Row, editing: boolean): HistoryRowAction {
-  if (!editing) return row.kind === "审稿台" ? "open-task" : "open-mockup";
+  if (!editing) {
+    if (row.resource === "upload") return "open-upload";
+    return row.resource === "task" ? "open-task" : "open-mockup";
+  }
   return historyCanDelete(row) ? "toggle" : "blocked";
 }
 
@@ -39,10 +47,13 @@ function clock(iso: string) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
-export function HistoryPage({ canDelete, onOpenTask, onOpenMockup }: Props) {
+export function HistoryPage({ canCreate, canDelete, onOpenTask, onOpenMockup, onOpenUpload }: Props) {
   const { message, modal } = App.useApp();
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const [jobs, setJobs] = useState<MockupJob[]>([]);
+  const [uploads, setUploads] = useState<PendingUploadReceipt[]>([]);
+  const compareUpload = useUploadSnapshot("compare");
+  const mockupUpload = useUploadSnapshot("mockup");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -55,10 +66,15 @@ export function HistoryPage({ canDelete, onOpenTask, onOpenMockup }: Props) {
 
   function load() {
     const g = ++loadGen.current;
-    return Promise.all([api.tasks(), api.mockups().catch(() => [] as MockupJob[])]).then(([t, m]) => {
+    return Promise.all([
+      api.tasks(),
+      api.mockups().catch(() => [] as MockupJob[]),
+      canCreate ? api.uploads().catch(() => [] as PendingUploadReceipt[]) : Promise.resolve([] as PendingUploadReceipt[]),
+    ]).then(([t, m, u]) => {
       if (g !== loadGen.current) return;
       setTasks(t);
       setJobs(m);
+      setUploads(u);
     });
   }
 
@@ -72,13 +88,17 @@ export function HistoryPage({ canDelete, onOpenTask, onOpenMockup }: Props) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [canCreate]);
 
   const rows = useMemo(() => {
-    const out = [...tasks.map(historyTaskRow), ...jobs.map(historyMockRow)];
+    const pending = [
+      ...pendingUploadItems("compare", compareUpload, uploads),
+      ...pendingUploadItems("mockup", mockupUpload, uploads),
+    ].map(historyUploadRow);
+    const out = [...pending, ...tasks.map(historyTaskRow), ...jobs.map(historyMockRow)];
     out.sort((a, b) => (b.at || "").localeCompare(a.at || ""));
     return out;
-  }, [tasks, jobs]);
+  }, [compareUpload, jobs, mockupUpload, tasks, uploads]);
 
   const live = historyHasLive(rows);
   useEffect(() => {
@@ -131,18 +151,47 @@ export function HistoryPage({ canDelete, onOpenTask, onOpenMockup }: Props) {
     if (action === "toggle") toggle(row);
     else if (action === "open-task") onOpenTask(row.id);
     else if (action === "open-mockup") onOpenMockup(row.id);
+    else if (action === "open-upload" && row.uploadKind) onOpenUpload(row.uploadKind, row.uploadId);
+  }
+
+  async function removeOnce(row: Row): Promise<void> {
+    if (row.resource === "task") {
+      const result = await api.deleteTask(row.id);
+      if (!result.ok) throw new Error("服务器没有确认删除审核单");
+      return;
+    }
+    if (row.resource === "mockup") {
+      const result = await api.deleteMockup(row.id);
+      if (!result.ok) throw new Error("服务器没有确认删除打样单");
+      return;
+    }
+    if (row.uploadId) {
+      const result = await api.discardUpload(row.uploadId);
+      if (!result.ok) throw new Error("这份上传已经开工、过期或不属于当前账号");
+      return;
+    }
+    if (row.uploadKind) await uploadStore.abandon(row.uploadKind);
+  }
+
+  async function removeWithRetry(row: Row): Promise<void> {
+    try {
+      await removeOnce(row);
+    } catch (err) {
+      if (!transientApiFailure(err)) throw err;
+      await new Promise((resolve) => window.setTimeout(resolve, 800));
+      await removeOnce(row);
+    }
   }
 
   async function removeMany(targets: Row[]) {
     setBusy(true);
-    const failures: string[] = [];
+    const failures: Array<{ title: string; reason: string }> = [];
     try {
       for (const row of targets) {
         try {
-          if (row.kind === "审稿台") await api.deleteTask(row.id);
-          else await api.deleteMockup(row.id);
+          await removeWithRetry(row);
         } catch (err) {
-          failures.push(err instanceof Error ? err.message : `${row.title} 删不掉`);
+          failures.push({ title: row.title, reason: err instanceof Error ? err.message : "删除请求失败" });
         }
       }
       try {
@@ -150,7 +199,22 @@ export function HistoryPage({ canDelete, onOpenTask, onOpenMockup }: Props) {
       } catch {
         message.warning("记录已处理，但列表刷新失败，请稍后再进历史记录确认。 ");
       }
-      if (failures.length) message.warning(`已删除 ${targets.length - failures.length} 条，${failures.length} 条未删除`);
+      if (failures.length) {
+        const summary = `已删除 ${targets.length - failures.length} 条，${failures.length} 条未删除`;
+        modal.warning({
+          className: "history-delete-modal",
+          centered: true,
+          title: null,
+          content: (
+            <div className="history-delete-errors">
+              <strong className="history-delete-summary">{summary}</strong>
+              {failures.map((failure) => (
+                <p key={`${failure.title}-${failure.reason}`}><strong>{failure.title}</strong>：{failure.reason}</p>
+              ))}
+            </div>
+          ),
+        });
+      }
       else message.success(`已删除 ${targets.length} 条记录`);
       setSelected([]);
     } finally {

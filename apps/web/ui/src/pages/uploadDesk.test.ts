@@ -31,11 +31,13 @@ const restored: PendingUploadReceipt = {
   id: "112233445566",
   kind: "compare",
   files: [
-    { field: "excel", name: "远端确认单.xlsx", bytes: 12 },
-    { field: "pdf", name: "远端包装.pdf", bytes: 24 },
+    { field: "excel", name: "远端确认单.xlsx", bytes: 12, received: 12 },
+    { field: "pdf", name: "远端包装.pdf", bytes: 24, received: 24 },
   ],
   bytes: 36,
+  received: 36,
   created_at: "2026-08-26T07:00:00.000Z",
+  phase: "ready",
 };
 
 describe("uploadDesk", () => {
@@ -115,7 +117,11 @@ describe("uploadDesk", () => {
       clientUploadId: "client-new-attempt",
       error: "上传中断。请检查网络后重新上传。",
     };
-    const older = { ...restored, client_upload_id: "client-old-attempt", files: local.files };
+    const older = {
+      ...restored,
+      client_upload_id: "client-old-attempt",
+      files: local.files.map((file) => ({ ...file, received: file.bytes })),
+    };
     const items = pendingUploadItems("compare", failed, [older]);
     assert.equal(items.length, 2);
     assert.deepEqual(items.map((item) => item.phase), ["failed", "ready"]);

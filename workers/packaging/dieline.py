@@ -208,7 +208,9 @@ def pick_main_regions(
         ):
             ordered = sorted(scored[:2], key=lambda c: c["pt"][0])
             return "pouch", ordered
-    return "carton", [scored[0]]
+    # 一页可能同时放产品盒体和内衬。后续必须比较所有候选，不能只拿第一个
+    # 连通域；Illustrator 图层顺序和连通像素数都不能代表哪套刀版是成品。
+    return "carton", scored[:4]
 
 
 def _is_wide(width_pt: float, max_width: float) -> bool:
@@ -435,6 +437,7 @@ def _try_parse_mask(
     except RuntimeError as err:
         return None, str(err)
     last_error = "刀线读不出盒面"
+    candidates: list[tuple[float, int, int, dict[str, Any]]] = []
     for region in regions:
         for dist_k in CARTON_DIST_K:
             try:
@@ -443,8 +446,20 @@ def _try_parse_mask(
                 last_error = str(err)
                 continue
             if layout_sane(layout):
-                return layout, ""
+                # 同一刀版在不同峰距下可能同时产出“勉强合理”的短盒和真正盒身。
+                # 四个盒面的物理面积能表达完整盒身，且不依赖固定毫米数；再以
+                # 连通像素和先试顺序作稳定的次级排序。
+                body_area = sum(
+                    max(0.0, float(panel["x1"]) - float(panel["x0"]))
+                    * max(0.0, float(panel["y1"]) - float(panel["y0"]))
+                    for panel in layout.get("panels") or []
+                    if panel.get("role") in {"front", "back", "left", "right"}
+                )
+                candidates.append((body_area, int(region.get("n") or 0), -len(candidates), layout))
+                continue
             last_error = f"刀线还原的尺寸不合理：{layout['dimensions_mm']}"
+    if candidates:
+        return max(candidates, key=lambda item: item[:3])[3], ""
     if family == "pouch" and len(regions) >= 2:
         panels = []
         roles = _roles_for("pouch", 2)

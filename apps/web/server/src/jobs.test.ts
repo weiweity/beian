@@ -1010,6 +1010,37 @@ describe("jobs dispatcher", () => {
     assert.equal(loadMockup(tid(71))?.raster_png, "/tmp/x.png");
   });
 
+  it("PDF-compatible AI goes straight to packaging without the Illustrator slot", async () => {
+    const { saveMockup, loadMockup } = await import("./mockup.js");
+    const source = join(process.env.WB_DATA_DIR || "", "pdf-compatible.ai");
+    writeFileSync(source, "%PDF-1.7\n");
+    let rasterCalls = 0;
+    setJobsTestHooks({
+      runRaster: async () => {
+        rasterCalls += 1;
+        return { ok: true, png: "/tmp/should-not-exist.png", message: "unexpected" };
+      },
+      runPack: () =>
+        new Promise(() => {
+          /* keep blender occupied so the claimed stage can be asserted */
+        }),
+    });
+    saveMockup({
+      id: tid(73),
+      status: "queued",
+      created_at: "2026-08-21T08:02:00.000Z",
+      files: [],
+      source_path: source,
+      job_kind: "mockup",
+      job_status: "queued",
+    });
+    enqueue({ kind: "mockup", id: tid(73) });
+    assert.equal(loadMockup(tid(73))?.job_stage, "render_pdf");
+    assert.equal(queueSnapshot().illustrator.running, 0);
+    assert.equal(queueSnapshot().blender.running, 1);
+    assert.equal(rasterCalls, 0);
+  });
+
   it("ai raster failure is Chinese and does not take OCR", async () => {
     const { saveMockup, loadMockup } = await import("./mockup.js");
     setJobsTestHooks({

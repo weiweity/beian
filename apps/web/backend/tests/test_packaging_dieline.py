@@ -60,6 +60,17 @@ def test_camera_fit_after_front_back_rotation():
     assert loc[2] > target[2]
 
 
+def test_blender_renders_product_transparent_without_global_standard_transform():
+    source = (PACKAGING / "blender" / "render_job.py").read_text(encoding="utf-8")
+    assert 'scene.render.film_transparent = True' in source
+    assert 'scene.view_settings.view_transform = "AgX"' in source
+    assert 'scene.view_settings.look = "AgX - Medium High Contrast"' in source
+    assert 'scene.view_settings.view_transform = "Standard"' not in source
+    assert 'background.inputs["Strength"].default_value = 0.9' in source
+    assert "MAT_WhiteFloor" not in source
+    assert 'background.inputs["Color"].default_value = (1.0, 1.0, 1.0, 1.0)' in source
+
+
 def test_pick_knife_layer_aliases():
     d = dieline()
     assert d.pick_knife_layer(["印刷", "刀线", "标注"]) == "刀线"
@@ -291,6 +302,38 @@ def test_real_26h17_recovers_square_flower_box(tmp_path: Path):
     assert abs(dims["depth"] - 47.5) < 4
     assert abs(dims["height"] - 177.5) < 8
 
+    layers = p.optional_content_layers(p.PdfReader(str(src)))
+    full_pdf = tmp_path / "26h17-full.pdf"
+    print_pdf = tmp_path / "26h17-print.pdf"
+    p.make_layer_pdf(src, full_pdf, set(layers))
+    p.make_layer_pdf(src, print_pdf, {"印刷"})
+    full_png = p.render_pdf_thumbnail(full_pdf, tmp_path / "full", 1600)
+    print_png = p.render_pdf_thumbnail(print_pdf, tmp_path / "print", 1600)
+    from PIL import Image, ImageChops
+
+    with Image.open(full_png) as rendered_full:
+        stroke_mask = p.render_stroke_mask(
+            knife_pdf,
+            tmp_path / "knife-strokes.png",
+            rendered_full.size,
+        )
+    template = d.layout_to_template(layout)
+    baseline_assets = tmp_path / "faces-baseline"
+    masked_assets = tmp_path / "faces-masked"
+    p.crop_faces(print_png, full_png, baseline_assets, template)
+    p.crop_faces(
+        print_png,
+        full_png,
+        masked_assets,
+        template,
+        stroke_mask_png=stroke_mask,
+    )
+    for face in ("front", "back", "left", "right"):
+        with Image.open(baseline_assets / f"panel_{face}.png") as baseline, Image.open(
+            masked_assets / f"panel_{face}.png"
+        ) as masked:
+            assert ImageChops.difference(baseline, masked).getbbox() is None
+
 
 @pytest.mark.skipif(not SAMPLES.is_dir(), reason="本地打样样张不在 CI")
 def test_real_26f23_collagen_stick_folds(tmp_path: Path):
@@ -304,9 +347,51 @@ def test_real_26f23_collagen_stick_folds(tmp_path: Path):
     dims = layout["dimensions_mm"]
     assert layout["family"] in {"carton", "flat"}
     assert {"front", "back", "left", "right"} <= {p["role"] for p in layout["panels"]}
-    assert 18 <= dims["width"] <= 80
-    assert 18 <= dims["depth"] <= 80
-    assert 40 <= dims["height"] <= 160
+    assert 25 <= dims["width"] <= 45
+    assert 25 <= dims["depth"] <= 45
+    assert 95 <= dims["height"] <= 120
+
+    layers = p.optional_content_layers(p.PdfReader(str(src)))
+    full_pdf = tmp_path / "26f23-full.pdf"
+    print_pdf = tmp_path / "26f23-print.pdf"
+    p.make_layer_pdf(src, full_pdf, set(layers))
+    p.make_layer_pdf(src, print_pdf, {"印刷"})
+    full_png = p.render_pdf_thumbnail(full_pdf, tmp_path / "full", 1600)
+    print_png = p.render_pdf_thumbnail(print_pdf, tmp_path / "print", 1600)
+    from PIL import Image
+
+    with Image.open(full_png) as rendered_full:
+        stroke_mask = p.render_stroke_mask(
+            knife_pdf,
+            tmp_path / "knife-strokes.png",
+            rendered_full.size,
+        )
+    assets = tmp_path / "faces"
+    p.crop_faces(
+        print_png,
+        full_png,
+        assets,
+        d.layout_to_template(layout),
+        stroke_mask_png=stroke_mask,
+    )
+
+    for face in ("front", "back", "left", "right"):
+        with Image.open(assets / f"panel_{face}.png") as image:
+            assert p._visual_detail_score(image) >= 10.0
+    with Image.open(assets / "panel_front.png").convert("RGB") as front:
+        dominant = max(front.getcolors(front.width * front.height) or [], key=lambda item: item[0])[1]
+        assert max(abs(actual - expected) for actual, expected in zip(dominant, (122, 35, 46))) <= 8
+        assert not any(
+            red > 180 and red > green * 2.2 and green < 90 and blue < 90
+            for red, green, blue in front.get_flattened_data()
+        )
+    with Image.open(assets / "panel_right.png").convert("RGB") as right:
+        assert not any(
+            red > 180 and red > green * 2.2 and green < 90 and blue < 90
+            for red, green, blue in right.get_flattened_data()
+        )
+    with Image.open(assets / "panel_top.png").convert("RGB") as top:
+        assert not any(max(pixel) < 40 for pixel in top.get_flattened_data())
 
 
 @pytest.mark.skipif(not SAMPLES.is_dir(), reason="本地打样样张不在 CI")
@@ -506,6 +591,25 @@ def test_fit_white_rgb_flattens_alpha_onto_white(tmp_path: Path):
     x = (20 - 8) // 2 + 3
     y = (16 - 8) // 2 + 3
     assert out.getpixel((x, y)) == (220, 30, 40)
+
+
+def test_flatten_render_onto_white_keeps_product_and_makes_exact_white(tmp_path: Path):
+    p = pipeline()
+    from PIL import Image
+
+    path = tmp_path / "render.png"
+    image = Image.new("RGBA", (6, 6), (0, 0, 0, 0))
+    image.putpixel((2, 2), (117, 35, 46, 255))
+    image.putpixel((3, 3), (117, 35, 46, 128))
+    image.save(path)
+
+    p.flatten_render_onto_white(path)
+
+    with Image.open(path) as flattened:
+        assert flattened.mode == "RGB"
+        assert flattened.getpixel((0, 0)) == (255, 255, 255)
+        assert flattened.getpixel((2, 2)) == (117, 35, 46)
+        assert flattened.getpixel((3, 3)) == (186, 145, 150)
 
 
 def test_contain_rect_keeps_source_aspect():

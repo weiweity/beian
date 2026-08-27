@@ -131,7 +131,9 @@ describe("uploads staging", () => {
     const compareRow = listed.find((row) => row.id === compare.id);
     assert.equal(compareRow?.kind, "compare");
     assert.equal(compareRow?.bytes, compare.files.reduce((sum, file) => sum + file.bytes, 0));
-    assert.deepEqual(Object.keys(compareRow?.files[0] || {}).sort(), ["bytes", "field", "name"]);
+    assert.deepEqual(Object.keys(compareRow?.files[0] || {}).sort(), ["bytes", "field", "name", "received"]);
+    assert.equal(compareRow?.phase, "ready");
+    assert.equal(compareRow?.received, compareRow?.bytes);
     assert.equal(listed.find((row) => row.id === mockup.id)?.kind, "mockup");
 
     for (const [rec, owner] of [[compare, "ou_list"], [mockup, "ou_list"], [other, "ou_other"]] as const) {

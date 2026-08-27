@@ -641,6 +641,12 @@ describe("review http", () => {
       headers: { authorization: `Bearer ${owner.token}` },
     });
     assert.equal(ok.status, 200);
+    const retried = await app.request("/api/tasks/191919191919", {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${owner.token}` },
+    });
+    assert.equal(retried.status, 200);
+    assert.equal(((await retried.json()) as { already_deleted?: boolean }).already_deleted, true);
     const gone = await app.request("/api/tasks/191919191919", {
       headers: { authorization: `Bearer ${owner.token}` },
     });
@@ -677,6 +683,7 @@ describe("review http", () => {
         blender?: { running: number; queued: number };
         illustrator?: { running: number; queued: number };
       };
+      uploads?: { active?: number; waiting?: number };
     };
     assert.match(String(body.version), /^\d+\.\d+\.\d+\.\d+$/);
     assert.equal(typeof body.jobs?.ocr?.running, "number");
@@ -685,6 +692,8 @@ describe("review http", () => {
     assert.equal(typeof body.jobs?.blender?.queued, "number");
     assert.equal(typeof body.jobs?.illustrator?.running, "number");
     assert.equal(typeof body.jobs?.illustrator?.queued, "number");
+    assert.equal(body.uploads?.active, 0);
+    assert.equal(body.uploads?.waiting, 0);
   });
 
   it("public health does not expose or scan live queue counts", async () => {
@@ -695,12 +704,14 @@ describe("review http", () => {
     const body = (await res.json()) as {
       version?: string;
       feishu_notify?: boolean;
+      uploads?: unknown;
       jobs?: Record<string, { visibility?: string }>;
     };
     assert.match(String(body.version), /^\d+\.\d+\.\d+\.\d+$/);
     assert.deepEqual(Object.keys(body.jobs || {}), ["illustrator"]);
     assert.equal(body.jobs?.illustrator?.visibility, "authenticated");
     assert.equal("feishu_notify" in body, false);
+    assert.equal("uploads" in body, false);
   });
 
   it("only exposes live health for an unforwarded loopback Host", async () => {
@@ -725,6 +736,7 @@ describe("review http", () => {
       assert.equal(res.status, 200, row.name);
       const body = (await res.json()) as {
         feishu_notify?: boolean;
+        uploads?: { active?: number };
         jobs?: {
           ocr?: { running?: number };
           illustrator?: { visibility?: string };
@@ -733,6 +745,7 @@ describe("review http", () => {
       assert.equal(typeof body.jobs?.ocr?.running === "number", row.live, row.name);
       assert.equal(body.jobs?.illustrator?.visibility, row.live ? undefined : "authenticated", row.name);
       assert.equal("feishu_notify" in body, row.live, row.name);
+      assert.equal(typeof body.uploads?.active === "number", row.live, row.name);
     }
   });
 
@@ -751,11 +764,13 @@ describe("review http", () => {
           blender?: { running?: number; queued?: number };
           illustrator?: { running?: number; queued?: number };
         };
+        uploads?: { active?: number; waiting?: number };
       };
       assert.equal(typeof body.jobs?.ocr?.running, "number");
       assert.equal(typeof body.jobs?.blender?.queued, "number");
       assert.equal(typeof body.jobs?.illustrator?.running, "number");
       assert.equal(body.feishu_notify, true);
+      assert.equal(body.uploads?.active, 0);
     } finally {
       saveSettings({ FEISHU_ENABLED: "false", FEISHU_OPEN_ID: "" });
     }

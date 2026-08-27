@@ -120,6 +120,7 @@ describe("historyHasLive", () => {
 describe("history filters and batch selection", () => {
   const rows: HistoryRow[] = [
     {
+      resource: "task",
       kind: "审稿台",
       id: "a",
       title: "喷雾",
@@ -130,6 +131,7 @@ describe("history filters and batch selection", () => {
       live: null,
     },
     {
+      resource: "mockup",
       kind: "打样台",
       id: "b",
       title: "花盒",
@@ -140,6 +142,7 @@ describe("history filters and batch selection", () => {
       live: null,
     },
     {
+      resource: "task",
       kind: "审稿台",
       id: "c",
       title: "旧单",
@@ -191,16 +194,16 @@ describe("history filters and batch selection", () => {
     assert.deepEqual(historyActors([...rows, { ...rows[0], id: "d", actor: "" }]), ["魏炜", "籽烨"]);
     assert.equal(historyCanDelete(rows[0]), true);
     assert.equal(historyCanDelete(rows[2]), false);
-    assert.equal(historyRowKey(rows[0]), "审稿台-a");
+    assert.equal(historyRowKey(rows[0]), "task-a");
   });
 
   it("selects every deletable visible row and reports the indeterminate state", () => {
     const selectable = historySelectionState(rows, []);
-    assert.deepEqual(selectable.keys, ["审稿台-a", "打样台-b"]);
+    assert.deepEqual(selectable.keys, ["task-a", "mockup-b"]);
     assert.equal(selectable.all, false);
     assert.equal(selectable.some, false);
 
-    const partial = historySelectionState(rows, ["审稿台-a"]);
+    const partial = historySelectionState(rows, ["task-a"]);
     assert.equal(partial.all, false);
     assert.equal(partial.some, true);
 

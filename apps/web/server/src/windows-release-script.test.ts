@@ -91,6 +91,12 @@ describe("windows release.ps1 contract", () => {
   it("fail-closes health and drains running plus queued", () => {
     assert.doesNotMatch(script, /当作空闲继续 pull/);
     assert.match(script, /health 没有 jobs，拒绝升版/);
+    assert.match(script, /health 没有 uploads，拒绝升版/);
+    assert.match(script, /function Assert-LegacyUploadsIdle/);
+    assert.match(script, /\.incoming-\*/);
+    assert.match(script, /AddMinutes\(-30\)/);
+    assert.match(script, /health\.uploads 不完整，拒绝升版/);
+    assert.match(script, /\$activeUploads -gt 0 -or \$waitingUploads -gt 0/);
     assert.match(script, /\$running -gt 0 -or \$queued -gt 0/);
     assert.match(script, /:8787 在听但 \/api\/health 失败，拒绝当空闲/);
     assert.match(script, /没有 python\/blender\/illustrator，当作空机继续/);

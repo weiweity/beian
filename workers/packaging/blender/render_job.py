@@ -149,10 +149,13 @@ def add_studio(job):
     scene.render.resolution_percentage = 100
     scene.render.image_settings.file_format = "PNG"
     scene.render.image_settings.color_mode = "RGBA"
-    scene.render.film_transparent = False
+    # Blender 只负责产品光照和透明通道；精确白底由外层流水线合成。
+    # 这样不会为了把背景从 AgX 的 230 提到 255，而连产品颜色一起洗白。
+    scene.render.film_transparent = True
     scene.render.image_settings.compression = 35
     scene.render.image_settings.color_depth = "8"
-    scene.view_settings.look = "None"
+    scene.view_settings.view_transform = "AgX"
+    scene.view_settings.look = "AgX - Medium High Contrast"
     scene.view_settings.exposure = 0.0
     scene.world.color = (1.0, 1.0, 1.0)
 
@@ -160,32 +163,12 @@ def add_studio(job):
     world.use_nodes = True
     background = world.node_tree.nodes.get("Background")
     background.inputs["Color"].default_value = (1.0, 1.0, 1.0, 1.0)
-    background.inputs["Strength"].default_value = 2.4
-
-    bpy.ops.mesh.primitive_plane_add(size=600, location=(0, 0, -0.8))
-    floor = bpy.context.object
-    floor.name = "White floor"
-    floor_mat = bpy.data.materials.new("MAT_WhiteFloor")
-    floor_mat.diffuse_color = (1.0, 1.0, 1.0, 1)
-    floor_mat.use_nodes = True
-    floor_mat.node_tree.nodes["Principled BSDF"].inputs["Base Color"].default_value = (1.0, 1.0, 1.0, 1)
-    floor_mat.node_tree.nodes["Principled BSDF"].inputs["Roughness"].default_value = 1.0
-    floor_shader = floor_mat.node_tree.nodes["Principled BSDF"]
-    if floor_shader.inputs.get("Emission Color"):
-        floor_shader.inputs["Emission Color"].default_value = (1.0, 1.0, 1.0, 1.0)
-    if floor_shader.inputs.get("Emission Strength"):
-        floor_shader.inputs["Emission Strength"].default_value = 1.15
-    floor.data.materials.append(floor_mat)
-
-    bpy.ops.mesh.primitive_plane_add(size=520, location=(0, 130, 145), rotation=(math.radians(90), 0, 0))
-    backdrop = bpy.context.object
-    backdrop.name = "White backdrop"
-    backdrop.data.materials.append(floor_mat)
+    background.inputs["Strength"].default_value = 0.9
 
     bpy.ops.object.light_add(type="AREA", location=(-135, -190, 275))
     key = bpy.context.object
     key.name = "Key softbox"
-    key.data.energy = 105000
+    key.data.energy = 94500
     key.data.shape = "RECTANGLE"
     key.data.size = 120
     key.data.size_y = 150
@@ -194,14 +177,14 @@ def add_studio(job):
     bpy.ops.object.light_add(type="AREA", location=(155, -120, 175))
     fill = bpy.context.object
     fill.name = "Fill softbox"
-    fill.data.energy = 62000
+    fill.data.energy = 55800
     fill.data.size = 110
     look_at(fill, (0, 0, 90))
 
     bpy.ops.object.light_add(type="AREA", location=(0, 15, 315))
     rim = bpy.context.object
     rim.name = "Rim softbox"
-    rim.data.energy = 72000
+    rim.data.energy = 64800
     rim.data.size = 95
     look_at(rim, (0, 0, 90))
 

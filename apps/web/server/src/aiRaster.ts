@@ -1,9 +1,24 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { illustratorBin } from "./settings.js";
 
 export type RasterResult = { ok: boolean; png?: string; message: string };
+
+/** Illustrator 保存且勾选“创建 PDF 兼容文件”的 AI，可直接交给现有 PDF/刀线流水线。 */
+export function isPdfCompatibleAi(source: string): boolean {
+  if (!/\.ai$/i.test(source || "")) return false;
+  let fd: number | undefined;
+  try {
+    fd = openSync(source, "r");
+    const magic = Buffer.alloc(5);
+    return readSync(fd, magic, 0, magic.length, 0) === magic.length && magic.toString("ascii") === "%PDF-";
+  } catch {
+    return false;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
 
 export function assertIllustratorReady(): string {
   const p = illustratorBin();

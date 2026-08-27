@@ -15,7 +15,7 @@ import time
 import zipfile
 from typing import Any
 
-from PIL import Image
+from PIL import Image, ImageChops, ImageStat
 
 try:
     from pypdf import PdfReader, PdfWriter
@@ -27,7 +27,7 @@ except ImportError:
     raise
 
 
-PIPELINE_VERSION = "1.3.1"
+PIPELINE_VERSION = "1.3.3"
 MAX_RASTER_PIXELS = 32_000_000
 ROOT = Path(__file__).resolve().parent
 BLENDER_SCRIPT = ROOT / "blender" / "render_job.py"
@@ -190,7 +190,9 @@ def make_layer_pdf(source: Path, output: Path, enabled_names: set[str]) -> None:
         layer_name = str(ref.get_object().get("/Name"))
         (enabled if layer_name in enabled_names else disabled).append(ref)
     default = ocprops["/D"].get_object()
-    default[NameObject("/BaseState")] = NameObject("/OFF")
+    # Illustrator 的嵌套 OCG 在 BaseState=OFF 时会把未直接列入 /ON 的子内容一并藏掉。
+    # 先按 PDF 默认显示，再明确关闭非目标层，才能保住目标层里的文字和复合对象。
+    default[NameObject("/BaseState")] = NameObject("/ON")
     default[NameObject("/ON")] = ArrayObject(enabled)
     default[NameObject("/OFF")] = ArrayObject(disabled)
     writer = PdfWriter(clone_from=reader)
@@ -260,6 +262,79 @@ def render_pdf_thumbnail(source: Path, output_dir: Path, width_px: int) -> Path:
     raise PipelineError("渲染平面失败")
 
 
+def render_stroke_mask(
+    source: Path,
+    output: Path,
+    target_size: tuple[int, int],
+) -> Path | None:
+    """把 PDF 里的纯描边路径渲染成透明蒙版，不把填充图案当成刀线。"""
+    try:
+        import pymupdf
+    except ImportError as err:
+        raise PipelineError("缺少 pymupdf，无法隔离刀线") from err
+
+    target_width, target_height = (int(target_size[0]), int(target_size[1]))
+    if target_width < 1 or target_height < 1:
+        raise PipelineError(f"刀线蒙版尺寸异常：{target_size}")
+
+    source_doc = pymupdf.open(str(source))
+    mask_doc = pymupdf.open()
+    try:
+        if source_doc.page_count < 1:
+            raise PipelineError("刀线蒙版没有页")
+        source_page = source_doc[0]
+        if source_page.rect.width <= 1 or source_page.rect.height <= 1:
+            raise PipelineError("刀线蒙版页宽异常")
+        mask_page = mask_doc.new_page(
+            width=source_page.rect.width,
+            height=source_page.rect.height,
+        )
+        stroke_count = 0
+        for drawing in source_page.get_drawings(extended=True):
+            # Illustrator 误分层稿里，文字和图案主要是 fill，结构线是 stroke-only。
+            # 只屏蔽 type=s，避免按红/黑颜色猜测而误删正常印刷内容。
+            if drawing.get("type") != "s":
+                continue
+            shape = mask_page.new_shape()
+            for item in drawing.get("items", []):
+                kind = item[0]
+                if kind == "l":
+                    shape.draw_line(item[1], item[2])
+                elif kind == "c":
+                    shape.draw_bezier(item[1], item[2], item[3], item[4])
+                elif kind == "qu":
+                    shape.draw_quad(item[1])
+                elif kind == "re":
+                    shape.draw_rect(item[1])
+                else:
+                    raise PipelineError(f"不支持的刀线路径：{kind}")
+            caps = drawing.get("lineCap") or (0, 0, 0)
+            line_cap = max(caps) if isinstance(caps, (tuple, list)) else int(caps)
+            # 比原描边多 1.5pt，覆盖原图栅格化后的抗锯齿边缘。
+            shape.finish(
+                width=max(0.25, float(drawing.get("width") or 1.0)) + 1.5,
+                color=(0, 0, 0),
+                lineCap=int(line_cap),
+                lineJoin=int(drawing.get("lineJoin") or 0),
+                closePath=bool(drawing.get("closePath")),
+            )
+            shape.commit()
+            stroke_count += 1
+        if stroke_count == 0:
+            return None
+        zoom = target_width / float(source_page.rect.width)
+        pixmap = mask_page.get_pixmap(
+            matrix=pymupdf.Matrix(zoom, zoom),
+            alpha=True,
+        )
+        output.parent.mkdir(parents=True, exist_ok=True)
+        pixmap.save(str(output))
+        return output
+    finally:
+        mask_doc.close()
+        source_doc.close()
+
+
 def scaled_box(box: list[int] | tuple[int, ...], scale: float) -> tuple[int, ...]:
     return tuple(round(value * scale) for value in box)
 
@@ -269,17 +344,66 @@ def _paper_face(size: tuple[int, int]) -> Image.Image:
     return Image.new("RGB", (w, h), (248, 248, 247))
 
 
-def crop_faces(print_png: Path, full_png: Path, assets_dir: Path, template: dict[str, Any]) -> dict[str, list[int]]:
+def _visual_detail_score(image: Image.Image) -> float:
+    """小图边缘分数；文字/图案明显高于纯色面和仅有外框的切面。"""
+    sample = image.convert("L")
+    sample.thumbnail((192, 192), Image.Resampling.BILINEAR)
+    width, height = sample.size
+    if width < 3 or height < 3:
+        return 0.0
+    dx = ImageChops.difference(sample.crop((1, 0, width, height)), sample.crop((0, 0, width - 1, height)))
+    dy = ImageChops.difference(sample.crop((0, 1, width, height)), sample.crop((0, 0, width, height - 1)))
+
+    def score(edges: Image.Image) -> float:
+        hist = edges.histogram()
+        pixels = max(1, edges.width * edges.height)
+        strong = sum(hist[24:]) / pixels
+        return float(ImageStat.Stat(edges).rms[0]) + strong * 100.0
+
+    return (score(dx) + score(dy)) / 2.0
+
+
+def _prefer_composite_face(print_crop: Image.Image, full_crop: Image.Image) -> bool:
+    print_detail = _visual_detail_score(print_crop)
+    full_detail = _visual_detail_score(full_crop)
+    # 有些供应商把已转曲文字误放在“刀线”层，导致“印刷”层只剩纯色。
+    # 10 分能排除单一边框（约 6 分）和一条折线（约 9 分），同时保留成片
+    # 文字/图案；相对阈值则避免正常印刷层被合成图里的刀线轻易替换。
+    return full_detail >= 10.0 and full_detail > print_detail * 1.65 + 4.0
+
+
+def crop_faces(
+    print_png: Path,
+    full_png: Path,
+    assets_dir: Path,
+    template: dict[str, Any],
+    stroke_mask_png: Path | None = None,
+) -> dict[str, list[int]]:
     reference_width = float(template["reference_width_px"])
     face_sources = template.get("face_sources", {})
     inset = int(template.get("composite_inset_reference_px", 0))
     assets_dir.mkdir(parents=True, exist_ok=True)
     sizes: dict[str, list[int]] = {}
-    with Image.open(print_png).convert("RGB") as print_image, Image.open(full_png).convert("RGB") as full_image:
+    stroke_mask: Image.Image | None = None
+    if stroke_mask_png is not None:
+        with Image.open(stroke_mask_png) as opened_mask:
+            stroke_mask = (
+                opened_mask.getchannel("A")
+                if "A" in opened_mask.getbands()
+                else opened_mask.convert("L")
+            )
+    with Image.open(print_png) as opened_print, Image.open(full_png) as opened_full:
+        print_image = opened_print.convert("RGB")
+        full_image = opened_full.convert("RGB")
         if print_image.size != full_image.size:
             raise PipelineError(
                 f"印刷层与合成图尺寸不一致：{print_image.size} vs {full_image.size}"
             )
+        clean_full_image = full_image
+        if stroke_mask is not None:
+            if stroke_mask.size != full_image.size:
+                stroke_mask = stroke_mask.resize(full_image.size, Image.Resampling.BILINEAR)
+            clean_full_image = Image.composite(print_image, full_image, stroke_mask)
         scale = print_image.width / reference_width
         boxes: dict[str, tuple[float, float, float, float]] = {}
         explicit = template.get("face_boxes") or {}
@@ -302,8 +426,8 @@ def crop_faces(print_png: Path, full_png: Path, assets_dir: Path, template: dict
             if lid and len(lid) >= 4:
                 boxes["top"] = (float(lid[0]), float(lid[1]), float(lid[2]), float(lid[3]))
         for face, box in boxes.items():
-            source_image = full_image if face_sources.get(face) == "composite" else print_image
-            face_inset = inset if face_sources.get(face) == "composite" else 0
+            explicit_composite = face_sources.get(face) == "composite"
+            face_inset = inset if explicit_composite else 0
             x0, y0, x1, y1 = (float(box[0]), float(box[1]), float(box[2]), float(box[3]))
             if x1 < x0:
                 x0, x1 = x1, x0
@@ -315,7 +439,26 @@ def crop_faces(print_png: Path, full_png: Path, assets_dir: Path, template: dict
                 x1 - face_inset,
                 y1 - face_inset,
             )
-            crop = source_image.crop(scaled_box(crop_box, scale))
+            crop = (clean_full_image if explicit_composite else print_image).crop(
+                scaled_box(crop_box, scale)
+            )
+            if not explicit_composite:
+                full_crop = clean_full_image.crop(scaled_box((x0, y0, x1, y1), scale))
+                if _prefer_composite_face(crop, full_crop):
+                    if stroke_mask is not None:
+                        # 矢量蒙版已经消掉折线/刀线，保留完整切面尺寸和边缘印刷。
+                        candidate = full_crop
+                    else:
+                        auto_inset = max(1.0, float(inset))
+                        composite_box = (
+                            x0 + auto_inset,
+                            y0 + auto_inset,
+                            x1 - auto_inset,
+                            y1 - auto_inset,
+                        )
+                        candidate = full_image.crop(scaled_box(composite_box, scale))
+                    if candidate.size[0] >= 2 and candidate.size[1] >= 2:
+                        crop = candidate
             if crop.size[0] < 2 or crop.size[1] < 2:
                 continue
             output = assets_dir / f"panel_{face}.png"
@@ -457,6 +600,7 @@ def preflight_product(
         else optional_content_layers(reader)
     )
     knife = pick_knife_layer(layers)
+    knife_pdf: Path | None = None
     if knife:
         knife_pdf = project_dir / "knife.pdf"
         try:
@@ -521,7 +665,21 @@ def preflight_product(
             temp_dir / "full",
             int(template["raster_width_px"]),
         )
-        face_sizes = crop_faces(print_png, full_png, assets_dir, template)
+        stroke_mask_png: Path | None = None
+        if knife_pdf is not None:
+            with Image.open(full_png) as rendered_full:
+                stroke_mask_png = render_stroke_mask(
+                    knife_pdf,
+                    temp_dir / "knife_strokes.png",
+                    rendered_full.size,
+                )
+        face_sizes = crop_faces(
+            print_png,
+            full_png,
+            assets_dir,
+            template,
+            stroke_mask_png=stroke_mask_png,
+        )
 
     resolved = {
         "pipeline_version": PIPELINE_VERSION,
@@ -581,6 +739,19 @@ def preflight_product(
     return resolved
 
 
+def flatten_render_onto_white(path: Path) -> None:
+    """把 Blender 的透明产品图铺到精确 RGB 白底，不改产品像素。"""
+    if not path.is_file():
+        raise PipelineError(f"Blender未生成白底图：{path}")
+    with Image.open(path) as opened:
+        rgba = opened.convert("RGBA")
+    white = Image.new("RGB", rgba.size, (255, 255, 255))
+    white.paste(rgba, mask=rgba.getchannel("A"))
+    temporary = path.with_name(f".{path.name}.white.part")
+    white.save(temporary, format="PNG", compress_level=3)
+    temporary.replace(path)
+
+
 def run_blender_job(job: dict[str, Any], blender_executable: Path) -> dict[str, Any]:
     if job.get("cache_hit"):
         return job
@@ -600,6 +771,8 @@ def run_blender_job(job: dict[str, Any], blender_executable: Path) -> dict[str, 
     log_path.write_text(process.stdout + "\n" + process.stderr, encoding="utf-8")
     if process.returncode != 0:
         raise PipelineError(f"Blender任务失败：{job['code']}，日志={log_path}")
+    for output_key in ("front_right", "back_left"):
+        flatten_render_onto_white(Path(job["outputs"][output_key]))
     blender_result_path = project_dir / "blender_result.json"
     if not blender_result_path.is_file():
         raise PipelineError(f"Blender未生成结果清单：{blender_result_path}")

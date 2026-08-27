@@ -267,8 +267,8 @@ export function deleteMockup(id: string): void {
   ) {
     throw Object.assign(new Error("打样还在跑，不能删。等结束或失败后再删。"), { status: 409 });
   }
+  rmSync(join(mockupRoot(false), job.id), { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
   cache.delete(job.id);
-  rmSync(join(mockupRoot(false), job.id), { recursive: true, force: true });
 }
 
 export function queueMockup(opts: {

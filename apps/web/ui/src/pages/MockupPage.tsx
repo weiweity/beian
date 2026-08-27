@@ -417,10 +417,12 @@ function receiptFromSnapshot(snapshot: UploadSnapshot | null): PendingUploadRece
   if (!snapshot?.receipt || snapshot.phase !== "ready") return null;
   return {
     id: snapshot.receipt,
-    files: snapshot.files,
+    files: snapshot.files.map((file) => ({ ...file, received: file.bytes, last_modified: file.lastModified })),
     bytes: snapshot.files.reduce((sum, file) => sum + file.bytes, 0),
+    received: snapshot.files.reduce((sum, file) => sum + file.bytes, 0),
     created_at: snapshot.createdAt,
     kind: snapshot.kind,
+    phase: "ready",
   };
 }
 
@@ -439,7 +441,7 @@ export function MockupNewPage({
   const upload = useUploadSnapshot("mockup");
   const localReceipt = receiptFromSnapshot(upload);
   const localMatches = Boolean(receiptId && localReceipt?.id === receiptId);
-  const [resumeSource] = useState<"local" | "remote">(() => (!receiptId || localMatches ? "local" : "remote"));
+  const [resumeSource, setResumeSource] = useState<"local" | "remote">(() => (!receiptId || localMatches ? "local" : "remote"));
   const [restoredReceipt, setRestoredReceipt] = useState<PendingUploadReceipt | null>(null);
   const [resumeError, setResumeError] = useState<string | null>(null);
   const [productName, setProductName] = useState(resumeSource === "local" ? upload?.productName || "" : "");
@@ -459,6 +461,13 @@ export function MockupNewPage({
       .then((list) => {
         if (cancelled) return;
         const found = list.find((item) => item.id === receiptId && item.kind === "mockup") || null;
+        if (found?.phase === "paused") {
+          uploadStore.restore("mockup", found);
+          setProductName(found.product_name || "");
+          setResumeSource("local");
+          setRestoredReceipt(null);
+          return;
+        }
         setRestoredReceipt(found);
         if (!found) setResumeError("这份上传回执已过期或已经开工，请返回打样台刷新。");
       })
@@ -593,6 +602,7 @@ export function MockupNewPage({
         snapshot={resumeSource === "local" ? upload : null}
         receipt={resumeSource === "remote" ? restoredReceipt : null}
         readyText="上传成功，可以开始打样"
+        onRetry={resumeSource === "local" ? () => uploadStore.retry("mockup") : undefined}
         onDiscard={files.length ? confirmAbandon : undefined}
       />
       <div className="upload-row is-single">
