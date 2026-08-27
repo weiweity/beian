@@ -29,11 +29,34 @@ def write_artwork(path: Path) -> Path:
     mm_to_pt = 72.0 / 25.4
     document = pymupdf.open()
     page = document.new_page(width=120 * mm_to_pt, height=90 * mm_to_pt)
-    page.draw_rect(
-        pymupdf.Rect(50 * mm_to_pt, 20 * mm_to_pt, 80 * mm_to_pt, 70 * mm_to_pt),
-        color=None,
-        fill=(117 / 255, 35 / 255, 46 / 255),
-    )
+    faces = {
+        "back": ((0, 20, 30, 70), (28, 96, 120)),
+        "left": ((30, 20, 50, 70), (51, 113, 82)),
+        "front": ((50, 20, 80, 70), (117, 35, 46)),
+        "right": ((80, 20, 100, 70), (191, 145, 64)),
+        "top": ((50, 70, 80, 90), (100, 69, 127)),
+        "bottom": ((50, 0, 80, 20), (55, 111, 145)),
+    }
+    for rect, rgb in faces.values():
+        page.draw_rect(
+            pymupdf.Rect(*(value * mm_to_pt for value in rect)),
+            color=None,
+            fill=tuple(value / 255 for value in rgb),
+        )
+    # Asymmetric corner marks make a rotated or mirrored face fail even when
+    # its center color still looks correct.
+    for rect, _rgb in faces.values():
+        x0, y0, x1, y1 = rect
+        page.draw_rect(
+            pymupdf.Rect(*((value * mm_to_pt) for value in (x0 + 1, y0 + 1, x0 + 5, y0 + 5))),
+            color=None,
+            fill=(1, 1, 1),
+        )
+        page.draw_rect(
+            pymupdf.Rect(*((value * mm_to_pt) for value in (x1 - 5, y1 - 5, x1 - 1, y1 - 1))),
+            color=None,
+            fill=(0, 0, 0),
+        )
     document.save(path)
     document.close()
     return path
@@ -96,9 +119,31 @@ def test_pipeline_v2_uses_resolved_geometry_and_exact_artwork(tmp_path: Path):
     assert job["input_mode"] == "semantic_sidecar"
     assert job["illustrator_invoked"] is False
     assert all(Path(path).is_file() for path in job["assets"].values())
-    with Image.open(job["assets"]["front"]).convert("RGB") as image:
-        red = image.getpixel((image.width // 2, image.height // 2))
-    assert red == pytest.approx((117, 35, 46), abs=2)
+    expected_centers = {
+        "front": (117, 35, 46),
+        "right": (191, 145, 64),
+        "back": (28, 96, 120),
+        "left": (51, 113, 82),
+        "top": (100, 69, 127),
+        "bottom": (55, 111, 145),
+    }
+    for face, rgb in expected_centers.items():
+        with Image.open(job["assets"][face]).convert("RGB") as image:
+            center = image.getpixel((image.width // 2, image.height // 2))
+            width_mm = 20 if face in {"left", "right"} else 30
+            height_mm = 20 if face in {"top", "bottom"} else 50
+            top_left = image.getpixel(
+                (round(image.width * 3 / width_mm), round(image.height * 3 / height_mm))
+            )
+            bottom_right = image.getpixel(
+                (
+                    round(image.width * (width_mm - 3) / width_mm),
+                    round(image.height * (height_mm - 3) / height_mm),
+                )
+            )
+        assert center == pytest.approx(rgb, abs=2), face
+        assert top_left == pytest.approx((255, 255, 255), abs=5), face
+        assert bottom_right == pytest.approx((0, 0, 0), abs=5), face
     resolution = json.loads(Path(job["structure_resolution_path"]).read_text(encoding="utf-8"))
     assert resolution["status"] == "ready"
 
