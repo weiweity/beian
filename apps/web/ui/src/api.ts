@@ -316,7 +316,10 @@ async function retryUploadCall<T>(
     }
   }
   const detail = lastError instanceof Error ? lastError.message : "网络连接中断";
-  throw new UploadPausedError(`上传已暂停，服务器已保存收到的部分。网络恢复后点“继续上传”。${detail ? `（${detail}）` : ""}`, uploadId);
+  const message = uploadId
+    ? `上传已暂停，服务器已保存收到的部分。网络恢复后点“继续上传”。${detail ? `（${detail}）` : ""}`
+    : `暂时无法确认服务器是否收到这次上传，正在按上传标识查找。${detail ? `（${detail}）` : ""}`;
+  throw new UploadPausedError(message, uploadId);
 }
 
 type SelectedUploadFile = { field: "excel" | "pdf" | "ai"; file: File };
@@ -395,7 +398,44 @@ export async function uploadResumable(
   for (const selected of input.files) {
     const serverFile = session.files.find((file) => file.field === selected.field);
     if (!serverFile) throw new ApiError(409, "服务器上传记录不完整，请重新开始");
-    let offset = serverFile.received;
+
+    // 文件名、大小和修改时间都可能碰撞。续传前把服务器已确认的区段逐块重放，
+    // 由服务端比较落盘内容的 SHA-256；任何一块不同都必须拒绝，不能拼成混合稿。
+    let confirmedPrefix = serverFile.received;
+    if (confirmedPrefix > selected.file.size) throw new ApiError(409, "服务器上传进度超过文件大小，请重新开始");
+    let verified = 0;
+    while (verified < confirmedPrefix) {
+      const end = Math.min(verified + RESUMABLE_CHUNK_BYTES, confirmedPrefix);
+      const buffer = await selected.file.slice(verified, end).arrayBuffer();
+      const sha256 = await sha256Hex(buffer);
+      const response = await retryUploadCall(
+        () =>
+          request<UploadSessionResponse>(
+            `/api/uploads/sessions/${encodeURIComponent(uploadId!)}/files/${selected.field}`,
+            {
+              method: "PUT",
+              headers: {
+                "Content-Type": "application/octet-stream",
+                "x-upload-offset": String(verified),
+                "x-upload-sha256": sha256,
+              },
+              body: buffer,
+            },
+          ),
+        retryNotice,
+        signal,
+        uploadId,
+      );
+      session = response.upload;
+      const checked = session.files.find((file) => file.field === selected.field);
+      if (!checked || checked.received < end) throw new ApiError(409, "服务器没有确认续传文件校验");
+      if (checked.received > selected.file.size) throw new ApiError(409, "服务器上传进度超过文件大小，请重新开始");
+      verified = end;
+      // 另一标签页可能推进了同一会话。只扩大“待校验前缀”，不能直接跳到它报告的 offset。
+      confirmedPrefix = Math.max(confirmedPrefix, checked.received);
+    }
+
+    let offset = verified;
     while (offset < selected.file.size) {
       const end = Math.min(offset + RESUMABLE_CHUNK_BYTES, selected.file.size);
       const buffer = await selected.file.slice(offset, end).arrayBuffer();
@@ -420,8 +460,10 @@ export async function uploadResumable(
       );
       session = response.upload;
       const updated = session.files.find((file) => file.field === selected.field);
-      if (!updated || updated.received <= offset) throw new ApiError(409, "服务器没有确认本次上传分片");
-      offset = updated.received;
+      if (!updated || updated.received < end) throw new ApiError(409, "服务器没有确认本次上传分片");
+      if (updated.received > selected.file.size) throw new ApiError(409, "服务器上传进度超过文件大小，请重新开始");
+      // 即便并发页面已把服务端推进得更远，本页也只前进到自己刚校验过的末端。
+      offset = end;
       loaded = session.files.reduce((sum, file) => sum + file.received, 0);
       latestProgress = { loaded, total, pct: Math.min(100, Math.round((loaded / total) * 100)) };
       onProgress?.({ ...latestProgress, phase: loaded >= total ? "confirming" : "uploading", uploadId });

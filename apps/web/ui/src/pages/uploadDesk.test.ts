@@ -119,6 +119,30 @@ describe("uploadDesk", () => {
     assert.equal(items[0]?.receipt, recovered.id);
   });
 
+  it("确定性校验失败保留原错误，不被同一服务端 partial 快照伪装成暂停", () => {
+    const failed: UploadSnapshot = {
+      ...local,
+      phase: "failed",
+      receipt: undefined,
+      uploadId: "112233445566",
+      clientUploadId: "client-invalid-file",
+      recoverable: false,
+      error: "不是有效的 PDF",
+    };
+    const partial = {
+      ...restored,
+      phase: "paused" as const,
+      received: restored.bytes,
+      client_upload_id: "client-invalid-file",
+    };
+    const items = pendingUploadItems("compare", failed, [partial]);
+    assert.equal(items.length, 1);
+    assert.equal(items[0]?.phase, "failed");
+    assert.equal(items[0]?.error, "不是有效的 PDF");
+    assert.equal(shouldReconcileUpload("compare", failed, [partial]), false);
+    assert.equal(shouldReconcileUpload("compare", { ...failed, recoverable: true }, [partial]), true);
+  });
+
   it("相同文件的另一次上传不会被错误合并", () => {
     const failed: UploadSnapshot = {
       ...local,

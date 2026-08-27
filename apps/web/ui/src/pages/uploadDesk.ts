@@ -39,7 +39,8 @@ export function shouldReconcileUpload(
   if (
     !local?.clientUploadId ||
     local.kind !== kind ||
-    !["confirming", "retrying", "paused", "failed"].includes(local.phase)
+    (!(["confirming", "retrying", "paused"].includes(local.phase)) &&
+      !(local.phase === "failed" && local.recoverable))
   ) {
     return false;
   }
@@ -83,7 +84,10 @@ export function pendingUploadItems(
   if (local && local.kind === kind && ["uploading", "retrying", "confirming", "paused", "ready", "failed"].includes(local.phase)) {
     const recoveredReady = matchedReceipt?.phase === "ready";
     const recoveredPaused =
-      matchedReceipt?.phase === "paused" && local.phase !== "ready" && !uploadIsLocallyBusy(local.phase);
+      matchedReceipt?.phase === "paused" &&
+      local.phase !== "ready" &&
+      !(local.phase === "failed" && !local.recoverable) &&
+      !uploadIsLocallyBusy(local.phase);
     const useRemote = recoveredReady || recoveredPaused;
     const receipt = recoveredReady || recoveredPaused ? matchedReceipt.id : local.receipt || null;
     const files = useRemote ? matchedReceipt.files : local.files;

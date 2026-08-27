@@ -35,6 +35,7 @@ export type UploadSnapshot = {
   uploadId?: string;
   clientUploadId?: string;
   retryAttempt?: number;
+  recoverable?: boolean;
   error?: string;
   createdAt: string;
 };
@@ -127,10 +128,22 @@ function storedSnapshot(kind: UploadKind, value: unknown): UploadSnapshot | null
   }
   if (!files.length) return null;
   const ready = raw.phase === "ready" && typeof raw.receipt === "string";
+  const recoverable =
+    raw.recoverable === true ||
+    (raw.recoverable !== false && ["uploading", "retrying", "confirming", "paused"].includes(raw.phase || ""));
+  const deterministicFailure = raw.phase === "failed" && !recoverable;
+  const hasServerUpload = typeof raw.uploadId === "string";
+  const phase: UploadPhase = ready
+    ? "ready"
+    : deterministicFailure
+      ? "failed"
+      : hasServerUpload
+        ? "paused"
+        : "failed";
   return {
     attempt: Number.isFinite(raw.attempt) ? Math.max(0, Math.floor(raw.attempt!)) : 0,
     kind,
-    phase: ready ? "ready" : "paused",
+    phase,
     files: orderedFiles(kind, files),
     productName: typeof raw.productName === "string" ? raw.productName : "",
     packSurface: typeof raw.packSurface === "string" && raw.packSurface ? raw.packSurface : "carton",
@@ -140,9 +153,16 @@ function storedSnapshot(kind: UploadKind, value: unknown): UploadSnapshot | null
     ...(ready ? { receipt: raw.receipt } : {}),
     ...(typeof raw.uploadId === "string" ? { uploadId: raw.uploadId } : {}),
     clientUploadId: raw.clientUploadId,
+    recoverable: ready ? false : recoverable,
     error: ready
       ? undefined
-      : "页面已刷新。请重新选择同一文件；服务器如已收到分片，会从断点继续。",
+      : deterministicFailure
+        ? raw.error || "上传失败，请重新选择文件。"
+        : hasServerUpload
+          ? "页面已刷新。请重新选择同一文件；服务器已确认的分片会从断点继续。"
+          : recoverable
+            ? "页面已刷新，暂时无法确认服务器状态；正在按上传标识查找，请重新选择同一文件备用。"
+            : "页面已刷新，请重新选择文件。",
     createdAt: typeof raw.createdAt === "string" ? raw.createdAt : new Date().toISOString(),
   };
 }
@@ -212,6 +232,11 @@ export function uploadIsBusy(snapshot: UploadSnapshot | null): boolean {
   return snapshot?.phase === "uploading" || snapshot?.phase === "retrying" || snapshot?.phase === "confirming";
 }
 
+export function uploadCanRetry(snapshot: UploadSnapshot | null | undefined): boolean {
+  if (!snapshot || !(snapshot.phase === "paused" || (snapshot.phase === "failed" && snapshot.recoverable))) return false;
+  return snapshot.files.every((file) => file.file instanceof File);
+}
+
 export function createUploadStore(
   transport: UploadTransport = api.stageUpload,
   discard: UploadDiscard = api.discardUpload,
@@ -264,6 +289,7 @@ export function createUploadStore(
       ...base,
       clientUploadId,
       phase: "uploading",
+      recoverable: true,
       error: undefined,
       retryAttempt: undefined,
     };
@@ -288,6 +314,7 @@ export function createUploadStore(
           total: Math.max(progress.total, latest.total),
           uploadId: progress.uploadId || latest.uploadId,
           retryAttempt: progress.retryAttempt,
+          recoverable: true,
           error: undefined,
         });
       },
@@ -316,6 +343,7 @@ export function createUploadStore(
             };
           }),
           retryAttempt: undefined,
+          recoverable: false,
           error: undefined,
         });
       })
@@ -323,14 +351,16 @@ export function createUploadStore(
         const latest = state[kind];
         if (generation !== runGeneration || !latest || latest.attempt !== attempt) return;
         delete controllers[kind];
-        const paused = err instanceof UploadPausedError;
+        const recoverable = err instanceof UploadPausedError;
+        const serverId = recoverable ? err.uploadId || latest.uploadId : latest.uploadId;
         publish(kind, {
           ...latest,
-          phase: paused ? "paused" : "failed",
+          phase: recoverable && serverId ? "paused" : "failed",
           error: errorMessage(err),
           receipt: undefined,
-          uploadId: paused ? err.uploadId || latest.uploadId : latest.uploadId,
+          uploadId: serverId,
           retryAttempt: undefined,
+          recoverable,
         });
       });
 
@@ -375,14 +405,17 @@ export function createUploadStore(
     delete controllers[kind];
 
     const savedField = current?.files.find((selected) => selected.field === field);
-    const resuming = Boolean(current?.phase === "paused" && current.clientUploadId && sameBrowserFile(savedField, file));
+    const recoverableState = Boolean(
+      current?.phase === "paused" || (current?.phase === "failed" && current.recoverable),
+    );
+    const resuming = Boolean(recoverableState && current?.clientUploadId && sameBrowserFile(savedField, file));
     const oldServerId =
       current?.receipt || current?.uploadId || (current && current.phase !== "draft" ? current.clientUploadId : undefined);
     if (oldServerId && !resuming) void discard(oldServerId).catch(() => undefined);
 
     // ready 后原始 File 已主动释放；若只保留另一栏的文件名，会看起来像选齐了，
     // 实际却无法重传。此时更换任一栏就明确开始一组新稿，只保留新选择。
-    const reusableFiles = current?.phase === "ready" || (current?.phase === "paused" && !resuming) ? [] : current?.files || [];
+    const reusableFiles = current?.phase === "ready" || (recoverableState && !resuming) ? [] : current?.files || [];
     const byField = new Map(reusableFiles.map((selected) => [selected.field, selected]));
     if (file) {
       byField.set(field, {
@@ -409,6 +442,7 @@ export function createUploadStore(
       total,
       clientUploadId,
       uploadId: resuming ? current?.uploadId : undefined,
+      recoverable: resuming,
       createdAt: new Date().toISOString(),
     };
 
@@ -420,7 +454,9 @@ export function createUploadStore(
 
     if (!completeFiles(kind, files)) {
       const waiting = resuming
-        ? { ...base, phase: "paused" as const, error: "服务器保留了已上传部分，请重新选择同一文件后继续" }
+        ? current?.uploadId
+          ? { ...base, phase: "paused" as const, error: "服务器保留了已上传部分，请重新选择同一文件后继续" }
+          : { ...base, phase: "failed" as const, error: "暂时无法确认服务器状态，请重新选择同一组文件后继续" }
         : base;
       publish(kind, waiting);
       return waiting;
@@ -430,7 +466,7 @@ export function createUploadStore(
 
   function retry(kind: UploadKind): UploadSnapshot | null {
     const current = state[kind];
-    if (!current || !["paused", "failed"].includes(current.phase) || !completeFiles(kind, current.files)) return current;
+    if (!current || !uploadCanRetry(current) || !completeFiles(kind, current.files)) return current;
     return runUpload(kind, { ...current, attempt: ++sequence, phase: "uploading", error: undefined });
   }
 
@@ -460,6 +496,7 @@ export function createUploadStore(
     ) {
       return false;
     }
+    if (receipt.phase === "paused" && current.phase === "failed" && !current.recoverable) return false;
     if (receipt.phase === "paused" && uploadIsBusy(current)) return true;
     controllers[kind]?.abort();
     delete controllers[kind];
@@ -473,6 +510,7 @@ export function createUploadStore(
       total: receipt.bytes,
       receipt: receipt.phase === "ready" ? receipt.id : undefined,
       uploadId: receipt.id,
+      recoverable: receipt.phase === "paused",
       files: current.files.map((selected) => {
         const saved = receipt.files.find((item) => item.field === selected.field);
         return {
@@ -517,6 +555,7 @@ export function createUploadStore(
       receipt: receipt.phase === "ready" ? receipt.id : undefined,
       uploadId: receipt.id,
       clientUploadId: receipt.client_upload_id,
+      recoverable: receipt.phase === "paused",
       error: receipt.phase === "paused" ? "上传已暂停，服务器已保存收到的部分；请重新选择同一文件继续" : undefined,
       createdAt: receipt.created_at,
     });
@@ -565,11 +604,12 @@ export function useUploadReceiptRecovery(
 ): void {
   const clientUploadId = snapshot?.clientUploadId;
   const phase = snapshot?.phase;
+  const recoverable = snapshot?.recoverable;
   useEffect(() => {
     if (
       !enabled ||
       !clientUploadId ||
-      !["confirming", "retrying", "paused", "failed"].includes(phase || "")
+      (!(["confirming", "retrying", "paused"].includes(phase || "")) && !(phase === "failed" && recoverable))
     ) {
       return;
     }
@@ -581,7 +621,7 @@ export function useUploadReceiptRecovery(
           if (cancelled) return;
           const receipt = pending.find((item) => {
             if (item.kind !== kind || item.client_upload_id !== clientUploadId) return false;
-            return item.phase === "ready" || phase === "paused" || phase === "failed";
+            return item.phase === "ready" || phase === "paused" || (phase === "failed" && recoverable);
           });
           if (receipt) uploadStore.recover(kind, receipt);
         })
@@ -595,5 +635,5 @@ export function useUploadReceiptRecovery(
       window.clearInterval(interval);
       window.clearTimeout(stop);
     };
-  }, [clientUploadId, enabled, kind, phase]);
+  }, [clientUploadId, enabled, kind, phase, recoverable]);
 }

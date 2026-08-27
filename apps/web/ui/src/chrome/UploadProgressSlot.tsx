@@ -1,5 +1,5 @@
 import type { PendingUploadReceipt } from "../api";
-import { uploadPhaseLine, type UploadSnapshot } from "../uploadStore";
+import { uploadCanRetry, uploadPhaseLine, type UploadSnapshot } from "../uploadStore";
 import { formatBytes } from "../pages/stemName";
 
 export function UploadProgressSlot({
@@ -29,7 +29,7 @@ export function UploadProgressSlot({
       : snapshot
         ? uploadPhaseLine(snapshot, readyText)
         : readyText;
-  const canRetry = Boolean(onRetry && snapshot?.files.every((file) => file.file instanceof File));
+  const canRetry = Boolean(onRetry && uploadCanRetry(snapshot));
   const serverDone = phase === "confirming" || ready;
 
   return (
@@ -38,7 +38,7 @@ export function UploadProgressSlot({
         <strong>{line}</strong>
         <div className="upload-progress-actions">
           <span>{pct}%</span>
-          {canRetry && (phase === "paused" || phase === "failed") ? (
+          {canRetry ? (
             <button type="button" className="upload-progress-retry" onClick={onRetry}>
               继续上传
             </button>

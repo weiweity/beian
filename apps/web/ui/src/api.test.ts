@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import { API_DOWN_LOCAL, API_DOWN_PUBLIC } from "./apiHint.js";
 import {
   ApiError,
+  UploadPausedError,
   UPLOAD_TIMEOUT_MS,
   api,
   brokenApiMessage,
@@ -113,6 +114,128 @@ describe("resumable upload", () => {
     }
   });
 
+  it("续传前重放并校验服务器已确认的前缀，再发送剩余字节", async () => {
+    const original = globalThis.fetch;
+    const file = new File(["old-tail"], "same.ai", { lastModified: 4321 });
+    const fd = new FormData();
+    fd.append("client_upload_id", "client-prefix-verify");
+    fd.append("file", file);
+    const calls: Array<{ method: string; offset?: string; body?: string }> = [];
+    let received = 3;
+    const upload = (phase: "paused" | "ready") => ({
+      id: "223344556677",
+      files: [{ field: "ai", name: file.name, bytes: file.size, received, last_modified: 4321 }],
+      bytes: file.size,
+      received,
+      created_at: "2026-08-26T08:00:00.000Z",
+      client_upload_id: "client-prefix-verify",
+      kind: "mockup" as const,
+      phase,
+    });
+    globalThis.fetch = (async (input, init) => {
+      const method = String(init?.method || "GET").toUpperCase();
+      const headers = new Headers(init?.headers);
+      const buffer = init?.body instanceof ArrayBuffer ? Buffer.from(init.body) : undefined;
+      const offset = headers.get("x-upload-offset") || undefined;
+      calls.push({ method, offset, body: buffer?.toString("utf8") });
+      if (method === "PUT" && offset === "3") received = file.size;
+      const body = String(input).endsWith("/complete") ? upload("ready") : upload("paused");
+      return new Response(JSON.stringify({ upload: body }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    try {
+      await uploadResumable(fd);
+      assert.deepEqual(
+        calls.filter((call) => call.method === "PUT").map((call) => [call.offset, call.body]),
+        [["0", "old"], ["3", "-tail"]],
+      );
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  it("并发页面推进服务端 offset 时仍逐块校验，不能跳过中间内容", async () => {
+    const original = globalThis.fetch;
+    const chunk = 1024 * 1024;
+    const file = new File([Buffer.alloc(chunk * 4, 65)], "parallel.ai", { lastModified: 7654 });
+    const fd = new FormData();
+    fd.append("client_upload_id", "client-parallel-prefix");
+    fd.append("file", file);
+    const offsets: number[] = [];
+    let received = chunk;
+    const upload = (phase: "paused" | "ready") => ({
+      id: "223344556688",
+      files: [{ field: "ai", name: file.name, bytes: file.size, received, last_modified: 7654 }],
+      bytes: file.size,
+      received,
+      created_at: "2026-08-26T08:00:00.000Z",
+      client_upload_id: "client-parallel-prefix",
+      kind: "mockup" as const,
+      phase,
+    });
+    globalThis.fetch = (async (input, init) => {
+      const method = String(init?.method || "GET").toUpperCase();
+      if (method === "PUT") {
+        const offset = Number(new Headers(init?.headers).get("x-upload-offset") || 0);
+        offsets.push(offset);
+        if (offset === chunk) received = chunk * 3;
+        if (offset === chunk * 3) received = chunk * 4;
+      }
+      const body = String(input).endsWith("/complete") ? upload("ready") : upload("paused");
+      return new Response(JSON.stringify({ upload: body }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    try {
+      await uploadResumable(fd);
+      assert.deepEqual(offsets, [0, chunk, chunk * 2, chunk * 3]);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  it("续传前缀不一致时停止，不把另一份同名同大小文件拼进旧会话", async () => {
+    const original = globalThis.fetch;
+    const file = new File(["new-tail"], "same.ai", { lastModified: 4321 });
+    const fd = new FormData();
+    fd.append("client_upload_id", "client-prefix-mismatch");
+    fd.append("file", file);
+    let calls = 0;
+    globalThis.fetch = (async (_input, init) => {
+      calls += 1;
+      if (String(init?.method || "GET").toUpperCase() === "PUT") {
+        return new Response(JSON.stringify({ detail: "重新选择的文件与已上传内容不一致，请重新开始" }), {
+          status: 409,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({
+        upload: {
+          id: "334455667788",
+          files: [{ field: "ai", name: file.name, bytes: file.size, received: 3, last_modified: 4321 }],
+          bytes: file.size,
+          received: 3,
+          created_at: "2026-08-26T08:00:00.000Z",
+          client_upload_id: "client-prefix-mismatch",
+          kind: "mockup",
+          phase: "paused",
+        },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    try {
+      await assert.rejects(
+        uploadResumable(fd),
+        (err: unknown) => err instanceof ApiError && err.status === 409 && /内容不一致/.test(err.message),
+      );
+      assert.equal(calls, 2);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
   it("surfaces a 429 upload-slot refusal immediately without retrying it as network loss", async () => {
     const original = globalThis.fetch;
     const fd = new FormData();
@@ -159,7 +282,13 @@ describe("resumable upload", () => {
       throw new DOMException("timed out", "AbortError");
     }) as typeof fetch;
     try {
-      await assert.rejects(uploadResumable(fd), /上传已暂停.*响应超时/);
+      await assert.rejects(
+        uploadResumable(fd),
+        (err: unknown) =>
+          err instanceof UploadPausedError &&
+          !err.uploadId &&
+          /无法确认服务器是否收到.*响应超时/.test(err.message),
+      );
       assert.equal(calls, 6);
     } finally {
       globalThis.fetch = originalFetch;
