@@ -38,24 +38,52 @@ test("核对 Dock 脱离工作区置顶，全屏时进入全屏根，处理疑�
   const dock = page.getByTestId("review-dock");
   await expect(dock).toBeVisible();
   expect(await dock.evaluate((node) => node.parentElement === document.body)).toBe(true);
+  await expect(dock.getByLabel("疑点列表")).toBeVisible();
+  await expect(dock.getByText("疑点 / 错误点", { exact: true })).toBeVisible();
+  await expect(dock.getByText("Excel 应印", { exact: true })).toBeVisible();
+  await expect(dock.getByText("稿上 OCR", { exact: true })).toBeVisible();
+  const [dockRect, headRect] = await Promise.all([
+    dock.boundingBox(),
+    page.locator(".review-page > .page-head").boundingBox(),
+  ]);
+  expect(dockRect?.y).toBeGreaterThanOrEqual((headRect?.y || 0) + (headRect?.height || 0) + 8);
+  expect(
+    await dock.locator(".review-evidence-grid").evaluate((node) => getComputedStyle(node).gridTemplateColumns.split(" ").length),
+  ).toBe(3);
 
   await page.getByRole("button", { name: "全屏核对" }).click();
   await expect(page.getByRole("button", { name: "退出全屏" })).toBeVisible();
   expect(await dock.evaluate((node) => node.parentElement?.getAttribute("data-testid"))).toBe("review-root");
+  await page.getByLabel("核对结论").click();
+  const decisionPopup = page.locator(".ant-select-dropdown:not(.ant-select-dropdown-hidden)");
+  await expect(decisionPopup).toBeVisible();
+  expect(
+    await decisionPopup.evaluate((node) => Boolean(node.closest(".review-page.is-fullscreen"))),
+  ).toBe(true);
+  await decisionPopup.getByText("有错", { exact: true }).click();
+  await expect.poll(() => syntheticApi.calls.filter((item) => item.path.endsWith("/decision")).length).toBe(1);
+
+  const noteInput = page.getByPlaceholder("补充说明，会进改稿清单");
+  await noteInput.fill("需要补齐中文品名");
+  await noteInput.press("Enter");
+  await expect.poll(() => syntheticApi.calls.filter((item) => item.path.endsWith("/decision")).length).toBe(2);
 
   await page.getByRole("button", { name: "退出全屏" }).click();
   await expect(page.getByRole("button", { name: "全屏核对" })).toBeVisible();
   expect(await dock.evaluate((node) => node.parentElement === document.body)).toBe(true);
 
-  await page.getByRole("button", { name: /^有\s*错$/ }).click();
-  await expect.poll(() => syntheticApi.calls.filter((item) => item.path.endsWith("/decision")).length).toBe(1);
-  await page.getByLabel("结论").fill("中文品名需要设计改稿");
+  await page.getByRole("textbox", { name: "结论", exact: true }).fill("中文品名需要设计改稿");
   await page.getByRole("button", { name: "签字并待设计改稿" }).click();
 
   await expect(page.getByText("已签字，不是系统过审")).toBeVisible();
-  const decisionCall = syntheticApi.calls.find((item) => item.path.endsWith("/decision"));
+  const decisionCalls = syntheticApi.calls.filter((item) => item.path.endsWith("/decision"));
+  const decisionCall = decisionCalls.at(-1);
   const completeCall = syntheticApi.calls.find((item) => item.path.endsWith("/complete"));
-  expect(decisionCall?.body).toMatchObject({ hit_id: "hit_name", decision: "issue" });
+  expect(decisionCall?.body).toMatchObject({
+    hit_id: "hit_name",
+    decision: "issue",
+    note: "需要补齐中文品名",
+  });
   expect(completeCall?.body).toEqual({ conclusion: "中文品名需要设计改稿" });
 });
 
@@ -74,4 +102,112 @@ test("浏览器拒绝核对全屏时显示可执行中文提示", async ({ page,
   await expect(page.getByText("全屏打不开")).toBeVisible();
   await expect(page.getByRole("button", { name: "全屏核对" })).toHaveAttribute("aria-pressed", "false");
   expect(await page.getByTestId("review-dock").evaluate((node) => node.parentElement === document.body)).toBe(true);
+});
+
+test("一致字段没有疑点时只显示 Excel 与稿上 OCR 两列", async ({ page, syntheticApi }) => {
+  const task = reviewTask("e5969b58cd50");
+  const hit = task.hits?.[0];
+  if (!hit) throw new Error("合成核对单缺少字段");
+  task.hits = [{
+    ...hit,
+    status: "一致",
+    decision: "confirm",
+    coverage: { hit: ["合成核对单"], miss: [], matched: 1, total: 1 },
+  }];
+  syntheticApi.tasks.push(task);
+  await page.goto(`/review/${task.id}`);
+
+  const grid = page.getByTestId("review-dock").locator(".review-evidence-grid");
+  await expect(grid.getByText("疑点 / 错误点", { exact: true })).toHaveCount(0);
+  await expect(grid.getByText("Excel 应印", { exact: true })).toBeVisible();
+  await expect(grid.getByText("稿上 OCR", { exact: true })).toBeVisible();
+  expect(await grid.evaluate((node) => getComputedStyle(node).gridTemplateColumns.split(" ").length)).toBe(2);
+});
+
+test("矢量核对页加载失败时自动切回高清 PNG", async ({ page, syntheticApi }) => {
+  const task = reviewTask("e5969b58cd48");
+  task.pages = [
+    {
+      url: "/synthetic/review.svg",
+      raster_url: "/synthetic/review.png",
+      name: "page_01.svg",
+      page: 1,
+      width: 600,
+      height: 800,
+    },
+  ];
+  syntheticApi.tasks.push(task);
+  await page.route("**/synthetic/review.svg", (route) => route.abort("failed"));
+  await page.route("**/synthetic/review.png", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "image/png",
+      body: Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    }),
+  );
+
+  await page.goto(`/review/${task.id}`);
+
+  const image = page.locator(".canvas-zoom img");
+  await expect(image).toBeVisible();
+  await expect.poll(() => image.getAttribute("src")).toBe("/synthetic/review.png");
+});
+
+test("核对 Dock 可真实拖拽缩放并在刷新后恢复", async ({ page, syntheticApi }) => {
+  const task = reviewTask("e5969b58cd49");
+  syntheticApi.tasks.push(task);
+  await page.goto(`/review/${task.id}`);
+
+  const dock = page.getByTestId("review-dock");
+  const before = await dock.boundingBox();
+  const south = await dock.locator(".notes-resize-s").boundingBox();
+  expect(before).not.toBeNull();
+  expect(south).not.toBeNull();
+  await page.mouse.move((south?.x || 0) + (south?.width || 0) / 2, (south?.y || 0) + (south?.height || 0) / 2);
+  await page.mouse.down();
+  await page.mouse.move((south?.x || 0) + (south?.width || 0) / 2, (south?.y || 0) + 52, { steps: 4 });
+  await page.mouse.up();
+  await expect.poll(async () => (await dock.boundingBox())?.height || 0).toBeGreaterThan((before?.height || 0) + 30);
+
+  const toolbar = await dock.locator(".notes-toolbar").boundingBox();
+  expect(toolbar).not.toBeNull();
+  const dragX = (toolbar?.x || 0) + 120;
+  const dragY = (toolbar?.y || 0) + 20;
+  await page.mouse.move(dragX, dragY);
+  await page.mouse.down();
+  await page.mouse.move(dragX + 120, dragY + 36, { steps: 5 });
+  await page.mouse.up();
+  const moved = await dock.boundingBox();
+  expect((moved?.x || 0) - (before?.x || 0)).toBeGreaterThan(80);
+  // The enlarged dock may only have a few vertical pixels left before the
+  // viewport clamp, but it must still follow the pointer within that room.
+  expect((moved?.y || 0) - (before?.y || 0)).toBeGreaterThan(5);
+
+  await page.reload();
+  const restored = await page.getByTestId("review-dock").boundingBox();
+  expect(Math.abs((restored?.x || 0) - (moved?.x || 0))).toBeLessThanOrEqual(2);
+  expect(Math.abs((restored?.y || 0) - (moved?.y || 0))).toBeLessThanOrEqual(2);
+  expect(Math.abs((restored?.height || 0) - (moved?.height || 0))).toBeLessThanOrEqual(2);
+});
+
+test("首次默认停靠不会冒充用户位置并能随视口保持左对齐", async ({ page, syntheticApi }) => {
+  const task = reviewTask("e5969b58cd51");
+  syntheticApi.tasks.push(task);
+  await page.setViewportSize({ width: 1200, height: 900 });
+  await page.goto(`/review/${task.id}`);
+
+  const dock = page.getByTestId("review-dock");
+  const first = await dock.boundingBox();
+  expect(first?.x).toBeLessThanOrEqual(24);
+  expect(await page.evaluate(() => localStorage.getItem("wb_review_dock_place_v2"))).toBeNull();
+
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await expect.poll(async () => (await dock.boundingBox())?.x || 0).toBeLessThanOrEqual(24);
+  await page.reload();
+  const restored = await page.getByTestId("review-dock").boundingBox();
+  expect(restored?.x).toBeLessThanOrEqual(24);
+  expect(await page.evaluate(() => localStorage.getItem("wb_review_dock_place_v2"))).toBeNull();
 });

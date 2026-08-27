@@ -8,7 +8,7 @@ import { WaitCard } from "../chrome/WaitCard";
 import { mockupFailReason, mockupFailTag } from "./mockupError";
 import { StructureConfirmPanel } from "./StructureConfirmPanel";
 import { structureIssueCopy, structureStatusLabel } from "./mockupStructure";
-import { liveJobLine, shouldShowWaitCard } from "./waitCard";
+import { liveJobLine, mockupBoardProgress, shouldShowWaitCard } from "./waitCard";
 import { stemFromFilename } from "./stemName";
 import { HUD_MS, downloadHudLine, missingPptHud } from "./mockupHud";
 import { deskClock, type DeskCardRow } from "./deskBoard";
@@ -128,6 +128,7 @@ function toMockCard(row: MockupJob): DeskCardRow {
     statusColor: s.color,
     actor: row.owner,
     at: row.job_started_at || row.created_at,
+    progress: mockupBoardProgress(row),
     live: liveJobLine({ ...row, kind: "mockup" }),
     error:
       row.structure_status === "review_required"

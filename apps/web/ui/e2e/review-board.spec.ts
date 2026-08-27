@@ -26,7 +26,7 @@ test("审稿台四栏用一行品名和进度或状态，日期单独落在底�
   await page.goto("/reviewup");
 
   const cases = [
-    ["对照中", "对照百分比产品", "55%"],
+    ["对照中", "对照百分比产品", "55% · 认字"],
     ["对照失败", "对照失败产品", "对照失败"],
     ["待审核", "待审核产品", "待审核"],
     ["已签字", "已签字产品", "已签字"],
@@ -43,7 +43,7 @@ test("审稿台四栏用一行品名和进度或状态，日期单独落在底�
   }
 
   const genericRunning = page.locator(".review-card").filter({ hasText: "无阶段对照产品" });
-  await expect(genericRunning.locator(".review-card-summary-state")).toHaveText("正在对照");
+  await expect(genericRunning.locator(".review-card-summary-state")).toHaveText("正在对照 · 大约还要 40 秒");
   await expect(genericRunning.locator(".review-card-time")).toContainText("2026-08-26");
 
   await page.locator(".review-card").filter({ hasText: "对照百分比产品" }).click();

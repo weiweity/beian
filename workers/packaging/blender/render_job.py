@@ -11,7 +11,7 @@ _PACKAGING = Path(__file__).resolve().parents[1]
 if str(_PACKAGING) not in sys.path:
     sys.path.insert(0, str(_PACKAGING))
 from camera_frame import aabb_after_z_rotation, camera_fit_after_yaw, camera_location_mm, camera_ortho_scale_mm, camera_target_mm
-from glb_verify import compare_glb_dimensions
+from glb_verify import SEMANTIC_FACES, compare_glb_dimensions, compare_glb_texture_bindings
 
 
 def job_path_from_argv():
@@ -55,7 +55,10 @@ def make_material(name, image_path, roughness=0.52, specular_ior=0.08):
     shader.inputs["Roughness"].default_value = roughness
     shader.inputs["Specular IOR Level"].default_value = specular_ior
     links.new(texture.outputs["Color"], shader.inputs["Base Color"])
-    links.new(texture.outputs["Alpha"], shader.inputs["Alpha"])
+    # Printed carton panels are opaque RGB artwork. Reusing the same image for
+    # Base Color and Alpha makes Blender's glTF exporter treat two sockets as
+    # competing samplers, even though there is only one texture node.
+    shader.inputs["Alpha"].default_value = 1.0
     links.new(shader.outputs["BSDF"], output.inputs["Surface"])
     return material
 
@@ -90,9 +93,15 @@ def add_panel(name, vertices, material):
 def make_core_material():
     material = bpy.data.materials.new("MAT_PaperboardEdge")
     material.use_nodes = True
-    shader = material.node_tree.nodes.get("Principled BSDF")
+    nodes = material.node_tree.nodes
+    links = material.node_tree.links
+    for node in list(nodes):
+        nodes.remove(node)
+    output = nodes.new("ShaderNodeOutputMaterial")
+    shader = nodes.new("ShaderNodeBsdfPrincipled")
     shader.inputs["Base Color"].default_value = (0.80, 0.81, 0.81, 1.0)
     shader.inputs["Roughness"].default_value = 0.60
+    links.new(shader.outputs["BSDF"], output.inputs["Surface"])
     return material
 
 
@@ -165,11 +174,18 @@ def add_studio(job):
     scene.view_settings.exposure = float(render_config.get("exposure", 0.0))
     scene.world.color = (1.0, 1.0, 1.0)
 
-    world = scene.world
+    world = scene.world or bpy.data.worlds.new("Packaging World")
+    scene.world = world
     world.use_nodes = True
-    background = world.node_tree.nodes.get("Background")
+    world_nodes = world.node_tree.nodes
+    world_links = world.node_tree.links
+    for node in list(world_nodes):
+        world_nodes.remove(node)
+    world_output = world_nodes.new("ShaderNodeOutputWorld")
+    background = world_nodes.new("ShaderNodeBackground")
     background.inputs["Color"].default_value = (1.0, 1.0, 1.0, 1.0)
     background.inputs["Strength"].default_value = float(render_config.get("world_strength", 0.62))
+    world_links.new(background.outputs["Background"], world_output.inputs["Surface"])
 
     if not exact_white_background:
         bpy.ops.mesh.primitive_plane_add(size=600, location=(0, 0, -0.8))
@@ -178,13 +194,19 @@ def add_studio(job):
         floor_mat = bpy.data.materials.new("MAT_WhiteFloor")
         floor_mat.diffuse_color = (0.95, 0.95, 0.95, 1)
         floor_mat.use_nodes = True
-        floor_mat.node_tree.nodes["Principled BSDF"].inputs["Base Color"].default_value = (0.96, 0.96, 0.96, 1)
-        floor_mat.node_tree.nodes["Principled BSDF"].inputs["Roughness"].default_value = 0.82
-        floor_shader = floor_mat.node_tree.nodes["Principled BSDF"]
+        floor_nodes = floor_mat.node_tree.nodes
+        floor_links = floor_mat.node_tree.links
+        for node in list(floor_nodes):
+            floor_nodes.remove(node)
+        floor_output = floor_nodes.new("ShaderNodeOutputMaterial")
+        floor_shader = floor_nodes.new("ShaderNodeBsdfPrincipled")
+        floor_shader.inputs["Base Color"].default_value = (0.96, 0.96, 0.96, 1)
+        floor_shader.inputs["Roughness"].default_value = 0.82
         if floor_shader.inputs.get("Emission Color"):
             floor_shader.inputs["Emission Color"].default_value = (1.0, 1.0, 1.0, 1.0)
         if floor_shader.inputs.get("Emission Strength"):
             floor_shader.inputs["Emission Strength"].default_value = 3.0
+        floor_links.new(floor_shader.outputs["BSDF"], floor_output.inputs["Surface"])
         floor.data.materials.append(floor_mat)
 
         bpy.ops.mesh.primitive_plane_add(size=520, location=(0, 130, 145), rotation=(math.radians(90), 0, 0))
@@ -318,18 +340,53 @@ def verify_glb(job):
         points.extend(obj.matrix_world @ Vector(corner) for corner in obj.bound_box)
     if not points:
         raise RuntimeError("GLB verification failed: no mesh objects")
-    has_image = False
-    for mat in bpy.data.materials:
-        if not mat.use_nodes:
-            continue
-        for node in mat.node_tree.nodes:
-            if node.type == "TEX_IMAGE" and getattr(node, "image", None):
-                has_image = True
-                break
-        if has_image:
-            break
-    if not has_image:
-        raise RuntimeError("GLB verification failed: no printed artwork textures")
+
+    def material_base_color_images(material):
+        if not material or not material.use_nodes:
+            return []
+        images = []
+        for node in material.node_tree.nodes:
+            if node.type != "BSDF_PRINCIPLED" or node.inputs.get("Base Color") is None:
+                continue
+            pending = [link.from_node for link in node.inputs["Base Color"].links]
+            visited = set()
+            while pending:
+                upstream = pending.pop()
+                marker = id(upstream)
+                if marker in visited:
+                    continue
+                visited.add(marker)
+                if upstream.type == "TEX_IMAGE" and getattr(upstream, "image", None):
+                    images.append(upstream.image.name)
+                pending.extend(
+                    link.from_node
+                    for input_socket in upstream.inputs
+                    for link in input_socket.links
+                )
+        return images
+
+    # A single texture anywhere in the file is not enough. Every semantic face
+    # must keep the material and exact source image assigned by ResolvedPackagingJob.
+    bindings = {}
+    for face in SEMANTIC_FACES:
+        face_objects = [
+            obj
+            for obj in bpy.context.scene.objects
+            if obj.type == "MESH"
+            and obj.name.lower().split(".", 1)[0].removesuffix("_mesh") == face
+        ]
+        bindings[face] = [
+            {"material": material.name, "images": material_base_color_images(material)}
+            for obj in face_objects
+            for material in obj.data.materials
+            if material
+        ]
+    binding_report = compare_glb_texture_bindings(bindings, job["assets"])
+    if not binding_report["ok"]:
+        raise RuntimeError(
+            "GLB verification failed: semantic artwork binding mismatch="
+            + json.dumps(binding_report, ensure_ascii=False, sort_keys=True)
+        )
     mins = [min(point[i] for point in points) for i in range(3)]
     maxs = [max(point[i] for point in points) for i in range(3)]
     report = compare_glb_dimensions(

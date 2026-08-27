@@ -161,7 +161,7 @@ describe("windows release.ps1 contract", () => {
     assert.ok(indexOf(/pip install -r apps\/web\/backend\/requirements.txt/) < indexOf(/start beian-server/));
   });
 
-  it("Actions runner drops dirty lockfile before invoking on-disk release.ps1", () => {
+  it("Actions runner authenticates the bootstrap fetch before invoking on-disk release.ps1", () => {
     const ymlPath = join(dirname(fileURLToPath(import.meta.url)), "../../../../.github/workflows/hangzhou-release.yml");
     const yml = readFileSync(ymlPath, "utf8");
     assert.match(yml, /shell: cmd/);
@@ -180,20 +180,28 @@ describe("windows release.ps1 contract", () => {
     const startIdx = yml.indexOf("sc start beian-server-8787");
     const runningIdx = yml.indexOf('find "RUNNING"');
     assert.ok(runningIdx >= 0 && startIdx >= 0 && runningIdx < startIdx);
-    assert.match(yml, /^[^#\n]*git -C D:\\beian fetch origin/m);
+    assert.match(yml, /^\s+GITHUB_TOKEN:\s*\$\{\{\s*secrets\.GITHUB_TOKEN\s*\}\}\s*$/m);
+    assert.match(yml, /^[^#\n]*x-access-token:[^\n]*GITHUB_TOKEN[^\n]*$/m);
+    assert.match(yml, /^[^#\n]*http\.extraheader=AUTHORIZATION: basic[^\n]*fetch origin[^\n]*$/m);
+    assert.doesNotMatch(yml, /http\.extraheader=AUTHORIZATION: bearer/);
+    assert.doesNotMatch(yml, /^[^#\n]*git -C D:\\beian fetch origin/m);
     assert.match(yml, /^[^#\n]*git -C D:\\beian checkout origin\/main -- scripts\/windows\/release\.ps1/m);
     const lockIdx = yml.search(/^[^#\n]*git -C D:\\beian checkout -- package-lock\.json/m);
-    const fetchIdx = yml.search(/^[^#\n]*git -C D:\\beian fetch origin/m);
+    const fetchIdx = yml.search(/^[^#\n]*http\.extraheader=AUTHORIZATION: basic[^\n]*fetch origin[^\n]*$/m);
     const ps1Idx = yml.search(/^[^#\n]*git -C D:\\beian checkout origin\/main -- scripts\/windows\/release\.ps1/m);
     const runIdx = yml.indexOf("D:\\beian\\scripts\\windows\\release.ps1");
     const failIdx = yml.indexOf("if: failure()");
     assert.ok(lockIdx >= 0 && fetchIdx > lockIdx && ps1Idx > fetchIdx && runIdx > ps1Idx && failIdx > runIdx);
-    assert.doesNotMatch(yml, /GITHUB_TOKEN/);
+    assert.doesNotMatch(yml, /echo[^\n]*GITHUB_TOKEN/i);
   });
 
   it("uses GITHUB_TOKEN for git when Actions provides it, never prints the token", () => {
     assert.match(script, /function Invoke-Git/);
-    assert.match(script, /http.extraheader=AUTHORIZATION: bearer/);
+    assert.match(script, /function Get-GithubAuthHeader/);
+    assert.match(script, /x-access-token:/);
+    assert.match(script, /ToBase64String/);
+    assert.match(script, /http.extraheader=\$AuthHeader/);
+    assert.doesNotMatch(script, /http.extraheader=AUTHORIZATION: bearer/);
     assert.match(script, /function Invoke-GitFetch/);
     assert.match(script, /Invoke-GitFetch -LogPath \$log/);
     assert.match(script, /Invoke-Git merge --ff-only origin\/main/);

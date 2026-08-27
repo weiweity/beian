@@ -22,11 +22,20 @@ function Assert-GitOk([string]$What) {
 }
 
 # Actions runner may not have Git Credential Manager. Never print GITHUB_TOKEN.
+# GitHub's smart HTTP credential is Basic(x-access-token:GITHUB_TOKEN).
+function Get-GithubAuthHeader {
+  if (-not $env:GITHUB_TOKEN) { return "" }
+  $Credential = "x-access-token:$($env:GITHUB_TOKEN)"
+  $Encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Credential))
+  return "AUTHORIZATION: basic $Encoded"
+}
+
 # Use $args (not an advanced function) so PS5 does not eat --ff-only as a named parameter.
 function Invoke-Git {
   $GitArgs = @($args)
-  if ($env:GITHUB_TOKEN) {
-    & git -c "http.extraheader=AUTHORIZATION: bearer $($env:GITHUB_TOKEN)" @GitArgs
+  $AuthHeader = Get-GithubAuthHeader
+  if ($AuthHeader) {
+    & git -c "http.extraheader=$AuthHeader" @GitArgs
   } else {
     & git @GitArgs
   }
@@ -48,15 +57,16 @@ function Invoke-GitFetch {
   $prevEap = $ErrorActionPreference
   $ErrorActionPreference = "Continue"
   try {
+    $AuthHeader = Get-GithubAuthHeader
     if ($LogPath) {
-      if ($env:GITHUB_TOKEN) {
-        & git -c "http.extraheader=AUTHORIZATION: bearer $($env:GITHUB_TOKEN)" fetch origin *> $LogPath
+      if ($AuthHeader) {
+        & git -c "http.extraheader=$AuthHeader" fetch origin *> $LogPath
       } else {
         & git fetch origin *> $LogPath
       }
     } else {
-      if ($env:GITHUB_TOKEN) {
-        & git -c "http.extraheader=AUTHORIZATION: bearer $($env:GITHUB_TOKEN)" fetch origin
+      if ($AuthHeader) {
+        & git -c "http.extraheader=$AuthHeader" fetch origin
       } else {
         & git fetch origin
       }
