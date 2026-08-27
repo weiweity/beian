@@ -31,13 +31,15 @@ jobs:
         # runner execution policy. Hangzhou Restricted blocked that (0.12.3.0 land,
         # 1s red) before release.ps1 could Bypass.
         shell: cmd
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           rem On-disk script lags origin until pull. Drop npm-dirty lockfile first.
           rem cmd fetch: git stderr is not a failed errorlevel. PS5 Stop treats it as NativeCommandError.
           rem Then copy origin/main's release.ps1 so this land can self-heal a broken on-disk CD script.
           git -C D:\beian checkout -- package-lock.json
           if errorlevel 1 exit /b 1
-          git -C D:\beian fetch origin
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$auth = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('x-access-token:' + $env:GITHUB_TOKEN)); & git -C D:\beian -c ('http.extraheader=AUTHORIZATION: basic ' + $auth) fetch origin; exit $LASTEXITCODE"
           if errorlevel 1 exit /b 1
           git -C D:\beian checkout origin/main -- scripts/windows/release.ps1
           if errorlevel 1 exit /b 1
