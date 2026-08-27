@@ -20,6 +20,15 @@ function controlledTransport() {
   return { calls, transport };
 }
 
+function memoryStorage() {
+  const values = new Map<string, string>();
+  return {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => values.set(key, value),
+    removeItem: (key: string) => values.delete(key),
+  };
+}
+
 function ai(name = "盒子.ai") {
   return new File(["ai"], name, { type: "application/postscript" });
 }
@@ -206,6 +215,38 @@ describe("uploadStore", () => {
     assert.match(store.get("mockup")?.error || "", /重新选择同一文件/);
     assert.equal(store.recover("mockup", paused), true);
     assert.match(store.get("mockup")?.error || "", /重新选择同一文件/);
+  });
+
+  it("整页刷新保留本次上传身份，并在重选同一文件后续传", () => {
+    const storage = memoryStorage();
+    const firstTransport = controlledTransport();
+    const source = ai("刷新续传.ai");
+    const first = createUploadStore(firstTransport.transport, async () => undefined, storage);
+    first.replaceFile("mockup", "ai", source, { productName: "刷新续传", packSurface: "carton" });
+    firstTransport.calls[0]?.progress?.({
+      pct: 50,
+      loaded: 1,
+      total: 2,
+      phase: "uploading",
+      uploadId: "112233445566",
+    });
+    const clientUploadId = first.get("mockup")?.clientUploadId;
+    assert.ok(clientUploadId);
+
+    const resumedTransport = controlledTransport();
+    const resumed = createUploadStore(resumedTransport.transport, async () => undefined, storage);
+    assert.equal(resumed.get("mockup")?.phase, "paused");
+    assert.equal(resumed.get("mockup")?.clientUploadId, clientUploadId);
+    assert.equal(resumed.get("mockup")?.uploadId, "112233445566");
+    assert.equal(resumed.get("mockup")?.files[0]?.file, undefined);
+    assert.match(resumed.get("mockup")?.error || "", /重新选择同一文件/);
+
+    resumed.replaceFile("mockup", "ai", source);
+    assert.equal(resumedTransport.calls.length, 1);
+    assert.equal(resumed.get("mockup")?.clientUploadId, clientUploadId);
+    assert.equal(resumed.get("mockup")?.uploadId, "112233445566");
+    first.abortAll();
+    resumed.abortAll();
   });
 
   it("不会用另一次同文件上传的 client id 覆盖当前失败状态", async () => {

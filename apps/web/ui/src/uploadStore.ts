@@ -52,6 +52,8 @@ export type UploadTransport = (
 
 export type UploadDiscard = (receipt: string) => Promise<unknown>;
 export const UPLOAD_RECOVERY_INTERVAL_MS = 5000;
+type UploadStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
+const UPLOAD_STORAGE_KEY = "beian.upload.sessions.v2";
 
 const FIELD_ORDER: Record<UploadKind, UploadField[]> = {
   compare: ["excel", "pdf"],
@@ -93,6 +95,100 @@ function errorMessage(err: unknown): string {
   return "上传失败，请重新上传。";
 }
 
+function browserUploadStorage(): UploadStorage | null {
+  try {
+    return typeof window === "undefined" ? null : window.sessionStorage;
+  } catch {
+    return null;
+  }
+}
+
+function storedSnapshot(kind: UploadKind, value: unknown): UploadSnapshot | null {
+  if (!value || typeof value !== "object") return null;
+  const raw = value as Partial<UploadSnapshot>;
+  if (raw.kind !== kind || !Array.isArray(raw.files) || typeof raw.clientUploadId !== "string") return null;
+  const files: UploadFile[] = [];
+  for (const candidate of raw.files) {
+    if (
+      !candidate ||
+      !FIELD_ORDER[kind].includes(candidate.field) ||
+      typeof candidate.name !== "string" ||
+      !Number.isFinite(candidate.bytes) ||
+      candidate.bytes < 0
+    ) {
+      return null;
+    }
+    files.push({
+      field: candidate.field,
+      name: candidate.name,
+      bytes: candidate.bytes,
+      ...(Number.isFinite(candidate.lastModified) ? { lastModified: candidate.lastModified } : {}),
+    });
+  }
+  if (!files.length) return null;
+  const ready = raw.phase === "ready" && typeof raw.receipt === "string";
+  return {
+    attempt: Number.isFinite(raw.attempt) ? Math.max(0, Math.floor(raw.attempt!)) : 0,
+    kind,
+    phase: ready ? "ready" : "paused",
+    files: orderedFiles(kind, files),
+    productName: typeof raw.productName === "string" ? raw.productName : "",
+    packSurface: typeof raw.packSurface === "string" && raw.packSurface ? raw.packSurface : "carton",
+    pct: Number.isFinite(raw.pct) ? Math.max(0, Math.min(100, Number(raw.pct))) : 0,
+    loaded: Number.isFinite(raw.loaded) ? Math.max(0, Number(raw.loaded)) : 0,
+    total: Number.isFinite(raw.total) ? Math.max(0, Number(raw.total)) : 0,
+    ...(ready ? { receipt: raw.receipt } : {}),
+    ...(typeof raw.uploadId === "string" ? { uploadId: raw.uploadId } : {}),
+    clientUploadId: raw.clientUploadId,
+    error: ready
+      ? undefined
+      : "页面已刷新。请重新选择同一文件；服务器如已收到分片，会从断点继续。",
+    createdAt: typeof raw.createdAt === "string" ? raw.createdAt : new Date().toISOString(),
+  };
+}
+
+function loadStoredUploads(storage: UploadStorage | null): Record<UploadKind, UploadSnapshot | null> {
+  const empty = { compare: null, mockup: null };
+  if (!storage) return empty;
+  try {
+    const raw = JSON.parse(storage.getItem(UPLOAD_STORAGE_KEY) || "null") as Record<string, unknown> | null;
+    if (!raw) return empty;
+    return {
+      compare: storedSnapshot("compare", raw.compare),
+      mockup: storedSnapshot("mockup", raw.mockup),
+    };
+  } catch {
+    return empty;
+  }
+}
+
+function saveStoredUploads(
+  storage: UploadStorage | null,
+  state: Record<UploadKind, UploadSnapshot | null>,
+): void {
+  if (!storage) return;
+  try {
+    if (!state.compare && !state.mockup) {
+      storage.removeItem(UPLOAD_STORAGE_KEY);
+      return;
+    }
+    const serializable = Object.fromEntries(
+      (Object.keys(state) as UploadKind[]).map((kind) => [
+        kind,
+        state[kind]
+          ? {
+              ...state[kind],
+              files: state[kind]!.files.map(({ file: _file, ...saved }) => saved),
+            }
+          : null,
+      ]),
+    );
+    storage.setItem(UPLOAD_STORAGE_KEY, JSON.stringify(serializable));
+  } catch {
+    // 浏览器禁用存储时仍可在当前 SPA 会话内上传。
+  }
+}
+
 export function uploadPhaseLine(snapshot: UploadSnapshot, readyText: string): string {
   if (snapshot.phase === "confirming") return "文件已传完，服务器正在确认";
   if (snapshot.phase === "retrying") return `网络波动，正在第 ${snapshot.retryAttempt || 1} 次重新连接`;
@@ -110,14 +206,16 @@ export function uploadIsBusy(snapshot: UploadSnapshot | null): boolean {
 export function createUploadStore(
   transport: UploadTransport = api.stageUpload,
   discard: UploadDiscard = api.discardUpload,
+  storage: UploadStorage | null = browserUploadStorage(),
 ) {
-  let sequence = 0;
-  let state: Record<UploadKind, UploadSnapshot | null> = { compare: null, mockup: null };
+  let state = loadStoredUploads(storage);
+  let sequence = Math.max(state.compare?.attempt || 0, state.mockup?.attempt || 0);
   const listeners = new Set<() => void>();
   const controllers: Partial<Record<UploadKind, AbortController>> = {};
 
   function publish(kind: UploadKind, next: UploadSnapshot | null) {
     state = { ...state, [kind]: next };
+    saveStoredUploads(storage, state);
     for (const listener of listeners) listener();
   }
 

@@ -798,6 +798,8 @@ export function startUploadSession(
   const clientUploadId = String(input.client_upload_id || "").trim();
   if (!/^[a-zA-Z0-9_-]{8,80}$/.test(clientUploadId)) throw uploadFailure("上传标识不正确");
   const files = normalizeSessionFiles(input.files || []);
+  const productName = String(input.product_name || "").trim().slice(0, 80) || undefined;
+  const packSurface = String(input.pack_surface || "").trim().slice(0, 24) || undefined;
 
   const completed = listReceipts(owner).find((item) => item.client_upload_id === clientUploadId);
   if (completed) return completed;
@@ -808,6 +810,14 @@ export function startUploadSession(
     if (!existing || existing.client_upload_id !== clientUploadId) continue;
     if (!sessionMetadataMatches(existing, files)) {
       throw uploadFailure("这次上传选择的文件与服务器记录不一致，请放弃后重新选择", 409);
+    }
+    if (
+      (productName && productName !== existing.product_name) ||
+      (packSurface && packSurface !== existing.pack_surface)
+    ) {
+      if (productName) existing.product_name = productName;
+      if (packSurface) existing.pack_surface = packSurface;
+      saveUploadSession(existing);
     }
     return listedSession(existing);
   }
@@ -827,8 +837,8 @@ export function startUploadSession(
       created_at: created,
       updated_at: created,
       client_upload_id: clientUploadId,
-      product_name: String(input.product_name || "").trim().slice(0, 80) || undefined,
-      pack_surface: String(input.pack_surface || "").trim().slice(0, 24) || undefined,
+      product_name: productName,
+      pack_surface: packSurface,
       kind: sessionFieldsKind(files),
       files,
     };

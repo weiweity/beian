@@ -262,12 +262,14 @@ describe("upload then start", () => {
 
   it("rejects mismatched resume metadata and keeps partial sessions owner-scoped", async () => {
     const owner = "ou_chunk_metadata";
-    const create = (bytes: number, openId = owner) =>
+    const create = (bytes: number, openId = owner, productName = "旧品名", packSurface = "carton") =>
       app.request("/api/uploads/sessions", {
         method: "POST",
         headers: { ...authHeader(openId), "content-type": "application/json" },
         body: JSON.stringify({
           client_upload_id: "client-chunk-metadata",
+          product_name: productName,
+          pack_surface: packSurface,
           files: [{ field: "ai", name: "box.ai", bytes, last_modified: 1234 }],
         }),
       });
@@ -275,6 +277,16 @@ describe("upload then start", () => {
     const created = await create(32);
     assert.equal(created.status, 200);
     const upload = (await created.json()) as { upload: { id: string } };
+
+    const renamed = await create(32, owner, "新膜袋", "pouch");
+    assert.equal(renamed.status, 200);
+    const renamedUpload = (await renamed.json()) as {
+      upload: { id: string; product_name?: string; pack_surface?: string };
+    };
+    assert.deepEqual(
+      [renamedUpload.upload.id, renamedUpload.upload.product_name, renamedUpload.upload.pack_surface],
+      [upload.upload.id, "新膜袋", "pouch"],
+    );
 
     const mismatched = await create(33);
     assert.equal(mismatched.status, 409);
