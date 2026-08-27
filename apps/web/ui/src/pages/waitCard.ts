@@ -69,6 +69,15 @@ export function shouldShowWaitCard(t: WaitCardTask | null): boolean {
   return t.status === "comparing";
 }
 
+export type DetailLoadState = "error" | "loading" | "waiting" | "ready";
+
+/** 详情页重验失败必须盖过创建接口留下的 queued 快照，不能让等待卡永久吞掉错误。 */
+export function detailLoadState(t: WaitCardTask | null, error: string | null): DetailLoadState {
+  if (error) return "error";
+  if (!t) return "loading";
+  return shouldShowWaitCard(t) ? "waiting" : "ready";
+}
+
 /** 看板/侧栏活进度。queued 不准写秒；没有作业返回 null。 */
 export function liveJobLine(opts: {
   job_status?: string;

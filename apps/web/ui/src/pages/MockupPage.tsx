@@ -1,7 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Alert, App, Button, ConfigProvider, Empty, Input, Segmented, Space, Table, Tag, theme as antdTheme } from "antd";
-import { api, UPLOAD_TIMEOUT_MS, type MockupJob, type PendingUploadReceipt } from "../api";
+import { ApiError, api, UPLOAD_TIMEOUT_MS, type MockupJob, type PendingUploadReceipt } from "../api";
+import {
+  forgetMockupHandoff,
+  mockupHandoffFor,
+  rememberMockupHandoff,
+} from "../jobHandoff";
 import { UploadProgressSlot } from "../chrome/UploadProgressSlot";
 import { UploadWell } from "../chrome/UploadWell";
 import { WaitCard } from "../chrome/WaitCard";
@@ -290,6 +295,7 @@ export function MockupPage({
           uploadStore.clear("mockup", receipt);
           setReceipts((current) => current.filter((saved) => saved.id !== receipt));
           message.success("已开始打样。");
+          rememberMockupHandoff(next);
           onOpenJob(next.id);
         } catch (err) {
           message.error(err instanceof Error ? err.message : "无法开始打样");
@@ -464,7 +470,15 @@ export function MockupNewPage({
   const [resumeError, setResumeError] = useState<string | null>(null);
   const [productName, setProductName] = useState(resumeSource === "local" ? upload?.productName || "" : "");
   const [submitting, setSubmitting] = useState(false);
+  const mounted = useRef(false);
   useUploadReceiptRecovery("mockup", upload, canCreate && resumeSource === "local");
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (resumeSource !== "local" || !upload) return;
@@ -545,10 +559,13 @@ export function MockupNewPage({
         product_name: name,
       });
       uploadStore.clear("mockup", receipt);
+      rememberMockupHandoff(next);
+      if (!mounted.current) return;
       onCreated(next.id);
     } catch (err) {
-      message.error(err instanceof Error ? err.message : "打样失败");
-      setSubmitting(false);
+      if (mounted.current) message.error(err instanceof Error ? err.message : "打样失败");
+    } finally {
+      if (mounted.current) setSubmitting(false);
     }
   }
 
@@ -590,8 +607,6 @@ export function MockupNewPage({
     );
   }
 
-  if (submitting) return <WaitCard job="打样" jobStatus="queued" />;
-
   return (
     <section className="new-form mockup-desk">
       <header className="page-head">
@@ -600,16 +615,16 @@ export function MockupNewPage({
           <p className="page-lead">先交平面稿。本机要有 Blender。</p>
         </div>
         <div style={{ display: "flex", gap: 12 }}>
-          <button type="button" className="btn-ghost" onClick={onBack}>
+          <button type="button" className="btn-ghost" disabled={submitting} onClick={onBack}>
             返回
           </button>
           <button
             type="button"
             className="btn-primary"
-            disabled={!receipt || busy}
+            disabled={!receipt || busy || submitting}
             onClick={() => void run()}
           >
-            {busy ? "上传中" : "开始打样"}
+            {submitting ? "正在开工" : busy ? "上传中" : "开始打样"}
           </button>
         </div>
       </header>
@@ -653,7 +668,7 @@ export function MockupNewPage({
 
 export function MockupJobPage({ jobId, canAdmin, onBack }: JobProps & { canAdmin: boolean }) {
   const { message } = App.useApp();
-  const [job, setJob] = useState<MockupJob | null>(null);
+  const [job, setJob] = useState<MockupJob | null>(() => mockupHandoffFor(jobId));
   const [error, setError] = useState<string | null>(null);
   const [hud, setHud] = useState("");
   const [glbFs, setGlbFs] = useState(false);
@@ -661,6 +676,7 @@ export function MockupJobPage({ jobId, canAdmin, onBack }: JobProps & { canAdmin
   const hudTimer = useRef<number | null>(null);
   const announced = useRef("");
   const lastGlbFs = useRef(false);
+  const seededJobId = useRef(jobId);
   const waiting = Boolean(job) && shouldShowWaitCard(job);
 
   function notice(text: string) {
@@ -695,18 +711,28 @@ export function MockupJobPage({ jobId, canAdmin, onBack }: JobProps & { canAdmin
 
   useEffect(() => {
     let cancelled = false;
-    setJob(null);
+    if (seededJobId.current !== jobId) {
+      seededJobId.current = jobId;
+      setJob(mockupHandoffFor(jobId));
+    }
     setError(null);
     announced.current = "";
     void api
       .mockup(jobId)
       .then((next) => {
         if (cancelled) return;
+        setError(null);
+        forgetMockupHandoff(jobId);
         setJob(next);
         announced.current = `${next.id}:${next.status}`;
       })
       .catch((err: unknown) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : "加载失败");
+        if (cancelled) return;
+        if (err instanceof ApiError && err.status === 404) {
+          forgetMockupHandoff(jobId);
+          setJob(null);
+        }
+        setError(err instanceof Error ? err.message : "加载失败");
       });
     return () => {
       cancelled = true;
@@ -721,6 +747,7 @@ export function MockupJobPage({ jobId, canAdmin, onBack }: JobProps & { canAdmin
         .mockup(job.id)
         .then((next) => {
           if (cancelled) return;
+          setError(null);
           setJob(next);
           if (shouldShowWaitCard(next)) return;
           const key = `${next.id}:${next.status}`;
@@ -730,7 +757,12 @@ export function MockupJobPage({ jobId, canAdmin, onBack }: JobProps & { canAdmin
           else if (next.status === "done") message.success("打样完成。白底给备案，GLB 可全屏截图。");
         })
         .catch((err: unknown) => {
-          if (!cancelled) setError(err instanceof Error ? err.message : "打样单读不到");
+          if (cancelled) return;
+          if (err instanceof ApiError && err.status === 404) {
+            forgetMockupHandoff(job.id);
+            setJob(null);
+          }
+          setError(err instanceof Error ? err.message : "打样单读不到");
         });
     }, 2500);
     return () => {

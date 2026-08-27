@@ -1,6 +1,12 @@
 import { Button, Input, Select, Tag } from "antd";
 import type { Decision, FieldHit, TaskDetail } from "../api";
-import { issueEvidence, reviewEvidence, type EvidenceText } from "./reviewEvidence";
+import {
+  issueEvidence,
+  partitionReviewHits,
+  reviewEvidence,
+  type EvidenceText,
+  type IndexedReviewHit,
+} from "./reviewEvidence";
 
 type Props = {
   hits: FieldHit[];
@@ -59,6 +65,7 @@ export function ReviewDockPanel({
   onCopy,
   onNoteChange,
 }: Props) {
+  const grouped = partitionReviewHits(hits);
   const evidence = current ? reviewEvidence(current) : null;
   const selected =
     current?.decision === "confirm" || current?.decision === "issue" || current?.decision === "ignore"
@@ -73,7 +80,7 @@ export function ReviewDockPanel({
       <section className="review-dock-issues" aria-label="疑点列表">
         <p className="field-label">疑点列表</p>
         <div className="review-dock-issue-row">
-          {hits.map((hit, index) => (
+          {grouped.issues.length ? grouped.issues.map(({ hit, index }) => (
             <button
               key={hit.id || index}
               type="button"
@@ -84,8 +91,27 @@ export function ReviewDockPanel({
               <strong>{hit.field || "字段"}</strong>
               {statusTag(hit.status)}
             </button>
-          ))}
+          )) : <span className="review-dock-none">暂无疑点</span>}
         </div>
+        {grouped.consistent.length ? (
+          <details className="review-dock-consistent">
+            <summary>一致列表 · {grouped.consistent.length}</summary>
+            <div className="review-dock-issue-row">
+              {grouped.consistent.map(({ hit, index }: IndexedReviewHit) => (
+                <button
+                  key={hit.id || index}
+                  type="button"
+                  className={index === active ? "hit-card is-on" : "hit-card"}
+                  onClick={() => onPick(index)}
+                >
+                  <span className="hit-no">{index + 1}</span>
+                  <strong>{hit.field || "字段"}</strong>
+                  {statusTag(hit.status)}
+                </button>
+              ))}
+            </div>
+          </details>
+        ) : null}
       </section>
 
       {current && evidence ? (

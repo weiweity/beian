@@ -13,6 +13,28 @@ export type ReviewEvidence = {
   observed: EvidenceText;
 };
 
+export type IndexedReviewHit = { hit: FieldHit; index: number };
+
+export function isReviewIssue(hit: FieldHit): boolean {
+  return (
+    hit.decision === "issue" ||
+    /待人工|不清|疑|缺|误/.test(String(hit.status || "")) ||
+    doubtLines(hit).length > 0
+  );
+}
+
+export function partitionReviewHits(hits: FieldHit[]): {
+  issues: IndexedReviewHit[];
+  consistent: IndexedReviewHit[];
+} {
+  const issues: IndexedReviewHit[] = [];
+  const consistent: IndexedReviewHit[] = [];
+  hits.forEach((hit, index) => {
+    (isReviewIssue(hit) ? issues : consistent).push({ hit, index });
+  });
+  return { issues, consistent };
+}
+
 export function withLocalNotes(hits: FieldHit[], notes: Record<string, string>): FieldHit[] {
   return hits.map((hit) => {
     if (!hit.id || !Object.prototype.hasOwnProperty.call(notes, hit.id)) return hit;

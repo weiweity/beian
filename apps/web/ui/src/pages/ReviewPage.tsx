@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { Alert, App, Button, Empty, Input } from "antd";
 import { ApiError, api, type Decision, type FieldHit, type TaskDetail, type TaskPage } from "../api";
 import { WaitCard } from "../chrome/WaitCard";
+import { forgetReviewHandoff, reviewHandoffFor } from "../jobHandoff";
 import { fittedPage, panBy, resetZoom, zoomAt, zoomCss, zoomToBox } from "./canvasZoom";
 import { overlayFromBox, overlaysForHit, pickHitBox, pinHitGroupsForPage, resolvePageMetrics } from "./pinBox";
 import {
@@ -32,10 +33,15 @@ import {
   type DockHandle,
   type DockPlace,
 } from "./reviewDock";
-import { shouldShowWaitCard } from "./waitCard";
+import { detailLoadState, shouldShowWaitCard } from "./waitCard";
 import { reviewHits, shouldUseReworkView } from "./reviewVersion";
 import { ReviewDockPanel } from "./ReviewDockPanel";
-import { buildRevisionList, withLocalNotes } from "./reviewEvidence";
+import { buildRevisionList, partitionReviewHits, withLocalNotes } from "./reviewEvidence";
+import {
+  prepareReviewMedia,
+  prepareReviewMediaAfterFailure,
+  type PreparedReviewMedia,
+} from "./reviewMedia";
 
 function browserStore(): Storage | null {
   return typeof localStorage === "undefined" ? null : localStorage;
@@ -74,7 +80,7 @@ function statusLead(task: TaskDetail | null, pageIdx: number, pages: TaskPage[])
 
 export function ReviewPage({ taskId, onBack }: Props) {
   const { message } = App.useApp();
-  const [task, setTask] = useState<TaskDetail | null>(null);
+  const [task, setTask] = useState<TaskDetail | null>(() => reviewHandoffFor(taskId));
   const [error, setError] = useState<string | null>(null);
   const [pageIdx, setPageIdx] = useState(0);
   const [active, setActive] = useState(0);
@@ -83,7 +89,8 @@ export function ReviewPage({ taskId, onBack }: Props) {
   const [busy, setBusy] = useState(false);
   const [useV2, setUseV2] = useState(false);
   const [nat, setNat] = useState<{ width: number; height: number } | null>(null);
-  const [reviewImageFallback, setReviewImageFallback] = useState<string | null>(null);
+  const [reviewMedia, setReviewMedia] = useState<PreparedReviewMedia | null>(null);
+  const [reviewMediaError, setReviewMediaError] = useState<string | null>(null);
   const [viewSize, setViewSize] = useState<{ width: number; height: number } | null>(null);
   const [zoom, setZoom] = useState(resetZoom);
   const [dockOpen, setDockOpen] = useState(true);
@@ -120,7 +127,10 @@ export function ReviewPage({ taskId, onBack }: Props) {
   const fitHitRef = useRef<(i: number) => void>(() => undefined);
   const busyDepthRef = useRef(0);
   const decisionQueueRef = useRef<Promise<boolean>>(Promise.resolve(true));
+  const seededTaskId = useRef(taskId);
+  const reviewMediaLoad = useRef<AbortController | null>(null);
   const waiting = shouldShowWaitCard(task);
+  const loadState = detailLoadState(task, error);
 
   function beginBusy() {
     busyDepthRef.current += 1;
@@ -346,10 +356,17 @@ export function ReviewPage({ taskId, onBack }: Props) {
   useEffect(() => {
     if (!taskId) return;
     let cancelled = false;
+    if (seededTaskId.current !== taskId) {
+      seededTaskId.current = taskId;
+      setTask(reviewHandoffFor(taskId));
+    }
+    setError(null);
     void api
       .task(taskId)
       .then((t) => {
         if (cancelled) return;
+        setError(null);
+        forgetReviewHandoff(taskId);
         setTask(t);
         setUseV2(shouldUseReworkView(t));
         const seed: Record<string, string> = {};
@@ -360,7 +377,12 @@ export function ReviewPage({ taskId, onBack }: Props) {
         if (t.conclusion) setConclusion(t.conclusion);
       })
       .catch((err: unknown) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : "加载失败");
+        if (cancelled) return;
+        if (err instanceof ApiError && err.status === 404) {
+          forgetReviewHandoff(taskId);
+          setTask(null);
+        }
+        setError(err instanceof Error ? err.message : "加载失败");
       });
     return () => {
       cancelled = true;
@@ -373,6 +395,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
       void api
         .task(taskId)
         .then((next) => {
+          setError(null);
           setTask(next);
           if (shouldShowWaitCard(next)) return;
           const seed: Record<string, string> = {};
@@ -387,6 +410,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
         })
         .catch((err: unknown) => {
           if (err instanceof ApiError && err.status === 404) {
+            forgetReviewHandoff(taskId);
             setError("这单已经不在了");
             setTask(null);
           }
@@ -402,6 +426,11 @@ export function ReviewPage({ taskId, onBack }: Props) {
   const reviewable = isReviewable(task?.status);
   const reworkable = isReworkable(task);
   const current = hits[active];
+  const firstIssueIndex = partitionReviewHits(hits).issues[0]?.index ?? 0;
+
+  useEffect(() => {
+    setActive(firstIssueIndex);
+  }, [task?.id, useV2, hits.length, firstIssueIndex]);
 
   useLayoutEffect(() => {
     const head = pageRef.current?.querySelector(":scope > .page-head");
@@ -444,10 +473,63 @@ export function ReviewPage({ taskId, onBack }: Props) {
   const currentBox = current ? pickHitBox(current.bboxes, Number(current.page) || pageNo) : null;
 
   useEffect(() => {
-    setNat(null);
-    setReviewImageFallback(null);
+    let cancelled = false;
+    reviewMediaLoad.current?.abort();
+    const controller = new AbortController();
+    reviewMediaLoad.current = controller;
+    setReviewMedia(null);
+    setReviewMediaError(null);
+    setNat(
+      Number(page?.width) > 1 && Number(page?.height) > 1
+        ? { width: Number(page?.width), height: Number(page?.height) }
+        : null,
+    );
     commitZoom(resetZoom());
-  }, [page?.url]);
+    if (page) {
+      void prepareReviewMedia(page, { signal: controller.signal })
+        .then((media) => {
+          if (cancelled || controller.signal.aborted) return;
+          setReviewMedia(media);
+          setNat({ width: media.width, height: media.height });
+        })
+        .catch((err: unknown) => {
+          if (!cancelled && !controller.signal.aborted) {
+            setReviewMediaError(err instanceof Error ? err.message : "高清核对图加载失败");
+          }
+        });
+    }
+    return () => {
+      cancelled = true;
+      controller.abort();
+      reviewMediaLoad.current?.abort();
+      reviewMediaLoad.current = null;
+    };
+  }, [page?.url, page?.raster_url, page?.width, page?.height]);
+
+  function recoverDisplayedReviewMedia(failedMedia: PreparedReviewMedia) {
+    if (!page) return;
+    if (failedMedia.source === "raster") {
+      setReviewMedia(null);
+      setReviewMediaError("高清核对图显示失败，请刷新后重试");
+      return;
+    }
+    reviewMediaLoad.current?.abort();
+    const controller = new AbortController();
+    reviewMediaLoad.current = controller;
+    setReviewMedia(null);
+    setReviewMediaError(null);
+    void prepareReviewMediaAfterFailure(page, failedMedia.url, { signal: controller.signal })
+      .then((media) => {
+        if (controller.signal.aborted) return;
+        setReviewMedia(media);
+        setNat({ width: media.width, height: media.height });
+      })
+      .catch((err: unknown) => {
+        if (!controller.signal.aborted) {
+          setReviewMediaError(err instanceof Error ? err.message : "高清核对图显示失败，请刷新后重试");
+        }
+      });
+  }
 
   useEffect(() => {
     const i = pendingFit.current;
@@ -626,14 +708,27 @@ export function ReviewPage({ taskId, onBack }: Props) {
     window.requestAnimationFrame(() => fitHitRef.current(i));
   }
 
-  if (!task && !error) {
+  if (loadState === "error") {
+    return (
+      <section className="review-page">
+        <header className="page-head">
+          <h1 className="page-title">审核单</h1>
+          <button type="button" className="btn-ghost" onClick={onBack}>
+            返回列表
+          </button>
+        </header>
+        <Alert type="error" showIcon title={error || "审核单加载失败"} />
+      </section>
+    );
+  }
+  if (loadState === "loading") {
     return (
       <div className="desk-empty">
         <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="打开核对页…" />
       </div>
     );
   }
-  if (waiting && task) {
+  if (loadState === "waiting" && task) {
     return (
       <WaitCard
         job={task.job_kind === "rework" ? "对红" : "对照"}
@@ -799,24 +894,22 @@ export function ReviewPage({ taskId, onBack }: Props) {
                   height: laid.imgH > 1 ? laid.imgH : undefined,
                 }}
               >
-                <img
-                  src={reviewImageFallback || page.url}
-                  alt=""
-                  draggable={false}
-                  onDragStart={(e) => e.preventDefault()}
-                  onError={() => {
-                    if (page.raster_url && page.raster_url !== page.url) {
-                      setReviewImageFallback(page.raster_url);
-                    }
-                  }}
-                  onLoad={(e) => {
-                    const img = e.currentTarget;
-                    if (img.naturalWidth > 1 && img.naturalHeight > 1) {
-                      setNat({ width: img.naturalWidth, height: img.naturalHeight });
-                    }
-                  }}
-                />
-                {pinHits.map(({ h, i, indices }) => {
+                {reviewMedia ? (
+                  <img
+                    src={reviewMedia.url}
+                    alt=""
+                    decoding="sync"
+                    fetchPriority="high"
+                    draggable={false}
+                    onDragStart={(e) => e.preventDefault()}
+                    onError={() => recoverDisplayedReviewMedia(reviewMedia)}
+                  />
+                ) : (
+                  <div className={reviewMediaError ? "review-media-status is-error" : "review-media-status"}>
+                    {reviewMediaError || "正在载入高清核对面…"}
+                  </div>
+                )}
+                {(reviewMedia ? pinHits : []).map(({ h, i, indices }) => {
                   const overlays = overlaysForHit(h.bboxes, pageNo, metrics);
                   const preferred = pickHitBox(h.bboxes, pageNo);
                   const pin = preferred && metrics ? overlayFromBox(preferred, metrics) : null;

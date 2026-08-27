@@ -3424,6 +3424,41 @@ html[data-theme="dark"] .notes.is-float {
   margin-inline-end: 0;
 }
 
+.review-dock-none {
+  padding: 6px 2px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.review-dock-consistent {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.review-dock-consistent summary {
+  width: max-content;
+  cursor: pointer;
+  color: var(--accent);
+}
+
+.review-dock-consistent[open] summary {
+  margin-bottom: 6px;
+}
+
+.review-media-status {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  place-items: center;
+  color: var(--muted);
+  background: var(--surface);
+  font-size: 14px;
+}
+
+.review-media-status.is-error {
+  color: var(--danger);
+}
+
 .review-evidence-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
