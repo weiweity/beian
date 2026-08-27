@@ -149,6 +149,23 @@ function assignmentOf(item, config) {
     return null;
 }
 
+function configuredProposalLayer(item, config) {
+    if (!item.layer || !config.proposal_layers || !(config.proposal_layers instanceof Array)) {
+        return false;
+    }
+    var layerName = String(item.layer.name || "");
+    for (var index = 0; index < config.proposal_layers.length; index += 1) {
+        if (layerName === String(config.proposal_layers[index] || "")) {
+            // Migration proposals are deliberately narrower than legacy layer
+            // selection: converted text is normally filled artwork, while
+            // structural paths are stroke-only.  This is only a proposal and
+            // can never bypass the six-face human confirmation gate.
+            return item.stroked && !item.filled;
+        }
+    }
+    return false;
+}
+
 function samePoint(left, right) {
     return Math.abs(left[0] - right[0]) <= 0.001 && Math.abs(left[1] - right[1]) <= 0.001;
 }
@@ -291,30 +308,46 @@ try {
         validation: {status: "review_required", errors: [], warnings: []}
     };
     var semanticItems = [];
+    var explicitRecords = [];
+    var proposalRecords = [];
     for (var pathIndex = 0; pathIndex < documentRef.pathItems.length; pathIndex += 1) {
         var item = documentRef.pathItems[pathIndex];
         if (item.clipping) {
             continue;
         }
         var assignment = assignmentOf(item, config);
-        if (assignment === null) {
-            continue;
+        if (assignment !== null) {
+            explicitRecords.push({item: item, pathIndex: pathIndex, assignment: assignment});
+        } else if (configuredProposalLayer(item, config)) {
+            proposalRecords.push({item: item, pathIndex: pathIndex, assignment: "crease"});
         }
-        semanticItems.push(item);
+    }
+    var chosenRecords = explicitRecords.length > 0 ? explicitRecords : proposalRecords;
+    var proposalMode = explicitRecords.length === 0 && proposalRecords.length > 0;
+    if (proposalMode) {
+        structure.source.adapter = "illustrator-stroke-proposal/1";
+        structure.source.adapter_version = "1.0.0";
+        uniquePush(structure.validation.errors, "structure_proposal_requires_confirmation");
+    }
+    for (var recordIndex = 0; recordIndex < chosenRecords.length; recordIndex += 1) {
+        var record = chosenRecords[recordIndex];
+        semanticItems.push(record.item);
         result.semantic_path_count += 1;
-        if (assignment === "ignore") {
+        if (record.assignment === "ignore") {
             continue;
         }
         result.semantic_edge_count += exportSemanticPath(
-            item,
-            pathIndex,
-            assignment,
+            record.item,
+            record.pathIndex,
+            record.assignment,
             structure,
             structure.validation.errors,
             artboard[0],
             artboard[1]
         );
     }
+    result.proposal_mode = proposalMode;
+    result.proposal_path_count = proposalRecords.length;
     if (result.semantic_edge_count === 0) {
         uniquePush(structure.validation.errors, "structure_semantics_missing");
     }

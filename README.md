@@ -11,7 +11,7 @@
 | `apps/web/ui` | React + Ant Design 6 审稿台 / 打样台 / 历史 / 设置 |
 | `apps/web/server` | Hono + TypeScript，对外 HTTP `:8787` |
 | `apps/web/backend` | Python 对照 worker（TS 用 `python -m app.cli` 调用）。PDF 按页分为活字 / 转曲 / 图片：活字直接读文字层，其他页只跑一次 OCR，再进入既有字段规则与单钉证据收敛 |
-| `workers/packaging/` | 2D→3D CLI，打样台调用。V2 只接受显式 `cut/crease/...` 语义并形成 `PackagingStructure`；拓扑歧义进入管理员六面确认，不再按颜色、图层名或 bbox 猜刀线。平面出图用 pymupdf（对照同一 Python）；杭州不需要 macOS qlmanage。PPT 用两张白底写 OOXML；两张白底再合成一页 PDF。缺 PPT/PDF 仍算出图 |
+| `workers/packaging/` | 2D→3D CLI，打样台调用。V2 以显式 `cut/crease/...` 语义为结构事实；旧稿只能从已识别的刀线层生成待人工确认的描边候选，不能自动接受。拓扑或面序歧义进入管理员六面确认，不再按颜色或 bbox 静默套盒。平面出图用 pymupdf（对照同一 Python）；杭州不需要 macOS qlmanage。PPT 用两张白底写 OOXML；两张白底再合成一页 PDF。缺 PPT/PDF 仍算出图 |
 | `docs/` | 章程、ADR、设计 |
 
 旧 `apps/web/frontend` 已删除。网页入口只有 `apps/web/ui` + Hono `apps/web/server`；对照规则和 Blender 仍是 Python。见 `docs/adr-002-typescript-http.md`。
@@ -46,7 +46,7 @@
 - 台地址：`/reviewup` 审稿台、`/reviewup/new` 审稿工作台、`/review/:id` 核对页、`/mockup` 打样台、`/mockup/new` 打样工作台、`/mockup/:id` 打样单、`/history`、`/settings`。旧 `/` `/new` `/review` 会转到新地址。后退换台。
 - 审稿双井或打样 `.ai` 选齐后会按 1 MiB 分片上传。进度到 100% 只表示浏览器已发完，看到「服务器确认中」后还要等「待开工」；网络波动会自动重连 5 次，仍失败则显示「已暂停」，服务器保留已收到的字节。SPA 换台和整页刷新都能找回上传会话；重新选择同一份文件会从服务器偏移量继续。要换稿点「停止并删除 / 删除暂存」，会同步清掉服务器会话或待开工回执。
 - 打样台可按品名/文件名搜索，并在看板与表格之间切换。新稿支持两份同时上传，第三份会提示等待其中一份完成。历史记录同时列出上传中、服务器确认、已暂停、待开工、处理中和已结束记录；有删除权限时点「编辑」可全选并批量删除可删除记录，进行中的作业不能删除。删除请求丢响应时可安全重试。核对页默认打开已完成的第二版（如有），可切回上一版，也可用「全屏核对」。页图优先加载可放大的矢量核对面，生成或加载失败时自动退回高清 PNG；横向核对窗先列疑点，再并排显示疑点/错误点、Excel 应印和稿上 OCR。
-- 语义结构 V2 由管理员设置 `PACKAGING_STRUCTURE_V2_ENABLED` 控制，发布默认关闭，真实稿金标与杭州 Windows L1/L2 通过后才打开。打开后结构状态分开显示：`识别结构中` → `待确认结构` / `当前不支持` → `打样中`。只有显式结构语义能够形成闭合六面时才进 Blender；角色或方向有歧义时由管理员看真实多边形并确认六面。没有语义的旧 AI 会提示在 Illustrator 对象备注、对象名或图层名写 `packaging:cut` / `packaging:crease` 后重传，不会静默套模板。
+- 网页新打样单固定进入语义结构 V2，不再回落到旧刀线猜测。状态分开显示：`识别结构中` → `待确认结构` / `当前不支持` → `打样中`。显式结构语义可直接进入严格拓扑验证；没有对象语义的旧 AI 只会从已识别的刀线层生成描边候选，并把真实 artwork 放在候选图下供管理员确认 front/right/back/left/top/bottom 与旋转。未确认或无法闭合时不会进 Blender。杭州 Windows Illustrator/Blender L1/L2 仍是合并部署门，不再是运行时开关。
 
 5173 登录闪或 `/api` 返回 HTML / 空 Content-Type：打开 http://127.0.0.1:8787/，或重启 `npm run dev:ui`。飞书授权失败回到飞书重试，不要把远程验收人指到本机。JSON 404（任务不存在等）不是 Vite 挂了。
 

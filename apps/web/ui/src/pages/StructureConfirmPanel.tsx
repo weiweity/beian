@@ -34,6 +34,8 @@ export function StructureConfirmPanel({ job, canAdmin, onConfirmed }: Props) {
     if (choice.role) selectedRoles.set(choice.role, faceId);
   }
   const viewBox = structureViewBox(faces).join(" ");
+  const pageSize = job.structure_preview?.page_size_mm;
+  const artworkImage = job.structure_preview?.image_url;
 
   function update(faceId: string, patch: Partial<FaceChoice>) {
     setChoices((current) => {
@@ -88,12 +90,23 @@ export function StructureConfirmPanel({ job, canAdmin, onConfirmed }: Props) {
       <Alert
         type="warning"
         showIcon
-        title="闭合面已经识别，请确认六个盒面"
-        description="系统只计算闭合关系，不猜正反和方向。折舌、粘口等面保持“不作为盒面”。"
+        title="原稿里检测到多个成品面候选，请确认六个盒面"
+        description="候选框直接叠在原稿上。请按印刷内容确认正面、四侧、顶部和底部；系统不会替你猜正反或方向。"
       />
       <div className="structure-confirm-layout">
         <div className="structure-map-shell">
           <svg className="structure-map" viewBox={viewBox} role="img" aria-label="包装展开结构面预览">
+            {artworkImage && pageSize ? (
+              <image
+                className="structure-map-artwork"
+                href={artworkImage}
+                x={0}
+                y={0}
+                width={pageSize[0]}
+                height={pageSize[1]}
+                preserveAspectRatio="none"
+              />
+            ) : null}
             {faces.map((face, index) => {
               const [left, top, right, bottom] = face.bounds_mm;
               const choice = choices[face.id];
@@ -118,7 +131,11 @@ export function StructureConfirmPanel({ job, canAdmin, onConfirmed }: Props) {
               );
             })}
           </svg>
-          <p>紫色面是已选择的六面。右侧可调整正反、侧面和旋转方向。</p>
+          <p>
+            {artworkImage
+              ? "紫色框是已选择的六面。按框下真实文字判断正面，再在右侧调整角色和旋转方向。"
+              : "原稿预览暂不可用；请勿只凭候选编号判断正面，建议重新识别后再确认。"}
+          </p>
         </div>
         <div className="structure-face-list">
           {faces.map((face, index) => {

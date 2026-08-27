@@ -435,6 +435,7 @@ def run_illustrator_structure_export(
     project_dir: Path,
     illustrator_config: dict[str, Any],
     semantic_assignments: dict[str, Any] | None = None,
+    proposal_layers: list[str] | None = None,
 ) -> dict[str, Any]:
     """V2 exporter is explicit and object-level; legacy fallback stays unchanged."""
     app_path = Path(
@@ -457,6 +458,7 @@ def run_illustrator_structure_export(
         "result_json": str(result_path),
         "debug_log": str(normalized_dir / "jsx_debug.log"),
         "semantic_assignments": semantic_assignments or {},
+        "proposal_layers": [str(value) for value in (proposal_layers or []) if str(value).strip()],
     }
     save_json(config_path, worker_config)
     timeout_seconds = int(illustrator_config.get("timeout_seconds", 420))
@@ -510,11 +512,23 @@ def preflight_product_v2(
     if artwork_pdf is None:
         if not bool(illustrator_config.get("enabled", True)):
             raise PipelineError("V2 需要对象级清理后的 artwork PDF，但 Illustrator 已禁用")
+        proposal_layers: list[str] = []
+        try:
+            source_layers = optional_content_layers(PdfReader(str(source)))
+            proposal_layer = pick_knife_layer(source_layers)
+            if proposal_layer:
+                proposal_layers.append(proposal_layer)
+        except Exception:
+            # Native AI has no PDF OCG table to inspect before Illustrator.
+            # It remains explicit-semantics-only until a platform adapter can
+            # name a candidate layer without guessing inside JSX.
+            proposal_layers = []
         illustrator_result = run_illustrator_structure_export(
             source,
             project_dir,
             illustrator_config,
             product.get("semantic_assignments"),
+            proposal_layers,
         )
         artwork_pdf = Path(illustrator_result["print_pdf"])
         if structure_sidecar is None:
@@ -530,6 +544,11 @@ def preflight_product_v2(
     resolution_path = project_dir / "structure_resolution.json"
     save_json(resolution_path, resolution.as_dict())
     if resolution.status != "ready" or resolution.resolved is None:
+        artwork_preview = render_pdf_thumbnail(
+            artwork_pdf,
+            project_dir / "structure_preview",
+            width_px=2_400,
+        )
         raise PipelineHold(
             status=resolution.status,
             code=resolution.code or "structure_review_required",
@@ -537,6 +556,7 @@ def preflight_product_v2(
             resolution_path=resolution_path,
             details={
                 "artwork_pdf": str(artwork_pdf),
+                "artwork_preview": str(artwork_preview),
                 "structure_sidecar": str(structure_sidecar) if structure_sidecar else None,
                 "source_sha256": file_sha256(source),
             },

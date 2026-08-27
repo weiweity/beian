@@ -8,7 +8,6 @@ process.env.VITEST = "1";
 process.env.WB_DATA_DIR = makeTestTempDir("beian-mockup-http-");
 process.env.WB_HOST = "127.0.0.1";
 process.env.WB_PORT = "0";
-process.env.PACKAGING_STRUCTURE_V2_ENABLED = "true";
 
 const { app } = await import("./index.js");
 const { issueSession } = await import("./auth.js");
@@ -208,6 +207,41 @@ describe("mockup get", () => {
   });
 });
 
+describe("mockup structure artwork preview", () => {
+  it("serves the private preview only to the owning account", async () => {
+    const id = "facefeed0001";
+    const dir = join(DATA_DIR, "mockups", id);
+    mkdirSync(dir, { recursive: true });
+    const preview = join(dir, "structure_preview.png");
+    writeFileSync(preview, PNG_MAGIC);
+    saveMockup({
+      id,
+      status: "review_required",
+      created_at: "2026-08-27T00:00:00Z",
+      files: [],
+      owner: "ou_preview_owner",
+      job_kind: "mockup",
+      job_status: "waiting_input",
+      structure_engine: "v2",
+      structure_status: "review_required",
+      structure_artwork_preview_path: preview,
+    });
+    const owner = issueSession("管理员", "admin", "ou_preview_owner", "feishu");
+    const own = await app.request(`/api/mockups/${id}/structure-preview`, {
+      headers: { authorization: `Bearer ${owner.token}` },
+    });
+    assert.equal(own.status, 200);
+    assert.equal(own.headers.get("content-type"), "image/png");
+    assert.deepEqual(Buffer.from(await own.arrayBuffer()), PNG_MAGIC);
+
+    const stranger = issueSession("其他审核员", "reviewer", "ou_preview_other", "feishu");
+    const denied = await app.request(`/api/mockups/${id}/structure-preview`, {
+      headers: { authorization: `Bearer ${stranger.token}` },
+    });
+    assert.equal(denied.status, 403);
+  });
+});
+
 describe("publicMockup", () => {
   it("drops disk paths from files", () => {
     const out = publicMockup({
@@ -282,44 +316,45 @@ describe("mockup structure confirmation http", () => {
 });
 
 describe("mockup post", { concurrency: false }, () => {
-  it("keeps the production legacy path until the V2 rollout gate is explicitly enabled", async () => {
+  it("routes every new web mockup through V2 without a legacy fallback", async () => {
     const { setJobsTestHooks, resetJobsTestHooks } = await import("./jobs.js");
     const prevBin = process.env.BLENDER_EXECUTABLE;
     const prevAi = process.env.ILLUSTRATOR_EXECUTABLE;
-    const prevGate = process.env.PACKAGING_STRUCTURE_V2_ENABLED;
     process.env.BLENDER_EXECUTABLE = process.execPath;
     process.env.ILLUSTRATOR_EXECUTABLE = process.execPath;
-    process.env.PACKAGING_STRUCTURE_V2_ENABLED = "false";
     setJobsTestHooks({
-      runRaster: () =>
-        new Promise(() => {
-          /* keep the legacy Illustrator slot occupied */
-        }),
+      runStructure: async () => ({
+        code: 1,
+        stdout: "",
+        stderr: '{"error":"test stop"}',
+        timedOut: false,
+      }),
     });
     try {
-      const sess = issueSession("籽烨", "reviewer", "ou_mockup_legacy_gate", "feishu");
+      const sess = issueSession("籽烨", "reviewer", "ou_mockup_v2_only", "feishu");
       const receipt = await stageAi(sess.token);
       const res = await startMockup(sess.token, receipt);
       assert.equal(res.status, 200);
       const body = (await res.json()) as { id?: string; structure_engine?: string };
       assert.ok(body.id);
-      assert.equal(body.structure_engine, undefined);
+      assert.equal(body.structure_engine, "v2");
       const manifest = JSON.parse(
         readFileSync(join(DATA_DIR, "mockups", body.id, "manifest.json"), "utf8"),
       ) as {
         illustrator?: { enabled?: boolean; application?: string };
         products?: Array<{ structure_engine?: string }>;
       };
-      assert.deepEqual(manifest.illustrator, { enabled: false });
-      assert.equal(manifest.products?.[0]?.structure_engine, undefined);
+      assert.deepEqual(manifest.illustrator, {
+        enabled: true,
+        application: process.execPath,
+      });
+      assert.equal(manifest.products?.[0]?.structure_engine, "v2");
     } finally {
       resetJobsTestHooks();
       if (prevBin !== undefined) process.env.BLENDER_EXECUTABLE = prevBin;
       else delete process.env.BLENDER_EXECUTABLE;
       if (prevAi !== undefined) process.env.ILLUSTRATOR_EXECUTABLE = prevAi;
       else delete process.env.ILLUSTRATOR_EXECUTABLE;
-      if (prevGate !== undefined) process.env.PACKAGING_STRUCTURE_V2_ENABLED = prevGate;
-      else delete process.env.PACKAGING_STRUCTURE_V2_ENABLED;
     }
   });
 

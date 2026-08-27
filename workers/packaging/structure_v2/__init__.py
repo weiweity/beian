@@ -11,7 +11,13 @@ from .adapters import AdaptationResult, StructureAdapterError, adapt_structure
 from .artwork import ArtworkMappingError, render_face_assets
 from .confirmation import StructureConfirmationError, confirm_structure
 from .resolver import ResolutionResult, resolve_structure, resolve_structure_payload
-from .topology import TopologyError, analyze_declared_faces, analyze_topology, derive_face_proposal
+from .topology import (
+    TopologyError,
+    analyze_declared_faces,
+    analyze_topology,
+    derive_face_proposal,
+    derive_rectangular_face_proposal,
+)
 
 __all__ = [
     "SCHEMA",
@@ -28,6 +34,7 @@ __all__ = [
     "canonicalize_structure",
     "confirm_structure",
     "derive_face_proposal",
+    "derive_rectangular_face_proposal",
     "load_structure",
     "resolve_structure",
     "resolve_structure_payload",

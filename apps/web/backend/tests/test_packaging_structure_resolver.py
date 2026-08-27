@@ -56,7 +56,7 @@ def test_only_ready_results_enter_atomic_cache(tmp_path: Path):
     cache_files = list(tmp_path.glob("*.json"))
     assert len(cache_files) == 1
     cached = json.loads(cache_files[0].read_text(encoding="utf-8"))
-    assert cached["schema"] == "packaging-structure-cache/1"
+    assert cached["schema"] == "packaging-structure-cache/2"
 
     bad = semantic_box(source_hash="e" * 64)
     bad["edges"] = bad["edges"][:-1]
@@ -157,6 +157,144 @@ def test_role_mapping_without_approval_never_reaches_blender_contract():
     assert result.status == "review_required"
     assert result.code == "structure_approval_required"
     assert result.resolved is None
+
+
+def test_stroke_proposal_surfaces_closed_faces_amid_unrelated_linework_without_auto_accepting():
+    payload = semantic_box()
+    payload["source"]["adapter"] = "illustrator-stroke-proposal/1"
+    payload["faces"] = []
+    payload["folds"] = []
+    payload["root_face"] = None
+    payload["validation"] = {
+        "status": "review_required",
+        "errors": ["structure_proposal_requires_confirmation"],
+        "warnings": [],
+    }
+    payload["vertices"].extend(
+        [
+            {"id": "extra-a", "x": 200, "y": 200},
+            {"id": "extra-b", "x": 210, "y": 200},
+            {"id": "extra-c", "x": 210, "y": 210},
+            {"id": "extra-d", "x": 200, "y": 210},
+            {"id": "dangle-a", "x": 300, "y": 300},
+            {"id": "dangle-b", "x": 305, "y": 300},
+        ]
+    )
+    payload["edges"].extend(
+        [
+            {
+                "id": f"extra-{index}",
+                "start": start,
+                "end": end,
+                "assignment": "crease",
+                "source_refs": [f"proposal:extra-{index}"],
+            }
+            for index, (start, end) in enumerate(
+                [
+                    ("extra-a", "extra-b"),
+                    ("extra-b", "extra-c"),
+                    ("extra-c", "extra-d"),
+                    ("extra-d", "extra-a"),
+                    ("dangle-a", "dangle-b"),
+                ],
+                start=1,
+            )
+        ]
+    )
+
+    proposed = resolve_structure_payload(payload)
+
+    assert proposed.status == "review_required"
+    assert proposed.code == "structure_face_mapping_incomplete"
+    assert proposed.resolved is None
+    assert len(proposed.topology["face_proposal"]) == 7
+    assert proposed.topology["proposal_diagnostics"]["errors"] == [
+        "structure_open_boundary",
+        "structure_multiple_components",
+    ]
+
+
+def test_stroke_proposal_keeps_finished_panels_with_duplicate_strokes_and_a_sloped_flap():
+    payload = semantic_box()
+    payload["source"]["adapter"] = "illustrator-stroke-proposal/1"
+    payload["faces"] = []
+    payload["folds"] = []
+    payload["root_face"] = None
+    payload["validation"] = {
+        "status": "review_required",
+        "errors": ["structure_proposal_requires_confirmation"],
+        "warnings": [],
+    }
+
+    translated_vertices = []
+    translated_ids = {}
+    for vertex in list(payload["vertices"]):
+        translated_id = f"double-{vertex['id']}"
+        translated_ids[vertex["id"]] = translated_id
+        translated_vertices.append(
+            {
+                "id": translated_id,
+                "x": float(vertex["x"]) + 0.3,
+                "y": float(vertex["y"]) + 0.2,
+            }
+        )
+    payload["vertices"].extend(translated_vertices)
+    payload["edges"].extend(
+        {
+            "id": f"double-{edge['id']}",
+            "start": translated_ids[edge["start"]],
+            "end": translated_ids[edge["end"]],
+            "assignment": edge["assignment"],
+            "source_refs": [f"proposal:double-{edge['id']}"],
+        }
+        for edge in list(payload["edges"])
+        if not edge["id"].startswith("double-")
+    )
+    payload["vertices"].extend(
+        [
+            {"id": "flap-left", "x": -5.0, "y": 80.0},
+            {"id": "flap-right", "x": 35.0, "y": 80.0},
+        ]
+    )
+    payload["edges"].extend(
+        [
+            {
+                "id": "flap-sloped-left",
+                "start": "v-4",
+                "end": "flap-left",
+                "assignment": "cut",
+                "source_refs": ["proposal:flap"],
+            },
+            {
+                "id": "flap-top",
+                "start": "flap-left",
+                "end": "flap-right",
+                "assignment": "cut",
+                "source_refs": ["proposal:flap"],
+            },
+            {
+                "id": "flap-sloped-right",
+                "start": "flap-right",
+                "end": "v-3",
+                "assignment": "cut",
+                "source_refs": ["proposal:flap"],
+            },
+        ]
+    )
+
+    proposed = resolve_structure_payload(payload)
+
+    assert proposed.status == "review_required"
+    assert proposed.code == "structure_face_mapping_incomplete"
+    sizes = [
+        tuple(face["size_mm"])
+        for face in proposed.topology["face_proposal"]
+        if face.get("size_mm") is not None
+    ]
+    assert sizes.count((30.0, 50.0)) >= 2
+    assert sizes.count((20.0, 50.0)) >= 2
+    assert sizes.count((30.0, 20.0)) >= 2
+    assert proposed.resolved is None
 
 
 def test_ready_cache_never_bypasses_current_approval_status(tmp_path: Path):
