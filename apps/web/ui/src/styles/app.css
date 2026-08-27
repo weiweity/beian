@@ -1786,8 +1786,8 @@ html[data-theme="dark"] .apple-slider::-moz-range-thumb {
 
 .upload-progress-slot.is-paused,
 .upload-progress-slot.is-retrying {
-  border-color: color-mix(in srgb, #d68a00 46%, var(--line));
-  background: color-mix(in srgb, #fff4d6 34%, var(--surface));
+  border-color: color-mix(in srgb, #d48806 46%, var(--line));
+  background: color-mix(in srgb, #d48806 12%, var(--surface));
 }
 
 .upload-progress-head,

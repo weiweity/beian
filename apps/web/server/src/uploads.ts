@@ -81,6 +81,7 @@ export const MAX_PENDING_BYTES_GLOBAL = 1024 * 1024 * 1024;
 export const UPLOAD_CONCURRENCY = 2;
 export const UPLOAD_BUSY = "同时最多上传 2 份，请等其中一份完成后再试";
 export const UPLOAD_CHUNK_BYTES = 1024 * 1024;
+export const UPLOAD_SESSION_METADATA_BYTES = 16 * 1024;
 export const UPLOAD_RELEASE_LEASE_MS = 2 * 60 * 1000;
 const SINGLE_UPLOAD_BUSY = "已有文件正在上传，请等它完成后再试";
 
@@ -688,6 +689,22 @@ export function recentUploadSessionCount(maxAgeMs = UPLOAD_RELEASE_LEASE_MS): nu
   return count;
 }
 
+function uploadSessionHasLease(session: UploadSession, maxAgeMs = UPLOAD_RELEASE_LEASE_MS): boolean {
+  const updatedAt = Date.parse(session.updated_at);
+  return Number.isFinite(updatedAt) && Date.now() - updatedAt <= maxAgeMs;
+}
+
+/**
+ * 分片间隙仍由持久化会话占住上传通道；暂停超过租约后，续传必须重新抢位。
+ * 同一会话的幂等查询不抢新位，避免响应丢失后被自己的租约挡住。
+ */
+function assertUploadSessionLeaseAvailable(session?: UploadSession): void {
+  if (session && uploadSessionHasLease(session)) return;
+  if (recentUploadSessionCount() >= UPLOAD_CONCURRENCY) {
+    throw uploadFailure(UPLOAD_BUSY, 429);
+  }
+}
+
 function sessionFieldsKind(files: UploadSessionFile[]): "compare" | "mockup" {
   const fields = files.map((file) => file.field).sort();
   if (fields.length === 1 && fields[0] === "ai") return "mockup";
@@ -768,6 +785,7 @@ export function startUploadSession(
     return listedSession(existing);
   }
 
+  assertUploadSessionLeaseAvailable();
   assertReceiptCapacity(owner, files.reduce((sum, file) => sum + file.bytes, 0));
   const id = newReceiptId();
   const dir = sessionDir(id);
@@ -836,6 +854,8 @@ export function appendUploadChunk(
   if (offset !== file.received) throw uploadFailure(`服务器已收到 ${file.received} 字节，请从该位置继续`, 409);
   if (offset + chunk.length > file.bytes) throw uploadFailure("上传内容超过文件大小", 413);
 
+  assertUploadSessionLeaseAvailable(session);
+
   let fd: number | undefined;
   try {
     fd = openSync(path, "r+");
@@ -878,7 +898,9 @@ export function completeUploadSession(id: string, owner: string): ListedUploadRe
     const receipt: UploadReceipt = {
       id,
       owner,
-      created_at: session.created_at,
+      // 回执的 30 分钟可开工窗口从服务端确认完成时开始；长传或暂停续传
+      // 不能在刚成功时就因会话起始时间过早而立刻过期。
+      created_at: nowIso(),
       client_upload_id: session.client_upload_id,
       product_name: session.product_name,
       pack_surface: session.pack_surface,

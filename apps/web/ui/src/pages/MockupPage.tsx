@@ -26,6 +26,7 @@ import {
   matchesDeskQuery,
   loadDeskReceipts,
   pendingUploadCard,
+  pendingUploadOpenAction,
   pendingUploadItems,
   shouldReconcileUpload,
   type PendingUploadItem,
@@ -265,14 +266,17 @@ export function MockupPage({
   );
 
   function openPending(item: PendingUploadItem) {
-    if (!item.receipt) {
+    const action = pendingUploadOpenAction(item);
+    if (action === "active") {
       onCompose();
       return;
     }
-    if (!item.productName) {
+    if (action === "resume") {
+      if (!item.receipt) return;
       onResumeReceipt(item.receipt);
       return;
     }
+    if (!item.receipt || !item.productName) return;
     const receipt = item.receipt;
     const productName = item.productName;
     modal.confirm({

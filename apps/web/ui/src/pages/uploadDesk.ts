@@ -16,6 +16,8 @@ export type PendingUploadItem = {
   error: string | null;
 };
 
+export type PendingUploadOpenAction = "active" | "resume" | "start";
+
 export function matchesDeskQuery(query: string, ...values: Array<string | undefined | null>): boolean {
   const needle = query.trim().toLocaleLowerCase();
   if (!needle) return true;
@@ -140,6 +142,17 @@ export function pendingUploadCard(item: PendingUploadItem, readyLabel: string): 
     progress: busy ? item.pct : undefined,
     error: failed ? item.error || "上传失败，请重新上传。" : null,
   };
+}
+
+/**
+ * 看板只允许完整回执进入开工确认；其余状态回到上传工作台继续恢复。
+ * 本机仍在传时不能用回执重挂载页面，否则会中断当前 XHR。
+ */
+export function pendingUploadOpenAction(item: PendingUploadItem): PendingUploadOpenAction {
+  if (uploadIsLocallyBusy(item.phase)) return "active";
+  if (item.phase !== "ready") return item.receipt ? "resume" : "active";
+  if (!item.receipt) return "active";
+  return item.productName ? "start" : "resume";
 }
 
 function uploadIsLocallyBusy(phase: UploadPhase): boolean {

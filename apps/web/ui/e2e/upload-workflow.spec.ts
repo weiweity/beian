@@ -146,6 +146,37 @@ test("回执生成后整页刷新，仍可从审稿台进入恢复页并放弃�
   ).toBe(true);
 });
 
+test("审稿看板点暂停上传只进入续传页，不会误发开工请求", async ({ page, syntheticApi }) => {
+  const excelBytes = excelFile.buffer.length;
+  const pdfBytes = pdfFile.buffer.length;
+  syntheticApi.uploads.push({
+    id: "d00000000002",
+    client_upload_id: "client-paused-board",
+    product_name: "看板续传花盒",
+    pack_surface: "carton",
+    kind: "compare",
+    created_at: "2026-08-26T08:00:00.000Z",
+    bytes: excelBytes + pdfBytes,
+    files: [
+      { field: "excel", name: excelFile.name, bytes: excelBytes, received: Math.floor(excelBytes / 2) },
+      { field: "pdf", name: pdfFile.name, bytes: pdfBytes, received: 0 },
+    ],
+  });
+
+  await page.goto("/reviewup");
+  const paused = page.getByRole("button", { name: /看板续传花盒.*待继续上传/ });
+  await expect(paused).toBeVisible();
+  await paused.click();
+
+  await expect(page).toHaveURL(/\/reviewup\/new\?receipt=d00000000002$/);
+  await expect(page.getByText(/请重新选择同一文件继续/)).toBeVisible();
+  expect(
+    syntheticApi.calls.some(
+      (item) => item.method === "POST" && item.path === "/api/tasks/start",
+    ),
+  ).toBe(false);
+});
+
 test("整页刷新后可找回部分上传，重选同一对文件从服务器偏移续传", async ({
   page,
   syntheticApi,

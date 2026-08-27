@@ -6,6 +6,7 @@ import {
   matchesDeskQuery,
   loadDeskReceipts,
   pendingUploadCard,
+  pendingUploadOpenAction,
   pendingUploadItems,
   shouldReconcileUpload,
 } from "./uploadDesk.js";
@@ -155,5 +156,34 @@ describe("uploadDesk", () => {
     assert.equal(calls, 0);
     assert.deepEqual(await loadDeskReceipts(true, load), []);
     assert.equal(calls, 1);
+  });
+
+  it("只有完整回执可以开工，暂停上传统一回恢复页", () => {
+    const [ready] = pendingUploadItems("compare", local, []);
+    assert.ok(ready);
+    assert.equal(pendingUploadOpenAction(ready), "start");
+
+    const [anonymous] = pendingUploadItems("compare", null, [restored]);
+    assert.ok(anonymous);
+    assert.equal(pendingUploadOpenAction(anonymous), "resume");
+
+    const [paused] = pendingUploadItems("compare", null, [
+      {
+        ...restored,
+        phase: "paused",
+        product_name: "断点续传花盒",
+        received: 18,
+      },
+    ]);
+    assert.ok(paused);
+    assert.equal(pendingUploadOpenAction(paused), "resume");
+  });
+
+  it("本机仍在上传或等回执时保持当前工作台，不重挂载恢复页", () => {
+    for (const phase of ["uploading", "retrying", "confirming"] as const) {
+      const [item] = pendingUploadItems("compare", { ...local, phase }, [restored]);
+      assert.ok(item);
+      assert.equal(pendingUploadOpenAction(item), "active");
+    }
   });
 });

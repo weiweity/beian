@@ -100,6 +100,7 @@ import {
   underReceiptDir,
   UPLOAD_CONCURRENCY,
   UPLOAD_CHUNK_BYTES,
+  UPLOAD_SESSION_METADATA_BYTES,
   UPLOAD_BODY_TOO_LARGE,
   oversizeMessage,
   uploadTotalTooLarge,
@@ -393,15 +394,22 @@ app.delete("/api/uploads/:id", (c) => {
   return c.json({ ok: true, ...(removed ? {} : { already_deleted: true }) });
 });
 
-app.post("/api/uploads/sessions", async (c) => {
-  const s = need(c, "create");
-  try {
-    const body = await c.req.json();
-    return c.json({ upload: startUploadSession(receiptOwner(s), body) });
-  } catch (err) {
-    boom(err);
-  }
-});
+app.post(
+  "/api/uploads/sessions",
+  bodyLimit({
+    maxSize: UPLOAD_SESSION_METADATA_BYTES,
+    onError: (c) => c.json({ detail: "上传文件信息过大" }, 413),
+  }),
+  async (c) => {
+    const s = need(c, "create");
+    try {
+      const body = await c.req.json();
+      return c.json({ upload: startUploadSession(receiptOwner(s), body) });
+    } catch (err) {
+      boom(err);
+    }
+  },
+);
 
 app.put(
   "/api/uploads/sessions/:id/files/:field",
