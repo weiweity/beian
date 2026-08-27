@@ -41,6 +41,28 @@ export function hitOnPage(hit: { page?: number | string }, pageNo: number): bool
   return p === n;
 }
 
+export type PinHitGroup<T> = { h: T; i: number; indices: number[] };
+
+/** 中英文品名可共享同一个联合框；保留两条审核字段，只在画布上画一个钉。 */
+export function pinHitGroupsForPage<
+  T extends { page?: number | string; bilingual_pair_id?: string },
+>(hits: T[], pageNo: number): Array<PinHitGroup<T>> {
+  const out: Array<PinHitGroup<T>> = [];
+  const pairIndex = new Map<string, number>();
+  hits.forEach((h, i) => {
+    if (!hitOnPage(h, pageNo)) return;
+    const pairId = String(h.bilingual_pair_id || "").trim();
+    const existing = pairId ? pairIndex.get(pairId) : undefined;
+    if (existing != null) {
+      out[existing].indices.push(i);
+      return;
+    }
+    if (pairId) pairIndex.set(pairId, out.length);
+    out.push({ h, i, indices: [i] });
+  });
+  return out;
+}
+
 function num(v: unknown): number {
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;

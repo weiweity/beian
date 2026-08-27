@@ -4,9 +4,27 @@ import {
   hitOnPage,
   overlayFromBox,
   overlaysForHit,
+  pinHitGroupsForPage,
   pickHitBox,
   resolvePageMetrics,
 } from "./pinBox.js";
+
+describe("pinHitGroupsForPage", () => {
+  it("keeps two review fields but renders one shared bilingual pin", () => {
+    const rows = pinHitGroupsForPage(
+      [
+        { page: 1, bilingual_pair_id: "pair-a", field: "中文品名" },
+        { page: 1, bilingual_pair_id: "pair-a", field: "英文品名" },
+        { page: 1, field: "净含量" },
+        { page: 2, field: "条码" },
+      ],
+      1,
+    );
+    assert.equal(rows.length, 2);
+    assert.deepEqual(rows[0].indices, [0, 1]);
+    assert.deepEqual(rows[1].indices, [2]);
+  });
+});
 
 describe("resolvePageMetrics", () => {
   it("uses page width/height when they are real", () => {

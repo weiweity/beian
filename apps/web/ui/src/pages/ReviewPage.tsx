@@ -4,7 +4,7 @@ import { Alert, App, Button, Empty, Input } from "antd";
 import { ApiError, api, type Decision, type FieldHit, type TaskDetail, type TaskPage } from "../api";
 import { WaitCard } from "../chrome/WaitCard";
 import { fittedPage, panBy, resetZoom, zoomAt, zoomCss, zoomToBox } from "./canvasZoom";
-import { hitOnPage, overlayFromBox, overlaysForHit, pickHitBox, resolvePageMetrics } from "./pinBox";
+import { overlayFromBox, overlaysForHit, pickHitBox, pinHitGroupsForPage, resolvePageMetrics } from "./pinBox";
 import {
   enterElementFullscreen,
   exitElementFullscreen,
@@ -439,7 +439,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
   const laid = metrics && viewSize ? fittedPage(metrics, viewSize) : { imgW: 0, imgH: 0, offsetX: 0, offsetY: 0 };
   laidRef.current = laid;
   const pinHits = useMemo(() => {
-    return hits.map((h, i) => ({ h, i })).filter(({ h }) => hitOnPage(h, pageNo));
+    return pinHitGroupsForPage(hits, pageNo);
   }, [hits, pageNo]);
   const currentBox = current ? pickHitBox(current.bboxes, Number(current.page) || pageNo) : null;
 
@@ -816,17 +816,18 @@ export function ReviewPage({ taskId, onBack }: Props) {
                     }
                   }}
                 />
-                {pinHits.map(({ h, i }) => {
+                {pinHits.map(({ h, i, indices }) => {
                   const overlays = overlaysForHit(h.bboxes, pageNo, metrics);
                   const preferred = pickHitBox(h.bboxes, pageNo);
                   const pin = preferred && metrics ? overlayFromBox(preferred, metrics) : null;
+                  const pairActive = indices.includes(active);
                   return (
                     <Fragment key={h.id || i}>
                       {boxesOn
                         ? overlays.map((ov, k) => (
                             <span
                               key={`${h.id || i}-box-${k}`}
-                              className={`hit-box ${ov.kind === "warn" ? "is-warn" : ""} ${i === active ? "is-on" : "is-dim"}`.trim()}
+                              className={`hit-box ${ov.kind === "warn" ? "is-warn" : ""} ${pairActive ? "is-on" : "is-dim"}`.trim()}
                               style={{ left: ov.left, top: ov.top, width: ov.width, height: ov.height }}
                             />
                           ))
@@ -834,10 +835,10 @@ export function ReviewPage({ taskId, onBack }: Props) {
                       {pinsOn && pin ? (
                         <button
                           type="button"
-                          className={i === active ? "pin is-on" : "pin is-dim"}
+                          className={pairActive ? "pin is-on" : "pin is-dim"}
                           style={{ left: pin.pinLeft, top: pin.pinTop }}
                           onPointerDown={(e) => e.stopPropagation()}
-                          onClick={() => pickHit(i)}
+                          onClick={() => pickHit(pairActive ? active : i)}
                         >
                           {i + 1}
                         </button>

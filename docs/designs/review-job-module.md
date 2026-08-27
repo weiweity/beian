@@ -6,7 +6,7 @@ Repo: weiweity/beian
 Status: APPROVED
 Mode: Startup
 
-Related: `docs/designs/review-rework-loop.md`（对红循环、签字门、open_issues 仍有效）、`docs/adr-004-ousterhout-design.md`（深模块、唯一 HTTP 仍有效）、`docs/adr-005-packaging-structure-v2.md`（打样结构与六面验证的现行合同）
+Related: `docs/designs/review-rework-loop.md`（对红循环、签字门、open_issues 仍有效）、`docs/designs/compare-pdf-ingest-v2.md`（对照 PDF 按页选源与证据合同）、`docs/adr-004-ousterhout-design.md`（深模块、唯一 HTTP 仍有效）、`docs/adr-005-packaging-structure-v2.md`（打样结构与六面验证的现行合同）
 
 本文**取代** `two-desks-review-and-mockup.md` 里这两句：8/31 不要实现 `POST /api/mockups`；8/31 不要通用异步队列。旧文件只保留需求发现历史，不再作为当前 UI、路由或视觉合同；当前合同以本文、`DESIGN.md` 与 `AGENTS.md` 为准。
 
@@ -148,7 +148,7 @@ GET 必须走 `publicTask` / `publicMockup`，剥掉 `job_pid`、磁盘 `path`�
 
 内部不返回：`job_pid` `notify_job_id` `reclaim_count`
 
-`job_stage` 白名单与汉字：`render_pdf` 出图、`ocr` 认字、`match` 对照、`blender` 打样、`export` 导出。未知 STAGE 忽略，不编百分比。
+`job_stage` 白名单与汉字：`render_pdf` 出图、`ingest` 识稿、`ocr` 认字、`layout` 分区、`match` 对照、`blender` 打样、`export` 导出。未知 STAGE 忽略，不编百分比。审稿台粗粒度进度按这个顺序单调前进。
 
 `job_eta_s` 只在 `running` 时给常数：对照/对红 40，打样 240。queued 只用 `queue_ahead`，禁止对排队中的单显示 40 秒。没有 STAGE 也用这条常数，不画百分比。
 
@@ -172,7 +172,7 @@ Windows 上 spawn 必须进 Job Object，Node 退出时杀掉子进程树。做�
 
 ### Worker
 
-- 对照 / 对红：`python -m app.cli compare|rework`，最后一行结果 JSON，过程中 `STAGE render_pdf|ocr|match`。不搬 `fields.py`。确认单底部工艺说明 / 颜色要求 / 版本号 / 更新内容走 `skip_sheet_field`（字段名开头），不进机审。
+- 对照 / 对红：`python -m app.cli compare|rework`，最后一行结果 JSON，过程中 `STAGE render_pdf|ingest|ocr|layout|match`。按 `compare-pdf-ingest-v2.md` 逐页选择 PDF 文字层或一次 OCR，再用版面区域收敛到真实单钉；不搬 `fields.py`。确认单底部工艺说明 / 颜色要求 / 版本号 / 更新内容走 `skip_sheet_field`（字段名开头），不进机审。
 - 打样：`workers/packaging`。POST 时已确认 Blender；跑到一半消失 → failed，写清。stderr 打 `STAGE render_pdf|blender|export`（出图/打样/导出）。入队后 `job_stage` 从 `render_pdf` 开始，不是 `blender`。平面出图用 pymupdf（对照同一 Python），不靠 qlmanage。结构只认与源稿绑定的 `PackagingStructure` 显式语义；拓扑或六面角色有歧义时进入管理员确认，无语义或不安全结构不得靠颜色、图层名、间距、bbox 或模板猜测进入 Blender。GLB 导出后验证轴向、毫米尺寸和六个已确认面的贴图来源、方向与镜像。PPT 先用两张白底写 OOXML，不依赖 Node；写不出才试演示文稿运行时（stderr `PPT 跳过`）。两张白底合成一页 PDF。缺 PPT/PDF 时白底图和 GLB 仍 `done`/`succeeded`，不要把整单判成「Node不存在」。
 - 超时：对照 180s、打样 420s（已有）。超时 = failed，回收槽。
 - 取消：不做。
