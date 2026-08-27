@@ -124,7 +124,7 @@ import {
 type Env = { Variables: { session: Session } };
 
 const app = new Hono<Env>();
-const VERSION = "0.18.0.0";
+const VERSION = "0.19.0.0";
 /** 浏览器给 100 MB 慢速上传 15 分钟；服务端多留 1 分钟完成落盘和回执。 */
 export const SERVER_HTTP_OPTIONS = {
   headersTimeout: 60_000,
@@ -1058,6 +1058,21 @@ app.get("/api/mockups/:id/structure-preview", (c) => {
       "Content-Disposition": "inline",
     },
   });
+});
+
+export function faviconResponse(path: string): Response {
+  if (!pngMagicAt(path)) throw new HTTPException(404, { message: "站点图标不存在" });
+  return new Response(Readable.toWeb(createReadStream(path)) as ReadableStream, {
+    headers: {
+      "Content-Type": "image/png",
+      "X-Content-Type-Options": "nosniff",
+      "Cache-Control": cacheHeaderFor("/brand/logo-mark.png") || "public, max-age=86400",
+    },
+  });
+}
+
+app.get("/favicon.ico", () => {
+  return faviconResponse(join(UI_PUBLIC, "brand", "logo-mark.png"));
 });
 
 // root = ui/public, so /brand/logo-mark.png → ui/public/brand/logo-mark.png.

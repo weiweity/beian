@@ -23,8 +23,9 @@ export function brokenApiMessage(err: unknown, host = ""): string | null {
 }
 
 export const GET_TIMEOUT_MS = 15_000;
-// 分片上传没有一条覆盖全流程的长连接，但每个网络步骤仍必须有退出上限。
+// 旧 multipart 仍是一条长连接；分片会话使用更短的单步上限，超时后进入“继续上传”。
 export const UPLOAD_TIMEOUT_MS = 15 * 60 * 1000;
+export const RESUMABLE_STEP_TIMEOUT_MS = 20_000;
 const GET_RETRY_BASE_MS = 5_000;
 const GET_RETRY_MAX_MS = 60_000;
 type PendingGet = { epoch: number; promise: Promise<unknown> };
@@ -39,6 +40,8 @@ function invalidateGetCache(): void {
   failedGets.clear();
 }
 
+type RequestOptions = RequestInit & { timeoutMs?: number };
+
 function isGet(opts: RequestInit): boolean {
   return String(opts.method || "GET").toUpperCase() === "GET";
 }
@@ -50,25 +53,26 @@ export function transientApiFailure(err: unknown): boolean {
   return err instanceof TypeError || (err instanceof DOMException && err.name === "AbortError");
 }
 
-async function fetchJson<T>(path: string, opts: RequestInit): Promise<T> {
-  const headers = new Headers(opts.headers);
-  if (!(opts.body instanceof FormData) && !headers.has("Content-Type")) {
+async function fetchJson<T>(path: string, opts: RequestOptions): Promise<T> {
+  const { timeoutMs, ...requestInit } = opts;
+  const headers = new Headers(requestInit.headers);
+  if (!(requestInit.body instanceof FormData) && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
-  const getRequest = isGet(opts);
+  const getRequest = isGet(requestInit);
   const controller = new AbortController();
   let timedOut = false;
-  const abortFromCaller = () => controller.abort(opts.signal?.reason);
-  if (opts.signal) opts.signal.addEventListener("abort", abortFromCaller, { once: true });
+  const abortFromCaller = () => controller.abort(requestInit.signal?.reason);
+  if (requestInit.signal) requestInit.signal.addEventListener("abort", abortFromCaller, { once: true });
   const timeout = globalThis.setTimeout(() => {
     timedOut = true;
     controller.abort();
-  }, getRequest ? GET_TIMEOUT_MS : UPLOAD_TIMEOUT_MS);
+  }, timeoutMs ?? (getRequest ? GET_TIMEOUT_MS : UPLOAD_TIMEOUT_MS));
   let res: Response;
   try {
     res = await fetch(path, {
       credentials: "same-origin",
-      ...opts,
+      ...requestInit,
       signal: controller.signal,
       headers,
     });
@@ -83,7 +87,7 @@ async function fetchJson<T>(path: string, opts: RequestInit): Promise<T> {
     throw err;
   } finally {
     globalThis.clearTimeout(timeout);
-    if (opts.signal) opts.signal.removeEventListener("abort", abortFromCaller);
+    if (requestInit.signal) requestInit.signal.removeEventListener("abort", abortFromCaller);
   }
   const ct = res.headers.get("content-type") || "";
   if (res.status === 413) {
@@ -110,7 +114,7 @@ async function fetchJson<T>(path: string, opts: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
-async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
+async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
   if (!isGet(opts)) {
     const body = await fetchJson<T>(path, opts);
     invalidateGetCache();
@@ -260,9 +264,13 @@ export class UploadPausedError extends ApiError {
 }
 
 const RESUMABLE_CHUNK_BYTES = 1024 * 1024;
-const RESUMABLE_RETRIES = 5;
+const RESUMABLE_RETRIES = 3;
 
 type UploadSessionResponse = { upload: PendingUploadReceipt };
+
+function uploadStep<T>(path: string, opts: RequestInit): Promise<T> {
+  return request<T>(path, { ...opts, timeoutMs: RESUMABLE_STEP_TIMEOUT_MS });
+}
 
 function abortError(): ApiError {
   return new ApiError(0, "上传已停止", false);
@@ -383,7 +391,11 @@ export async function uploadResumable(
   };
   let session = (
     await retryUploadCall(
-      () => request<UploadSessionResponse>("/api/uploads/sessions", { method: "POST", body: JSON.stringify(startBody) }),
+      () => uploadStep<UploadSessionResponse>("/api/uploads/sessions", {
+        method: "POST",
+        body: JSON.stringify(startBody),
+        signal,
+      }),
       retryNotice,
       signal,
     )
@@ -410,7 +422,7 @@ export async function uploadResumable(
       const sha256 = await sha256Hex(buffer);
       const response = await retryUploadCall(
         () =>
-          request<UploadSessionResponse>(
+          uploadStep<UploadSessionResponse>(
             `/api/uploads/sessions/${encodeURIComponent(uploadId!)}/files/${selected.field}`,
             {
               method: "PUT",
@@ -420,6 +432,7 @@ export async function uploadResumable(
                 "x-upload-sha256": sha256,
               },
               body: buffer,
+              signal,
             },
           ),
         retryNotice,
@@ -442,7 +455,7 @@ export async function uploadResumable(
       const sha256 = await sha256Hex(buffer);
       const response = await retryUploadCall(
         () =>
-          request<UploadSessionResponse>(
+          uploadStep<UploadSessionResponse>(
             `/api/uploads/sessions/${encodeURIComponent(uploadId!)}/files/${selected.field}`,
             {
               method: "PUT",
@@ -452,6 +465,7 @@ export async function uploadResumable(
                 "x-upload-sha256": sha256,
               },
               body: buffer,
+              signal,
             },
           ),
         retryNotice,
@@ -475,9 +489,10 @@ export async function uploadResumable(
   session = (
     await retryUploadCall(
       () =>
-        request<UploadSessionResponse>(`/api/uploads/sessions/${encodeURIComponent(uploadId!)}/complete`, {
+        uploadStep<UploadSessionResponse>(`/api/uploads/sessions/${encodeURIComponent(uploadId!)}/complete`, {
           method: "POST",
           body: JSON.stringify({}),
+          signal,
         }),
       retryNotice,
       signal,

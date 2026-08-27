@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   compareBoardProgress,
+  detailLoadState,
   feishuReadyFromHealth,
   liveJobLine,
   liveNavPulse,
@@ -93,6 +94,18 @@ describe("shouldShowWaitCard", () => {
     assert.equal(shouldShowWaitCard({ status: "queued" }), false);
     assert.equal(shouldShowWaitCard({ status: "queued", job_status: "queued" }), true);
     assert.equal(shouldShowWaitCard({ status: "running", job_status: "running" }), true);
+  });
+});
+
+describe("detailLoadState", () => {
+  it("shows a revalidation error instead of a stale queued handoff", () => {
+    assert.equal(detailLoadState({ status: "queued", job_status: "queued" }, "没有权限"), "error");
+  });
+
+  it("keeps loading, waiting and ready states distinct", () => {
+    assert.equal(detailLoadState(null, null), "loading");
+    assert.equal(detailLoadState({ status: "queued", job_status: "queued" }, null), "waiting");
+    assert.equal(detailLoadState({ status: "pending_review", job_status: "succeeded" }, null), "ready");
   });
 });
 

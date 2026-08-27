@@ -156,42 +156,70 @@ def parse_excel_fields(path: str) -> list[dict]:
     成分表自动按步骤拆条（P0）。
     """
     wb = openpyxl.load_workbook(path, data_only=True)
-    ws = wb.active
-    fields: list[dict] = []
-    max_col = min(ws.max_column or 3, 8)
-    for row in ws.iter_rows(
-        min_row=1, max_row=ws.max_row or 1, max_col=max_col, values_only=True
-    ):
-        cells = list(row) + [None] * 8
-        b, c = cells[1], cells[2]
-        remark = cells[4] if cells[4] is not None else cells[3]
-        name = str(b).strip() if b is not None else ""
-        if name in ("", "项目", "序号") or "确认单" in name:
-            continue
-        val = "" if c is None else str(c).strip()
-        rem = "" if remark is None else str(remark).strip()
-        if not name:
-            continue
-        if not val and not rem:
-            continue
-        if not val and rem:
-            val = rem
-            rem = ""
-        if skip_sheet_field(name):
-            continue
-        fg = field_group(name)
-        if fg == "成分表":
-            fields.extend(split_ingredient_steps(name, val, rem))
-        else:
-            fields.append(
-                {
-                    "field": name,
-                    "excel_value": val,
-                    "remark": rem,
-                    "field_group": fg,
-                }
+    try:
+        ws = wb.active
+        fields: list[dict] = []
+
+        # B/C 是字段和值的产品合同。任一列被隐藏时，这一页不应悄悄把隐藏数据
+        # 当成审核要求；备注只从可见的 E/D 中取，避免隐藏辅助列制造假疑点。
+        if ws.column_dimensions["B"].hidden or ws.column_dimensions["C"].hidden:
+            # B/C 是整份确认单的输入合同，不是辅助备注。静默返回空数组会让
+            # “没有任何核对字段”伪装成干净单，必须在 worker 边界明确失败。
+            raise ValueError("确认单的项目列或内容列被隐藏，请取消隐藏后重新对照")
+        remark_columns = [
+            column
+            for column in (5, 4)
+            if not ws.column_dimensions[openpyxl.utils.get_column_letter(column)].hidden
+        ]
+
+        for row_index in range(1, (ws.max_row or 1) + 1):
+            if ws.row_dimensions[row_index].hidden:
+                continue
+            b = ws.cell(row=row_index, column=2).value
+            c = ws.cell(row=row_index, column=3).value
+            name = str(b).strip() if b is not None else ""
+            if name in {"职责", "签字"}:
+                # 确认单的职责/签字区是明确页脚边界，边界后的联系人、审批人等
+                # 不属于包装正文，不能继续进入机审。
+                break
+            if name in ("", "项目", "序号") or "确认单" in name:
+                continue
+            remark = next(
+                (
+                    ws.cell(row=row_index, column=column).value
+                    for column in remark_columns
+                    if ws.cell(row=row_index, column=column).value is not None
+                ),
+                None,
             )
-    return fields
+            val = "" if c is None else str(c).strip()
+            rem = "" if remark is None else str(remark).strip()
+            if not val and not rem:
+                continue
+            if not val and rem:
+                val = rem
+                rem = ""
+            if skip_sheet_field(name):
+                continue
+            fg = field_group(name)
+            if fg == "成分表":
+                fields.extend(split_ingredient_steps(name, val, rem))
+            else:
+                fields.append(
+                    {
+                        "field": name,
+                        "excel_value": val,
+                        "remark": rem,
+                        "field_group": fg,
+                    }
+                )
+        if not fields:
+            # 零字段不是“全部一致”，而是确认单合同没有被读到。继续执行会生成
+            # 可签字的假干净单，因此必须在进入 OCR 前失败并让用户修正确认单。
+            raise ValueError("确认单没有可核对字段，请检查隐藏行和正文内容")
+        return fields
+    finally:
+        wb.close()
 
 def split_chunks(value: str) -> list[str]:
     value = (value or "").strip()

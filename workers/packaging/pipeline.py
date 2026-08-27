@@ -61,7 +61,32 @@ DEFAULT_ILLUSTRATOR_APP = Path(
 
 
 class PipelineError(RuntimeError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "packaging_failed",
+        cause: str | None = None,
+        fix: str | None = None,
+    ):
+        public_message = str(message).strip() or "打样中断"
+        super().__init__(public_message)
+        self.message = public_message
+        self.code = str(code).strip() or "packaging_failed"
+        self.cause = str(cause or "").strip()
+        self.fix = str(fix or "").strip()
+
+    def as_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "ok": False,
+            "code": self.code,
+            "error": self.message[:80],
+        }
+        if self.cause:
+            payload["cause"] = self.cause[:240]
+        if self.fix:
+            payload["fix"] = self.fix[:160]
+        return payload
 
 
 class PipelineHold(PipelineError):
@@ -430,6 +455,76 @@ def run_illustrator_fallback(
     return result
 
 
+def _last_worker_diagnostic(*values: object) -> str:
+    for value in values:
+        lines = [line.strip() for line in str(value or "").splitlines() if line.strip()]
+        for line in reversed(lines):
+            if not line.startswith("STAGE "):
+                return line[:240]
+    return "Illustrator worker returned no diagnostic"
+
+
+def illustrator_structure_failure(
+    *,
+    returncode: int,
+    stdout: str = "",
+    stderr: str = "",
+    result: dict[str, Any] | None = None,
+) -> PipelineError:
+    result = dict(result or {})
+    result_error = result.get("error") or result.get("semantic_errors") or result.get("missing_outputs")
+    cause = _last_worker_diagnostic(result_error, stderr, stdout, f"worker exit {returncode}")
+    lowered = cause.lower()
+
+    if "no other open documents" in lowered or "requires no other open documents" in lowered:
+        return PipelineError(
+            "Illustrator 还有其他稿件打开，请关闭后重新打样",
+            code="illustrator_documents_open",
+            cause=cause,
+            fix="关闭 Illustrator 中其他文档，仅保留本次自动任务",
+        )
+    if returncode == 3 or "timed out" in lowered or "timeout" in lowered:
+        return PipelineError(
+            "Illustrator 处理超时，请关闭其他稿件后重试",
+            code="illustrator_timeout",
+            cause=cause,
+            fix="关闭其他 Illustrator 文档后重试；仍超时再查 worker 日志",
+        )
+    if (
+        returncode == 6
+        or "com unavailable" in lowered
+        or "warm-up failed" in lowered
+        or "launch failed" in lowered
+        or "probe" in lowered
+    ):
+        return PipelineError(
+            "Illustrator 没有启动成功，请在杭州电脑打开后重试",
+            code="illustrator_unavailable",
+            cause=cause,
+            fix="在交互桌面启动 Illustrator，并确认没有弹窗或其他打开文档",
+        )
+    if returncode == 5 or result.get("missing_outputs"):
+        return PipelineError(
+            "Illustrator 导出结果不完整，请重新打样",
+            code="illustrator_output_incomplete",
+            cause=cause,
+            fix="重试一次；仍失败由管理员查看该任务的 Illustrator 日志",
+        )
+    if result and (not result.get("success") or result.get("semantic_errors")):
+        return PipelineError(
+            "Illustrator 没有读到完整结构语义，请检查结构标记后重试",
+            code="illustrator_structure_invalid",
+            cause=cause,
+            fix="检查 packaging:cut/crease 与六面标记，修正后重新打样",
+        )
+    return PipelineError(
+        "Illustrator 结构语义导出失败，请关闭其他稿件后重试",
+        code="illustrator_structure_export_failed",
+        cause=cause,
+        fix="关闭其他 Illustrator 文档后重试；仍失败由管理员查看任务日志",
+    )
+
+
 def run_illustrator_structure_export(
     source: Path,
     project_dir: Path,
@@ -442,7 +537,12 @@ def run_illustrator_structure_export(
         illustrator_config.get("application", str(DEFAULT_ILLUSTRATOR_APP))
     ).expanduser().resolve()
     if not app_path.exists():
-        raise PipelineError(f"结构语义导出需要 Illustrator，但未找到应用：{app_path}")
+        raise PipelineError(
+            "没有找到 Illustrator，请让管理员在开工板重新扫描",
+            code="illustrator_not_found",
+            cause=f"configured Illustrator path does not exist: {app_path}",
+            fix="在杭州电脑设置页重新扫描 Illustrator 后再打样",
+        )
     normalized_dir = project_dir / "illustrator_semantic"
     normalized_dir.mkdir(parents=True, exist_ok=True)
     config_path = normalized_dir / "illustrator_input.json"
@@ -474,12 +574,36 @@ def run_illustrator_structure_export(
         text=True,
     )
     log_path.write_text(process.stdout + "\n" + process.stderr, encoding="utf-8")
-    if process.returncode != 0 or not result_path.is_file():
-        raise PipelineError(f"Illustrator 结构语义导出失败，日志={log_path}")
-    result = load_json(result_path)
+    result: dict[str, Any] | None = None
+    if result_path.is_file():
+        try:
+            result = load_json(result_path)
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            result = None
+    if process.returncode != 0 or result is None:
+        raise illustrator_structure_failure(
+            returncode=process.returncode,
+            stdout=process.stdout,
+            stderr=process.stderr,
+            result=result,
+        )
     required = ("full_pdf", "print_pdf", "structure_json")
-    if not result.get("success") or any(not Path(result.get(key, "")).is_file() for key in required):
-        raise PipelineError(f"Illustrator 结构语义导出不完整：{result.get('error')}，日志={log_path}")
+    missing = [
+        key
+        for key in required
+        if not str(result.get(key) or "").strip()
+        or not Path(str(result.get(key))).is_file()
+    ]
+    if not result.get("success") or missing:
+        detail = dict(result)
+        if missing:
+            detail["missing_outputs"] = missing
+        raise illustrator_structure_failure(
+            returncode=process.returncode,
+            stdout=process.stdout,
+            stderr=process.stderr,
+            result=detail,
+        )
     return result
 
 
@@ -1392,8 +1516,12 @@ def main() -> int:
 
 
 def _err_json(msg: object) -> None:
-    text = str(msg).strip()[:80] or "打样中断"
-    print(json.dumps({"ok": False, "error": text}, ensure_ascii=False), file=sys.stderr)
+    if isinstance(msg, PipelineError):
+        payload = msg.as_dict()
+    else:
+        text = str(msg).strip()[:80] or "打样中断"
+        payload = {"ok": False, "error": text}
+    print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), file=sys.stderr)
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@ import {
   buildRevisionList,
   compactEvidence,
   issueEvidence,
+  partitionReviewHits,
   reviewEvidence,
   withLocalNotes,
 } from "./reviewEvidence.js";
@@ -31,6 +32,36 @@ describe("compactEvidence", () => {
     assert.equal(result.expandable, true);
     assert.ok(result.summary.length <= 181);
     assert.equal(result.full, lines.join("\n"));
+  });
+});
+
+describe("partitionReviewHits", () => {
+  it("puts actionable doubts first and keeps original indices for canvas picking", () => {
+    const result = partitionReviewHits([
+      { id: "ok", field: "品牌", status: "一致" },
+      { id: "missing", field: "英文品名", status: "缺失" },
+      { id: "manual", field: "净含量", status: "一致", decision: "issue" },
+    ]);
+
+    assert.deepEqual(result.issues.map(({ hit, index }) => [hit.id, index]), [
+      ["missing", 1],
+      ["manual", 2],
+    ]);
+    assert.deepEqual(result.consistent.map(({ hit, index }) => [hit.id, index]), [["ok", 0]]);
+  });
+
+  it("treats concrete coverage misses as issues even when the coarse status says consistent", () => {
+    const result = partitionReviewHits([
+      {
+        id: "coverage-miss",
+        field: "英文品名",
+        status: "一致",
+        coverage: { hit: ["SEA GRAPE"], miss: ["CAPSULE MIST"], matched: 1, total: 2 },
+      },
+    ]);
+
+    assert.deepEqual(result.issues.map(({ hit, index }) => [hit.id, index]), [["coverage-miss", 0]]);
+    assert.equal(result.consistent.length, 0);
   });
 });
 

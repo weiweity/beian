@@ -14,12 +14,13 @@ DocMode = Literal["live_text", "outlined", "image", "mixed"]
 
 # 分类启发式（夹具可微调）：
 # live_text: 去掉刀版尺寸数字与 U+FFFD 后，有足够活字且没有大面积图/密集路径
-# outlined: 几乎无活字且 drawings ≥ 400（转曲：几乎无 text object、路径 2000–7000）
+# outlined: 几乎无活字且路径组或组内绘图指令足够密集
 # image: 几乎无活字且大图铺满 / 矢量很少
 # mixed: 大面积图或密集路径与活字同页；必须 OCR，不能因页脚/尺寸活字漏掉主体
 # 文档级：各页模式不一致即 mixed；具体 OCR 路由仍按页模式决定
 LIVE_TEXT_MIN_CHARS = 40
 OUTLINED_MIN_DRAWINGS = 400
+OUTLINED_MIN_DRAWING_ITEMS = 800
 FFFD_MAX_RATIO = 0.5
 FULL_PAGE_IMAGE_MIN_COVERAGE = 0.5
 
@@ -54,20 +55,30 @@ _PUBLIC_PAGE_KEYS = (
     "image_blocks",
     "image_coverage",
     "drawings",
+    "drawing_items",
     "warning",
 )
-_PUBLIC_KEYS = ("mode", "pages", "live_chars", "drawings", "images", "warning")
+_PUBLIC_KEYS = (
+    "mode",
+    "pages",
+    "live_chars",
+    "drawings",
+    "drawing_items",
+    "images",
+    "warning",
+)
 
 
 def classify_page(
     live_chars: int,
     drawings: int,
     *,
+    drawing_items: int = 0,
     image_coverage: float = 0.0,
 ) -> PageMode:
     if image_coverage >= FULL_PAGE_IMAGE_MIN_COVERAGE:
         return "mixed" if live_chars >= LIVE_TEXT_MIN_CHARS else "image"
-    if drawings >= OUTLINED_MIN_DRAWINGS:
+    if drawings >= OUTLINED_MIN_DRAWINGS or drawing_items >= OUTLINED_MIN_DRAWING_ITEMS:
         return "mixed" if live_chars >= LIVE_TEXT_MIN_CHARS else "outlined"
     if live_chars < LIVE_TEXT_MIN_CHARS:
         return "image"
@@ -153,6 +164,7 @@ def ingest_pdf(
             mode = classify_page(
                 live,
                 gfx["drawings"],
+                drawing_items=gfx["drawing_items"],
                 image_coverage=gfx["image_coverage"],
             )
             pages_out.append(
@@ -165,6 +177,7 @@ def ingest_pdf(
                     "image_blocks": gfx["image_blocks"],
                     "image_coverage": gfx["image_coverage"],
                     "drawings": gfx["drawings"],
+                    "drawing_items": gfx["drawing_items"],
                     "warning": _warning_for(mode),
                 }
             )
@@ -177,6 +190,7 @@ def ingest_pdf(
         "pages": pages_out,
         "live_chars": sum(p["live_chars"] for p in pages_out),
         "drawings": sum(p["drawings"] for p in pages_out),
+        "drawing_items": sum(p["drawing_items"] for p in pages_out),
         "images": sum(p["image_blocks"] for p in pages_out),
         "warning": _warning_for(doc_mode),
         "spans": _map_live_spans(layer_blocks, page_metas),
@@ -198,6 +212,11 @@ def _warning_for(mode: str) -> str | None:
 
 def _page_graphics(page: Any) -> dict[str, Any]:
     drawings = page.get_drawings() or []
+    drawing_items = sum(
+        len(path.get("items") or [])
+        for path in drawings
+        if isinstance(path, dict)
+    )
     d = page.get_text("dict") or {}
     image_blocks = 0
     image_rects: list[pymupdf.Rect] = []
@@ -215,6 +234,7 @@ def _page_graphics(page: Any) -> dict[str, Any]:
     image_coverage = _rect_union_coverage(image_rects, page_box)
     return {
         "drawings": len(drawings),
+        "drawing_items": drawing_items,
         "image_blocks": image_blocks,
         "image_coverage": round(min(1.0, image_coverage), 4),
         "words": len(words),

@@ -196,6 +196,59 @@ def test_outlined_path_drawings(tmp_path: Path):
     assert len(result["warning"]) <= 80
 
 
+def test_grouped_vector_commands_with_live_text_route_to_ocr(tmp_path: Path):
+    """Illustrator 可把大量转曲字合并进少量 path；按组内指令复杂度仍判 mixed。"""
+    pdf = tmp_path / "grouped-vector.pdf"
+    doc = pymupdf.open()
+    page = doc.new_page(width=600, height=800)
+    page.insert_textbox(
+        pymupdf.Rect(20, 20, 580, 120),
+        "LIVE TEXT FOOTER " * 8,
+        fontsize=10,
+        fontname="helv",
+    )
+    shape = page.new_shape()
+    for index in range(810):
+        x = 20 + (index % 90) * 6
+        y = 160 + (index // 90) * 12
+        shape.draw_line((x, y), (x + 3, y + 6))
+    shape.finish(color=(0, 0, 0), width=0.4)
+    shape.commit()
+    doc.save(str(pdf))
+    doc.close()
+
+    result = ingest_pdf(pdf, max_pages=1)
+    page_result = result["pages"][0]
+
+    assert page_result["drawings"] < 400
+    assert page_result["drawing_items"] >= 800
+    assert page_result["live_chars"] >= 40
+    assert page_result["mode"] == "mixed"
+
+
+def test_grouped_vector_commands_without_live_text_stay_outlined(tmp_path: Path):
+    pdf = tmp_path / "grouped-vector-outlined.pdf"
+    doc = pymupdf.open()
+    page = doc.new_page(width=600, height=800)
+    shape = page.new_shape()
+    for index in range(810):
+        x = 20 + (index % 90) * 6
+        y = 80 + (index // 90) * 12
+        shape.draw_line((x, y), (x + 3, y + 6))
+    shape.finish(color=(0, 0, 0), width=0.4)
+    shape.commit()
+    doc.save(str(pdf))
+    doc.close()
+
+    result = ingest_pdf(pdf, max_pages=1)
+    page_result = result["pages"][0]
+
+    assert page_result["drawings"] < 400
+    assert page_result["drawing_items"] >= 800
+    assert page_result["live_chars"] == 0
+    assert page_result["mode"] == "outlined"
+
+
 def test_full_page_image(tmp_path: Path):
     """一张大图页 → image。"""
     pdf = _image_pdf(tmp_path / "image.pdf")
@@ -343,6 +396,7 @@ def test_public_ingest_drops_spans_and_layer_text(tmp_path: Path):
         "pages",
         "live_chars",
         "drawings",
+        "drawing_items",
         "images",
         "warning",
     }
