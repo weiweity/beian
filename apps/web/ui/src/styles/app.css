@@ -898,7 +898,11 @@ html[data-theme="dark"] .workspace {
 }
 
 .review-card-summary-state {
-  flex: none;
+  flex: 0 1 auto;
+  max-width: 46%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--accent);
   font-family: var(--font-mono);
   font-size: 15px;
@@ -2548,6 +2552,7 @@ html[data-diff="off"] .hit-box {
 }
 
 .notes.is-float {
+  container-type: inline-size;
   position: fixed;
   z-index: 220;
   top: 8px;
@@ -3307,80 +3312,176 @@ html[data-theme="dark"] .notes.is-float {
   cursor: grabbing;
 }
 
-.notes-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.15fr) minmax(200px, 0.85fr);
-  gap: 12px;
-  min-height: 0;
-  flex: 1;
-  overflow: hidden;
-}
-
-.notes-grid.notes-grid-ordered {
-  grid-template-areas: "field hits";
-}
-
-.notes-grid-ordered .notes-hits-first {
-  grid-area: hits;
-}
-
-.notes-grid-ordered .notes-field {
-  grid-area: field;
-}
-
-.hit-list.hit-list-wrap {
-  flex: none;
-  min-height: 0;
-  overflow: visible;
-  flex-flow: row wrap;
-}
-
-.hit-list-wrap .hit-card {
-  width: auto;
-  max-width: 100%;
-  flex: 0 1 auto;
-}
-
-.notes-field,
-.notes-hits {
-  min-height: 0;
-  overflow: auto;
-  overscroll-behavior: contain;
+.review-dock-panel {
   display: flex;
   flex-direction: column;
+  min-height: 0;
+  gap: 12px;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.review-dock-issues {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: grid;
+  gap: 6px;
+  padding-bottom: 8px;
+  background: color-mix(in srgb, var(--surface) 72%, transparent);
+  backdrop-filter: blur(18px) saturate(160%);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+}
+
+.review-dock-issues .field-label {
+  margin: 0;
+}
+
+.review-dock-issue-row {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+  overflow-x: auto;
+  padding: 1px 1px 6px;
+  scrollbar-width: thin;
+}
+
+.review-dock-issue-row .hit-card {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: auto;
+  min-width: max-content;
+  flex: none;
+  padding: 8px 10px;
+}
+
+.review-dock-issue-row .ant-tag {
+  margin-inline-end: 0;
+}
+
+.review-evidence-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
 }
 
-.notes-foot {
-  flex: none;
+.review-evidence-grid.has-issues {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
-.notes-fab {
-  position: fixed;
-  z-index: 80;
-  top: 8px;
-  right: 8px;
-  min-height: 40px;
-  padding: 0 16px;
-  border: 0;
-  border-radius: 20px;
-  background: var(--accent);
-  color: #fff;
-  font-size: 15px;
+@container (max-width: 700px) {
+  .review-evidence-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
-.notes-fab:hover {
-  filter: brightness(1.05);
+.review-evidence-cell {
+  min-width: 0;
+  padding: 12px;
+  border-radius: 14px;
+  background: var(--col);
 }
 
-.hit-list {
-  flex: 1;
-  min-height: 72px;
+.review-evidence-cell.is-issue {
+  background: color-mix(in srgb, #fff7e6 72%, var(--surface));
+}
+
+.review-evidence-label {
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.review-evidence-cell.is-issue .review-evidence-label,
+.review-evidence-cell.is-issue .review-evidence-value {
+  color: #d48806;
+}
+
+.review-evidence-value,
+.review-evidence-details p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.review-evidence-value {
+  max-height: 7.5em;
   overflow: auto;
-  overscroll-behavior: contain;
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.review-evidence-details {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.review-evidence-details summary {
+  width: max-content;
+  cursor: pointer;
+  color: var(--accent);
+}
+
+.review-evidence-details p {
+  margin-top: 8px;
+  max-height: 240px;
+  overflow: auto;
+  color: var(--ink);
+  white-space: pre-wrap;
+}
+
+.review-evidence-location {
   display: flex;
-  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 36px;
+  padding: 0 4px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.review-evidence-location strong {
+  color: var(--ink);
+  font-weight: 500;
+  text-align: right;
+}
+
+.review-evidence-actions {
+  display: grid;
+  grid-template-columns: minmax(180px, 240px) auto;
+  justify-content: space-between;
   gap: 8px;
+}
+
+.review-decision-select {
+  width: 100%;
+}
+
+/* In browser fullscreen, Select must live inside the fullscreen root. Keep its
+   popup above the fixed review dock instead of letting the dock intercept it. */
+.review-page.is-fullscreen .ant-select-dropdown {
+  position: fixed !important;
+  z-index: 320 !important;
+}
+
+.review-evidence-note {
+  width: 100%;
+}
+
+@container (max-width: 520px) {
+  .review-evidence-actions {
+    grid-template-columns: 1fr;
+  }
+}
+
+.notes-foot {
+  display: grid;
+  flex: none;
+  gap: 8px;
+  padding-top: 4px;
+  border-top: 1px solid var(--line);
 }
 
 .hit-no {
@@ -3400,56 +3501,6 @@ html[data-theme="dark"] .notes.is-float {
 
 .hit-card.is-on .hit-no {
   box-shadow: 0 0 0 2px var(--accent-soft);
-}
-
-.hit-now {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 8px;
-}
-
-.hit-now strong {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.pair {
-  padding: 10px 12px;
-  border-radius: 12px;
-  background: var(--col);
-}
-
-.pair-k {
-  margin: 0 0 4px;
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.pair-doubt .pair-k {
-  font-size: 13px;
-  color: #d48806;
-}
-
-.doubt-list {
-  margin: 0;
-  padding: 0 0 0 1.1em;
-  font-size: 13px;
-  color: #d48806;
-  overflow-wrap: anywhere;
-}
-
-.doubt-list li + li {
-  margin-top: 4px;
-}
-
-.pair-v {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 500;
-  max-height: 280px;
-  overflow: auto;
-  overflow-wrap: anywhere;
 }
 
 .hit-card {
@@ -3501,24 +3552,8 @@ html[data-theme="dark"] .notes.is-float {
     max-width: calc(100% - 24px);
   }
 
-  .notes-grid {
+  .review-evidence-grid {
     grid-template-columns: 1fr;
-  }
-
-  .notes-grid.notes-grid-ordered {
-    grid-template-areas:
-      "hits"
-      "field";
-    overflow: auto;
-  }
-
-  .notes-grid-ordered .notes-hits-first,
-  .notes-grid-ordered .notes-field {
-    overflow: visible;
-  }
-
-  .hit-list {
-    max-height: 280px;
   }
 
   .new-meta {

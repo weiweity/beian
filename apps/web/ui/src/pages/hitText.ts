@@ -17,7 +17,7 @@ export type HitText = {
 export function doubtLines(h: HitText): string[] {
   const misses = (h.coverage?.miss || []).map((s) => String(s).trim()).filter(Boolean);
   const st = h.status || "";
-  const flagged = h.decision === "issue" || /疑|缺|误/.test(st);
+  const flagged = h.decision === "issue" || /待人工|不清|疑|缺|误/.test(st);
   const excelOnly = flagged
     ? (h.sequence_diff?.only_in_excel || []).map((s) => String(s).trim()).filter(Boolean)
     : [];
@@ -47,7 +47,6 @@ export function isImageOnlyField(field?: string): boolean {
 export function pdfText(h: HitText, field?: string): string {
   const direct = (h.pdf || "").trim() || (h.found || "").trim();
   const hits = (h.coverage?.hit || []).map((s) => String(s).trim()).filter(Boolean);
-  const misses = (h.coverage?.miss || []).map((s) => String(s).trim()).filter(Boolean);
   const matched = Number(h.coverage?.matched);
   const total = Number(h.coverage?.total);
   const found = direct || (hits.length ? hits.join(" ") : "");
@@ -60,7 +59,6 @@ export function pdfText(h: HitText, field?: string): string {
   if (imageNote) parts.push(imageNote);
   if (found) parts.push(found);
   if (tally) parts.push(tally);
-  if (misses.length) parts.push(`未在稿上读到：${misses.join(" ")}`);
   if (parts.length) return parts.join("\n");
   const ev = (h.evidence || "").trim();
   if (ev) return ev;

@@ -4,6 +4,7 @@ import {
   clampDockBox,
   clampDockPlace,
   dockCanvasInset,
+  dockTopAfterHeader,
   dockVisual,
   DOCK_DEFAULT_H,
   DOCK_DEFAULT_W,
@@ -15,6 +16,7 @@ import {
   readDockBox,
   readDockOpen,
   readDockPlace,
+  readStoredDockPlace,
   readPinsOn,
   resizeDockCorner,
   rectsOverlap,
@@ -52,6 +54,7 @@ describe("reviewDock", () => {
     writePinsOn(store, false);
     writeBoxesOn(store, false);
     writeDockPlace(store, { top: 24, right: 40 });
+    assert.deepEqual(readStoredDockPlace(store), { top: 24, right: 40 });
     assert.equal(readDockOpen(store), false);
     assert.equal(readPinsOn(store), false);
     assert.equal(readBoxesOn(store), false);
@@ -64,6 +67,17 @@ describe("reviewDock", () => {
     assert.equal(readDockOpen(store), true);
     assert.equal(readPinsOn(store), true);
     assert.equal(readBoxesOn(store), true);
+  });
+
+  it("distinguishes a first visit from an explicit dock placement", () => {
+    assert.equal(readStoredDockPlace(null), null);
+    assert.equal(readStoredDockPlace({ getItem: () => null }), null);
+    assert.equal(readStoredDockPlace({ getItem: () => "{" }), null);
+    assert.equal(readStoredDockPlace({ getItem: () => '{"top":"bad","right":20}' }), null);
+    assert.deepEqual(readStoredDockPlace({ getItem: () => '{"top":180,"right":64}' }), {
+      top: 180,
+      right: 64,
+    });
   });
 
   it("clamps and persists dock size", () => {
@@ -82,7 +96,7 @@ describe("reviewDock", () => {
     assert.equal(tight.h, 376);
     const grown = resizeDockCorner({ w: 400, h: 400 }, { dx: -80, dy: 40 }, { w: 900, h: 800 });
     assert.deepEqual(grown, { w: 480, h: 440 });
-    assert.equal(clampDockBox({ w: Number.NaN, h: Number.NaN }, { w: 800, h: 600 }).w, DOCK_DEFAULT_W);
+    assert.equal(clampDockBox({ w: Number.NaN, h: Number.NaN }, { w: 1200, h: 600 }).w, DOCK_DEFAULT_W);
     assert.ok(DOCK_MIN_H > 0);
     const se = resizeDockHandle(
       { w: 400, h: 400 },
@@ -145,6 +159,16 @@ describe("reviewDock", () => {
     assert.equal(sw.box.h, 420);
     const short = clampDockPlace({ top: 4, right: 8 }, { w: 400, h: 300 }, { w: 320, h: 280 });
     assert.equal(short.top, 8);
+    const underHeader = clampDockBox({ w: 900, h: 480 }, { w: 1200, h: 400 }, 173);
+    assert.equal(underHeader.h, 219);
+    assert.equal(
+      clampDockPlace({ top: 8, right: 8 }, { w: 1200, h: 400 }, underHeader, 173).top,
+      173,
+    );
+    assert.equal(
+      clampDockPlace({ top: 8, right: 8 }, { w: 1200, h: 300 }, { w: 900, h: 280 }, 173).top,
+      173,
+    );
     const nanTop = clampDockPlace({ top: Number.NaN, right: 8 }, room, { w: 400, h: 300 });
     assert.equal(nanTop.top, 104);
     assert.equal(readDockPlace({ getItem: () => "{" }).top, 104);
@@ -167,6 +191,15 @@ describe("reviewDock", () => {
     assert.equal(shutLeft, openLeft);
     const shown = dockVisual(true, box, parked, room);
     assert.deepEqual(shown, { box, place: parked });
+    const shortShut = dockVisual(false, box, parked, { w: 1400, h: 140 }, 104);
+    assert.equal(shortShut.place.top, 104);
+  });
+
+  it("derives the dock top from the live page header instead of a fixed guess", () => {
+    assert.equal(dockTopAfterHeader(Number.NaN), 104);
+    assert.equal(dockTopAfterHeader(160.2), 173);
+    const parked = sidebarDockPlace({ w: 1400, h: 900 }, { w: 900, h: 480 }, 20, 173);
+    assert.equal(parked.top, 173);
   });
 
   it("measures dock overlap without requiring the canvas to pad", () => {

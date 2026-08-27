@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { PENDING_REVIEW, deskClock, deskShortId } from "./deskBoard.js";
+import { PENDING_REVIEW, deskCardState, deskClock, deskShortId } from "./deskBoard.js";
 
 describe("deskBoard", () => {
   it("keeps the pending-review copy as 待审核", () => {
@@ -18,5 +18,29 @@ describe("deskBoard", () => {
     assert.equal(deskClock(undefined), "—");
     const out = deskClock("2026-08-25T11:49:00.000Z");
     assert.match(out, /^2026-08-25 \d{2}:\d{2}$/);
+  });
+
+  it("keeps the real live stage in the compact state line", () => {
+    assert.equal(
+      deskCardState({
+        id: "1",
+        title: "产品",
+        statusText: "对照中",
+        statusColor: "processing",
+        progress: 55,
+        live: "认字 · 大约还要 40 秒",
+      }),
+      "55% · 认字",
+    );
+    assert.equal(
+      deskCardState({
+        id: "2",
+        title: "产品",
+        statusText: "正在对照",
+        statusColor: "processing",
+        live: "大约还要 40 秒",
+      }),
+      "正在对照 · 大约还要 40 秒",
+    );
   });
 });

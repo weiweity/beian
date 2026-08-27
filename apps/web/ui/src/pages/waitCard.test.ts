@@ -5,6 +5,7 @@ import {
   feishuReadyFromHealth,
   liveJobLine,
   liveNavPulse,
+  mockupBoardProgress,
   pickLiveMockup,
   shouldShowWaitCard,
   waitCardActiveSteps,
@@ -27,6 +28,22 @@ describe("compareBoardProgress", () => {
     assert.equal(compareBoardProgress({ status: "pending_review" }), undefined);
     assert.equal(compareBoardProgress({ status: "pending_review", job_status: "succeeded" }), undefined);
     assert.equal(compareBoardProgress({ status: "completed" }), undefined);
+  });
+});
+
+describe("mockupBoardProgress", () => {
+  it("maps only real packaging stages to the shared compact percentage", () => {
+    assert.equal(mockupBoardProgress({ status: "queued", job_status: "queued" }), 0);
+    assert.equal(mockupBoardProgress({ status: "running", job_status: "running", job_stage: "illustrator" }), 15);
+    assert.equal(mockupBoardProgress({ status: "running", job_status: "running", job_stage: "render_pdf" }), 35);
+    assert.equal(mockupBoardProgress({ status: "running", job_status: "running", job_stage_label: "打样" }), 70);
+    assert.equal(mockupBoardProgress({ status: "running", job_status: "running", job_stage: "export" }), 90);
+  });
+
+  it("does not invent progress for finished, failed, or unknown stages", () => {
+    assert.equal(mockupBoardProgress({ status: "done", job_status: "succeeded" }), undefined);
+    assert.equal(mockupBoardProgress({ status: "failed", job_status: "failed" }), undefined);
+    assert.equal(mockupBoardProgress({ status: "running", job_status: "running" }), undefined);
   });
 });
 
