@@ -10,7 +10,7 @@
 |---|---|
 | `apps/web/ui` | React + Ant Design 6 审稿台 / 打样台 / 历史 / 设置 |
 | `apps/web/server` | Hono + TypeScript，对外 HTTP `:8787` |
-| `apps/web/backend` | Python 对照 worker（TS 用 `python -m app.cli` 调用） |
+| `apps/web/backend` | Python 对照 worker（TS 用 `python -m app.cli` 调用）。PDF 按页分为活字 / 转曲 / 图片：活字直接读文字层，其他页只跑一次 OCR，再进入既有字段规则与单钉证据收敛 |
 | `workers/packaging/` | 2D→3D CLI，打样台调用。V2 只接受显式 `cut/crease/...` 语义并形成 `PackagingStructure`；拓扑歧义进入管理员六面确认，不再按颜色、图层名或 bbox 猜刀线。平面出图用 pymupdf（对照同一 Python）；杭州不需要 macOS qlmanage。PPT 用两张白底写 OOXML；两张白底再合成一页 PDF。缺 PPT/PDF 仍算出图 |
 | `docs/` | 章程、ADR、设计 |
 
@@ -26,6 +26,7 @@
 | `docs/adr-003-settings-overlay.md` | 本机设置覆盖密钥文件 |
 | `docs/adr-004-ousterhout-design.md` | 深模块、唯一入口、8/31 前不拆引擎 |
 | `docs/adr-005-packaging-structure-v2.md` | 包装语义 IR、人工确认闸门与 V1 退场条件 |
+| `docs/designs/compare-pdf-ingest-v2.md` | PDF 按页选源、单 OCR、版面区域与单钉证据合同 |
 | `docs/risks.md` | 密钥、Tunnel、3D 验收门 |
 | `docs/designs/` | 对红循环、两张台、作业模块（对照/对红/打样入队） |
 | `CHANGELOG.md` | 已发布版本 |
