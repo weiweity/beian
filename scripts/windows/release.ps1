@@ -5,7 +5,7 @@
 # Does not touch cloudflared. Does not kill all node.exe (Grok Build uses Node).
 # Kills only the LISTENING 8787 process tree via taskkill /T /F /PID.
 # Discard npm-dirty package-lock.json and refuse other tracked edits BEFORE stopping.
-# If merge/build/start fails: git reset --hard to the pre-stop SHA, npm ci/build if the tree was wiped, then schtasks /Run.
+# If merge/build/start fails: git reset --hard to the pre-stop SHA, npm ci/build if the tree was wiped, then Restart-Service beian-server-8787.
 
 param(
   [switch]$Restart
@@ -216,15 +216,29 @@ function Assert-IdleOrThrow {
   Write-Host "preflight: :8787 没听且没有 python/blender/illustrator，当作空机继续"
 }
 
+function Start-BeianWinSwService {
+  $name = "beian-server-8787"
+  $svc = Get-Service -Name $name -ErrorAction SilentlyContinue
+  if (-not $svc) {
+    throw "找不到 Windows 服务 $name（WinSW）。拒绝用 schtasks ONLOGON 兜底。"
+  }
+  try {
+    Restart-Service -Name $name -Force -ErrorAction Stop
+  } catch {
+    Start-Service -Name $name -ErrorAction Stop
+  }
+}
+
 function Restore-BeianListener([string]$Why) {
   if (Test-PortListening 8787) {
     Write-Host "$Why : :8787 仍在听，不重复拉起"
     return
   }
-  Write-Host "$Why : :8787 没听，schtasks /Run beian-server-8787"
-  cmd.exe /c "schtasks /Run /TN beian-server-8787" | Out-Null
-  if ($LASTEXITCODE -ne 0) {
-    Write-Host "拉回失败 schtasks exit=$LASTEXITCODE。公网可能 502。不要动 cloudflared。"
+  Write-Host "$Why : :8787 没听，Restart-Service beian-server-8787"
+  try {
+    Start-BeianWinSwService
+  } catch {
+    Write-Host "拉回失败 Restart-Service $($_.Exception.Message)。公网可能 502。不要动 cloudflared。"
     return
   }
   for ($i = 0; $i -lt 20; $i++) {
@@ -382,22 +396,8 @@ try {
   if ($LASTEXITCODE -ne 0) { throw "pip install 失败 exit=$LASTEXITCODE" }
 
   Write-Host "start beian-server WB_DATA_DIR=$($env:WB_DATA_DIR)"
-  # GitHub Actions kills the job process tree. schtasks /Run is outside that tree.
-  $bat = Join-Path $env:TEMP "beian-start-prod.cmd"
-  @(
-    "@echo off",
-    "cd /d `"$Root`"",
-    "set WB_DATA_DIR=$($env:WB_DATA_DIR)",
-    "set WB_PUBLIC=1",
-    "set WB_DEV_DISPLAY_LOGIN=false"
-  ) + $(if ($env:WB_PYTHON) { @("set WB_PYTHON=$($env:WB_PYTHON)") } else { @() }) + @(
-    "call npm.cmd run start -w beian-server"
-  ) | Set-Content -Path $bat -Encoding ASCII
-  $task = "beian-server-8787"
-  cmd.exe /c "schtasks /Create /TN $task /SC ONLOGON /RL LIMITED /TR `"$bat`" /F" | Out-Null
-  if ($LASTEXITCODE -ne 0) { throw "schtasks /Create $task 失败 exit=$LASTEXITCODE" }
-  cmd.exe /c "schtasks /Run /TN $task" | Out-Null
-  if ($LASTEXITCODE -ne 0) { throw "schtasks /Run $task 失败 exit=$LASTEXITCODE" }
+  # GitHub Actions kills the job process tree. Restart-Service beian-server-8787 is outside that tree.
+  Start-BeianWinSwService
   $ok = $false
   for ($i = 0; $i -lt 20; $i++) {
     Start-Sleep -Seconds 2

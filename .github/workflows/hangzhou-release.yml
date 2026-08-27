@@ -47,5 +47,5 @@ jobs:
         shell: cmd
         run: |
           rem Job killed or script threw after :8787 was stopped. Do not touch cloudflared.
-          rem Do not kill node.exe. Extra /Run while 8787 is up fails bind and exits.
-          schtasks /Run /TN beian-server-8787
+          rem Do not kill node.exe. WinSW service is outside the Actions job tree.
+          sc start beian-server-8787
