@@ -448,7 +448,9 @@ function finishStructure(id: string, startedAt: string, result: RunPythonResult)
     return;
   }
   if (result.code !== 0) {
-    markMockupFailed(job, publicJobError(cliError(result.stderr)) || "结构识别中断");
+    const failure = cliFailure(result.stderr);
+    logCliFailure(`mockup ${job.id} structure`, failure);
+    markMockupFailed(job, publicJobError(failure.error) || "结构识别中断");
     return;
   }
   const payload = lastJson(result.stdout);
@@ -667,7 +669,9 @@ function finishMockup(id: string, startedAt: string, result: RunPythonResult): v
     return;
   }
   if (result.code !== 0) {
-    markMockupFailed(job, publicJobError(cliError(result.stderr)) || "打样中断");
+    const failure = cliFailure(result.stderr);
+    logCliFailure(`mockup ${job.id} render`, failure);
+    markMockupFailed(job, publicJobError(failure.error) || "打样中断");
     return;
   }
   const files = collectOutputs(outDir);
@@ -735,17 +739,48 @@ function lastJson(stdout: string): Record<string, unknown> | null {
   return null;
 }
 
-function cliError(stderr: string): string {
+type CliFailure = { error: string; code?: string; cause?: string; fix?: string };
+
+function cliFailure(stderr: string): CliFailure {
   const lines = stderr.trim().split(/\n/).map((l) => l.trim()).filter(Boolean);
   for (let i = lines.length - 1; i >= 0; i--) {
     try {
-      const v = JSON.parse(lines[i]) as { error?: unknown };
-      if (typeof v.error === "string") return v.error;
+      const v = JSON.parse(lines[i]) as Record<string, unknown>;
+      if (typeof v.error === "string") {
+        return {
+          error: v.error,
+          code: typeof v.code === "string" ? v.code : undefined,
+          cause: typeof v.cause === "string" ? v.cause : undefined,
+          fix: typeof v.fix === "string" ? v.fix : undefined,
+        };
+      }
     } catch {
       /* next */
     }
   }
-  return "";
+  return { error: "" };
+}
+
+function cliError(stderr: string): string {
+  return cliFailure(stderr).error;
+}
+
+function safeCliDiagnostic(value: string | undefined): string {
+  return String(value || "-")
+    .replace(/https?:\/\/\S+/gi, "[url]")
+    .replace(/Bearer\s+\S+/gi, "Bearer ***")
+    .replace(/((?:token|secret|api[_-]?key|authorization|cookie)\s*[=:]\s*)[^\s,;]+/gi, "$1***")
+    // 私有 cause 只用于定位类别；数据目录和任务绝对路径不进入持久日志。
+    .replace(/[A-Za-z]:\\[^\r\n]*/g, "[path]")
+    .replace(/(^|[\s=:])\/(?:Users|home|var|tmp|opt|srv|Volumes|private)\/[^\r\n]*/g, "$1[path]")
+    .slice(0, 240);
+}
+
+function logCliFailure(scope: string, failure: CliFailure): void {
+  if (!failure.cause && !failure.fix && !failure.code) return;
+  console.error(
+    `${scope}: problem=${safeCliDiagnostic(failure.code || failure.error)} cause=${safeCliDiagnostic(failure.cause)} fix=${safeCliDiagnostic(failure.fix)}`,
+  );
 }
 
 function publicJobError(msg: string): string | null {

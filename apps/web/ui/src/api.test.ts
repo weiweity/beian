@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import { API_DOWN_LOCAL, API_DOWN_PUBLIC } from "./apiHint.js";
 import {
   ApiError,
+  RESUMABLE_STEP_TIMEOUT_MS,
   UploadPausedError,
   UPLOAD_TIMEOUT_MS,
   api,
@@ -271,7 +272,9 @@ describe("resumable upload", () => {
     fd.append("client_upload_id", "client-timeout-request");
     fd.append("file", new File(["ai"], "box.ai"));
     let calls = 0;
-    globalThis.setTimeout = ((handler: TimerHandler) => {
+    const delays: number[] = [];
+    globalThis.setTimeout = ((handler: TimerHandler, delay?: number) => {
+      delays.push(Number(delay || 0));
       if (typeof handler === "function") handler();
       return 1;
     }) as typeof setTimeout;
@@ -289,11 +292,175 @@ describe("resumable upload", () => {
           !err.uploadId &&
           /无法确认服务器是否收到.*响应超时/.test(err.message),
       );
-      assert.equal(calls, 6);
+      assert.equal(calls, 4);
+      assert.ok(delays.includes(RESUMABLE_STEP_TIMEOUT_MS));
     } finally {
       globalThis.fetch = originalFetch;
       globalThis.setTimeout = originalSetTimeout;
       globalThis.clearTimeout = originalClearTimeout;
+    }
+  });
+
+  it("pauses with the server upload id when a PUT step keeps timing out", async () => {
+    const originalFetch = globalThis.fetch;
+    const originalSetTimeout = globalThis.setTimeout;
+    const originalClearTimeout = globalThis.clearTimeout;
+    const file = new File(["ai"], "box.ai", { lastModified: 2468 });
+    const fd = new FormData();
+    fd.append("client_upload_id", "client-put-timeout");
+    fd.append("file", file);
+    let calls = 0;
+    const upload = {
+      id: "445566778899",
+      files: [{ field: "ai", name: file.name, bytes: file.size, received: 0, last_modified: 2468 }],
+      bytes: file.size,
+      received: 0,
+      created_at: "2026-08-26T08:00:00.000Z",
+      client_upload_id: "client-put-timeout",
+      kind: "mockup",
+      phase: "paused",
+    };
+    globalThis.setTimeout = ((handler: TimerHandler) => {
+      if (typeof handler === "function") handler();
+      return 1;
+    }) as typeof setTimeout;
+    globalThis.clearTimeout = (() => undefined) as typeof clearTimeout;
+    globalThis.fetch = (async (_input, init) => {
+      calls += 1;
+      if (calls === 1) {
+        return new Response(JSON.stringify({ upload }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      assert.equal(String(init?.method), "PUT");
+      assert.equal(init?.signal?.aborted, true);
+      throw new DOMException("timed out", "AbortError");
+    }) as typeof fetch;
+    try {
+      await assert.rejects(
+        uploadResumable(fd),
+        (err: unknown) =>
+          err instanceof UploadPausedError &&
+          err.uploadId === "445566778899" &&
+          /服务器已保存收到的部分.*继续上传/.test(err.message),
+      );
+      assert.equal(calls, 5);
+    } finally {
+      globalThis.fetch = originalFetch;
+      globalThis.setTimeout = originalSetTimeout;
+      globalThis.clearTimeout = originalClearTimeout;
+    }
+  });
+
+  it("retries a lost complete response without retransmitting the file", async () => {
+    const originalFetch = globalThis.fetch;
+    const originalSetTimeout = globalThis.setTimeout;
+    const originalClearTimeout = globalThis.clearTimeout;
+    const file = new File(["ai"], "box.ai", { lastModified: 1357 });
+    const fd = new FormData();
+    fd.append("client_upload_id", "client-complete-recovery");
+    fd.append("file", file);
+    let received = 0;
+    let putCalls = 0;
+    let completeCalls = 0;
+    const upload = (phase: "paused" | "ready") => ({
+      id: "556677889900",
+      files: [{ field: "ai", name: file.name, bytes: file.size, received, last_modified: 1357 }],
+      bytes: file.size,
+      received,
+      created_at: "2026-08-26T08:00:00.000Z",
+      client_upload_id: "client-complete-recovery",
+      kind: "mockup" as const,
+      phase,
+    });
+    globalThis.setTimeout = ((handler: TimerHandler) => {
+      if (typeof handler === "function") handler();
+      return 1;
+    }) as typeof setTimeout;
+    globalThis.clearTimeout = (() => undefined) as typeof clearTimeout;
+    globalThis.fetch = (async (input, init) => {
+      const path = String(input);
+      const method = String(init?.method || "GET").toUpperCase();
+      if (method === "PUT") {
+        putCalls += 1;
+        received = file.size;
+      }
+      if (path.endsWith("/complete")) {
+        completeCalls += 1;
+        if (completeCalls === 1) throw new DOMException("response lost", "AbortError");
+        return new Response(JSON.stringify({ upload: upload("ready") }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ upload: upload("paused") }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    try {
+      const receipt = await uploadResumable(fd);
+      assert.equal(receipt.receipt, "556677889900");
+      assert.equal(putCalls, 1);
+      assert.equal(completeCalls, 2);
+    } finally {
+      globalThis.fetch = originalFetch;
+      globalThis.setTimeout = originalSetTimeout;
+      globalThis.clearTimeout = originalClearTimeout;
+    }
+  });
+
+  it("aborts the active PUT request when the caller stops the upload", async () => {
+    const originalFetch = globalThis.fetch;
+    const controller = new AbortController();
+    const file = new File(["ai"], "box.ai", { lastModified: 9753 });
+    const fd = new FormData();
+    fd.append("client_upload_id", "client-active-abort");
+    fd.append("file", file);
+    let calls = 0;
+    let putStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      putStarted = resolve;
+    });
+    const upload = {
+      id: "667788990011",
+      files: [{ field: "ai", name: file.name, bytes: file.size, received: 0, last_modified: 9753 }],
+      bytes: file.size,
+      received: 0,
+      created_at: "2026-08-26T08:00:00.000Z",
+      client_upload_id: "client-active-abort",
+      kind: "mockup",
+      phase: "paused",
+    };
+    globalThis.fetch = (async (_input, init) => {
+      calls += 1;
+      if (calls === 1) {
+        return new Response(JSON.stringify({ upload }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      putStarted();
+      return await new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener(
+          "abort",
+          () => reject(new DOMException("aborted", "AbortError")),
+          { once: true },
+        );
+      });
+    }) as typeof fetch;
+    try {
+      const pending = uploadResumable(fd, undefined, controller.signal);
+      await started;
+      controller.abort();
+      await assert.rejects(
+        pending,
+        (err: unknown) => err instanceof ApiError && err.message === "上传已停止",
+      );
+      assert.equal(calls, 2);
+    } finally {
+      globalThis.fetch = originalFetch;
     }
   });
 });

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Alert, App, Button, Empty, Input, Segmented, Space, Table, Tag } from "antd";
 import { api, ApiError, UPLOAD_TIMEOUT_MS, type PendingUploadReceipt, type TaskSummary } from "../api";
 import { UPLOAD_RECOVERY_INTERVAL_MS, uploadStore, useUploadSnapshot } from "../uploadStore";
+import { rememberReviewHandoff } from "../jobHandoff";
 import { compareBoardProgress, liveJobLine } from "./waitCard";
 import { shouldShowTaskBoard } from "./tasksBoard";
 import { PENDING_REVIEW, deskClock, type DeskCardRow } from "./deskBoard";
@@ -200,6 +201,7 @@ export function TasksPage({ canCreate, onCreate, onOpen, onResumeReceipt }: Prop
           uploadStore.clear("compare", receipt);
           setReceipts((current) => current.filter((saved) => saved.id !== receipt));
           message.success("已开始对照。结论还要你来定。");
+          rememberReviewHandoff(next);
           onOpen(next.id);
         } catch (err) {
           message.error(err instanceof Error ? err.message : "无法开始对照");

@@ -9,12 +9,21 @@ import pytest
 
 PACKAGING = Path(__file__).resolve().parents[4] / "workers" / "packaging"
 WORKER = PACKAGING / "illustrator" / "illustrator_worker.py"
+PIPELINE = PACKAGING / "pipeline.py"
 EXPORTER = PACKAGING / "illustrator" / "export_structure.jsx"
 WINDOWS_RUNNER = PACKAGING / "illustrator" / "run_export.vbs"
 
 
 def load_worker():
     spec = importlib.util.spec_from_file_location("packaging_illustrator_worker_v2", WORKER)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_pipeline():
+    spec = importlib.util.spec_from_file_location("packaging_pipeline_error_contract", PIPELINE)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -130,3 +139,90 @@ def test_windows_warmup_refuses_to_touch_an_open_illustrator_document(
     )
     with pytest.raises(RuntimeError, match="no other open documents"):
         worker.warm_up_windows_illustrator(application, 30)
+
+
+@pytest.mark.parametrize(
+    ("returncode", "stderr", "expected_code", "expected_message"),
+    [
+        (6, "Illustrator COM unavailable", "illustrator_unavailable", "没有启动成功"),
+        (2, "Illustrator semantic export requires no other open documents", "illustrator_documents_open", "其他稿件"),
+        (3, "Illustrator export timed out after 30s", "illustrator_timeout", "处理超时"),
+    ],
+)
+def test_structure_export_failure_has_actionable_public_contract(
+    returncode: int,
+    stderr: str,
+    expected_code: str,
+    expected_message: str,
+):
+    pipeline = load_pipeline()
+    error = pipeline.illustrator_structure_failure(returncode=returncode, stderr=stderr)
+
+    payload = error.as_dict()
+    assert payload["code"] == expected_code
+    assert expected_message in payload["error"]
+    assert "日志=" not in payload["error"]
+    assert payload["cause"]
+    assert payload["fix"]
+
+
+def test_structure_export_failure_keeps_private_cause_out_of_public_message():
+    pipeline = load_pipeline()
+    error = pipeline.illustrator_structure_failure(
+        returncode=2,
+        stderr=r"JSX failed at C:\supply\data\mockups\secret\illustrator.log",
+    )
+
+    payload = error.as_dict()
+    assert r"C:\supply" not in payload["error"]
+    assert r"C:\supply" in payload["cause"]
+
+
+@pytest.mark.parametrize(
+    ("returncode", "result", "expected_code"),
+    [
+        (0, {"success": False, "semantic_errors": ["missing front"]}, "illustrator_structure_invalid"),
+        (
+            5,
+            {
+                "success": False,
+                "semantic_errors": ["structure_face_mapping_incomplete"],
+                "missing_outputs": ["print_pdf"],
+            },
+            "illustrator_output_incomplete",
+        ),
+        (0, None, "illustrator_structure_export_failed"),
+    ],
+)
+def test_structure_export_maps_invalid_or_incomplete_result_contracts(
+    returncode: int,
+    result: dict | None,
+    expected_code: str,
+):
+    pipeline = load_pipeline()
+
+    error = pipeline.illustrator_structure_failure(
+        returncode=returncode,
+        stdout="worker returned malformed result" if result is None else "",
+        result=result,
+    )
+
+    assert error.as_dict()["code"] == expected_code
+
+
+def test_structure_export_missing_application_has_actionable_public_contract(tmp_path: Path):
+    pipeline = load_pipeline()
+    source = tmp_path / "box.ai"
+    source.write_bytes(b"ai")
+
+    with pytest.raises(pipeline.PipelineError) as caught:
+        pipeline.run_illustrator_structure_export(
+            source,
+            tmp_path / "project",
+            {"application": str(tmp_path / "missing-Illustrator.exe")},
+        )
+
+    payload = caught.value.as_dict()
+    assert payload["code"] == "illustrator_not_found"
+    assert "重新扫描" in payload["error"]
+    assert str(tmp_path) not in payload["error"]

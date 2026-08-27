@@ -1,9 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Alert, App } from "antd";
 import { api, type PendingUploadReceipt } from "../api";
 import { UploadProgressSlot } from "../chrome/UploadProgressSlot";
 import { UploadWell } from "../chrome/UploadWell";
-import { WaitCard } from "../chrome/WaitCard";
+import { rememberReviewHandoff } from "../jobHandoff";
 import {
   uploadIsBusy,
   uploadStore,
@@ -44,7 +44,15 @@ export function NewTaskPage({ canCreate, receiptId, onCreated, onBack }: Props) 
   const [productName, setProductName] = useState(resumeSource === "local" ? upload?.productName || "" : "");
   const [pack, setPack] = useState(resumeSource === "local" ? upload?.packSurface || "carton" : "carton");
   const [submitting, setSubmitting] = useState(false);
+  const mounted = useRef(false);
   useUploadReceiptRecovery("compare", upload, canCreate && resumeSource === "local");
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (resumeSource !== "local" || !upload) return;
@@ -135,11 +143,14 @@ export function NewTaskPage({ canCreate, receiptId, onCreated, onBack }: Props) 
         pack_surface: pack,
       });
       uploadStore.clear("compare", receipt);
+      rememberReviewHandoff(task);
+      if (!mounted.current) return;
       message.success("已开始对照。结论还要你来定。");
       onCreated(task.id);
     } catch (err) {
-      message.error(err instanceof Error ? err.message : "无法开始对照");
-      setSubmitting(false);
+      if (mounted.current) message.error(err instanceof Error ? err.message : "无法开始对照");
+    } finally {
+      if (mounted.current) setSubmitting(false);
     }
   }
 
@@ -181,8 +192,6 @@ export function NewTaskPage({ canCreate, receiptId, onCreated, onBack }: Props) 
     );
   }
 
-  if (submitting) return <WaitCard job="对照" jobStatus="queued" />;
-
   return (
     <section className="new-form">
       <header className="page-head">
@@ -191,16 +200,16 @@ export function NewTaskPage({ canCreate, receiptId, onCreated, onBack }: Props) 
           <p className="page-lead">一次只传一对。机审只标疑点。</p>
         </div>
         <div style={{ display: "flex", gap: 12 }}>
-          <button type="button" className="btn-ghost" onClick={onBack}>
+          <button type="button" className="btn-ghost" disabled={submitting} onClick={onBack}>
             返回
           </button>
           <button
             type="button"
             className="btn-primary"
-            disabled={!receipt || busy}
+            disabled={!receipt || busy || submitting}
             onClick={() => void submit()}
           >
-            {busy ? "上传中" : "开始对照"}
+            {submitting ? "正在开工" : busy ? "上传中" : "开始对照"}
           </button>
         </div>
       </header>
