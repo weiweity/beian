@@ -109,8 +109,9 @@ test("服务端已落盘但完成响应丢失时，按同一上传身份恢复�
   expect(syntheticApi.receipts).toEqual([]);
 });
 
-test("回执生成后整页刷新，仍可从审稿台进入恢复页并放弃上传", async ({ page, syntheticApi }) => {
+test("回执生成后整页刷新，仍可开工且恢复页保留品名与包装面", async ({ page, syntheticApi }) => {
   await page.goto("/reviewup/new");
+  await page.getByRole("button", { name: "膜袋", exact: true }).click();
   await page.getByLabel("Excel 确认单文件").setInputFiles({ ...excelFile, name: "reload-e2e.xlsx" });
   await page.getByLabel("包装 PDF文件").setInputFiles({ ...pdfFile, name: "reload-e2e.pdf" });
   await expect(page.getByText("上传成功，可以开始对照")).toBeVisible();
@@ -128,8 +129,13 @@ test("回执生成后整页刷新，仍可从审稿台进入恢复页并放弃�
   expect(syntheticApi.calls.some((item) => item.method === "GET" && item.path === "/api/uploads")).toBe(true);
 
   await pending.click();
+  await expect(page.getByRole("dialog", { name: "开始对照这单？" })).toBeVisible();
+  await page.getByRole("dialog").getByRole("button", { name: "先不开始" }).click();
+  await page.goto(`/reviewup/new?receipt=${receipt?.id}`);
   await expect(page).toHaveURL(new RegExp(`/reviewup/new\\?receipt=${receipt?.id}$`));
   await expect(page.getByText("上传成功，可以开始对照")).toBeVisible();
+  await expect(page.getByLabel("品名")).toHaveValue("reload e2e");
+  await expect(page.getByRole("button", { name: "膜袋", exact: true })).toHaveClass(/is-on/);
   await expect(page.locator(".upload-filechip-name").filter({ hasText: "reload-e2e.xlsx" })).toBeVisible();
   await expect(page.locator(".upload-filechip-name").filter({ hasText: "reload-e2e.pdf" })).toBeVisible();
 

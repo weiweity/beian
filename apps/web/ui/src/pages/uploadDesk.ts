@@ -9,6 +9,7 @@ export type PendingUploadItem = {
   phase: Extract<UploadPhase, "uploading" | "retrying" | "confirming" | "paused" | "ready" | "failed">;
   title: string;
   productName: string | null;
+  packSurface: string | null;
   files: { field: string; name: string; bytes: number }[];
   pct: number;
   at: string;
@@ -91,6 +92,7 @@ export function pendingUploadItems(
       phase: phase as PendingUploadItem["phase"],
       title: local.productName.trim() || matchedReceipt?.product_name || receiptDisplayTitle(files),
       productName: local.productName.trim() || matchedReceipt?.product_name || null,
+      packSurface: local.packSurface || matchedReceipt?.pack_surface || null,
       files,
       pct: total > 0 ? Math.round((received / total) * 100) : local.pct,
       at: matchedReceipt?.created_at || local.createdAt,
@@ -106,6 +108,7 @@ export function pendingUploadItems(
       phase: receipt.phase,
       title: receipt.product_name || receiptDisplayTitle(receipt.files),
       productName: receipt.product_name || null,
+      packSurface: receipt.pack_surface || null,
       files: receipt.files,
       pct: receipt.bytes > 0 ? Math.round((receipt.received / receipt.bytes) * 100) : 0,
       at: receipt.created_at,

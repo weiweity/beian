@@ -67,6 +67,8 @@ export type SyntheticReceipt = {
   bytes: number;
   created_at: string;
   client_upload_id?: string;
+  product_name?: string;
+  pack_surface?: string;
   kind: "compare" | "mockup";
 };
 
@@ -318,6 +320,8 @@ async function installSyntheticApi(page: Page, state: SyntheticApi) {
           bytes: upload.bytes,
           created_at: upload.created_at,
           client_upload_id: upload.client_upload_id,
+          product_name: upload.product_name,
+          pack_surface: upload.pack_surface,
           kind: upload.kind,
         };
         state.uploads = state.uploads.filter((item) => item.id !== upload.id);

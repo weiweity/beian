@@ -112,6 +112,61 @@ describe("resumable upload", () => {
       globalThis.fetch = original;
     }
   });
+
+  it("surfaces a 429 upload-slot refusal immediately without retrying it as network loss", async () => {
+    const original = globalThis.fetch;
+    const fd = new FormData();
+    fd.append("client_upload_id", "client-slot-refused");
+    fd.append("file", new File(["ai"], "box.ai"));
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return new Response(JSON.stringify({ detail: "同时最多上传 2 份，请等其中一份完成后再试" }), {
+        status: 429,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    try {
+      await assert.rejects(
+        uploadResumable(fd),
+        (err: unknown) =>
+          err instanceof ApiError &&
+          err.status === 429 &&
+          /同时最多上传 2 份/.test(err.message),
+      );
+      assert.equal(calls, 1);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  it("times out every stalled upload request instead of leaving the page pending forever", async () => {
+    const originalFetch = globalThis.fetch;
+    const originalSetTimeout = globalThis.setTimeout;
+    const originalClearTimeout = globalThis.clearTimeout;
+    const fd = new FormData();
+    fd.append("client_upload_id", "client-timeout-request");
+    fd.append("file", new File(["ai"], "box.ai"));
+    let calls = 0;
+    globalThis.setTimeout = ((handler: TimerHandler) => {
+      if (typeof handler === "function") handler();
+      return 1;
+    }) as typeof setTimeout;
+    globalThis.clearTimeout = (() => undefined) as typeof clearTimeout;
+    globalThis.fetch = (async (_input, init) => {
+      calls += 1;
+      assert.equal(init?.signal?.aborted, true);
+      throw new DOMException("timed out", "AbortError");
+    }) as typeof fetch;
+    try {
+      await assert.rejects(uploadResumable(fd), /上传已暂停.*响应超时/);
+      assert.equal(calls, 6);
+    } finally {
+      globalThis.fetch = originalFetch;
+      globalThis.setTimeout = originalSetTimeout;
+      globalThis.clearTimeout = originalClearTimeout;
+    }
+  });
 });
 
 describe("GET polling protection", () => {

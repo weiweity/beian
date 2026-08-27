@@ -68,7 +68,12 @@ export function NewTaskPage({ canCreate, receiptId, onCreated, onBack }: Props) 
           return;
         }
         setRestoredReceipt(found);
-        if (!found) setResumeError("这份上传回执已过期或已经开工，请返回审稿台刷新。");
+        if (found) {
+          setProductName(found.product_name || "");
+          setPack(found.pack_surface || "carton");
+        } else {
+          setResumeError("这份上传回执已过期或已经开工，请返回审稿台刷新。");
+        }
       })
       .catch((err: unknown) => {
         if (!cancelled) setResumeError(err instanceof Error ? err.message : "上传回执读取失败");

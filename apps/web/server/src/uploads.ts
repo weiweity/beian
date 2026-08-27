@@ -582,6 +582,26 @@ function saveUploadSession(session: UploadSession): void {
   replaceJson(sessionPath(session.id), session);
 }
 
+/**
+ * 终结会话是逻辑动作，不依赖 Windows 当下能否删目录。删不掉时先把租约写成
+ * 过期，让列表、配额和发版闸门立即忽略它；后续 sweep 再回收物理文件。
+ */
+function retireUploadSession(id: string): void {
+  try {
+    rmSync(sessionDir(id), { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    return;
+  } catch {
+    // Windows 杀毒或索引可能短暂占用目录。
+  }
+  try {
+    const session = JSON.parse(readFileSync(sessionPath(id), "utf8")) as UploadSession;
+    if (!uploadSessionShapeOk(id, session)) return;
+    saveUploadSession({ ...session, updated_at: "1970-01-01T00:00:00.000Z" });
+  } catch {
+    // sweep 会继续尝试；有效回执或任务不能因清理失败回滚。
+  }
+}
+
 export function loadUploadSession(id: string, owner: string): UploadSession | null {
   if (!isTid(id)) return null;
   let session: UploadSession;
@@ -650,6 +670,13 @@ export function sweepUploadSessions(): void {
       session = JSON.parse(readFileSync(sessionPath(id), "utf8")) as UploadSession;
     } catch {
       /* remove below */
+    }
+    // 回执已经发布就是上传完成的事实。Windows 若短暂占用分片目录，complete
+    // 会把删除留给这里；不能让遗留会话继续占并发租约和暂存配额。
+    const completed = readReceipt(id);
+    if (completed) {
+      retireUploadSession(id);
+      continue;
     }
     if (!session || !uploadSessionShapeOk(id, session) || !uploadSessionFresh(session)) {
       try {
@@ -886,6 +913,8 @@ export function completeUploadSession(id: string, owner: string): ListedUploadRe
   }
 
   const finalDir = receiptDir(id);
+  // 新数据目录可能先走分片协议，尚未经过 multipart 初始化。
+  mkdirSync(receiptsDir(), { recursive: true });
   rmSync(finalDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
   mkdirSync(finalDir, { recursive: false });
   try {
@@ -907,11 +936,7 @@ export function completeUploadSession(id: string, owner: string): ListedUploadRe
       files,
     };
     writeFileSync(receiptPath(id), JSON.stringify(receipt), { encoding: "utf8", flag: "wx" });
-    try {
-      rmSync(sessionDir(id), { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
-    } catch {
-      // 回执已经成为事实；遗留分片由 sweep 清理，不能把成功响应改成失败。
-    }
+    retireUploadSession(id);
     return listedReceipt(receipt);
   } catch (err) {
     if (!existsSync(receiptPath(id))) rmSync(finalDir, { recursive: true, force: true });
@@ -922,7 +947,7 @@ export function completeUploadSession(id: string, owner: string): ListedUploadRe
 export function discardUploadSession(id: string, owner: string): boolean {
   const session = loadUploadSession(id, owner);
   if (!session) return false;
-  rmSync(sessionDir(id), { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  retireUploadSession(id);
   return true;
 }
 
@@ -1119,6 +1144,9 @@ export function consumeReceipt(id: string, owner: string): UploadReceipt | null 
       }
       return null;
     }
+    // complete 已发布回执后会删除分片会话；若 Windows 当时短暂占用目录，
+    // 领取回执是第二个确定的终结点。否则回执开工后旧会话会重新出现在待上传列表。
+    retireUploadSession(id);
     unlinkQuietly(taken);
     return rec;
   } catch {

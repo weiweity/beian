@@ -195,7 +195,7 @@ export function TasksPage({ canCreate, onCreate, onOpen, onResumeReceipt }: Prop
             receipt,
             product_name: productName,
             title: productName,
-            pack_surface: localUpload?.receipt === receipt ? localUpload.packSurface : undefined,
+            pack_surface: item.packSurface || undefined,
           });
           uploadStore.clear("compare", receipt);
           setReceipts((current) => current.filter((saved) => saved.id !== receipt));

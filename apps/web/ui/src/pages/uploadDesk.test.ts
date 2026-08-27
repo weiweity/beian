@@ -63,6 +63,15 @@ describe("uploadDesk", () => {
     assert.equal(item?.receipt, "112233445566");
   });
 
+  it("GET 恢复的待开工审稿保留包装面类型", () => {
+    const [item] = pendingUploadItems("compare", null, [
+      { ...restored, product_name: "膜袋", pack_surface: "pouch" },
+    ]);
+    assert.equal(item?.productName, "膜袋");
+    assert.equal(item?.packSurface, "pouch");
+    assert.equal(item ? pendingUploadOpenAction(item) : null, "start");
+  });
+
   it("可按任一文件名搜索待开工上传", () => {
     assert.equal(pendingUploadItems("compare", null, [restored], "包装").length, 1);
     assert.equal(pendingUploadItems("compare", null, [restored], "不存在").length, 0);

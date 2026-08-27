@@ -23,6 +23,8 @@ export function brokenApiMessage(err: unknown, host = ""): string | null {
 }
 
 export const GET_TIMEOUT_MS = 15_000;
+// 分片上传没有一条覆盖全流程的长连接，但每个网络步骤仍必须有退出上限。
+export const UPLOAD_TIMEOUT_MS = 15 * 60 * 1000;
 const GET_RETRY_BASE_MS = 5_000;
 const GET_RETRY_MAX_MS = 60_000;
 type PendingGet = { epoch: number; promise: Promise<unknown> };
@@ -53,34 +55,35 @@ async function fetchJson<T>(path: string, opts: RequestInit): Promise<T> {
   if (!(opts.body instanceof FormData) && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
-  const controller = isGet(opts) ? new AbortController() : null;
+  const getRequest = isGet(opts);
+  const controller = new AbortController();
   let timedOut = false;
-  const abortFromCaller = () => controller?.abort(opts.signal?.reason);
-  if (controller && opts.signal) opts.signal.addEventListener("abort", abortFromCaller, { once: true });
-  const timeout = controller
-    ? globalThis.setTimeout(() => {
-        timedOut = true;
-        controller.abort();
-      }, GET_TIMEOUT_MS)
-    : undefined;
+  const abortFromCaller = () => controller.abort(opts.signal?.reason);
+  if (opts.signal) opts.signal.addEventListener("abort", abortFromCaller, { once: true });
+  const timeout = globalThis.setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, getRequest ? GET_TIMEOUT_MS : UPLOAD_TIMEOUT_MS);
   let res: Response;
   try {
     res = await fetch(path, {
       credentials: "same-origin",
       ...opts,
-      signal: controller?.signal || opts.signal,
+      signal: controller.signal,
       headers,
     });
   } catch (err) {
-    if (timedOut) throw new ApiError(0, "审稿服务响应超时，请稍后重试。", true);
+    if (timedOut) {
+      throw new ApiError(0, getRequest ? "审稿服务响应超时，请稍后重试。" : "上传请求响应超时，正在重试。", true);
+    }
     if (err instanceof TypeError) {
       const hint = describeBrokenApi(0, "text/html", apiHost()) || "审稿服务没回上。刷新后再试。";
       throw new ApiError(0, hint, true);
     }
     throw err;
   } finally {
-    if (timeout !== undefined) globalThis.clearTimeout(timeout);
-    if (controller && opts.signal) opts.signal.removeEventListener("abort", abortFromCaller);
+    globalThis.clearTimeout(timeout);
+    if (opts.signal) opts.signal.removeEventListener("abort", abortFromCaller);
   }
   const ct = res.headers.get("content-type") || "";
   if (res.status === 413) {
@@ -170,9 +173,6 @@ export type UploadProgress = {
   retryAttempt?: number;
   uploadId?: string;
 };
-
-// 100 MB 在慢链路上传输可能超过五分钟；超时覆盖传输和服务端落盘确认。
-export const UPLOAD_TIMEOUT_MS = 15 * 60 * 1000;
 
 export function uploadWithProgress<T>(
   path: string,
@@ -268,6 +268,11 @@ function abortError(): ApiError {
   return new ApiError(0, "上传已停止", false);
 }
 
+function transientUploadFailure(err: unknown): boolean {
+  // 429 是明确的并发或暂存容量拒绝；立即把服务端原因交给用户，不冒充断网。
+  return !(err instanceof ApiError && err.status === 429) && transientApiFailure(err);
+}
+
 function waitForRetry(ms: number, signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) return Promise.reject(abortError());
   return new Promise((resolve, reject) => {
@@ -303,7 +308,8 @@ async function retryUploadCall<T>(
       return await run();
     } catch (err) {
       lastError = err;
-      if (!transientApiFailure(err)) throw err;
+      if (signal?.aborted) throw abortError();
+      if (!transientUploadFailure(err)) throw err;
       if (attempt >= RESUMABLE_RETRIES) break;
       onRetry(attempt + 1);
       await waitForRetry(Math.min(1000 * 2 ** attempt, 8000), signal);

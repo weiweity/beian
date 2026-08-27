@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { makeTestTempDir } from "./testTemp.js";
@@ -31,6 +31,65 @@ describe("upload then start", () => {
   it("keeps the server request window longer than the 15-minute browser upload window", () => {
     assert.ok(SERVER_HTTP_OPTIONS.requestTimeout > 15 * 60 * 1000);
     assert.equal(SERVER_HTTP_OPTIONS.headersTimeout, 60_000);
+  });
+
+  it("completes the first resumable upload and removes a crash-left session after publishing its receipt", async () => {
+    const owner = "ou_first_chunk_receipt";
+    const source = Buffer.from("%PDF-1.7\nfirst-resumable-upload");
+    const created = await app.request("/api/uploads/sessions", {
+      method: "POST",
+      headers: { ...authHeader(owner), "content-type": "application/json" },
+      body: JSON.stringify({
+        client_upload_id: "client-first-chunk-receipt",
+        product_name: "首单花盒",
+        pack_surface: "pouch",
+        files: [{ field: "ai", name: "first.ai", bytes: source.length, last_modified: 1 }],
+      }),
+    });
+    assert.equal(created.status, 200);
+    const upload = (await created.json()) as { upload: { id: string } };
+    const sessionDir = join(process.env.WB_DATA_DIR!, "uploads", "sessions", upload.upload.id);
+    const backupDir = join(process.env.WB_DATA_DIR!, `completed-session-${upload.upload.id}`);
+
+    const written = await app.request(`/api/uploads/sessions/${upload.upload.id}/files/ai`, {
+      method: "PUT",
+      headers: {
+        ...authHeader(owner),
+        "content-type": "application/octet-stream",
+        "x-upload-offset": "0",
+        "x-upload-sha256": createHash("sha256").update(source).digest("hex"),
+      },
+      body: Uint8Array.from(source).buffer,
+    });
+    assert.equal(written.status, 200);
+    cpSync(sessionDir, backupDir, { recursive: true });
+
+    const completed = await app.request(`/api/uploads/sessions/${upload.upload.id}/complete`, {
+      method: "POST",
+      headers: { ...authHeader(owner), "content-type": "application/json" },
+      body: "{}",
+    });
+    assert.equal(completed.status, 200);
+    assert.equal(((await completed.json()) as { upload: { phase: string } }).upload.phase, "ready");
+
+    mkdirSync(join(process.env.WB_DATA_DIR!, "uploads", "sessions"), { recursive: true });
+    cpSync(backupDir, sessionDir, { recursive: true });
+    assert.equal(existsSync(sessionDir), true);
+    const listed = await app.request("/api/uploads", { headers: authHeader(owner) });
+    assert.equal(listed.status, 200);
+    const rows = (await listed.json()) as Array<{ id: string; phase: string; pack_surface?: string }>;
+    assert.deepEqual(rows.map((row) => [row.id, row.phase, row.pack_surface]), [
+      [upload.upload.id, "ready", "pouch"],
+    ]);
+    assert.equal(existsSync(sessionDir), false);
+
+    cpSync(backupDir, sessionDir, { recursive: true });
+    assert.equal(existsSync(sessionDir), true);
+    assert.equal(discardReceipt(upload.upload.id, owner), true);
+    assert.equal(existsSync(sessionDir), false);
+    const afterDiscard = await app.request("/api/uploads", { headers: authHeader(owner) });
+    assert.deepEqual(await afterDiscard.json(), []);
+    rmSync(backupDir, { recursive: true, force: true });
   });
 
   it("refuses start without a receipt", async () => {
