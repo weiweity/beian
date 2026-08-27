@@ -81,10 +81,14 @@ import { assertIllustratorReady } from "./aiRaster.js";
 import { confirmPackagingStructure } from "./workers.js";
 import { skipPackSheetField } from "./sheetSkip.js";
 import {
+  appendUploadChunk,
+  completeUploadSession,
   consumeReceipt,
   createUploadAdmission,
+  createUploadCoordinator,
+  discardPendingUpload,
   discardReceipt,
-  listReceipts,
+  listPendingUploads,
   loadReceipt,
   MAX_UPLOAD_BODY_BYTES,
   purgeReceiptFiles,
@@ -93,7 +97,8 @@ import {
   stageMultipart,
   tooLarge,
   underReceiptDir,
-  UPLOAD_CONCURRENCY,
+  UPLOAD_CHUNK_BYTES,
+  UPLOAD_SESSION_METADATA_BYTES,
   UPLOAD_BODY_TOO_LARGE,
   oversizeMessage,
   uploadTotalTooLarge,
@@ -119,13 +124,13 @@ import {
 type Env = { Variables: { session: Session } };
 
 const app = new Hono<Env>();
-const VERSION = "0.16.0.0";
+const VERSION = "0.17.0.0";
 /** 浏览器给 100 MB 慢速上传 15 分钟；服务端多留 1 分钟完成落盘和回执。 */
 export const SERVER_HTTP_OPTIONS = {
   headersTimeout: 60_000,
   requestTimeout: 16 * 60 * 1000,
 } as const;
-const uploadAdmission = createUploadAdmission(UPLOAD_CONCURRENCY);
+const uploadCoordinator = createUploadCoordinator();
 // 对红仍用 Hono parseBody，单独保持单槽；新稿上传已改为双通道流式落盘。
 const reworkUploadAdmission = createUploadAdmission(1);
 
@@ -213,7 +218,7 @@ app.onError((err, c) => {
 });
 
 function liveStatus() {
-  const primaryUploads = uploadAdmission.snapshot();
+  const primaryUploads = uploadCoordinator.snapshot();
   const reworkUploads = reworkUploadAdmission.snapshot();
   return {
     jobs: queueSnapshot(),
@@ -357,7 +362,16 @@ app.get("/api/tasks/:tid", (c) => {
 app.delete("/api/tasks/:tid", (c) => {
   const s = need(c, "delete");
   try {
-    const task = loadTask(c.req.param("tid"));
+    const tid = assertTid(c.req.param("tid"));
+    let task: ReturnType<typeof loadTask>;
+    try {
+      task = loadTask(tid);
+    } catch (err) {
+      if (typeof err === "object" && err && "status" in err && Number((err as { status: number }).status) === 404) {
+        return c.json({ ok: true, already_deleted: true });
+      }
+      throw err;
+    }
     assertCanAccessTask(task, viewerFromSession(s));
     deleteTask(task.id);
     return c.json({ ok: true });
@@ -368,19 +382,80 @@ app.delete("/api/tasks/:tid", (c) => {
 
 app.get("/api/uploads", (c) => {
   const s = need(c, "create");
-  return c.json(listReceipts(receiptOwner(s)));
+  return c.json(listPendingUploads(receiptOwner(s)));
 });
 
 app.delete("/api/uploads/:id", (c) => {
   const s = need(c, "create");
-  return c.json({ ok: discardReceipt(c.req.param("id"), receiptOwner(s)) });
+  const removed = discardPendingUpload(c.req.param("id"), receiptOwner(s));
+  return c.json({ ok: true, ...(removed ? {} : { already_deleted: true }) });
+});
+
+app.post(
+  "/api/uploads/sessions",
+  bodyLimit({
+    maxSize: UPLOAD_SESSION_METADATA_BYTES,
+    onError: (c) => c.json({ detail: "上传文件信息过大" }, 413),
+  }),
+  async (c) => {
+    const s = need(c, "create");
+    try {
+      const body = await c.req.json();
+      return c.json({ upload: uploadCoordinator.start(receiptOwner(s), body) });
+    } catch (err) {
+      boom(err);
+    }
+  },
+);
+
+app.put(
+  "/api/uploads/sessions/:id/files/:field",
+  async (c, next) => {
+    need(c, "create");
+    await uploadCoordinator.runSession(c.req.param("id"), next);
+  },
+  bodyLimit({
+    maxSize: UPLOAD_CHUNK_BYTES,
+    onError: (c) => c.json({ detail: "上传分片超过 1 MB" }, 413),
+  }),
+  async (c) => {
+    const s = need(c, "create");
+    try {
+      const chunk = Buffer.from(await c.req.arrayBuffer());
+      const offset = Number(c.req.header("x-upload-offset") || "NaN");
+      const sha256 = c.req.header("x-upload-sha256") || "";
+      const upload = appendUploadChunk(
+        c.req.param("id"),
+        receiptOwner(s),
+        c.req.param("field"),
+        offset,
+        chunk,
+        sha256,
+      );
+      return c.json({ upload });
+    } catch (err) {
+      boom(err);
+    }
+  },
+);
+
+app.post("/api/uploads/sessions/:id/complete", async (c) => {
+  const s = need(c, "create");
+  try {
+    const upload = await uploadCoordinator.runSession(c.req.param("id"), async () =>
+      completeUploadSession(c.req.param("id"), receiptOwner(s)),
+    );
+    return c.json({ upload });
+  } catch (err) {
+    boom(err);
+  }
 });
 
 app.post(
   "/api/uploads",
   async (c, next) => {
     need(c, "create");
-    await uploadAdmission.run(next);
+    await uploadCoordinator.runLegacy(next);
   },
   async (c) => {
     const s = need(c, "create");
@@ -919,8 +994,9 @@ app.get("/api/mockups/:id", (c) => {
 app.delete("/api/mockups/:id", (c) => {
   const s = need(c, "delete");
   try {
-    const job = getJob(assertTid(c.req.param("id")));
-    if (!job) throw new HTTPException(404, { message: "没有这单打样" });
+    const id = assertTid(c.req.param("id"));
+    const job = getJob(id);
+    if (!job) return c.json({ ok: true, already_deleted: true });
     assertCanAccessMockup(job, viewerFromSession(s));
     deleteMockup(job.id);
     return c.json({ ok: true });

@@ -134,14 +134,17 @@ export function App() {
       setMe(next);
       setApiBroken(null);
       if (next.logged_in) {
+        uploadStore.setOwner(next.open_id || next.display_name || null);
         if (next.open_id) setActor(next.open_id);
         const r = parsePath(window.location.pathname, window.location.search, window.location.hash);
         setView((cur) => (cur === "tasks" && r.view === "settings" ? "settings" : cur));
         setAuthError(null);
       } else {
+        uploadStore.setOwner(null);
         setTaskId(null);
       }
     } catch (e) {
+      uploadStore.setOwner(null);
       setApiBroken(brokenApiMessage(e, window.location.host));
       setMe({ logged_in: false, display_name: null, avatar_url: null, role: null, perms: [] });
     }
@@ -396,9 +399,15 @@ export function App() {
         {view === "history" ? (
           <Suspense fallback={<PaneFallback label="打开历史记录…" />}>
             <HistoryPage
+              canCreate={me.perms.includes("create")}
               canDelete={me.perms.includes("delete")}
               onOpenTask={(id) => goRoute({ view: "review", taskId: id })}
               onOpenMockup={(id) => goRoute({ view: "mockup", mockupId: id })}
+              onOpenUpload={(kind, receipt) =>
+                kind === "compare"
+                  ? goRoute({ view: "new", receipt: receipt || undefined })
+                  : goRoute({ view: "mockupNew", receipt: receipt || undefined })
+              }
             />
           </Suspense>
         ) : null}

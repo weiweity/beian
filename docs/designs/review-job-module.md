@@ -112,8 +112,9 @@ GET 必须走 `publicTask` / `publicMockup`，剥掉 `job_pid`、磁盘 `path`�
 
 | 方法 | 路径 | 变什么 |
 |---|---|---|
-| POST | `/api/uploads` | 限流并暂存当前用户的 Excel+PDF 或 `.ai`，返回有时限、有额度的回执；不建任务、不入队。 |
-| GET / DELETE | `/api/uploads` / `/api/uploads/:id` | 列出自己的待开工回执，或放弃回执并清掉暂存文件。 |
+| POST | `/api/uploads` | 旧页面兼容入口：一次 multipart 暂存 Excel+PDF 或 `.ai`，返回回执；不建任务、不入队。 |
+| POST / PUT / POST | `/api/uploads/sessions` / `/api/uploads/sessions/:id/files/:field` / `/api/uploads/sessions/:id/complete` | 创建或找回上传会话、幂等写入带 SHA-256 的 1 MiB 分片、全部文件落盘后生成回执。 |
+| GET / DELETE | `/api/uploads` / `/api/uploads/:id` | 列出自己的 partial 会话与 ready 回执，或删除会话/回执和暂存文件。 |
 | POST | `/api/tasks/start` | 领取回执、写盘、`task.status=comparing`、`job_status=queued`、入队、立即返回；同一 `source_receipt` 重试返回原任务。 |
 | POST | `/api/tasks/:tid/rework` | kind=`rework`。对红门不变。已有 `job_status` 为 queued/running → 409「对红还在排队或正在跑」。 |
 | GET | `/api/tasks` / `/api/tasks/:tid` | 多返回公开作业字段。`board` 仍只看 `task.status`。 |

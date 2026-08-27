@@ -176,6 +176,12 @@ describe("mockup get", () => {
       headers: { authorization: `Bearer ${owner.token}` },
     });
     assert.equal(ok.status, 200);
+    const retried = await app.request("/api/mockups/dddddddddddd", {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${owner.token}` },
+    });
+    assert.equal(retried.status, 200);
+    assert.equal(((await retried.json()) as { already_deleted?: boolean }).already_deleted, true);
     const gone = await app.request("/api/mockups/dddddddddddd", {
       headers: { authorization: `Bearer ${owner.token}` },
     });

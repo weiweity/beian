@@ -24,10 +24,12 @@ function receiptFromSnapshot(snapshot: UploadSnapshot | null): PendingUploadRece
   if (!snapshot?.receipt || snapshot.phase !== "ready") return null;
   return {
     id: snapshot.receipt,
-    files: snapshot.files,
+    files: snapshot.files.map((file) => ({ ...file, received: file.bytes, last_modified: file.lastModified })),
     bytes: snapshot.files.reduce((sum, file) => sum + file.bytes, 0),
+    received: snapshot.files.reduce((sum, file) => sum + file.bytes, 0),
     created_at: snapshot.createdAt,
     kind: snapshot.kind,
+    phase: "ready",
   };
 }
 
@@ -36,13 +38,19 @@ export function NewTaskPage({ canCreate, receiptId, onCreated, onBack }: Props) 
   const upload = useUploadSnapshot("compare");
   const localReceipt = receiptFromSnapshot(upload);
   const localMatches = Boolean(receiptId && localReceipt?.id === receiptId);
-  const [resumeSource] = useState<"local" | "remote">(() => (!receiptId || localMatches ? "local" : "remote"));
+  const [resumeSource, setResumeSource] = useState<"local" | "remote">(() => (!receiptId || localMatches ? "local" : "remote"));
   const [restoredReceipt, setRestoredReceipt] = useState<PendingUploadReceipt | null>(null);
   const [resumeError, setResumeError] = useState<string | null>(null);
   const [productName, setProductName] = useState(resumeSource === "local" ? upload?.productName || "" : "");
   const [pack, setPack] = useState(resumeSource === "local" ? upload?.packSurface || "carton" : "carton");
   const [submitting, setSubmitting] = useState(false);
   useUploadReceiptRecovery("compare", upload, canCreate && resumeSource === "local");
+
+  useEffect(() => {
+    if (resumeSource !== "local" || !upload) return;
+    setProductName(upload.productName || "");
+    setPack(upload.packSurface || "carton");
+  }, [resumeSource, upload?.clientUploadId, upload?.productName, upload?.packSurface]);
 
   useEffect(() => {
     if (!canCreate || resumeSource === "local" || !receiptId) {
@@ -57,8 +65,21 @@ export function NewTaskPage({ canCreate, receiptId, onCreated, onBack }: Props) 
       .then((list) => {
         if (cancelled) return;
         const found = list.find((item) => item.id === receiptId && item.kind === "compare") || null;
+        if (found?.phase === "paused") {
+          uploadStore.restore("compare", found);
+          setProductName(found.product_name || "");
+          setPack(found.pack_surface || "carton");
+          setResumeSource("local");
+          setRestoredReceipt(null);
+          return;
+        }
         setRestoredReceipt(found);
-        if (!found) setResumeError("这份上传回执已过期或已经开工，请返回审稿台刷新。");
+        if (found) {
+          setProductName(found.product_name || "");
+          setPack(found.pack_surface || "carton");
+        } else {
+          setResumeError("这份上传回执已过期或已经开工，请返回审稿台刷新。");
+        }
       })
       .catch((err: unknown) => {
         if (!cancelled) setResumeError(err instanceof Error ? err.message : "上传回执读取失败");
@@ -220,6 +241,7 @@ export function NewTaskPage({ canCreate, receiptId, onCreated, onBack }: Props) 
         snapshot={resumeSource === "local" ? upload : null}
         receipt={resumeSource === "remote" ? restoredReceipt : null}
         readyText="上传成功，可以开始对照"
+        onRetry={resumeSource === "local" ? () => uploadStore.retry("compare") : undefined}
         onDiscard={files.length ? confirmAbandon : undefined}
       />
 

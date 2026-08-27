@@ -3,10 +3,12 @@ import { describe, it } from "node:test";
 import { API_DOWN_LOCAL, API_DOWN_PUBLIC } from "./apiHint.js";
 import {
   ApiError,
+  UploadPausedError,
   UPLOAD_TIMEOUT_MS,
   api,
   brokenApiMessage,
   transientApiFailure,
+  uploadResumable,
   uploadWithProgress,
 } from "./api.js";
 import { UPLOAD_TOO_LARGE } from "./uploadLimit.js";
@@ -52,6 +54,246 @@ describe("authenticated live status API", () => {
       assert.deepEqual(calls, [{ input: "/api/status", credentials: "same-origin" }]);
     } finally {
       globalThis.fetch = original;
+    }
+  });
+});
+
+describe("resumable upload", () => {
+  it("creates a session, sends one verified chunk, then waits for the ready receipt", async () => {
+    const original = globalThis.fetch;
+    const file = new File([Buffer.alloc(1024 * 1024, 65), Buffer.from("tail")], "box.ai", {
+      type: "application/postscript",
+      lastModified: 1234,
+    });
+    const fd = new FormData();
+    fd.append("client_upload_id", "client-resumable-test");
+    fd.append("product_name", "花盒");
+    fd.append("file", file);
+    const calls: Array<{ path: string; method: string; offset?: string; hash?: string }> = [];
+    const upload = (phase: "paused" | "ready", received: number) => ({
+      id: "112233445566",
+      files: [{ field: "ai", name: file.name, bytes: file.size, received, last_modified: 1234 }],
+      bytes: file.size,
+      received,
+      created_at: "2026-08-26T08:00:00.000Z",
+      client_upload_id: "client-resumable-test",
+      product_name: "花盒",
+      kind: "mockup" as const,
+      phase,
+    });
+    let received = 0;
+    globalThis.fetch = (async (input, init) => {
+      const headers = new Headers(init?.headers);
+      const path = String(input);
+      const method = String(init?.method || "GET").toUpperCase();
+      calls.push({ path, method, offset: headers.get("x-upload-offset") || undefined, hash: headers.get("x-upload-sha256") || undefined });
+      if (method === "PUT") received = Number(headers.get("x-upload-offset") || 0) + ((init?.body as ArrayBuffer)?.byteLength || 0);
+      const body = path.endsWith("/complete") ? upload("ready", file.size) : upload("paused", received);
+      return new Response(JSON.stringify({ upload: body }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    try {
+      const phases: string[] = [];
+      const receipt = await uploadResumable(fd, (progress) => phases.push(progress.phase || ""));
+      assert.equal(receipt.receipt, "112233445566");
+      assert.deepEqual(calls.map((call) => [call.method, call.path]), [
+        ["POST", "/api/uploads/sessions"],
+        ["PUT", "/api/uploads/sessions/112233445566/files/ai"],
+        ["PUT", "/api/uploads/sessions/112233445566/files/ai"],
+        ["POST", "/api/uploads/sessions/112233445566/complete"],
+      ]);
+      assert.equal(calls[1]?.offset, "0");
+      assert.equal(calls[2]?.offset, String(1024 * 1024));
+      assert.match(calls[1]?.hash || "", /^[a-f0-9]{64}$/);
+      assert.match(calls[2]?.hash || "", /^[a-f0-9]{64}$/);
+      assert.deepEqual(phases, ["uploading", "uploading", "confirming", "confirming"]);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  it("续传前重放并校验服务器已确认的前缀，再发送剩余字节", async () => {
+    const original = globalThis.fetch;
+    const file = new File(["old-tail"], "same.ai", { lastModified: 4321 });
+    const fd = new FormData();
+    fd.append("client_upload_id", "client-prefix-verify");
+    fd.append("file", file);
+    const calls: Array<{ method: string; offset?: string; body?: string }> = [];
+    let received = 3;
+    const upload = (phase: "paused" | "ready") => ({
+      id: "223344556677",
+      files: [{ field: "ai", name: file.name, bytes: file.size, received, last_modified: 4321 }],
+      bytes: file.size,
+      received,
+      created_at: "2026-08-26T08:00:00.000Z",
+      client_upload_id: "client-prefix-verify",
+      kind: "mockup" as const,
+      phase,
+    });
+    globalThis.fetch = (async (input, init) => {
+      const method = String(init?.method || "GET").toUpperCase();
+      const headers = new Headers(init?.headers);
+      const buffer = init?.body instanceof ArrayBuffer ? Buffer.from(init.body) : undefined;
+      const offset = headers.get("x-upload-offset") || undefined;
+      calls.push({ method, offset, body: buffer?.toString("utf8") });
+      if (method === "PUT" && offset === "3") received = file.size;
+      const body = String(input).endsWith("/complete") ? upload("ready") : upload("paused");
+      return new Response(JSON.stringify({ upload: body }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    try {
+      await uploadResumable(fd);
+      assert.deepEqual(
+        calls.filter((call) => call.method === "PUT").map((call) => [call.offset, call.body]),
+        [["0", "old"], ["3", "-tail"]],
+      );
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  it("并发页面推进服务端 offset 时仍逐块校验，不能跳过中间内容", async () => {
+    const original = globalThis.fetch;
+    const chunk = 1024 * 1024;
+    const file = new File([Buffer.alloc(chunk * 4, 65)], "parallel.ai", { lastModified: 7654 });
+    const fd = new FormData();
+    fd.append("client_upload_id", "client-parallel-prefix");
+    fd.append("file", file);
+    const offsets: number[] = [];
+    let received = chunk;
+    const upload = (phase: "paused" | "ready") => ({
+      id: "223344556688",
+      files: [{ field: "ai", name: file.name, bytes: file.size, received, last_modified: 7654 }],
+      bytes: file.size,
+      received,
+      created_at: "2026-08-26T08:00:00.000Z",
+      client_upload_id: "client-parallel-prefix",
+      kind: "mockup" as const,
+      phase,
+    });
+    globalThis.fetch = (async (input, init) => {
+      const method = String(init?.method || "GET").toUpperCase();
+      if (method === "PUT") {
+        const offset = Number(new Headers(init?.headers).get("x-upload-offset") || 0);
+        offsets.push(offset);
+        if (offset === chunk) received = chunk * 3;
+        if (offset === chunk * 3) received = chunk * 4;
+      }
+      const body = String(input).endsWith("/complete") ? upload("ready") : upload("paused");
+      return new Response(JSON.stringify({ upload: body }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    try {
+      await uploadResumable(fd);
+      assert.deepEqual(offsets, [0, chunk, chunk * 2, chunk * 3]);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  it("续传前缀不一致时停止，不把另一份同名同大小文件拼进旧会话", async () => {
+    const original = globalThis.fetch;
+    const file = new File(["new-tail"], "same.ai", { lastModified: 4321 });
+    const fd = new FormData();
+    fd.append("client_upload_id", "client-prefix-mismatch");
+    fd.append("file", file);
+    let calls = 0;
+    globalThis.fetch = (async (_input, init) => {
+      calls += 1;
+      if (String(init?.method || "GET").toUpperCase() === "PUT") {
+        return new Response(JSON.stringify({ detail: "重新选择的文件与已上传内容不一致，请重新开始" }), {
+          status: 409,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({
+        upload: {
+          id: "334455667788",
+          files: [{ field: "ai", name: file.name, bytes: file.size, received: 3, last_modified: 4321 }],
+          bytes: file.size,
+          received: 3,
+          created_at: "2026-08-26T08:00:00.000Z",
+          client_upload_id: "client-prefix-mismatch",
+          kind: "mockup",
+          phase: "paused",
+        },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    try {
+      await assert.rejects(
+        uploadResumable(fd),
+        (err: unknown) => err instanceof ApiError && err.status === 409 && /内容不一致/.test(err.message),
+      );
+      assert.equal(calls, 2);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  it("surfaces a 429 upload-slot refusal immediately without retrying it as network loss", async () => {
+    const original = globalThis.fetch;
+    const fd = new FormData();
+    fd.append("client_upload_id", "client-slot-refused");
+    fd.append("file", new File(["ai"], "box.ai"));
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return new Response(JSON.stringify({ detail: "同时最多上传 2 份，请等其中一份完成后再试" }), {
+        status: 429,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    try {
+      await assert.rejects(
+        uploadResumable(fd),
+        (err: unknown) =>
+          err instanceof ApiError &&
+          err.status === 429 &&
+          /同时最多上传 2 份/.test(err.message),
+      );
+      assert.equal(calls, 1);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  it("times out every stalled upload request instead of leaving the page pending forever", async () => {
+    const originalFetch = globalThis.fetch;
+    const originalSetTimeout = globalThis.setTimeout;
+    const originalClearTimeout = globalThis.clearTimeout;
+    const fd = new FormData();
+    fd.append("client_upload_id", "client-timeout-request");
+    fd.append("file", new File(["ai"], "box.ai"));
+    let calls = 0;
+    globalThis.setTimeout = ((handler: TimerHandler) => {
+      if (typeof handler === "function") handler();
+      return 1;
+    }) as typeof setTimeout;
+    globalThis.clearTimeout = (() => undefined) as typeof clearTimeout;
+    globalThis.fetch = (async (_input, init) => {
+      calls += 1;
+      assert.equal(init?.signal?.aborted, true);
+      throw new DOMException("timed out", "AbortError");
+    }) as typeof fetch;
+    try {
+      await assert.rejects(
+        uploadResumable(fd),
+        (err: unknown) =>
+          err instanceof UploadPausedError &&
+          !err.uploadId &&
+          /无法确认服务器是否收到.*响应超时/.test(err.message),
+      );
+      assert.equal(calls, 6);
+    } finally {
+      globalThis.fetch = originalFetch;
+      globalThis.setTimeout = originalSetTimeout;
+      globalThis.clearTimeout = originalClearTimeout;
     }
   });
 });

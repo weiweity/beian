@@ -1,5 +1,6 @@
 import {
   closeSync,
+  copyFileSync,
   createWriteStream,
   existsSync,
   mkdirSync,
@@ -13,7 +14,9 @@ import {
   statSync,
   unlinkSync,
   writeFileSync,
+  writeSync,
 } from "node:fs";
+import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import busboy from "busboy";
@@ -27,16 +30,50 @@ export type UploadReceipt = {
   owner: string;
   created_at: string;
   client_upload_id?: string;
+  product_name?: string;
+  pack_surface?: string;
   files: StagedFile[];
 };
 
 export type ListedUploadReceipt = {
   id: string;
-  files: { field: string; name: string; bytes: number }[];
+  files: { field: string; name: string; bytes: number; received: number; last_modified?: number }[];
   bytes: number;
+  received: number;
   created_at: string;
   client_upload_id?: string;
+  product_name?: string;
+  pack_surface?: string;
   kind: "compare" | "mockup";
+  phase: "ready" | "paused";
+};
+
+export type UploadSessionFile = {
+  field: "excel" | "pdf" | "ai";
+  name: string;
+  bytes: number;
+  received: number;
+  last_modified?: number;
+  storage_name: string;
+};
+
+export type UploadSession = {
+  id: string;
+  owner: string;
+  created_at: string;
+  updated_at: string;
+  client_upload_id: string;
+  product_name?: string;
+  pack_surface?: string;
+  kind: "compare" | "mockup";
+  files: UploadSessionFile[];
+};
+
+export type UploadSessionStartInput = {
+  client_upload_id?: unknown;
+  product_name?: unknown;
+  pack_surface?: unknown;
+  files?: { field?: unknown; name?: unknown; bytes?: unknown; last_modified?: unknown }[];
 };
 
 const TTL_MS = 30 * 60 * 1000;
@@ -50,10 +87,20 @@ export const MAX_PENDING_RECEIPTS_GLOBAL = 64;
 export const MAX_PENDING_BYTES_GLOBAL = 1024 * 1024 * 1024;
 export const UPLOAD_CONCURRENCY = 2;
 export const UPLOAD_BUSY = "同时最多上传 2 份，请等其中一份完成后再试";
+export const UPLOAD_CHUNK_BYTES = 1024 * 1024;
+export const UPLOAD_SESSION_METADATA_BYTES = 16 * 1024;
+export const UPLOAD_RELEASE_LEASE_MS = 2 * 60 * 1000;
 const SINGLE_UPLOAD_BUSY = "已有文件正在上传，请等它完成后再试";
 
 type UploadAdmission = {
   run<T>(work: () => Promise<T>): Promise<T>;
+  snapshot(): { active: number; waiting: number };
+};
+
+export type UploadCoordinator = {
+  start(owner: string, input: UploadSessionStartInput): ListedUploadReceipt;
+  runSession<T>(sessionId: string, work: () => Promise<T>): Promise<T>;
+  runLegacy<T>(work: () => Promise<T>): Promise<T>;
   snapshot(): { active: number; waiting: number };
 };
 
@@ -89,6 +136,72 @@ export function createUploadAdmission(
   };
 }
 
+/**
+ * 新旧上传共用同一组两路通道。分片会话在请求间隙用磁盘租约占位；当前
+ * HTTP 请求在收正文前占位。同一分片会话的第一条活动请求复用自己的租约，
+ * 并发的第二条请求才额外占一格，避免把租约和请求重复计算。
+ */
+export function createUploadCoordinator(limit = UPLOAD_CONCURRENCY): UploadCoordinator {
+  if (!Number.isInteger(limit) || limit < 1) throw new Error("上传并发数必须大于 0");
+  const claims = new Map<symbol, string | undefined>();
+
+  function occupancy(leases: Set<string>, nextSessionId?: string): number {
+    let occupied = leases.size;
+    const claimsPerLeasedSession = new Map<string, number>();
+    for (const sessionId of [...claims.values(), nextSessionId]) {
+      if (sessionId && leases.has(sessionId)) {
+        const prior = claimsPerLeasedSession.get(sessionId) || 0;
+        if (prior > 0) occupied += 1;
+        claimsPerLeasedSession.set(sessionId, prior + 1);
+      } else {
+        occupied += 1;
+      }
+    }
+    return occupied;
+  }
+
+  function acquire(sessionId?: string): () => void {
+    const leases = recentUploadSessionIds();
+    if (occupancy(leases, sessionId) > limit) throw uploadFailure(UPLOAD_BUSY, 429);
+    const token = Symbol("upload-claim");
+    claims.set(token, sessionId);
+    return () => {
+      claims.delete(token);
+    };
+  }
+
+  async function run<T>(sessionId: string | undefined, work: () => Promise<T>): Promise<T> {
+    const release = acquire(sessionId);
+    try {
+      return await work();
+    } finally {
+      release();
+    }
+  }
+
+  return {
+    start(owner, input) {
+      let release: (() => void) | undefined;
+      try {
+        return startUploadSession(owner, input, () => {
+          release = acquire();
+        });
+      } finally {
+        release?.();
+      }
+    },
+    runSession: (sessionId, work) => run(sessionId, work),
+    runLegacy: (work) => run(undefined, work),
+    snapshot() {
+      const leases = recentUploadSessionIds();
+      const claimedLeases = new Set(
+        [...claims.values()].filter((sessionId): sessionId is string => Boolean(sessionId && leases.has(sessionId))),
+      );
+      return { active: claims.size, waiting: Math.max(0, leases.size - claimedLeases.size) };
+    },
+  };
+}
+
 function receiptsDir(): string {
   return join(DATA_DIR, "uploads", "receipts");
 }
@@ -99,6 +212,36 @@ function receiptPath(id: string): string {
 
 function receiptDir(id: string): string {
   return join(receiptsDir(), id);
+}
+
+function sessionsDir(): string {
+  return join(DATA_DIR, "uploads", "sessions");
+}
+
+function sessionDir(id: string): string {
+  return join(sessionsDir(), id);
+}
+
+function sessionPath(id: string): string {
+  return join(sessionDir(id), "session.json");
+}
+
+function sessionFilePath(session: UploadSession, file: UploadSessionFile): string {
+  return join(sessionDir(session.id), file.storage_name);
+}
+
+function replaceJson(path: string, value: unknown): void {
+  const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
+  writeFileSync(tmp, JSON.stringify(value), "utf8");
+  try {
+    renameSync(tmp, path);
+  } catch {
+    try {
+      copyFileSync(tmp, path);
+    } finally {
+      unlinkQuietly(tmp);
+    }
+  }
 }
 
 export function underReceiptDir(id: string, p: string): boolean {
@@ -172,7 +315,13 @@ export function receiptOwner(s: { open_id?: string; display_name?: string }): st
 function newReceiptId(): string {
   for (let attempt = 0; attempt < 16; attempt += 1) {
     const candidate = newTid();
-    if (!existsSync(receiptPath(candidate)) && !existsSync(receiptDir(candidate))) return candidate;
+    if (
+      !existsSync(receiptPath(candidate)) &&
+      !existsSync(receiptDir(candidate)) &&
+      !existsSync(sessionDir(candidate))
+    ) {
+      return candidate;
+    }
   }
   throw new Error("暂存编号冲突，请重试");
 }
@@ -439,6 +588,8 @@ function receiptShapeOk(id: string, rec: UploadReceipt): boolean {
     typeof rec.owner === "string" &&
     typeof rec.created_at === "string" &&
     (rec.client_upload_id === undefined || typeof rec.client_upload_id === "string") &&
+    (rec.product_name === undefined || typeof rec.product_name === "string") &&
+    (rec.pack_surface === undefined || typeof rec.pack_surface === "string") &&
     Array.isArray(rec.files) &&
     rec.files.every(
       (file) =>
@@ -474,12 +625,430 @@ function receiptBytes(rec: UploadReceipt): number {
   return total;
 }
 
+function uploadSessionShapeOk(id: string, session: UploadSession): boolean {
+  return (
+    session?.id === id &&
+    isTid(session.id) &&
+    typeof session.owner === "string" &&
+    typeof session.created_at === "string" &&
+    typeof session.updated_at === "string" &&
+    /^[a-zA-Z0-9_-]{8,80}$/.test(session.client_upload_id || "") &&
+    (session.kind === "compare" || session.kind === "mockup") &&
+    Array.isArray(session.files) &&
+    session.files.length > 0 &&
+    session.files.every(
+      (file) =>
+        Boolean(file) &&
+        (["excel", "pdf", "ai"] as string[]).includes(file.field) &&
+        typeof file.name === "string" &&
+        Number.isInteger(file.bytes) &&
+        file.bytes >= 0 &&
+        Number.isInteger(file.received) &&
+        file.received >= 0 &&
+        file.received <= file.bytes &&
+        typeof file.storage_name === "string" &&
+        !file.storage_name.includes("/") &&
+        !file.storage_name.includes("\\"),
+    )
+  );
+}
+
+function uploadSessionFresh(session: UploadSession): boolean {
+  const age = Date.now() - Date.parse(session.updated_at);
+  return Number.isFinite(age) && age <= TTL_MS;
+}
+
+function saveUploadSession(session: UploadSession): void {
+  replaceJson(sessionPath(session.id), session);
+}
+
+/**
+ * 终结会话是逻辑动作，不依赖 Windows 当下能否删目录。删不掉时先把租约写成
+ * 过期，让列表、配额和发版闸门立即忽略它；后续 sweep 再回收物理文件。
+ */
+function retireUploadSession(id: string): void {
+  try {
+    rmSync(sessionDir(id), { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    return;
+  } catch {
+    // Windows 杀毒或索引可能短暂占用目录。
+  }
+  try {
+    const session = JSON.parse(readFileSync(sessionPath(id), "utf8")) as UploadSession;
+    if (!uploadSessionShapeOk(id, session)) return;
+    saveUploadSession({ ...session, updated_at: "1970-01-01T00:00:00.000Z" });
+  } catch {
+    // sweep 会继续尝试；有效回执或任务不能因清理失败回滚。
+  }
+}
+
+export function loadUploadSession(id: string, owner: string): UploadSession | null {
+  if (!isTid(id)) return null;
+  let session: UploadSession;
+  try {
+    session = JSON.parse(readFileSync(sessionPath(id), "utf8")) as UploadSession;
+  } catch {
+    return null;
+  }
+  if (!uploadSessionShapeOk(id, session) || !uploadSessionFresh(session) || session.owner !== owner) {
+    return null;
+  }
+
+  let changed = false;
+  for (const file of session.files) {
+    const path = sessionFilePath(session, file);
+    let actual = 0;
+    try {
+      actual = statSync(path).size;
+    } catch {
+      return null;
+    }
+    if (actual > file.bytes) return null;
+    if (actual !== file.received) {
+      file.received = actual;
+      changed = true;
+    }
+  }
+  if (changed) saveUploadSession(session);
+  return session;
+}
+
+function listedSession(session: UploadSession): ListedUploadReceipt {
+  const files = session.files.map(({ field, name, bytes, received, last_modified }) => ({
+    field,
+    name,
+    bytes,
+    received,
+    ...(last_modified === undefined ? {} : { last_modified }),
+  }));
+  return {
+    id: session.id,
+    files,
+    bytes: files.reduce((sum, file) => sum + file.bytes, 0),
+    received: files.reduce((sum, file) => sum + file.received, 0),
+    created_at: session.created_at,
+    client_upload_id: session.client_upload_id,
+    ...(session.product_name ? { product_name: session.product_name } : {}),
+    ...(session.pack_surface ? { pack_surface: session.pack_surface } : {}),
+    kind: session.kind,
+    phase: "paused",
+  };
+}
+
+function allSessionIds(): string[] {
+  try {
+    return readdirSync(sessionsDir()).filter((name) => isTid(name));
+  } catch {
+    return [];
+  }
+}
+
+export function sweepUploadSessions(): void {
+  for (const id of allSessionIds()) {
+    let session: UploadSession | null = null;
+    try {
+      session = JSON.parse(readFileSync(sessionPath(id), "utf8")) as UploadSession;
+    } catch {
+      /* remove below */
+    }
+    // 回执已经发布就是上传完成的事实。Windows 若短暂占用分片目录，complete
+    // 会把删除留给这里；不能让遗留会话继续占并发租约和暂存配额。
+    const completed = readReceipt(id);
+    if (completed) {
+      retireUploadSession(id);
+      continue;
+    }
+    if (!session || !uploadSessionShapeOk(id, session) || !uploadSessionFresh(session)) {
+      try {
+        rmSync(sessionDir(id), { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      } catch {
+        // Windows 杀毒/索引可能短暂占用分片；下次读取继续清理。
+      }
+    }
+  }
+}
+
+/**
+ * 分片请求之间没有长连接；只看当前 HTTP 请求会让发版在两个分片的
+ * 空隙误判为空闲。最近更新的持久化会话因此持有一个短租约；暂停后不会卡住
+ * 整个 30 分钟 TTL，正常完成或放弃则会立即释放。
+ */
+function recentUploadSessionIds(maxAgeMs = UPLOAD_RELEASE_LEASE_MS): Set<string> {
+  sweepUploadSessions();
+  const now = Date.now();
+  const found = new Set<string>();
+  for (const id of allSessionIds()) {
+    try {
+      const session = JSON.parse(readFileSync(sessionPath(id), "utf8")) as UploadSession;
+      const updatedAt = Date.parse(session.updated_at);
+      if (
+        uploadSessionShapeOk(id, session) &&
+        uploadSessionFresh(session) &&
+        Number.isFinite(updatedAt) &&
+        now - updatedAt <= maxAgeMs
+      ) {
+        found.add(id);
+      }
+    } catch {
+      // sweep 会在下次读取清理损坏会话；这里只提供发版闸门快照。
+    }
+  }
+  return found;
+}
+
+export function recentUploadSessionCount(maxAgeMs = UPLOAD_RELEASE_LEASE_MS): number {
+  return recentUploadSessionIds(maxAgeMs).size;
+}
+
+function uploadSessionHasLease(session: UploadSession, maxAgeMs = UPLOAD_RELEASE_LEASE_MS): boolean {
+  const updatedAt = Date.parse(session.updated_at);
+  return Number.isFinite(updatedAt) && Date.now() - updatedAt <= maxAgeMs;
+}
+
+/**
+ * 分片间隙仍由持久化会话占住上传通道；暂停超过租约后，续传必须重新抢位。
+ * 同一会话的幂等查询不抢新位，避免响应丢失后被自己的租约挡住。
+ */
+function assertUploadSessionLeaseAvailable(session?: UploadSession): void {
+  if (session && uploadSessionHasLease(session)) return;
+  if (recentUploadSessionCount() >= UPLOAD_CONCURRENCY) {
+    throw uploadFailure(UPLOAD_BUSY, 429);
+  }
+}
+
+function sessionFieldsKind(files: UploadSessionFile[]): "compare" | "mockup" {
+  const fields = files.map((file) => file.field).sort();
+  if (fields.length === 1 && fields[0] === "ai") return "mockup";
+  if (fields.length === 2 && fields[0] === "excel" && fields[1] === "pdf") return "compare";
+  throw uploadFailure("审稿需要 Excel + PDF；打样需要一份 AI");
+}
+
+function normalizeSessionFiles(
+  files: { field?: unknown; name?: unknown; bytes?: unknown; last_modified?: unknown }[],
+): UploadSessionFile[] {
+  if (!Array.isArray(files) || files.length < 1 || files.length > 2) {
+    throw uploadFailure("一次只收一份打样稿，或一对审稿文件");
+  }
+  const seen = new Set<string>();
+  const normalized = files.map((raw) => {
+    const field = raw.field === "file" ? "ai" : String(raw.field || "");
+    if (!(field === "excel" || field === "pdf" || field === "ai") || seen.has(field)) {
+      throw uploadFailure("上传文件栏不正确");
+    }
+    seen.add(field);
+    const name = String(raw.name || "").trim();
+    const bytes = Number(raw.bytes);
+    if (!name || !Number.isInteger(bytes) || bytes <= 0) throw uploadFailure("上传文件信息不完整");
+    if (tooLarge(bytes)) throw uploadFailure(oversizeMessage(), 413);
+    const lastModified = Number(raw.last_modified);
+    return {
+      field,
+      name,
+      bytes,
+      received: 0,
+      ...(Number.isFinite(lastModified) && lastModified >= 0 ? { last_modified: lastModified } : {}),
+      storage_name: `${field}-${safeStagedName(name, field)}.part`,
+    } as UploadSessionFile;
+  });
+  if (uploadTotalTooLarge(normalized.map((file) => file.bytes))) {
+    throw uploadFailure(UPLOAD_BODY_TOO_LARGE, 413);
+  }
+  sessionFieldsKind(normalized);
+  return normalized;
+}
+
+function sessionMetadataMatches(session: UploadSession, files: UploadSessionFile[]): boolean {
+  if (session.files.length !== files.length) return false;
+  return files.every((file) => {
+    const existing = session.files.find((candidate) => candidate.field === file.field);
+    return Boolean(
+      existing &&
+        existing.name === file.name &&
+        existing.bytes === file.bytes &&
+        (existing.last_modified ?? 0) === (file.last_modified ?? 0),
+    );
+  });
+}
+
+export function startUploadSession(
+  owner: string,
+  input: UploadSessionStartInput,
+  reserveNewSession?: () => void,
+): ListedUploadReceipt {
+  const clientUploadId = String(input.client_upload_id || "").trim();
+  if (!/^[a-zA-Z0-9_-]{8,80}$/.test(clientUploadId)) throw uploadFailure("上传标识不正确");
+  const files = normalizeSessionFiles(input.files || []);
+  const productName = String(input.product_name || "").trim().slice(0, 80) || undefined;
+  const packSurface = String(input.pack_surface || "").trim().slice(0, 24) || undefined;
+
+  const completed = listReceipts(owner).find((item) => item.client_upload_id === clientUploadId);
+  if (completed) return completed;
+
+  sweepUploadSessions();
+  for (const id of allSessionIds()) {
+    const existing = loadUploadSession(id, owner);
+    if (!existing || existing.client_upload_id !== clientUploadId) continue;
+    if (!sessionMetadataMatches(existing, files)) {
+      throw uploadFailure("这次上传选择的文件与服务器记录不一致，请放弃后重新选择", 409);
+    }
+    if (
+      (productName && productName !== existing.product_name) ||
+      (packSurface && packSurface !== existing.pack_surface)
+    ) {
+      if (productName) existing.product_name = productName;
+      if (packSurface) existing.pack_surface = packSurface;
+      saveUploadSession(existing);
+    }
+    return listedSession(existing);
+  }
+
+  assertReceiptCapacity(owner, files.reduce((sum, file) => sum + file.bytes, 0));
+  if (reserveNewSession) reserveNewSession();
+  else assertUploadSessionLeaseAvailable();
+  const id = newReceiptId();
+  const dir = sessionDir(id);
+  mkdirSync(sessionsDir(), { recursive: true });
+  mkdirSync(dir, { recursive: false });
+  try {
+    for (const file of files) writeFileSync(join(dir, file.storage_name), Buffer.alloc(0), { flag: "wx" });
+    const created = nowIso();
+    const session: UploadSession = {
+      id,
+      owner,
+      created_at: created,
+      updated_at: created,
+      client_upload_id: clientUploadId,
+      product_name: productName,
+      pack_surface: packSurface,
+      kind: sessionFieldsKind(files),
+      files,
+    };
+    writeFileSync(sessionPath(id), JSON.stringify(session), { encoding: "utf8", flag: "wx" });
+    return listedSession(session);
+  } catch (err) {
+    rmSync(dir, { recursive: true, force: true });
+    throw err;
+  }
+}
+
+function readChunk(path: string, offset: number, length: number): Buffer {
+  const buf = Buffer.alloc(length);
+  let fd: number | undefined;
+  try {
+    fd = openSync(path, "r");
+    const bytes = readSync(fd, buf, 0, length, offset);
+    return buf.subarray(0, bytes);
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+export function appendUploadChunk(
+  id: string,
+  owner: string,
+  field: string,
+  offset: number,
+  chunk: Buffer,
+  sha256: string,
+): ListedUploadReceipt {
+  if (!Number.isInteger(offset) || offset < 0) throw uploadFailure("上传位置不正确", 400);
+  if (!chunk.length || chunk.length > UPLOAD_CHUNK_BYTES) throw uploadFailure("上传分片大小不正确", 413);
+  if (!/^[a-f0-9]{64}$/i.test(sha256)) throw uploadFailure("上传分片缺少校验值", 400);
+  const actualHash = createHash("sha256").update(chunk).digest("hex");
+  if (actualHash !== sha256.toLowerCase()) throw uploadFailure("上传分片校验失败，请重试", 409);
+
+  const session = loadUploadSession(id, owner);
+  if (!session) throw uploadFailure("上传会话已过期，请重新选择文件", 404);
+  const file = session.files.find((candidate) => candidate.field === field);
+  if (!file) throw uploadFailure("上传文件栏不存在", 404);
+  const path = sessionFilePath(session, file);
+
+  if (offset < file.received) {
+    if (offset + chunk.length > file.received) throw uploadFailure(`服务器已收到 ${file.received} 字节，请从该位置继续`, 409);
+    const existingHash = createHash("sha256").update(readChunk(path, offset, chunk.length)).digest("hex");
+    if (existingHash !== actualHash) throw uploadFailure("重新选择的文件与已上传内容不一致，请重新开始", 409);
+    return listedSession(session);
+  }
+  if (offset !== file.received) throw uploadFailure(`服务器已收到 ${file.received} 字节，请从该位置继续`, 409);
+  if (offset + chunk.length > file.bytes) throw uploadFailure("上传内容超过文件大小", 413);
+
+  assertUploadSessionLeaseAvailable(session);
+
+  let fd: number | undefined;
+  try {
+    fd = openSync(path, "r+");
+    let written = 0;
+    while (written < chunk.length) {
+      written += writeSync(fd, chunk, written, chunk.length - written, offset + written);
+    }
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+  file.received = offset + chunk.length;
+  session.updated_at = nowIso();
+  saveUploadSession(session);
+  return listedSession(session);
+}
+
+export function completeUploadSession(id: string, owner: string): ListedUploadReceipt {
+  const completed = loadReceipt(id, owner);
+  if (completed) return listedReceipt(completed);
+  const session = loadUploadSession(id, owner);
+  if (!session) throw uploadFailure("上传会话已过期，请重新选择文件", 404);
+  if (session.files.some((file) => file.received !== file.bytes)) {
+    throw uploadFailure("文件还没有传完", 409);
+  }
+  for (const file of session.files) {
+    const error = magicOk(file.field, readPrefix(sessionFilePath(session, file)), file.name);
+    if (error) throw uploadFailure(error);
+  }
+
+  const finalDir = receiptDir(id);
+  // 新数据目录可能先走分片协议，尚未经过 multipart 初始化。
+  mkdirSync(receiptsDir(), { recursive: true });
+  rmSync(finalDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  mkdirSync(finalDir, { recursive: false });
+  try {
+    const files: StagedFile[] = session.files.map((file) => {
+      const storageName = `${file.field}-${safeStagedName(file.name, file.field)}`;
+      const path = join(finalDir, storageName);
+      copyFileSync(sessionFilePath(session, file), path);
+      return { field: file.field, name: file.name, path, bytes: file.bytes };
+    });
+    const receipt: UploadReceipt = {
+      id,
+      owner,
+      // 回执的 30 分钟可开工窗口从服务端确认完成时开始；长传或暂停续传
+      // 不能在刚成功时就因会话起始时间过早而立刻过期。
+      created_at: nowIso(),
+      client_upload_id: session.client_upload_id,
+      product_name: session.product_name,
+      pack_surface: session.pack_surface,
+      files,
+    };
+    writeFileSync(receiptPath(id), JSON.stringify(receipt), { encoding: "utf8", flag: "wx" });
+    retireUploadSession(id);
+    return listedReceipt(receipt);
+  } catch (err) {
+    if (!existsSync(receiptPath(id))) rmSync(finalDir, { recursive: true, force: true });
+    throw err;
+  }
+}
+
+export function discardUploadSession(id: string, owner: string): boolean {
+  const session = loadUploadSession(id, owner);
+  if (!session) return false;
+  retireUploadSession(id);
+  return true;
+}
+
 function assertReceiptCapacity(owner: string, incomingBytes: number): void {
+  sweepUploadSessions();
   let names: string[];
   try {
     names = readdirSync(receiptsDir());
   } catch {
-    return;
+    names = [];
   }
   let globalCount = 0;
   let globalBytes = 0;
@@ -494,6 +1063,24 @@ function assertReceiptCapacity(owner: string, incomingBytes: number): void {
     globalCount += 1;
     globalBytes += bytes;
     if (ownedBy(rec, owner)) {
+      ownerCount += 1;
+      ownerBytes += bytes;
+    }
+  }
+  for (const id of allSessionIds()) {
+    const session = loadUploadSession(id, owner) || (() => {
+      try {
+        const raw = JSON.parse(readFileSync(sessionPath(id), "utf8")) as UploadSession;
+        return uploadSessionShapeOk(id, raw) && uploadSessionFresh(raw) ? raw : null;
+      } catch {
+        return null;
+      }
+    })();
+    if (!session) continue;
+    const bytes = session.files.reduce((sum, file) => sum + file.bytes, 0);
+    globalCount += 1;
+    globalBytes += bytes;
+    if (session.owner === owner) {
       ownerCount += 1;
       ownerBytes += bytes;
     }
@@ -569,14 +1156,18 @@ export function sweepReceipts(): void {
 }
 
 function listedReceipt(rec: UploadReceipt): ListedUploadReceipt {
-  const files = rec.files.map(({ field, name, bytes }) => ({ field, name, bytes }));
+  const files = rec.files.map(({ field, name, bytes }) => ({ field, name, bytes, received: bytes }));
   return {
     id: rec.id,
     files,
     bytes: files.reduce((sum, file) => sum + file.bytes, 0),
+    received: files.reduce((sum, file) => sum + file.received, 0),
     created_at: rec.created_at,
     ...(rec.client_upload_id ? { client_upload_id: rec.client_upload_id } : {}),
+    ...(rec.product_name ? { product_name: rec.product_name } : {}),
+    ...(rec.pack_surface ? { pack_surface: rec.pack_surface } : {}),
     kind: files.some((file) => file.field === "ai") ? "mockup" : "compare",
+    phase: "ready",
   };
 }
 
@@ -605,6 +1196,20 @@ export function listReceipts(owner: string): ListedUploadReceipt[] {
   return found.sort((a, b) => b.created_at.localeCompare(a.created_at));
 }
 
+/** 台面和历史记录共用：完整回执可开工，部分会话可续传。 */
+export function listPendingUploads(owner: string): ListedUploadReceipt[] {
+  const ready = listReceipts(owner);
+  const completedClients = new Set(ready.map((item) => item.client_upload_id).filter(Boolean));
+  sweepUploadSessions();
+  const partial: ListedUploadReceipt[] = [];
+  for (const id of allSessionIds()) {
+    const session = loadUploadSession(id, owner);
+    if (!session || completedClients.has(session.client_upload_id)) continue;
+    partial.push(listedSession(session));
+  }
+  return [...ready, ...partial].sort((a, b) => b.created_at.localeCompare(a.created_at));
+}
+
 /** 原子拿走收据 JSON。稿件目录仍在，开工拷完后调用 purgeReceiptFiles。 */
 export function consumeReceipt(id: string, owner: string): UploadReceipt | null {
   if (!isTid(id)) return null;
@@ -630,6 +1235,9 @@ export function consumeReceipt(id: string, owner: string): UploadReceipt | null 
       }
       return null;
     }
+    // complete 已发布回执后会删除分片会话；若 Windows 当时短暂占用目录，
+    // 领取回执是第二个确定的终结点。否则回执开工后旧会话会重新出现在待上传列表。
+    retireUploadSession(id);
     unlinkQuietly(taken);
     return rec;
   } catch {
@@ -647,6 +1255,25 @@ export function discardReceipt(id: string, owner: string): boolean {
   if (!rec) return false;
   purgeReceiptFiles(rec.id);
   return true;
+}
+
+export function discardPendingUpload(id: string, owner: string): boolean {
+  if (discardReceipt(id, owner) || discardUploadSession(id, owner)) return true;
+  if (!/^[a-zA-Z0-9_-]{8,80}$/.test(id)) return false;
+
+  let removed = false;
+  for (const receipt of listReceipts(owner)) {
+    if (receipt.client_upload_id === id) removed = discardReceipt(receipt.id, owner) || removed;
+  }
+  sweepUploadSessions();
+  for (const sessionId of allSessionIds()) {
+    const session = loadUploadSession(sessionId, owner);
+    if (session?.client_upload_id === id) {
+      retireUploadSession(sessionId);
+      removed = true;
+    }
+  }
+  return removed;
 }
 
 export function tooLarge(bytes: number): boolean {
