@@ -3459,13 +3459,6 @@ html[data-theme="dark"] .notes.is-float {
   width: 100%;
 }
 
-/* In browser fullscreen, Select must live inside the fullscreen root. Keep its
-   popup above the fixed review dock instead of letting the dock intercept it. */
-.review-page.is-fullscreen .ant-select-dropdown {
-  position: fixed !important;
-  z-index: 320 !important;
-}
-
 .review-evidence-note {
   width: 100%;
 }

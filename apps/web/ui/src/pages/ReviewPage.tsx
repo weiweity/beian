@@ -985,6 +985,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
                 hits={hits}
                 active={active}
                 current={current}
+                fullscreen={reviewFullscreen}
                 currentHasBox={Boolean(currentBox)}
                 reviewable={reviewable}
                 busy={busy}

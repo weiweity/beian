@@ -6,6 +6,7 @@ type Props = {
   hits: FieldHit[];
   active: number;
   current?: FieldHit;
+  fullscreen: boolean;
   currentHasBox: boolean;
   reviewable: boolean;
   busy: boolean;
@@ -45,6 +46,7 @@ export function ReviewDockPanel({
   hits,
   active,
   current,
+  fullscreen,
   currentHasBox,
   reviewable,
   busy,
@@ -104,6 +106,11 @@ export function ReviewDockPanel({
               placeholder="选择结论"
               value={selected}
               popupMatchSelectWidth={220}
+              styles={
+                fullscreen
+                  ? { popup: { root: { position: "fixed", zIndex: 320 } } }
+                  : undefined
+              }
               getPopupContainer={(trigger) => {
                 const fullscreenRoot = trigger.closest(".review-page.is-fullscreen");
                 return fullscreenRoot instanceof HTMLElement ? fullscreenRoot : document.body;
