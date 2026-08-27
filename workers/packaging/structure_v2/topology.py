@@ -13,7 +13,7 @@ from typing import Any, Iterable, Mapping
 
 try:
     from shapely import STRtree, line_merge, polygonize_full, snap, unary_union
-    from shapely.geometry import GeometryCollection, LineString, MultiLineString, MultiPoint, Point
+    from shapely.geometry import GeometryCollection, LineString, MultiLineString, MultiPoint, Point, Polygon
 except ImportError as error:  # pragma: no cover - exercised by deployment probe
     raise RuntimeError("packaging_dependency_missing: 缺少 Shapely/GEOS") from error
 
@@ -318,18 +318,310 @@ def _face_transform(polygon: Any) -> tuple[list[float], list[float]] | None:
     return transform, [round(x_length, 6), round(y_length, 6)]
 
 
+def _dominant_orthogonal_angle(lines: list[LineString]) -> float:
+    """Return the dominant carton-grid angle, modulo 90 degrees.
+
+    Old Illustrator dielines frequently contain duplicate cut/crease strokes
+    and separate reference diagrams.  Their useful panel edges still share an
+    orthogonal basis.  A fourth-angle mean lets horizontal and vertical edges
+    vote for the same basis without assuming that the net is axis-aligned.
+    """
+    cosine = 0.0
+    sine = 0.0
+    for line in lines:
+        coordinates = list(line.coords)
+        if len(coordinates) < 2 or line.length <= 1e-9:
+            continue
+        left, right = coordinates[0], coordinates[-1]
+        angle = math.atan2(float(right[1]) - float(left[1]), float(right[0]) - float(left[0]))
+        cosine += float(line.length) * math.cos(4.0 * angle)
+        sine += float(line.length) * math.sin(4.0 * angle)
+    if abs(cosine) + abs(sine) <= 1e-9:
+        return 0.0
+    return math.atan2(sine, cosine) / 4.0
+
+
+def _rotate_coordinate(point: tuple[float, float], angle: float) -> tuple[float, float]:
+    cosine = math.cos(angle)
+    sine = math.sin(angle)
+    x, y = point
+    return (cosine * x - sine * y, sine * x + cosine * y)
+
+
+def _cluster_axis_coordinates(
+    values: list[tuple[float, float]],
+    tolerance: float,
+) -> list[float]:
+    if not values:
+        return []
+    groups: list[list[tuple[float, float]]] = []
+    for value, weight in sorted(values):
+        if not groups or value - groups[-1][-1][0] > tolerance:
+            groups.append([(value, weight)])
+        else:
+            groups[-1].append((value, weight))
+    result: list[float] = []
+    for group in groups:
+        total = sum(max(weight, 1e-9) for _value, weight in group)
+        result.append(sum(value * max(weight, 1e-9) for value, weight in group) / total)
+    return result
+
+
+def derive_rectangular_face_proposal(
+    payload: Mapping[str, Any],
+    *,
+    boundary_tolerance_mm: float = 1.5,
+) -> dict[str, Any]:
+    """Build human-selectable finished-face rectangles from legacy strokes.
+
+    This is deliberately a proposal adapter, not an automatic dieline parser.
+    It rectifies the *finished panel area* (including non-rectangular closing
+    flaps), keeps unrelated reference drawings as visible alternatives, and
+    requires a human to choose the connected six-face net.  No result from this
+    function can be accepted without ``confirm_structure``.
+    """
+    structure = canonicalize_structure(payload)
+    vertices = {item["id"]: (float(item["x"]), float(item["y"])) for item in structure["vertices"]}
+    source_lines = [
+        LineString([vertices[edge["start"]], vertices[edge["end"]]])
+        for edge in structure["edges"]
+        if edge["assignment"] in LINEWORK_ASSIGNMENTS
+    ]
+    source_lines = [line for line in source_lines if line.length >= 1e-6]
+    if not source_lines:
+        raise TopologyError("structure_semantics_missing", "结构线没有形成可确认的盒面候选")
+
+    tolerance = float(boundary_tolerance_mm)
+    if not math.isfinite(tolerance) or tolerance <= 0 or tolerance > 2.0:
+        raise TopologyError("structure_contract_invalid", "候选边界容差必须位于 0–2 mm")
+    basis_angle = _dominant_orthogonal_angle(source_lines)
+    local_lines = [
+        LineString([_rotate_coordinate(tuple(point), -basis_angle) for point in line.coords])
+        for line in source_lines
+    ]
+    minimum_axis_length = 5.0
+    angular_error = math.sin(math.radians(3.0))
+    horizontal: list[LineString] = []
+    vertical: list[LineString] = []
+    for line in local_lines:
+        left, right = list(line.coords)[0], list(line.coords)[-1]
+        dx = float(right[0]) - float(left[0])
+        dy = float(right[1]) - float(left[1])
+        length = math.hypot(dx, dy)
+        if length < minimum_axis_length:
+            continue
+        if abs(dy) <= length * angular_error:
+            horizontal.append(line)
+        elif abs(dx) <= length * angular_error:
+            vertical.append(line)
+    x_values = _cluster_axis_coordinates(
+        [((float(line.coords[0][0]) + float(line.coords[-1][0])) / 2.0, float(line.length)) for line in vertical],
+        tolerance,
+    )
+    y_values = _cluster_axis_coordinates(
+        [((float(line.coords[0][1]) + float(line.coords[-1][1])) / 2.0, float(line.length)) for line in horizontal],
+        tolerance,
+    )
+    if len(x_values) < 2 or len(y_values) < 2:
+        raise TopologyError("structure_face_mapping_incomplete", "结构线不足以生成矩形盒面候选")
+    # Bound worst-case work for annotation-heavy files.  A useful carton grid
+    # has far fewer axes; exceeding this limit is a reviewable source problem.
+    if len(x_values) > 40 or len(y_values) > 40:
+        raise TopologyError(
+            "structure_limit_exceeded",
+            "结构候选轴线过多，不能安全生成盒面候选",
+            details={"x_axes": len(x_values), "y_axes": len(y_values)},
+        )
+
+    covered = unary_union(local_lines).buffer(tolerance, cap_style=2)
+    coverage_cache: dict[tuple[float, float, float, float], float] = {}
+
+    def coverage(left: tuple[float, float], right: tuple[float, float]) -> float:
+        key = tuple(round(value, 6) for value in (*left, *right))
+        cached = coverage_cache.get(key)
+        if cached is not None:
+            return cached
+        line = LineString([left, right])
+        ratio = min(1.0, float(line.intersection(covered).length) / max(float(line.length), 1e-9))
+        coverage_cache[key] = ratio
+        return ratio
+
+    candidates: list[dict[str, Any]] = []
+    maximum_axis_gap = 12
+    for x_index, x1 in enumerate(x_values):
+        for x2 in x_values[x_index + 1 : x_index + 1 + maximum_axis_gap]:
+            width = x2 - x1
+            if width < 5.0:
+                continue
+            for y_index, y1 in enumerate(y_values):
+                for y2 in y_values[y_index + 1 : y_index + 1 + maximum_axis_gap]:
+                    height = y2 - y1
+                    if height < 5.0 or max(width, height) / min(width, height) > 20.0:
+                        continue
+                    sides = [
+                        coverage((x1, y1), (x2, y1)),
+                        coverage((x2, y1), (x2, y2)),
+                        coverage((x2, y2), (x1, y2)),
+                        coverage((x1, y2), (x1, y1)),
+                    ]
+                    if sum(value >= 0.88 for value in sides) < 3 or min(sides) < 0.52:
+                        continue
+                    internal_x = max(
+                        [coverage((x, y1), (x, y2)) for x in x_values if x1 + tolerance < x < x2 - tolerance]
+                        or [0.0]
+                    )
+                    internal_y = max(
+                        [coverage((x1, y), (x2, y)) for y in y_values if y1 + tolerance < y < y2 - tolerance]
+                        or [0.0]
+                    )
+                    # A nearly complete internal divider means this rectangle
+                    # spans multiple panels.  Short slots and flap notches are
+                    # retained because they do not divide the finished face.
+                    if internal_x >= 0.84 or internal_y >= 0.84:
+                        continue
+                    local_points = [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
+                    points = [_rotate_coordinate(point, basis_angle) for point in local_points]
+                    polygon = Polygon(points)
+                    frame = _face_transform(polygon)
+                    if frame is None:
+                        continue
+                    candidates.append(
+                        {
+                            "local_bounds": (x1, y1, x2, y2),
+                            "points": points,
+                            "polygon": polygon,
+                            "transform": frame[0],
+                            "size_mm": [round(width, 6), round(height, 6)],
+                            "coverage": [round(value, 6) for value in sides],
+                        }
+                    )
+    candidates.sort(key=lambda item: tuple(round(float(value), 9) for value in item["local_bounds"]))
+    if len(candidates) < 6:
+        raise TopologyError("structure_face_mapping_incomplete", "没有找到至少六个可确认的成品盒面候选")
+    if len(candidates) > 200:
+        raise TopologyError(
+            "structure_limit_exceeded",
+            "盒面候选过多，不能安全交给人工确认",
+            details={"count": len(candidates), "limit": 200},
+        )
+
+    point_keys = sorted(
+        {
+            (round(float(point[0]), 6), round(float(point[1]), 6))
+            for candidate in candidates
+            for point in candidate["points"]
+        }
+    )
+    vertex_ids = {point: f"rv-{index:04d}" for index, point in enumerate(point_keys, start=1)}
+    segment_keys = sorted(
+        {
+            _segment_key(tuple(points[index]), tuple(points[(index + 1) % 4]))
+            for candidate in candidates
+            for points in [candidate["points"]]
+            for index in range(4)
+        }
+    )
+    edge_ids = {key: f"re-{index:04d}" for index, key in enumerate(segment_keys, start=1)}
+    face_payload: list[dict[str, Any]] = []
+    preview: list[dict[str, Any]] = []
+    edge_faces: dict[str, list[str]] = defaultdict(list)
+    for index, candidate in enumerate(candidates, start=1):
+        identity = f"rect-face-{index:04d}"
+        points = candidate["points"]
+        boundary = [
+            edge_ids[_segment_key(tuple(points[item]), tuple(points[(item + 1) % 4]))]
+            for item in range(4)
+        ]
+        face_payload.append(
+            {
+                "id": identity,
+                "boundary": boundary,
+                "role": "unknown",
+                "artwork_transform": candidate["transform"],
+            }
+        )
+        for edge_id in boundary:
+            edge_faces[edge_id].append(identity)
+        polygon = candidate["polygon"]
+        preview.append(
+            {
+                "id": identity,
+                "bounds_mm": [round(float(value), 6) for value in polygon.bounds],
+                "centroid_mm": [round(float(polygon.centroid.x), 6), round(float(polygon.centroid.y), 6)],
+                "area_mm2": round(float(polygon.area), 6),
+                "rectangular": True,
+                "size_mm": candidate["size_mm"],
+                "points_mm": [[round(float(x), 6), round(float(y), 6)] for x, y in points],
+                "boundary_coverage": candidate["coverage"],
+            }
+        )
+    edge_payload = [
+        {
+            "id": edge_ids[key],
+            "start": vertex_ids[key[0]],
+            "end": vertex_ids[key[1]],
+            "assignment": "crease",
+            "source_refs": ["illustrator-stroke-proposal:grid"],
+        }
+        for key in segment_keys
+    ]
+    folds = [
+        {
+            "edge": edge_id,
+            "left_face": faces[0],
+            "right_face": faces[1],
+            "angle_deg": 90.0,
+        }
+        for edge_id, faces in sorted(edge_faces.items())
+        if len(faces) == 2
+    ]
+    proposal = {
+        "schema": structure["schema"],
+        "units": "mm",
+        "source": structure["source"],
+        "vertices": [
+            {"id": vertex_ids[point], "x": point[0], "y": point[1]}
+            for point in point_keys
+        ],
+        "edges": edge_payload,
+        "faces": face_payload,
+        "folds": folds,
+        "root_face": None,
+        "validation": {
+            "status": "review_required",
+            "errors": ["structure_face_mapping_incomplete"],
+            "warnings": ["legacy_stroke_proposal_requires_human_confirmation"],
+        },
+    }
+    return {"structure": canonicalize_structure(proposal), "faces": preview}
+
+
 def derive_face_proposal(
     payload: Mapping[str, Any],
     *,
     snap_tolerance_mm: float = 0.1,
+    allow_partial: bool = False,
 ) -> dict[str, Any]:
-    """Derive planar faces from explicit semantic linework without assigning box roles."""
+    """Derive planar faces without assigning box roles.
+
+    Explicit semantic input remains strict.  A stroke-only migration proposal
+    may contain unrelated annotation components and open flap contours; in
+    that mode closed polygons are surfaced for human selection, but never
+    accepted automatically.  Confirmation later prunes everything the human
+    did not select before the strict resolver runs again.
+    """
     structure = canonicalize_structure(payload)
     topology = analyze_topology(structure, snap_tolerance_mm=snap_tolerance_mm)
-    if topology["status"] != "accepted":
+    if topology["status"] != "accepted" and not allow_partial:
         raise TopologyError(
             topology["errors"][0] if topology["errors"] else "structure_face_mapping_incomplete",
             "结构线尚不能形成闭合面提案",
+            details={"topology": topology},
+        )
+    if not topology.get("faces"):
+        raise TopologyError(
+            topology["errors"][0] if topology.get("errors") else "structure_face_mapping_incomplete",
+            "结构线没有形成可确认的闭合面",
             details={"topology": topology},
         )
     vertices = {item["id"]: (float(item["x"]), float(item["y"])) for item in structure["vertices"]}
@@ -402,7 +694,7 @@ def derive_face_proposal(
     ]
     polygon_lines = [LineString(key) for key in sorted_segments]
     polygons, cuts, dangles, invalids = polygonize_full(polygon_lines)
-    if any(_collection_items(item) for item in (cuts, dangles, invalids)):
+    if not allow_partial and any(_collection_items(item) for item in (cuts, dangles, invalids)):
         raise TopologyError("structure_open_boundary", "面提案仍有未闭合结构边")
     polygon_items = sorted(
         _collection_items(polygons),

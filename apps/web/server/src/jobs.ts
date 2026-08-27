@@ -338,6 +338,7 @@ type StructureControl = {
   resolution_path?: string;
   details?: {
     artwork_pdf?: string | null;
+    artwork_preview?: string | null;
     structure_sidecar?: string | null;
     source_sha256?: string | null;
   };
@@ -420,6 +421,7 @@ function finishStructure(id: string, startedAt: string, result: RunPythonResult)
     const controlPaths = [
       control.resolution_path,
       control.details?.artwork_pdf,
+      control.details?.artwork_preview,
       control.details?.structure_sidecar,
     ].filter((path): path is string => Boolean(path));
     if (
@@ -435,6 +437,7 @@ function finishStructure(id: string, startedAt: string, result: RunPythonResult)
     job.structure_resolution_path = control.resolution_path;
     job.structure_sidecar_path = control.details?.structure_sidecar || undefined;
     job.structure_artwork_path = control.details?.artwork_pdf || undefined;
+    job.structure_artwork_preview_path = control.details?.artwork_preview || undefined;
     job.structure_source_sha256 = control.details?.source_sha256 || undefined;
     job.status = control.structure_status;
     job.job_status = "waiting_input";

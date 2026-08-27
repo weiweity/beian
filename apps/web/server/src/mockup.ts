@@ -40,6 +40,7 @@ export type MockupJob = {
   structure_resolution_path?: string;
   structure_sidecar_path?: string;
   structure_artwork_path?: string;
+  structure_artwork_preview_path?: string;
   structure_source_sha256?: string;
 };
 
@@ -227,7 +228,11 @@ function finitePointPairs(value: unknown): Array<[number, number]> | undefined {
   return points;
 }
 
-export function loadStructurePreview(job: MockupJob): { faces: StructurePreviewFace[] } | undefined {
+export function loadStructurePreview(job: MockupJob): {
+  faces: StructurePreviewFace[];
+  page_size_mm?: [number, number];
+  image_url?: string;
+} | undefined {
   const path = job.structure_resolution_path;
   if (!path || !existsSync(path) || !underJobDir(job.id, path)) return undefined;
   try {
@@ -235,6 +240,7 @@ export function loadStructurePreview(job: MockupJob): { faces: StructurePreviewF
     if (contents.byteLength > 25 * 1024 * 1024) return undefined;
     const resolution = JSON.parse(contents.toString("utf8")) as {
       topology?: { face_proposal?: unknown[] };
+      structure?: { source?: { page_size?: unknown } };
     };
     const raw = resolution.topology?.face_proposal;
     if (!Array.isArray(raw) || raw.length > 1000) return undefined;
@@ -257,7 +263,21 @@ export function loadStructurePreview(job: MockupJob): { faces: StructurePreviewF
         ...(points ? { points_mm: points } : {}),
       });
     }
-    return faces.length ? { faces } : undefined;
+    if (!faces.length) return undefined;
+    const pageSize = finiteNumbers(resolution.structure?.source?.page_size, 2);
+    const previewPath = job.structure_artwork_preview_path;
+    const hasPreview = Boolean(
+      previewPath &&
+      existsSync(previewPath) &&
+      underJobDir(job.id, previewPath),
+    );
+    return {
+      faces,
+      ...(pageSize && pageSize.every((value) => value > 0)
+        ? { page_size_mm: pageSize as [number, number] }
+        : {}),
+      ...(hasPreview ? { image_url: `/api/mockups/${job.id}/structure-preview` } : {}),
+    };
   } catch {
     return undefined;
   }
@@ -459,30 +479,26 @@ export function queueMockup(opts: {
   ownerId: string;
   displayName: string;
   illustratorExecutable: string;
-  structureEngine: "legacy" | "v2";
   title?: string;
 }): MockupJob {
   const blender = assertBlenderReady();
   const template = defaultTemplatePath();
   const outDir = join(mockupRoot(), opts.id);
   mkdirSync(outDir, { recursive: true });
-  const useStructureV2 = opts.structureEngine === "v2";
   const product = {
     code: opts.id.slice(0, 8),
     slug: "pack",
     display_name: (opts.title || opts.displayName).slice(0, 40),
     source_ai: opts.sourcePath,
     template,
-    ...(useStructureV2 ? { structure_engine: "v2" as const } : {}),
+    structure_engine: "v2" as const,
   };
   const manifest = {
     pipeline_name: "审稿室打样",
     output_root: outDir,
     workers: 1,
     blender_executable: blender,
-    illustrator: useStructureV2
-      ? { enabled: true, application: opts.illustratorExecutable }
-      : { enabled: false },
+    illustrator: { enabled: true, application: opts.illustratorExecutable },
     generate_ppt: true,
     products: [product],
   };
@@ -501,9 +517,8 @@ export function queueMockup(opts: {
     manifest_path: manifestPath,
     job_kind: "mockup",
     job_status: "queued",
-    ...(useStructureV2
-      ? { structure_engine: "v2" as const, structure_status: "analyzing" as const }
-      : {}),
+    structure_engine: "v2",
+    structure_status: "analyzing",
   };
   saveMockup(job);
   return job;

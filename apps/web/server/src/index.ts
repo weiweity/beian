@@ -34,7 +34,6 @@ import {
 import {
   feishuRedirect,
   getSetting,
-  packagingStructureV2Enabled,
   publicBase,
   publicView,
   runProbe,
@@ -69,6 +68,7 @@ import {
   fileOf,
   findMockupBySourceReceipt,
   getJob,
+  isMockupJobFile,
   isWhiteFile,
   listJobsFor,
   publicMockup,
@@ -608,7 +608,6 @@ app.post("/api/mockups/start", async (c) => {
       ownerId: viewerFromSession(s).id,
       displayName: s.display_name,
       illustratorExecutable,
-      structureEngine: packagingStructureV2Enabled() ? "v2" : "legacy",
       title,
     });
   } catch (err) {
@@ -1038,6 +1037,25 @@ app.get("/api/mockups/:id/files/:key", (c) => {
       "X-Content-Type-Options": "nosniff",
       "Cache-Control": "private, no-store",
       "Content-Disposition": `${disposition}; filename="${ascii}"; filename*=UTF-8''${encoded}`,
+    },
+  });
+});
+
+app.get("/api/mockups/:id/structure-preview", (c) => {
+  const session = need(c, "read");
+  const job = getJob(assertTid(c.req.param("id")));
+  if (!job) throw new HTTPException(404, { message: "没有这单打样" });
+  assertCanAccessMockup(job, viewerFromSession(session));
+  const path = job.structure_artwork_preview_path;
+  if (!isMockupJobFile(job.id, path) || !pngMagicAt(path)) {
+    throw new HTTPException(404, { message: "结构原稿预览还没有" });
+  }
+  return new Response(Readable.toWeb(createReadStream(path)) as ReadableStream, {
+    headers: {
+      "Content-Type": "image/png",
+      "X-Content-Type-Options": "nosniff",
+      "Cache-Control": "private, no-store",
+      "Content-Disposition": "inline",
     },
   });
 });

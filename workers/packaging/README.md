@@ -1,12 +1,14 @@
 # AI 包装稿 → 3D/PPT 快速流水线
 
-这是包装平面稿到既有 Blender 流水线的本地批处理入口。V2 不再把“红线、刀线图层名、间距或 bbox 看起来像盒子”当作结构事实；它只消费版本化 `PackagingStructure`，把结构识别、拓扑验证、人工确认和 3D 生成分开。旧 `dieline.py` 只保留为迁移期回滚基线，不是 V2 的判断依据。
+这是包装平面稿到既有 Blender 流水线的本地批处理入口。V2 不再把“红线、间距或 bbox 看起来像盒子”当作可自动接受的结构事实；它消费版本化 `PackagingStructure`，把结构识别、拓扑验证、人工确认和 3D 生成分开。旧 `dieline.py` 只保留给命令行诊断，不在网页新任务路径中。
 
 当前可验证的语义来源有两种：
 
 - 同稿件哈希绑定的 `packaging-structure/1` JSON sidecar；
 - Illustrator 中对象的备注、对象名或图层名精确写成 `packaging:cut`、`packaging:crease`、`packaging:perforation`、`packaging:glue` 或 `packaging:ignore`，由语义导出器同时生成结构 JSON 和隐藏这些对象后的 artwork PDF。
 - macOS 用 AppleScript、Windows 用 `Illustrator.Application` COM + VBScript 启动桥；两端都执行 `export_structure.jsx`，不维护第二套 Windows 识别算法。Windows 清单必须传开工板扫描到的 `Illustrator.exe`。
+
+为迁移旧稿，导出器还可在服务端已识别出的刀线层中提取“仅描边、无填充”的矩形网络，形成 `illustrator-stroke-proposal/1` 候选。候选不是结构事实：必须由管理员叠着真实 artwork 选择六个盒面和旋转，确认后才裁掉未选几何并进入同一严格解析器；它不会自动接受，也不会回退旧方盒算法。
 
 颜色、普通图层名和文件名不自动升级成语义。CF2/DXF、ISO 19593 等格式必须各自有已验证样本和专用适配器后才能接入，不能伪装成已支持。目标是在显式结构语义可追踪时完成：
 
@@ -37,7 +39,7 @@
 
 V2 任务在产品项中写 `"structure_engine": "v2"`。显式 sidecar 可写 `structure_sidecar`；已从结构对象清理出的印刷稿可写 `artwork_pdf`。网页 `.ai` 通道由 Illustrator 同时导出这两个文件。首次运行加 `--force`；同一源文件、结构、artwork 和流程版本未变化时，去掉 `--force` 会复用缓存，但缓存命中仍必须先通过当前 sidecar 的 `validation.status=accepted` 闸门。
 
-网页生产发布默认不写 `structure_engine=v2`。只有管理员在真实稿真值和杭州 Windows 验收完成后打开 `PACKAGING_STRUCTURE_V2_ENABLED`，新建打样单才进入 V2；关闭时清单保持旧入口合同。此开关是迁移闸门，V2 稳定一个发布周期后应连同旧控制路径一起删除。
+网页新建打样单一律写 `structure_engine=v2`，不再提供运行时旧引擎开关。杭州 Windows 的 Illustrator/Blender 验证是合并部署门：失败时保持上一生产版本；任务本身若缺少可验证结构，则停在 `review_required` / `unsupported`，不会用旧引擎伪造成功。
 
 ## 输入边界
 

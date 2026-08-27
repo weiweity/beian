@@ -2970,12 +2970,17 @@ html[data-theme="dark"] .notes.is-float {
   min-height: 320px;
 }
 
+.structure-map-artwork {
+  opacity: 0.92;
+  pointer-events: none;
+}
+
 .structure-map rect,
 .structure-map polygon {
   vector-effect: non-scaling-stroke;
-  fill: #f8f5fa;
-  stroke: #b5a9bd;
-  stroke-width: 1.25;
+  fill: rgba(246, 241, 248, 0.18);
+  stroke: rgba(95, 54, 117, 0.72);
+  stroke-width: 1.5;
 }
 
 .structure-map text {
@@ -2984,11 +2989,15 @@ html[data-theme="dark"] .notes.is-float {
   font-weight: 500;
   text-anchor: middle;
   pointer-events: none;
+  paint-order: stroke fill;
+  stroke: rgba(255, 255, 255, 0.92);
+  stroke-width: 1.8px;
+  stroke-linejoin: round;
 }
 
 .structure-map .is-selected rect,
 .structure-map .is-selected polygon {
-  fill: #ede7f1;
+  fill: rgba(128, 88, 152, 0.24);
   stroke: #805898;
   stroke-width: 2;
 }

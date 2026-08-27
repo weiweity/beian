@@ -741,6 +741,8 @@ export type MockupJob = {
   structure_code?: string;
   structure_message?: string;
   structure_preview?: {
+    page_size_mm?: [number, number];
+    image_url?: string;
     faces: Array<{
       id: string;
       bounds_mm: [number, number, number, number];

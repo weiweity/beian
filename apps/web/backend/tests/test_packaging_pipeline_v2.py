@@ -189,9 +189,12 @@ def test_illustrator_structure_export_accepts_a_windows_executable_path(
     illustrator = tmp_path / "Illustrator.exe"
     illustrator.write_bytes(b"exe")
 
+    captured: dict[str, object] = {}
+
     def fake_run(command, capture_output, text):
         config_path = Path(command[2])
         config = json.loads(config_path.read_text(encoding="utf-8"))
+        captured.update(config)
         for key in ("full_pdf", "print_pdf", "structure_json"):
             Path(config[key]).write_bytes(b"output")
         Path(config["result_json"]).write_text(
@@ -212,8 +215,10 @@ def test_illustrator_structure_export_accepts_a_windows_executable_path(
         source,
         tmp_path / "project",
         {"application": str(illustrator)},
+        proposal_layers=["供应商结构候选"],
     )
     assert result["success"] is True
+    assert captured["proposal_layers"] == ["供应商结构候选"]
 
 
 def test_legacy_illustrator_fallback_accepts_a_windows_executable_path(
@@ -333,3 +338,4 @@ def test_preflight_cli_returns_recoverable_structure_control_json(tmp_path: Path
     assert control["structure_status"] == "review_required"
     assert control["code"] == "structure_semantics_missing"
     assert Path(control["resolution_path"]).is_file()
+    assert Path(control["details"]["artwork_preview"]).is_file()

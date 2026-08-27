@@ -140,6 +140,29 @@ def confirm_structure(
             turns,
         )
         face["role"] = role
+    selected_face_ids = {face_id for face_id, _role, _turns in normalized}
+    structure["faces"] = [face for face in structure["faces"] if face["id"] in selected_face_ids]
+    selected_edge_ids = {
+        edge_id
+        for face in structure["faces"]
+        for edge_id in face["boundary"]
+    }
+    structure["edges"] = [edge for edge in structure["edges"] if edge["id"] in selected_edge_ids]
+    selected_vertex_ids = {
+        vertex_id
+        for edge in structure["edges"]
+        for vertex_id in (edge["start"], edge["end"])
+    }
+    structure["vertices"] = [
+        vertex for vertex in structure["vertices"] if vertex["id"] in selected_vertex_ids
+    ]
+    structure["folds"] = [
+        fold
+        for fold in structure["folds"]
+        if fold["edge"] in selected_edge_ids
+        and fold["left_face"] in selected_face_ids
+        and fold["right_face"] in selected_face_ids
+    ]
     structure["root_face"] = next(face_id for face_id, role, _turns in normalized if role == "front")
     structure["validation"] = {"status": "accepted", "errors": [], "warnings": []}
     approved = canonicalize_structure(structure)

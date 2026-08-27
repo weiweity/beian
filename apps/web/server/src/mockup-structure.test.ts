@@ -25,12 +25,15 @@ function reviewJob() {
   const source = join(root, "source.ai");
   const resolution = join(root, "structure_resolution.json");
   const artwork = join(root, "artwork.pdf");
+  const artworkPreview = join(root, "structure_preview.png");
   const manifest = join(root, "manifest.json");
   writeFileSync(source, "source");
   writeFileSync(artwork, "%PDF");
+  writeFileSync(artworkPreview, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
   writeFileSync(
     resolution,
     JSON.stringify({
+      structure: { source: { page_size: [210, 297] } },
       topology: {
         face_proposal: [
           {
@@ -63,6 +66,7 @@ function reviewJob() {
     structure_status: "review_required" as const,
     structure_resolution_path: resolution,
     structure_artwork_path: artwork,
+    structure_artwork_preview_path: artworkPreview,
     structure_source_sha256: "a".repeat(64),
   };
   saveMockup(job);
@@ -83,6 +87,8 @@ describe("mockup structure confirmation persistence", () => {
     });
     assert.equal(JSON.stringify(view).includes("/never/expose"), false);
     assert.equal(JSON.stringify(view).includes(DATA_DIR), false);
+    assert.deepEqual(view.structure_preview?.page_size_mm, [210, 297]);
+    assert.equal(view.structure_preview?.image_url, `/api/mockups/${job.id}/structure-preview`);
   });
 
   it("writes a decision contract and resumes from an approved sidecar", () => {
