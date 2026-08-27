@@ -119,7 +119,7 @@ import {
 type Env = { Variables: { session: Session } };
 
 const app = new Hono<Env>();
-const VERSION = "0.14.0.0";
+const VERSION = "0.15.0.0";
 /** 浏览器给 100 MB 慢速上传 15 分钟；服务端多留 1 分钟完成落盘和回执。 */
 export const SERVER_HTTP_OPTIONS = {
   headersTimeout: 60_000,
@@ -765,10 +765,19 @@ app.get("/api/tasks/:tid/pages/:name", (c) => {
   const tid = assertTid(c.req.param("tid"));
   assertCanAccessTask(loadTask(tid), viewerFromSession(s));
   const name = c.req.param("name");
-  if (!/^page_\d{2}\.png$/.test(name)) throw new HTTPException(400, { message: "非法页名" });
+  if (!/^page_\d{2}\.(?:png|svg)$/.test(name)) throw new HTTPException(400, { message: "非法页名" });
   const p = join(DATA_DIR, "uploads", tid, "pages", name);
   if (!existsSync(p)) throw new HTTPException(404, { message: "没有这一页" });
-  return new Response(readFileSync(p), { headers: { "Content-Type": "image/png" } });
+  const svg = name.endsWith(".svg");
+  return new Response(readFileSync(p), {
+    headers: svg
+      ? {
+          "Content-Type": "image/svg+xml; charset=utf-8",
+          "Content-Security-Policy": "default-src 'none'; img-src data:; style-src 'unsafe-inline'",
+          "X-Content-Type-Options": "nosniff",
+        }
+      : { "Content-Type": "image/png", "X-Content-Type-Options": "nosniff" },
+  });
 });
 
 app.get("/api/tasks/:tid/pages/:side/:name", (c) => {
@@ -777,12 +786,21 @@ app.get("/api/tasks/:tid/pages/:side/:name", (c) => {
   assertCanAccessTask(loadTask(tid), viewerFromSession(s));
   const side = c.req.param("side");
   const name = c.req.param("name");
-  if (!/^[a-z0-9]+$/i.test(side) || !/^page_\d{2}\.png$/.test(name)) {
+  if (!/^[a-z0-9]+$/i.test(side) || !/^page_\d{2}\.(?:png|svg)$/.test(name)) {
     throw new HTTPException(400, { message: "非法路径" });
   }
   const p = join(DATA_DIR, "uploads", tid, "pages", side, name);
   if (!existsSync(p)) throw new HTTPException(404, { message: "没有这一页" });
-  return new Response(readFileSync(p), { headers: { "Content-Type": "image/png" } });
+  const svg = name.endsWith(".svg");
+  return new Response(readFileSync(p), {
+    headers: svg
+      ? {
+          "Content-Type": "image/svg+xml; charset=utf-8",
+          "Content-Security-Policy": "default-src 'none'; img-src data:; style-src 'unsafe-inline'",
+          "X-Content-Type-Options": "nosniff",
+        }
+      : { "Content-Type": "image/png", "X-Content-Type-Options": "nosniff" },
+  });
 });
 
 app.get("/api/settings", (c) => {

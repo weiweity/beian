@@ -1,8 +1,10 @@
 const DOCK_KEY = "wb_review_dock";
 const PINS_KEY = "wb_review_pins";
 const BOXES_KEY = "wb_review_boxes";
-const SIZE_KEY = "wb_review_dock_size";
-const PLACE_KEY = "wb_review_dock_place";
+// v2 is a horizontal evidence desk. Do not reuse a persisted narrow size from
+// the former two-column vertical dock.
+const SIZE_KEY = "wb_review_dock_size_v2";
+const PLACE_KEY = "wb_review_dock_place_v2";
 
 export type DockBox = { w: number; h: number };
 export type DockPlace = { top: number; right: number };
@@ -10,8 +12,8 @@ export type DockHandle = "n" | "s" | "e" | "w" | "nw" | "ne" | "sw" | "se";
 
 export const DOCK_MIN_W = 320;
 export const DOCK_MIN_H = 280;
-export const DOCK_DEFAULT_W = 560;
-export const DOCK_DEFAULT_H = 520;
+export const DOCK_DEFAULT_W = 900;
+export const DOCK_DEFAULT_H = 480;
 export const DOCK_SHUT_W = 168;
 export const DOCK_SHUT_H = 48;
 export const DOCK_SIDE_GAP = 8;
@@ -19,6 +21,13 @@ export const DOCK_SIDE_GAP = 8;
 export const DOCK_SHELL_PAD = 20;
 /** 钉钉/飞书检视栏：portal 到 body 后相对视口。壳 20 + 主区 24 + 页头，不盖签字。 */
 export const DOCK_BELOW_HEAD = 104;
+export const DOCK_HEAD_GAP = 12;
+
+export function dockTopAfterHeader(headerBottom: number): number {
+  const bottom = Number(headerBottom);
+  if (!Number.isFinite(bottom)) return DOCK_BELOW_HEAD;
+  return Math.max(DOCK_BELOW_HEAD, Math.ceil(bottom) + DOCK_HEAD_GAP);
+}
 
 export function readDockOpen(storage: Pick<Storage, "getItem"> | null): boolean {
   try {
@@ -68,14 +77,24 @@ export function writeBoxesOn(storage: Pick<Storage, "setItem"> | null, on: boole
   }
 }
 
-export function clampDockBox(box: DockBox, room: { w: number; h: number }): DockBox {
-  const maxW = Math.max(DOCK_MIN_W, Math.round(Number(room.w) || DOCK_DEFAULT_W) - 24);
-  const maxH = Math.max(DOCK_MIN_H, Math.round(Number(room.h) || DOCK_DEFAULT_H) - 24);
+export function clampDockBox(
+  box: DockBox,
+  room: { w: number; h: number },
+  minimumTop = 8,
+): DockBox {
+  const roomW = Math.round(Number(room.w) || DOCK_DEFAULT_W);
+  const roomH = Math.round(Number(room.h) || DOCK_DEFAULT_H);
+  const minTop = Math.max(8, Math.round(Number(minimumTop) || 8));
+  const maxW = Math.max(DOCK_MIN_W, roomW - 24);
+  // Preserve the page header first. On a short viewport the dock may shrink
+  // below its comfortable default, but it must never be pushed over signing.
+  const availableH = Math.max(DOCK_SHUT_H, roomH - Math.max(24, minTop + 8));
+  const minH = Math.min(DOCK_MIN_H, availableH);
   const w = Number(box.w);
   const h = Number(box.h);
   return {
     w: Math.min(maxW, Math.max(DOCK_MIN_W, Number.isFinite(w) ? Math.round(w) : DOCK_DEFAULT_W)),
-    h: Math.min(maxH, Math.max(DOCK_MIN_H, Number.isFinite(h) ? Math.round(h) : DOCK_DEFAULT_H)),
+    h: Math.min(availableH, Math.max(minH, Number.isFinite(h) ? Math.round(h) : DOCK_DEFAULT_H)),
   };
 }
 
@@ -131,14 +150,22 @@ export function rectsOverlap(a: ScreenRect, b: ScreenRect): boolean {
   return a.left < bR && aR > b.left && a.top < bB && aB > b.top;
 }
 
-export function clampDockPlace(place: DockPlace, room: { w: number; h: number }, box: DockBox): DockPlace {
+export function clampDockPlace(
+  place: DockPlace,
+  room: { w: number; h: number },
+  box: DockBox,
+  minimumTop = 8,
+): DockPlace {
   const maxRight = Math.max(8, Math.round(Number(room.w) || 800) - box.w - 8);
   const maxTop = Math.max(8, Math.round(Number(room.h) || 600) - box.h - 8);
-  const minTop = 8;
+  const minTop = Math.max(8, Math.round(Number(minimumTop) || 8));
   const top = Number(place.top);
   const right = Number(place.right);
   return {
-    top: Math.min(maxTop, Math.max(minTop, Number.isFinite(top) ? Math.round(top) : DOCK_BELOW_HEAD)),
+    top:
+      maxTop < minTop
+        ? minTop
+        : Math.min(maxTop, Math.max(minTop, Number.isFinite(top) ? Math.round(top) : DOCK_BELOW_HEAD)),
     right: Math.min(maxRight, Math.max(8, Number.isFinite(right) ? Math.round(right) : 8)),
   };
 }
@@ -147,15 +174,17 @@ export function sidebarDockPlace(
   room: { w: number; h: number },
   box: DockBox,
   dockLeft = DOCK_SHELL_PAD,
+  dockTop = DOCK_BELOW_HEAD,
 ): DockPlace {
   const left = Math.max(DOCK_SIDE_GAP, Math.round(Number(dockLeft) || DOCK_SHELL_PAD));
   return clampDockPlace(
     {
-      top: DOCK_BELOW_HEAD,
+      top: dockTop,
       right: Math.round(Number(room.w) || 800) - box.w - left,
     },
     room,
     box,
+    dockTop,
   );
 }
 
@@ -165,6 +194,7 @@ export function dockVisual(
   box: DockBox,
   place: DockPlace,
   room: { w: number; h: number },
+  minimumTop = 8,
 ): { box: DockBox; place: DockPlace } {
   if (open) return { box, place };
   const left = Math.round(Number(room.w) || 800) - place.right - box.w;
@@ -178,6 +208,7 @@ export function dockVisual(
       },
       room,
       shutBox,
+      minimumTop,
     ),
   };
 }
@@ -187,17 +218,25 @@ export function readDockPlace(storage: Pick<Storage, "getItem"> | null): DockPla
     { w: 2400, h: 1800 },
     { w: DOCK_DEFAULT_W, h: DOCK_DEFAULT_H },
   );
+  const stored = readStoredDockPlace(storage);
+  return stored
+    ? clampDockPlace(stored, { w: 2400, h: 1800 }, { w: DOCK_DEFAULT_W, h: DOCK_DEFAULT_H })
+    : fallback;
+}
+
+/** Read only an explicit user placement. Missing/corrupt state stays null so a
+ * first visit can use the sidebar-aligned default in the current viewport. */
+export function readStoredDockPlace(storage: Pick<Storage, "getItem"> | null): DockPlace | null {
   try {
     const raw = storage?.getItem(PLACE_KEY);
-    if (!raw) return fallback;
+    if (!raw) return null;
     const parsed = JSON.parse(raw) as { top?: unknown; right?: unknown };
-    return clampDockPlace(
-      { top: Number(parsed.top), right: Number(parsed.right) },
-      { w: 2400, h: 1800 },
-      { w: DOCK_DEFAULT_W, h: DOCK_DEFAULT_H },
-    );
+    const top = Number(parsed.top);
+    const right = Number(parsed.right);
+    if (!Number.isFinite(top) || !Number.isFinite(right)) return null;
+    return { top, right };
   } catch {
-    return fallback;
+    return null;
   }
 }
 
@@ -225,6 +264,7 @@ export function resizeDockHandle(
   delta: { dx: number; dy: number },
   room: { w: number; h: number },
   handle: DockHandle = "sw",
+  minimumTop = 8,
 ): { box: DockBox; place: DockPlace } {
   const east = handle === "e" || handle === "ne" || handle === "se";
   const west = handle === "w" || handle === "nw" || handle === "sw";
@@ -248,8 +288,8 @@ export function resizeDockHandle(
     h = start.h - delta.dy;
     top = place.top + delta.dy;
   }
-  const box = clampDockBox({ w, h }, room);
-  return { box, place: clampDockPlace({ top, right }, room, box) };
+  const box = clampDockBox({ w, h }, room, minimumTop);
+  return { box, place: clampDockPlace({ top, right }, room, box, minimumTop) };
 }
 
 export function skipPackSheetField(field?: string): boolean {

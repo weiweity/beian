@@ -15,6 +15,8 @@ export type SyntheticHit = {
   page?: number;
   decision?: string;
   note?: string;
+  evidence?: string;
+  coverage?: { hit?: string[]; miss?: string[]; matched?: number; total?: number };
   bboxes?: Array<Record<string, unknown>>;
 };
 
@@ -32,18 +34,30 @@ export type SyntheticTask = {
   job_stage_label?: string;
   queue_ahead?: number;
   hits?: SyntheticHit[];
-  pages?: Array<{ url: string; name?: string; page: number; width: number; height: number }>;
+  pages?: Array<{
+    url: string;
+    raster_url?: string;
+    name?: string;
+    page: number;
+    width: number;
+    height: number;
+  }>;
   conclusion?: string;
 };
 
 export type SyntheticMockup = {
   id: string;
-  status: "queued" | "running" | "done" | "failed";
+  status: "queued" | "running" | "review_required" | "unsupported" | "done" | "failed";
   title: string;
   created_at?: string;
   owner?: string;
   job_status?: string;
+  job_stage?: string;
+  job_stage_label?: string;
   queue_ahead?: number;
+  structure_status?: "analyzing" | "review_required" | "unsupported" | "ready";
+  structure_code?: string;
+  structure_message?: string;
   files: Array<{ key: string; name: string }>;
 };
 
@@ -132,6 +146,7 @@ export function reviewTask(id = "e5969b58cd47"): SyntheticTask {
         id: "hit_name",
         field: "中文品名",
         status: "待人工确认",
+        evidence: "OCR 没读全，需要人眼确认",
         excel: "合成核对单",
         pdf: "合成核对",
         page: 1,

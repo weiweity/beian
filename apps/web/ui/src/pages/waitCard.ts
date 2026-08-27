@@ -108,6 +108,31 @@ export function compareBoardProgress(opts: {
   return undefined;
 }
 
+/** 打样台与审稿台共用同一种紧凑明细；这里只映射真实 worker 阶段。 */
+export function mockupBoardProgress(opts: {
+  status?: string;
+  job_status?: string;
+  job_stage?: string;
+  job_stage_label?: string;
+}): number | undefined {
+  if (opts.status === "failed" || opts.status === "unsupported" || opts.job_status === "failed") {
+    return undefined;
+  }
+  const running =
+    opts.status === "queued" ||
+    opts.status === "running" ||
+    opts.job_status === "queued" ||
+    opts.job_status === "running";
+  if (!running) return undefined;
+  if (opts.job_status === "queued") return 0;
+  const key = `${opts.job_stage || ""} ${opts.job_stage_label || ""}`.trim().toLowerCase();
+  if (/(^|\s)(export|导出)(\s|$)/.test(key)) return 90;
+  if (/(^|\s)(blender|打样)(\s|$)/.test(key)) return 70;
+  if (/(^|\s)(render_pdf|出图)(\s|$)/.test(key)) return 35;
+  if (/(^|\s)(illustrator|识别结构|结构)(\s|$)/.test(key)) return 15;
+  return undefined;
+}
+
 export function waitCardActiveSteps(
   kind: WaitKind,
   job_status?: string,
