@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.fields import compare_fields, field_group
-from app.pack_layout import principal_claims_region
+from app.pack_layout import roles_for_field
 
 _NAME_GROUPS = frozenset({"中文品名", "英文品名"})
 
@@ -140,20 +140,25 @@ def _pick_principal(
 ) -> tuple[dict, int]:
     if len(boxes) == 1:
         return boxes[0], 0
+    preferred_roles = roles_for_field(fg)
+    inside = [
+        box
+        for box in boxes
+        if any(
+            region.get("role") in preferred_roles and _box_in_region(box, region)
+            for region in regions
+        )
+    ]
+    pool = inside or boxes
     if fg in _NAME_GROUPS:
-        inside = []
-        for box in boxes:
-            claims = principal_claims_region(
-                regions, page=int(box.get("page") or 1)
-            )
-            if claims and _box_in_region(box, claims):
-                inside.append(box)
-        pool = inside or boxes
-        pool = sorted(pool, key=lambda b: (int(b.get("page") or 1), int(b.get("top") or 0)))
+        pool = sorted(
+            pool,
+            key=lambda b: (int(b.get("page") or 1), int(b.get("top") or 0)),
+        )
         return pool[0], max(0, len(boxes) - 1)
     # 长字段：取面积最大的一块
     best = max(
-        boxes,
+        pool,
         key=lambda b: int(b.get("width") or 0) * int(b.get("height") or 0),
     )
     return best, max(0, len(boxes) - 1)
@@ -202,13 +207,17 @@ def _union(boxes: list[dict], *, role: str) -> dict:
     top = min(int(b.get("top") or 0) for b in same)
     right = max(int(b.get("left") or 0) + int(b.get("width") or 0) for b in same)
     bottom = max(int(b.get("top") or 0) + int(b.get("height") or 0) for b in same)
-    return {
-        "page": page,
-        "left": left,
-        "top": top,
-        "width": max(2, right - left),
-        "height": max(2, bottom - top),
-        "role": role,
-        "status": "ok" if role == "hit" else "warn",
-        "label": same[0].get("label") or "",
-    }
+    out = dict(same[0])
+    out.update(
+        {
+            "page": page,
+            "left": left,
+            "top": top,
+            "width": max(2, right - left),
+            "height": max(2, bottom - top),
+            "role": role,
+            "status": "ok" if role == "hit" else "warn",
+            "label": same[0].get("label") or "",
+        }
+    )
+    return out

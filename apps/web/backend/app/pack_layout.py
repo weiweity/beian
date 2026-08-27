@@ -15,6 +15,18 @@ ROLE_ZONE_NAME = {
     "footnote": "footnote",
 }
 
+FIELD_REGION_ROLES: dict[str, tuple[str, ...]] = {
+    "中文品名": ("claims",),
+    "英文品名": ("claims",),
+    "logo标识": ("claims",),
+    "文案": ("claims",),
+    "成分表": ("ingredients",),
+    "使用方法": ("usage", "claims"),
+    "生产信息": ("filing",),
+    "净含量": ("claims", "usage"),
+    "二维码": ("footnote",),
+}
+
 
 def detect_regions(
     words: list[dict],
@@ -31,11 +43,13 @@ def detect_regions(
         return {"regions": [], "zones": keyword, "page_height": h}
 
     regions: list[dict[str, Any]] = []
+    zones_by_page: dict[int, dict[str, Any]] = {}
     for meta in page_metas:
         pw = max(1, int(meta.get("width") or 1))
         ph = max(1, int(meta.get("height") or 1))
         page = int(meta.get("page") or 1)
         page_words = [w for w in words if int(w.get("page") or 1) == page]
+        zones_by_page[page] = layout_zones.detect_zones(page_words, page_height=ph)
         for role, frac in PACK_ROI_TEMPLATE.items():
             box = {
                 "left": int(frac["left"] * pw),
@@ -58,13 +72,22 @@ def detect_regions(
             )
 
     ph0 = max(1, int(page_metas[0].get("height") or 2400))
-    zones = layout_zones.detect_zones(words, page_height=ph0)
-    # ROI 无关键词时仍保证 filing/footnote 有 y 带
-    zones.setdefault(
-        "footnote",
-        {"y0": int(ph0 * 0.82), "y1": ph0, "label": "脚注区", "keywords_hit": 0},
-    )
-    return {"regions": regions, "zones": zones, "page_height": ph0}
+    # 旧 fields.py 的 zones 只有 y0/y1，没有 page 维度。多页时传它会把
+    # 不同页面的同一 Y 带混在一起，因此只在单页暴露兼容视图。
+    zones = dict(zones_by_page.get(int(page_metas[0].get("page") or 1), {}))
+    if len(page_metas) != 1:
+        zones = {}
+    if zones:
+        zones.setdefault(
+            "footnote",
+            {"y0": int(ph0 * 0.82), "y1": ph0, "label": "脚注区", "keywords_hit": 0},
+        )
+    return {
+        "regions": regions,
+        "zones": zones,
+        "zones_by_page": zones_by_page,
+        "page_height": ph0,
+    }
 
 
 def words_in_roles(
@@ -101,6 +124,10 @@ def principal_claims_region(regions: list[dict], page: int = 1) -> dict | None:
         if r.get("role") == "claims" and int(r.get("page") or 1) == page
     ]
     return claims[0] if claims else None
+
+
+def roles_for_field(field_group: str) -> tuple[str, ...]:
+    return FIELD_REGION_ROLES.get(field_group or "", ())
 
 
 def _refine_box(box: dict, words: list[dict], pw: int, ph: int) -> dict:

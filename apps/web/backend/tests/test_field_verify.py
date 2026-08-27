@@ -84,6 +84,39 @@ def test_bbox_budget_hit_and_optional_check():
     assert len(out["bboxes"]) == 2
 
 
+def test_long_field_prefers_its_semantic_region_over_larger_duplicate():
+    regions = [
+        {
+            "role": "claims",
+            "page": 1,
+            "left": 0,
+            "top": 0,
+            "width": 1000,
+            "height": 400,
+        },
+        {
+            "role": "ingredients",
+            "page": 1,
+            "left": 0,
+            "top": 400,
+            "width": 1000,
+            "height": 600,
+        },
+    ]
+    hit = {
+        "field": "成分表",
+        "field_group": "成分表",
+        "bboxes": [
+            _box(10, 50, 900, 300, role="hit"),
+            _box(10, 500, 500, 200, role="hit"),
+        ],
+    }
+    out = clip_hit_bboxes(hit, regions)
+    chosen = next(b for b in out["bboxes"] if b.get("role") == "hit")
+    assert chosen["top"] == 500
+    assert chosen["width"] == 500
+
+
 def test_context_only_is_not_promoted_to_real_hit():
     hit = {
         "field": "卖点文案",

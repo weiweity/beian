@@ -48,6 +48,26 @@ def test_outlined_runs_single_engine_once_per_page(tmp_path):
     assert tag.startswith("baidu:")
 
 
+def test_mixed_page_runs_single_engine(tmp_path):
+    img = tmp_path / "mixed.png"
+    img.write_bytes(b"x")
+    calls = {"n": 0}
+
+    def fake(_data: bytes):
+        calls["n"] += 1
+        return "mixed", [], {"api": "accurate"}
+
+    text, _words, tag, meta = recognize_pages(
+        [{"path": str(img), "page": 1, "width": 20, "height": 20}],
+        {"mode": "mixed", "pages": [{"page": 1, "mode": "mixed"}]},
+        ocr_fn=fake,
+    )
+    assert calls["n"] == 1
+    assert text == "mixed"
+    assert tag == "baidu:accurate"
+    assert meta["pages_ran"] == 1
+
+
 def test_no_engine_union_in_source():
     from pathlib import Path
 

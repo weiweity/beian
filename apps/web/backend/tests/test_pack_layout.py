@@ -41,3 +41,19 @@ def test_product_name_scope_is_claims_not_ingredients():
     # 成分区那一处不应进主展示匹配范围
     assert claims_words[0]["location"]["top"] < 200
     assert any(w["location"]["top"] > 400 for w in ing_words) or "达肤妍" in ing_text
+
+
+def test_multi_page_layout_keeps_page_specific_zones():
+    metas = [
+        {"page": 1, "width": 1000, "height": 1000},
+        {"page": 2, "width": 1200, "height": 3000},
+    ]
+    words = [
+        _word("成分：水", page=1, top=300),
+        _word("使用方法", page=2, top=2400),
+    ]
+    layout = detect_regions(words, metas)
+    assert layout["zones"] == {}
+    assert set(layout["zones_by_page"]) == {1, 2}
+    assert layout["zones_by_page"][1]["process"]["y1"] == 1000
+    assert layout["zones_by_page"][2]["process"]["y1"] == 3000

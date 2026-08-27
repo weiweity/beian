@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pymupdf
 import pytest
-from PIL import Image, ImageDraw
+from PIL import Image, ImageChops, ImageDraw
 
 from app.pdf_ingest import (
     WARNING_IMAGE,
@@ -93,12 +93,54 @@ def _image_pdf(path: Path) -> Path:
     return path
 
 
+def _image_with_live_footer_pdf(path: Path) -> Path:
+    raster = path.with_suffix(".png")
+    Image.new("RGB", (800, 600), (18, 92, 54)).save(raster)
+    doc = pymupdf.open()
+    page = doc.new_page(width=400, height=300)
+    page.insert_image(page.rect, filename=str(raster))
+    page.insert_text(
+        (16, 286),
+        "LIVE FOOTER TEXT " * 4,
+        fontsize=7,
+        fontname="helv",
+    )
+    doc.save(str(path))
+    doc.close()
+    return path
+
+
+def _tiled_images_with_live_footer_pdf(path: Path) -> Path:
+    raster = path.with_suffix(".png")
+    Image.new("RGB", (400, 300), (18, 92, 54)).save(raster)
+    doc = pymupdf.open()
+    page = doc.new_page(width=400, height=300)
+    for rect in (
+        pymupdf.Rect(0, 0, 200, 150),
+        pymupdf.Rect(200, 0, 400, 150),
+        pymupdf.Rect(0, 150, 200, 300),
+        pymupdf.Rect(200, 150, 400, 300),
+    ):
+        page.insert_image(rect, filename=str(raster))
+    page.insert_text(
+        (16, 286),
+        "LIVE FOOTER TEXT " * 4,
+        fontsize=7,
+        fontname="helv",
+    )
+    doc.save(str(path))
+    doc.close()
+    return path
+
+
 def test_classify_thresholds():
     assert classify_page(80, 0) == "live_text"
     assert classify_page(0, 400) == "outlined"
     assert classify_page(20, 399) == "image"
     assert classify_page(50, 10) == "live_text"
-    assert classify_page(50, 400) == "outlined"
+    assert classify_page(50, 400) == "mixed"
+    assert classify_page(20, 0, image_coverage=0.9) == "image"
+    assert classify_page(50, 0, image_coverage=0.9) == "mixed"
     assert classify_document(["live_text", "outlined"]) == "mixed"
     assert classify_document(["live_text", "image"]) == "mixed"
     assert classify_document(["outlined", "image"]) == "mixed"
@@ -165,6 +207,25 @@ def test_full_page_image(tmp_path: Path):
     assert len(result["warning"]) <= 80
 
 
+def test_full_page_image_with_live_footer_still_routes_to_ocr(tmp_path: Path):
+    pdf = _image_with_live_footer_pdf(tmp_path / "image-live-footer.pdf")
+    result = ingest_pdf(pdf, max_pages=1)
+    page = result["pages"][0]
+    assert page["mode"] == "mixed"
+    assert page["image_coverage"] >= 0.9
+    assert page["live_chars"] >= 40
+
+
+def test_tiled_page_images_with_live_footer_still_route_to_ocr(tmp_path: Path):
+    pdf = _tiled_images_with_live_footer_pdf(tmp_path / "tiled-live-footer.pdf")
+    result = ingest_pdf(pdf, max_pages=1)
+    page = result["pages"][0]
+    assert page["mode"] == "mixed"
+    assert page["image_blocks"] == 4
+    assert page["image_coverage"] >= 0.99
+    assert page["live_chars"] >= 40
+
+
 def test_zhuanqu_artwork_is_outlined():
     """工作区审稿台转曲真稿（不 copy 进 git）。"""
     pdfs = _zhuanqu_pdfs()
@@ -197,6 +258,39 @@ def test_live_span_maps_inside_png_pixels(tmp_path: Path):
         assert span["width"] >= 1
         assert span["height"] >= 1
         assert span["text"]
+
+
+@pytest.mark.parametrize("rotation", [0, 90, 180, 270])
+def test_live_span_follows_rendered_page_rotation(tmp_path: Path, rotation: int):
+    pdf = tmp_path / f"rotated-{rotation}.pdf"
+    doc = pymupdf.open()
+    page = doc.new_page(width=200, height=100)
+    page.insert_text((20, 30), "HELLO LIVE TEXT", fontsize=10, fontname="helv")
+    page.set_rotation(rotation)
+    doc.save(str(pdf))
+    doc.close()
+
+    metas = render_pdf_pages(
+        pdf,
+        tmp_path / f"pages-{rotation}",
+        max_pages=1,
+        dpi=144,
+        max_side=1000,
+        review_svg_max_bytes=0,
+    )
+    result = ingest_pdf(pdf, metas, max_pages=1)
+    span = result["spans"][0]
+    with Image.open(metas[0]["path"]) as image:
+        rgb = image.convert("RGB")
+        pixels = ImageChops.difference(rgb, Image.new("RGB", rgb.size, "white")).getbbox()
+    assert pixels is not None
+    mapped = (
+        span["left"],
+        span["top"],
+        span["left"] + span["width"],
+        span["top"] + span["height"],
+    )
+    assert all(abs(actual - expected) <= 30 for actual, expected in zip(mapped, pixels))
 
 
 def test_mixed_page_sources_keep_live_and_ocr_evidence():

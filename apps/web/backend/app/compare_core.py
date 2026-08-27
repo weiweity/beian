@@ -14,7 +14,7 @@ from app.baidu_ocr import qrcode_image_bytes
 from app.claims_rules import build_claims_report
 from app.field_verify import clip_hit_bboxes, verify_fields
 from app.fields import parse_excel_fields
-from app.pack_layout import detect_regions
+from app.pack_layout import detect_regions, words_in_roles
 from app.pdf_ingest import ingest_pdf, public_ingest
 from app.pdf_render import render_pdf_pages
 from app.region_ocr import recognize_pages
@@ -233,8 +233,12 @@ def _surface_job(
     )
     emit_stage("layout")
     layout = detect_regions(words, page_metas)
-    zones = layout.get("zones") or layout_zones.detect_zones(
-        words, page_height=int(page_metas[0]["height"]) if page_metas else 2400
+    zones = (
+        layout.get("zones")
+        if "zones" in layout
+        else layout_zones.detect_zones(
+            words, page_height=int(page_metas[0]["height"]) if page_metas else 2400
+        )
     )
     regions = layout.get("regions") or []
     excel_net = next(
@@ -304,7 +308,14 @@ def _surface_job(
 
     excel_joined = excel_joined_pre
     # 反向：只扫卖点区（排除工艺表）
-    claims_text = layout_zones.claims_zone_text(words, zones)
+    claims_words = words_in_roles(words, regions, ("claims", "usage"))
+    claims_text = "\n".join(
+        str(w.get("text") or "").strip()
+        for w in claims_words
+        if str(w.get("text") or "").strip()
+    )
+    if not claims_text and zones:
+        claims_text = layout_zones.claims_zone_text(words, zones)
     reverse_extras = text_verify.reverse_extra_phrases(
         claims_text or pack_text, excel_joined
     )
@@ -347,9 +358,9 @@ def _surface_job(
                 "score": 55.0,
                 "decision": "pending",
                 "bboxes": rev_hit.get("bboxes") or [],
-                "page": 1,
+                "page": rev_hit.get("page") or 1,
                 "category": "reverse_extra",
-                "no_bbox": not bool(rev_boxes),
+                "no_bbox": bool(rev_hit.get("no_bbox", not bool(rev_boxes))),
                 "reverse_extras": reverse_extras,
                 "surface": surface_label,
                 "match_mode": "reverse_claims_zone",

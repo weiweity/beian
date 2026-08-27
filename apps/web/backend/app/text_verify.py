@@ -102,6 +102,7 @@ def extract_pdf_text_layer(
             d = page.get_text("dict")
             page_h = float(page.rect.height)
             page_w = float(page.rect.width)
+            rotation = page.rotation_matrix
             for b in d.get("blocks") or []:
                 if b.get("type") != 0:
                     continue
@@ -113,11 +114,14 @@ def extract_pdf_text_layer(
                         if not t:
                             continue
                         line_text += t
-                        bb = sp.get("bbox") or [0, 0, 0, 0]
-                        x0 = bb[0] if x0 is None else min(x0, bb[0])
-                        y0 = bb[1] if y0 is None else min(y0, bb[1])
-                        x1 = bb[2] if x1 is None else max(x1, bb[2])
-                        y1 = bb[3] if y1 is None else max(y1, bb[3])
+                        bb = pymupdf.Rect(sp.get("bbox") or [0, 0, 0, 0])
+                        # get_text() 返回未旋转坐标，get_pixmap() / page.rect 使用
+                        # 页面显示方向。先统一到显示坐标，后续只需做一次像素缩放。
+                        shown = bb * rotation
+                        x0 = shown.x0 if x0 is None else min(x0, shown.x0)
+                        y0 = shown.y0 if y0 is None else min(y0, shown.y0)
+                        x1 = shown.x1 if x1 is None else max(x1, shown.x1)
+                        y1 = shown.y1 if y1 is None else max(y1, shown.y1)
                     line_text = line_text.strip()
                     if not line_text or x0 is None:
                         continue

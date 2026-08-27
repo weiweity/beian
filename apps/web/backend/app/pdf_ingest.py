@@ -9,18 +9,19 @@ import pymupdf
 
 from app.text_verify import extract_pdf_text_layer, map_pdf_blocks_to_pixels
 
-PageMode = Literal["live_text", "outlined", "image"]
+PageMode = Literal["live_text", "outlined", "image", "mixed"]
 DocMode = Literal["live_text", "outlined", "image", "mixed"]
 
 # 分类启发式（夹具可微调）：
-# live_text: 去掉刀版尺寸数字与 U+FFFD 后 live_chars ≥ 80（40–79 且路径不密集也算活字）
-# outlined: live_chars < 80 且 drawings ≥ 400（转曲：几乎无 text object、路径 2000–7000）
-# image: 几乎无活字且 drawings 不像转曲（大图铺满 / 矢量很少）
+# live_text: 去掉刀版尺寸数字与 U+FFFD 后，有足够活字且没有大面积图/密集路径
+# outlined: 几乎无活字且 drawings ≥ 400（转曲：几乎无 text object、路径 2000–7000）
+# image: 几乎无活字且大图铺满 / 矢量很少
+# mixed: 大面积图或密集路径与活字同页；必须 OCR，不能因页脚/尺寸活字漏掉主体
 # 文档级：各页模式不一致即 mixed；具体 OCR 路由仍按页模式决定
-LIVE_TEXT_MIN_CHARS = 80
-OUTLINED_MAX_LIVE_CHARS = 40
+LIVE_TEXT_MIN_CHARS = 40
 OUTLINED_MIN_DRAWINGS = 400
 FFFD_MAX_RATIO = 0.5
+FULL_PAGE_IMAGE_MIN_COVERAGE = 0.5
 
 WARNING_OUTLINED = "稿是转曲，没有活字，按扫描识别，钉框会比活字稿粗"
 WARNING_IMAGE = "稿页主要是图，没有可选中文字"
@@ -51,18 +52,24 @@ _PUBLIC_PAGE_KEYS = (
     "words",
     "text_blocks",
     "image_blocks",
+    "image_coverage",
     "drawings",
     "warning",
 )
 _PUBLIC_KEYS = ("mode", "pages", "live_chars", "drawings", "images", "warning")
 
 
-def classify_page(live_chars: int, drawings: int) -> PageMode:
-    if live_chars >= LIVE_TEXT_MIN_CHARS:
-        return "live_text"
+def classify_page(
+    live_chars: int,
+    drawings: int,
+    *,
+    image_coverage: float = 0.0,
+) -> PageMode:
+    if image_coverage >= FULL_PAGE_IMAGE_MIN_COVERAGE:
+        return "mixed" if live_chars >= LIVE_TEXT_MIN_CHARS else "image"
     if drawings >= OUTLINED_MIN_DRAWINGS:
-        return "outlined"
-    if live_chars < OUTLINED_MAX_LIVE_CHARS:
+        return "mixed" if live_chars >= LIVE_TEXT_MIN_CHARS else "outlined"
+    if live_chars < LIVE_TEXT_MIN_CHARS:
         return "image"
     return "live_text"
 
@@ -143,7 +150,11 @@ def ingest_pdf(
             gfx = _page_graphics(page)
             raw = "\n".join(b.get("text") or "" for b in blocks_by_page.get(pno, []))
             live = live_char_count(raw)
-            mode = classify_page(live, gfx["drawings"])
+            mode = classify_page(
+                live,
+                gfx["drawings"],
+                image_coverage=gfx["image_coverage"],
+            )
             pages_out.append(
                 {
                     "page": pno,
@@ -152,6 +163,7 @@ def ingest_pdf(
                     "words": gfx["words"],
                     "text_blocks": gfx["text_blocks"],
                     "image_blocks": gfx["image_blocks"],
+                    "image_coverage": gfx["image_coverage"],
                     "drawings": gfx["drawings"],
                     "warning": _warning_for(mode),
                 }
@@ -188,19 +200,64 @@ def _page_graphics(page: Any) -> dict[str, Any]:
     drawings = page.get_drawings() or []
     d = page.get_text("dict") or {}
     image_blocks = 0
+    image_rects: list[pymupdf.Rect] = []
     text_blocks = 0
     for block in d.get("blocks") or []:
         if block.get("type") == 1:
             image_blocks += 1
+            bbox = pymupdf.Rect(block.get("bbox") or (0, 0, 0, 0))
+            if not bbox.is_empty:
+                image_rects.append(bbox)
         elif block.get("type") == 0:
             text_blocks += 1
     words = page.get_text("words") or []
+    page_box = pymupdf.Rect(0, 0, float(page.cropbox.width), float(page.cropbox.height))
+    image_coverage = _rect_union_coverage(image_rects, page_box)
     return {
         "drawings": len(drawings),
         "image_blocks": image_blocks,
+        "image_coverage": round(min(1.0, image_coverage), 4),
         "words": len(words),
         "text_blocks": text_blocks,
     }
+
+
+def _rect_union_coverage(rects: list[pymupdf.Rect], bounds: pymupdf.Rect) -> float:
+    """计算页内图片矩形的联合覆盖率，避免多图平铺漏判或重叠重复计数。"""
+    clipped: list[pymupdf.Rect] = []
+    for rect in rects:
+        item = rect & bounds
+        if not item.is_empty and item.width > 0 and item.height > 0:
+            clipped.append(item)
+    if not clipped:
+        return 0.0
+
+    xs = sorted({float(r.x0) for r in clipped} | {float(r.x1) for r in clipped})
+    area = 0.0
+    for x0, x1 in zip(xs, xs[1:]):
+        if x1 <= x0:
+            continue
+        intervals = sorted(
+            (float(r.y0), float(r.y1))
+            for r in clipped
+            if r.x0 < x1 and r.x1 > x0
+        )
+        covered_y = 0.0
+        start = end = None
+        for y0, y1 in intervals:
+            if start is None:
+                start, end = y0, y1
+            elif y0 <= end:
+                end = max(end, y1)
+            else:
+                covered_y += end - start
+                start, end = y0, y1
+        if start is not None and end is not None:
+            covered_y += end - start
+        area += (x1 - x0) * covered_y
+
+    page_area = max(1.0, float(bounds.width) * float(bounds.height))
+    return min(1.0, max(0.0, area / page_area))
 
 
 def _map_live_spans(
