@@ -147,11 +147,19 @@ function storedSnapshot(kind: UploadKind, value: unknown): UploadSnapshot | null
   };
 }
 
-function loadStoredUploads(storage: UploadStorage | null): Record<UploadKind, UploadSnapshot | null> {
+function ownerStorageKey(owner: string | null): string | null {
+  const normalized = owner?.trim();
+  return normalized ? `${UPLOAD_STORAGE_KEY}:${normalized}` : null;
+}
+
+function loadStoredUploads(
+  storage: UploadStorage | null,
+  key: string | null,
+): Record<UploadKind, UploadSnapshot | null> {
   const empty = { compare: null, mockup: null };
-  if (!storage) return empty;
+  if (!storage || !key) return empty;
   try {
-    const raw = JSON.parse(storage.getItem(UPLOAD_STORAGE_KEY) || "null") as Record<string, unknown> | null;
+    const raw = JSON.parse(storage.getItem(key) || "null") as Record<string, unknown> | null;
     if (!raw) return empty;
     return {
       compare: storedSnapshot("compare", raw.compare),
@@ -164,12 +172,13 @@ function loadStoredUploads(storage: UploadStorage | null): Record<UploadKind, Up
 
 function saveStoredUploads(
   storage: UploadStorage | null,
+  key: string | null,
   state: Record<UploadKind, UploadSnapshot | null>,
 ): void {
-  if (!storage) return;
+  if (!storage || !key) return;
   try {
     if (!state.compare && !state.mockup) {
-      storage.removeItem(UPLOAD_STORAGE_KEY);
+      storage.removeItem(key);
       return;
     }
     const serializable = Object.fromEntries(
@@ -183,7 +192,7 @@ function saveStoredUploads(
           : null,
       ]),
     );
-    storage.setItem(UPLOAD_STORAGE_KEY, JSON.stringify(serializable));
+    storage.setItem(key, JSON.stringify(serializable));
   } catch {
     // 浏览器禁用存储时仍可在当前 SPA 会话内上传。
   }
@@ -207,15 +216,18 @@ export function createUploadStore(
   transport: UploadTransport = api.stageUpload,
   discard: UploadDiscard = api.discardUpload,
   storage: UploadStorage | null = browserUploadStorage(),
+  initialOwner: string | null = null,
 ) {
-  let state = loadStoredUploads(storage);
+  let owner = initialOwner;
+  let generation = 0;
+  let state = loadStoredUploads(storage, ownerStorageKey(owner));
   let sequence = Math.max(state.compare?.attempt || 0, state.mockup?.attempt || 0);
   const listeners = new Set<() => void>();
   const controllers: Partial<Record<UploadKind, AbortController>> = {};
 
   function publish(kind: UploadKind, next: UploadSnapshot | null) {
     state = { ...state, [kind]: next };
-    saveStoredUploads(storage, state);
+    saveStoredUploads(storage, ownerStorageKey(owner), state);
     for (const listener of listeners) listener();
   }
 
@@ -244,6 +256,7 @@ export function createUploadStore(
 
   function runUpload(kind: UploadKind, base: UploadSnapshot): UploadSnapshot {
     const attempt = base.attempt;
+    const runGeneration = generation;
     const clientUploadId = base.clientUploadId || newClientUploadId(attempt);
     const controller = new AbortController();
     controllers[kind] = controller;
@@ -263,7 +276,7 @@ export function createUploadStore(
       }),
       (progress) => {
         const latest = state[kind];
-        if (!latest || latest.attempt !== attempt) return;
+        if (generation !== runGeneration || !latest || latest.attempt !== attempt) return;
         const pct = Math.max(0, Math.min(100, Math.round(progress.pct)));
         const phase =
           progress.phase || (pct >= 100 ? "confirming" : "uploading");
@@ -282,7 +295,7 @@ export function createUploadStore(
     )
       .then((receipt) => {
         const latest = state[kind];
-        if (!latest || latest.attempt !== attempt) return;
+        if (generation !== runGeneration || !latest || latest.attempt !== attempt) return;
         delete controllers[kind];
         const totalBytes = receipt.files.reduce((sum, selected) => sum + selected.bytes, 0) || latest.total;
         publish(kind, {
@@ -308,7 +321,7 @@ export function createUploadStore(
       })
       .catch((err: unknown) => {
         const latest = state[kind];
-        if (!latest || latest.attempt !== attempt) return;
+        if (generation !== runGeneration || !latest || latest.attempt !== attempt) return;
         delete controllers[kind];
         const paused = err instanceof UploadPausedError;
         publish(kind, {
@@ -516,10 +529,21 @@ export function createUploadStore(
     }
   }
 
-  return { subscribe, get, updateMeta, replaceFile, retry, clear, abandon, recover, restore, abortAll };
+  function setOwner(nextOwner: string | null) {
+    const normalized = nextOwner?.trim() || null;
+    if (normalized === owner) return;
+    generation += 1;
+    abortAll();
+    owner = normalized;
+    state = loadStoredUploads(storage, ownerStorageKey(owner));
+    sequence = Math.max(sequence, state.compare?.attempt || 0, state.mockup?.attempt || 0);
+    for (const listener of listeners) listener();
+  }
+
+  return { subscribe, get, updateMeta, replaceFile, retry, clear, abandon, recover, restore, abortAll, setOwner };
 }
 
-export const uploadStore = createUploadStore();
+export const uploadStore = createUploadStore(api.stageUpload, api.discardUpload, browserUploadStorage(), null);
 
 export function useUploadSnapshot(kind: UploadKind): UploadSnapshot | null {
   return useSyncExternalStore(

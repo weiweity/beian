@@ -467,6 +467,11 @@ export function MockupNewPage({
   useUploadReceiptRecovery("mockup", upload, canCreate && resumeSource === "local");
 
   useEffect(() => {
+    if (resumeSource !== "local" || !upload) return;
+    setProductName(upload.productName || "");
+  }, [resumeSource, upload?.clientUploadId, upload?.productName]);
+
+  useEffect(() => {
     if (!canCreate || resumeSource === "local" || !receiptId) {
       setRestoredReceipt(null);
       setResumeError(null);

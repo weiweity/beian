@@ -221,7 +221,7 @@ describe("uploadStore", () => {
     const storage = memoryStorage();
     const firstTransport = controlledTransport();
     const source = ai("刷新续传.ai");
-    const first = createUploadStore(firstTransport.transport, async () => undefined, storage);
+    const first = createUploadStore(firstTransport.transport, async () => undefined, storage, "ou_refresh_owner");
     first.replaceFile("mockup", "ai", source, { productName: "刷新续传", packSurface: "carton" });
     firstTransport.calls[0]?.progress?.({
       pct: 50,
@@ -234,7 +234,7 @@ describe("uploadStore", () => {
     assert.ok(clientUploadId);
 
     const resumedTransport = controlledTransport();
-    const resumed = createUploadStore(resumedTransport.transport, async () => undefined, storage);
+    const resumed = createUploadStore(resumedTransport.transport, async () => undefined, storage, "ou_refresh_owner");
     assert.equal(resumed.get("mockup")?.phase, "paused");
     assert.equal(resumed.get("mockup")?.clientUploadId, clientUploadId);
     assert.equal(resumed.get("mockup")?.uploadId, "112233445566");
@@ -247,6 +247,22 @@ describe("uploadStore", () => {
     assert.equal(resumed.get("mockup")?.uploadId, "112233445566");
     first.abortAll();
     resumed.abortAll();
+  });
+
+  it("按登录人隔离刷新状态，切换账号不会看到上一人的文件名", () => {
+    const storage = memoryStorage();
+    const fake = controlledTransport();
+    const store = createUploadStore(fake.transport, async () => undefined, storage, "ou_owner_a");
+    store.replaceFile("mockup", "ai", ai("甲账号稿件.ai"));
+    assert.equal(store.get("mockup")?.files[0]?.name, "甲账号稿件.ai");
+
+    store.setOwner("ou_owner_b");
+    assert.equal(store.get("mockup"), null);
+
+    store.setOwner("ou_owner_a");
+    assert.equal(store.get("mockup")?.phase, "paused");
+    assert.equal(store.get("mockup")?.files[0]?.name, "甲账号稿件.ai");
+    store.abortAll();
   });
 
   it("不会用另一次同文件上传的 client id 覆盖当前失败状态", async () => {

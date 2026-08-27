@@ -47,6 +47,12 @@ export function NewTaskPage({ canCreate, receiptId, onCreated, onBack }: Props) 
   useUploadReceiptRecovery("compare", upload, canCreate && resumeSource === "local");
 
   useEffect(() => {
+    if (resumeSource !== "local" || !upload) return;
+    setProductName(upload.productName || "");
+    setPack(upload.packSurface || "carton");
+  }, [resumeSource, upload?.clientUploadId, upload?.productName, upload?.packSurface]);
+
+  useEffect(() => {
     if (!canCreate || resumeSource === "local" || !receiptId) {
       setRestoredReceipt(null);
       setResumeError(null);
