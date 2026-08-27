@@ -1060,6 +1060,21 @@ app.get("/api/mockups/:id/structure-preview", (c) => {
   });
 });
 
+export function faviconResponse(path: string): Response {
+  if (!pngMagicAt(path)) throw new HTTPException(404, { message: "站点图标不存在" });
+  return new Response(Readable.toWeb(createReadStream(path)) as ReadableStream, {
+    headers: {
+      "Content-Type": "image/png",
+      "X-Content-Type-Options": "nosniff",
+      "Cache-Control": cacheHeaderFor("/brand/logo-mark.png") || "public, max-age=86400",
+    },
+  });
+}
+
+app.get("/favicon.ico", () => {
+  return faviconResponse(join(UI_PUBLIC, "brand", "logo-mark.png"));
+});
+
 // root = ui/public, so /brand/logo-mark.png → ui/public/brand/logo-mark.png.
 // Do not regex-strip /brand from UI_BRAND: Windows join uses `\brand`, the
 // replace is a no-op, and serveStatic looks in public\brand\brand\… (404).

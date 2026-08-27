@@ -876,6 +876,59 @@ describe("jobs dispatcher", () => {
     assert.equal(receivedManifest, preparedManifest);
   });
 
+  it("V2 structure failure stores the actionable public error instead of a truncated log path", async () => {
+    const { saveMockup, loadMockup } = await import("./mockup.js");
+    const originalConsoleError = console.error;
+    const diagnosticLogs: string[] = [];
+    console.error = (...values: unknown[]) => diagnosticLogs.push(values.map(String).join(" "));
+    setJobsTestHooks({
+      runStructure: async () => ({
+        code: 2,
+        stdout: "",
+        stderr: JSON.stringify({
+          ok: false,
+          code: "illustrator_unavailable",
+          error: "Illustrator 没有启动成功，请在杭州电脑打开后重试",
+          cause: String.raw`fetch https://api.example.test/private with Bearer bearer-secret token=token-secret at /Users/operator/private/report.json and C:\supply\data\mockups\secret\illustrator.log`,
+          fix: "cookie=session-secret; api_key=key-secret; secret: plain-secret",
+        }) + "\n",
+        timedOut: false,
+      }),
+    });
+    saveMockup({
+      id: tid(87),
+      status: "queued",
+      created_at: "2026-08-27T00:00:03.000Z",
+      files: [],
+      job_kind: "mockup",
+      job_status: "queued",
+      structure_engine: "v2",
+      structure_status: "analyzing",
+    });
+
+    try {
+      enqueue({ kind: "mockup", id: tid(87) });
+      for (let index = 0; index < 50 && loadMockup(tid(87))?.job_status !== "failed"; index += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+
+      assert.equal(loadMockup(tid(87))?.job_error, "Illustrator 没有启动成功，请在杭州电脑打开后重试");
+      assert.doesNotMatch(loadMockup(tid(87))?.job_error || "", /日志=|private runtime path/);
+      const log = diagnosticLogs.join("\n");
+      assert.match(log, /problem=illustrator_unavailable/);
+      assert.match(log, /\[url\]/);
+      assert.match(log, /Bearer \*\*\*/);
+      assert.match(log, /token=\*\*\*/);
+      assert.match(log, /\[path\]/);
+      assert.match(log, /cookie=\*\*\*/);
+      assert.match(log, /api_key=\*\*\*/);
+      assert.match(log, /secret: \*\*\*/);
+      assert.doesNotMatch(log, /api\.example|bearer-secret|token-secret|session-secret|key-secret|plain-secret|C:\\supply|operator\/private|secret\\illustrator/);
+    } finally {
+      console.error = originalConsoleError;
+    }
+  });
+
   it("V2 refuses a prepared manifest outside its own job directory", async () => {
     const { saveMockup, loadMockup } = await import("./mockup.js");
     let blenderCalls = 0;
