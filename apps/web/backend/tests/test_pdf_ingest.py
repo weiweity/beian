@@ -106,7 +106,29 @@ def test_classify_thresholds():
 
 def test_dieline_numbers_are_not_live_chars():
     assert live_char_count("29.35 56 30 186.35") == 0
+    assert live_char_count("29.35×56×30mm " * 10) == 0
+    assert live_char_count("W29.35 H56 " * 10) == 0
+    assert live_char_count("29.35/56/30 " * 10) == 0
+    assert live_char_count("2026/08/27") > 0
     assert live_char_count("达肤妍保湿喷雾 30ml") >= 8
+
+
+def test_dense_dieline_with_compound_dimensions_stays_outlined(tmp_path: Path):
+    pdf = _outlined_pdf(tmp_path / "outlined-dimensions.pdf")
+    doc = pymupdf.open(pdf)
+    page = doc[0]
+    for i in range(10):
+        page.insert_text(
+            (20, 150 + i * 10),
+            "29.35×56×30mm",
+            fontsize=7,
+            fontname="helv",
+        )
+    doc.save(str(tmp_path / "outlined-dimensions-saved.pdf"))
+    doc.close()
+    result = ingest_pdf(tmp_path / "outlined-dimensions-saved.pdf", max_pages=1)
+    assert result["mode"] == "outlined"
+    assert result["pages"][0]["live_chars"] == 0
 
 
 def test_live_text_helvetica(tmp_path: Path):
@@ -185,7 +207,12 @@ def test_mixed_page_sources_keep_live_and_ocr_evidence():
             "text": "Live page product name",
             "page": 1,
             "location": {"left": 1, "top": 1, "width": 80, "height": 20},
-        }
+        },
+        {
+            "text": "29.35",
+            "page": 2,
+            "location": {"left": 2, "top": 30, "width": 30, "height": 10},
+        },
     ]
     ocr_words = [
         {
@@ -203,6 +230,8 @@ def test_mixed_page_sources_keep_live_and_ocr_evidence():
     )
     assert layer_text in text
     assert ocr_text in text
+    # 同页定位框仍由 OCR 接管，避免双源重复钉；这里只验证短 OCR 全文不会被漏掉。
+    assert "29.35" not in " ".join(w["text"] for w in words)
     assert {int(w["page"]) for w in words} == {1, 2}
     assert source == "pdf_text+ocr"
 

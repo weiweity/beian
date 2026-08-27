@@ -84,6 +84,40 @@ def test_bbox_budget_hit_and_optional_check():
     assert len(out["bboxes"]) == 2
 
 
+def test_context_only_is_not_promoted_to_real_hit():
+    hit = {
+        "field": "卖点文案",
+        "field_group": "文案",
+        "bboxes": [_box(10, 20, 200, 80, role="context")],
+        "no_bbox": False,
+    }
+    out = clip_hit_bboxes(hit, [])
+    assert out["bboxes"] == []
+    assert out["no_bbox"] is True
+
+
+def test_cross_page_warning_controls_hit_page_and_stays_local():
+    hit = {
+        "field": "使用方法",
+        "field_group": "使用方法",
+        "page": 1,
+        "bboxes": [
+            _box(10, 10, 80, 20, page=1, role="hit"),
+            _box(20, 40, 60, 18, page=2, role="check"),
+            _box(900, 1400, 80, 30, page=3, role="check"),
+            _box(5, 5, 20, 10, page=1, role="miss_anchor"),
+        ],
+    }
+    out = clip_hit_bboxes(hit, [])
+    checks = [b for b in out["bboxes"] if b.get("role") == "check"]
+    assert len(checks) == 1
+    assert checks[0]["page"] == 2
+    assert checks[0]["left"] == 20
+    assert checks[0]["width"] == 60
+    assert out["page"] == 2
+    assert out["no_bbox"] is False
+
+
 def test_bilingual_pair_one_shared_box():
     cn = {
         "field": "中文品名",
@@ -99,10 +133,30 @@ def test_bilingual_pair_one_shared_box():
     cb = out[0]["bboxes"][0]
     eb = out[1]["bboxes"][0]
     assert out[0]["bilingual_pair"] is True
+    assert out[0]["bilingual_pair_id"] == out[1]["bilingual_pair_id"]
     assert cb["left"] == eb["left"]
     assert cb["top"] == eb["top"]
     assert cb["width"] == eb["width"]
     assert cb["height"] == eb["height"]
+
+
+def test_bilingual_pair_does_not_hide_a_field_warning():
+    cn = {
+        "field": "中文品名",
+        "field_group": "中文品名",
+        "bboxes": [
+            _box(20, 20, 120, 30, role="hit"),
+            _box(10, 300, 80, 20, page=2, role="check"),
+        ],
+    }
+    en = {
+        "field": "英文品名",
+        "field_group": "英文品名",
+        "bboxes": [_box(24, 52, 160, 22, role="hit")],
+    }
+    out = pair_bilingual_names([cn, en], [])
+    assert not out[0].get("bilingual_pair")
+    assert not out[1].get("bilingual_pair")
 
 
 def test_verify_fields_uses_compare_then_clips(monkeypatch):

@@ -294,6 +294,7 @@ export type FieldHit = {
   note?: string;
   decision?: string;
   bboxes?: Array<Record<string, unknown>>;
+  bilingual_pair_id?: string;
   coverage?: { miss?: string[]; hit?: string[]; ratio?: number; matched?: number; total?: number };
   evidence?: string;
   sequence_diff?: { only_in_excel?: string[] };

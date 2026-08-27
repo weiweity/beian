@@ -527,15 +527,9 @@ def merge_text_sources(
             w for w in layer_words if int(w.get("page") or 1) not in ocr_pages
         ]
         words = list(ocr_words) + layer_fallback if ocr_words else list(layer_words)
-        text = layer_text
-        layer_pages = {int(w.get("page") or 1) for w in layer_words}
-        has_ocr_only_page = bool(ocr_pages - layer_pages)
-        if ocr_text and (
-            has_ocr_only_page
-            or not ocr_words
-            or len(ocr_text) > len(layer_text) * 0.5
-        ):
-            # 跨页双源必须拼接；同页仅在 OCR 信息量足够时增强召回。
-            text = layer_text + "\n" + ocr_text
+        # 当前调用合同只会对非活字页执行 OCR。即使该页恰好还有少量尺寸标注
+        # 的 PDF 文字框，也必须保留整页 OCR 文本，不能用“该页已有文字层”推断
+        # OCR 内容重复，否则短条码/短文案会从全文核对中消失。
+        text = layer_text + "\n" + ocr_text if ocr_text else layer_text
         return text, words, "pdf_text+ocr" if ocr_words else "pdf_text"
     return ocr_text or layer_text, ocr_words or layer_words, "ocr"

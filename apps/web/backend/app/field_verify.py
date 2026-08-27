@@ -39,9 +39,11 @@ def clip_hit_bboxes(hit: dict, regions: list[dict] | None = None) -> dict:
     boxes = list(h.get("bboxes") or [])
     if not boxes:
         h["bboxes"] = []
+        h["no_bbox"] = True
         return h
     fg = h.get("field_group") or field_group(h.get("field") or "")
-    hits = [b for b in boxes if (b.get("role") in (None, "hit", "context"))]
+    # context 只是区域提示，不是字段真实命中；把它升成 hit 会制造假框。
+    hits = [b for b in boxes if b.get("role") in (None, "hit")]
     checks = [b for b in boxes if b.get("role") in ("check", "miss_anchor")]
     kept: list[dict] = []
     extra = 0
@@ -51,8 +53,18 @@ def clip_hit_bboxes(hit: dict, regions: list[dict] | None = None) -> dict:
         chosen["role"] = "hit"
         kept.append(_union([chosen], role="hit"))
     if checks:
-        role = str(checks[0].get("role") or "check")
-        kept.append(_union(checks, role=role))
+        # 跨页或多处疑点不能合成一个巨框；优先显示明确 check，再按页内位置稳定取一处。
+        chosen_check = min(
+            checks,
+            key=lambda b: (
+                0 if b.get("role") == "check" else 1,
+                int(b.get("page") or 1),
+                int(b.get("top") or 0),
+                int(b.get("left") or 0),
+            ),
+        )
+        role = str(chosen_check.get("role") or "check")
+        kept.append(_union([chosen_check], role=role))
     h["bboxes"] = kept
     if extra > 0 and fg in _NAME_GROUPS:
         h["name_extra_count"] = extra
@@ -64,8 +76,14 @@ def clip_hit_bboxes(hit: dict, regions: list[dict] | None = None) -> dict:
         cov["extra_occurrences"] = extra
         h["coverage"] = cov
     if kept:
-        h["page"] = kept[0].get("page") or h.get("page") or 1
+        preferred = next(
+            (b for b in kept if b.get("role") in ("check", "miss_anchor")),
+            kept[0],
+        )
+        h["page"] = preferred.get("page") or h.get("page") or 1
         h["no_bbox"] = False
+    else:
+        h["no_bbox"] = True
     return h
 
 
@@ -77,6 +95,9 @@ def pair_bilingual_names(hits: list[dict], regions: list[dict]) -> list[dict]:
     cb = _first_hit_box(cn)
     eb = _first_hit_box(en)
     if not cb or not eb:
+        return hits
+    if _warning_boxes(cn) or _warning_boxes(en):
+        # 两字段任一仍有疑点时各自定位，避免共享钉吞掉另一字段的警告页。
         return hits
     if int(cb.get("page") or 1) != int(eb.get("page") or 1):
         return hits
@@ -94,6 +115,12 @@ def pair_bilingual_names(hits: list[dict], regions: list[dict]) -> list[dict]:
     ]
     cn["bilingual_pair"] = True
     en["bilingual_pair"] = True
+    pair_id = (
+        f"bilingual-name-p{paired['page']}-"
+        f"{paired['left']}-{paired['top']}-{paired['width']}-{paired['height']}"
+    )
+    cn["bilingual_pair_id"] = pair_id
+    en["bilingual_pair_id"] = pair_id
     cn["page"] = paired["page"]
     en["page"] = paired["page"]
     out = []
@@ -134,9 +161,17 @@ def _pick_principal(
 
 def _first_hit_box(hit: dict) -> dict | None:
     for b in hit.get("bboxes") or []:
-        if b.get("role") in (None, "hit", "context"):
+        if b.get("role") in (None, "hit"):
             return b
     return None
+
+
+def _warning_boxes(hit: dict) -> list[dict]:
+    return [
+        b
+        for b in (hit.get("bboxes") or [])
+        if b.get("role") in ("check", "miss_anchor")
+    ]
 
 
 def _vertically_paired(cn: dict, en: dict) -> bool:

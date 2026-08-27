@@ -295,6 +295,9 @@ def _surface_job(
         h["surface"] = surface_label
         if h.get("id"):
             h["id"] = f"{pages_subdir}_{h['id']}"
+        if h.get("bilingual_pair_id"):
+            surface_key = pages_subdir or "a"
+            h["bilingual_pair_id"] = f"{surface_key}_{h['bilingual_pair_id']}"
 
     qrcodes, qr_meta = _qrcode_pages(page_metas)
     hits = _apply_qrcode_to_hits(hits, qrcodes, qr_meta)

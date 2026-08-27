@@ -30,6 +30,18 @@ _DIELINE_TOKEN = re.compile(
     r"^\d{1,4}(?:\.\d{1,3})?(?:\s*(?:mm|cm))?$",
     re.I,
 )
+_DIELINE_COMPOUND = re.compile(
+    r"(?<![A-Za-z0-9])"
+    r"(?:[WHDL]\s*)?\d{1,4}(?:\.\d{1,3})?"
+    r"(?:\s*(?:[x×*]|[/\-])\s*(?:[WHDL]\s*)?\d{1,4}(?:\.\d{1,3})?){1,3}"
+    r"\s*(?:mm|cm)?"
+    r"(?![A-Za-z0-9])",
+    re.I,
+)
+_DIELINE_AXIS_TOKEN = re.compile(
+    r"^[WHDL]\s*\d{1,4}(?:\.\d{1,3})?(?:\s*(?:mm|cm))?$",
+    re.I,
+)
 _LIVE_CHAR = re.compile(r"[\u4e00-\u9fffA-Za-z0-9]")
 
 _PUBLIC_PAGE_KEYS = (
@@ -72,9 +84,27 @@ def live_char_count(text: str) -> int:
     compact = re.sub(r"\s+", "", text)
     if compact and n_fffd / max(len(compact), 1) >= FFFD_MAX_RATIO:
         return 0
+    cleaned = text.replace("\ufffd", " ")
+
+    def drop_compound(match: re.Match[str]) -> str:
+        value = match.group(0)
+        # 纯整数斜杠/短横线更像日期或批号；带小数、单位、轴名或乘号才视为刀版尺寸。
+        if (
+            re.search(r"[.×x*]", value, re.I)
+            or re.search(r"(?:mm|cm)\s*$", value, re.I)
+            or re.search(r"\b[WHDL]\s*\d", value, re.I)
+        ):
+            return " "
+        return value
+
+    cleaned = _DIELINE_COMPOUND.sub(drop_compound, cleaned)
+    tokens = re.findall(r"\S+", cleaned)
+    axis_count = sum(1 for tok in tokens if _DIELINE_AXIS_TOKEN.fullmatch(tok))
     kept: list[str] = []
-    for tok in re.findall(r"\S+", text.replace("\ufffd", " ")):
+    for tok in tokens:
         if _DIELINE_TOKEN.fullmatch(tok):
+            continue
+        if axis_count >= 2 and _DIELINE_AXIS_TOKEN.fullmatch(tok):
             continue
         kept.append(tok)
     return len(_LIVE_CHAR.findall("".join(kept)))
