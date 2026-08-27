@@ -39,6 +39,8 @@ import { rasterAiFile } from "./aiRaster.js";
 const STAGE_LABEL: Record<string, string> = {
   structure: "识别结构",
   render_pdf: "出图",
+  ingest: "识稿",
+  layout: "分区",
   ocr: "认字",
   match: "对照",
   blender: "打样",
@@ -62,6 +64,8 @@ const MERGE_ALLOW = new Set([
   "label_b",
   "text_source",
   "has_pdf_text_layer",
+  "ingest",
+  "pack_layout",
   "pack_profile",
   "layout_zones",
   "surfaces",

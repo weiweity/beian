@@ -17,9 +17,23 @@ describe("compareBoardProgress", () => {
   it("maps queue and compare stages to a compact board percentage", () => {
     assert.equal(compareBoardProgress({ status: "comparing", job_status: "queued" }), 0);
     assert.equal(compareBoardProgress({ status: "comparing", job_status: "running", job_stage: "render_pdf" }), 20);
+    assert.equal(compareBoardProgress({ status: "comparing", job_status: "running", job_stage: "ingest" }), 35);
     assert.equal(compareBoardProgress({ status: "comparing", job_status: "running", job_stage_label: "认字" }), 55);
+    assert.equal(compareBoardProgress({ status: "comparing", job_status: "running", job_stage: "layout" }), 70);
     assert.equal(compareBoardProgress({ status: "comparing", job_status: "running", job_stage: "match" }), 85);
     assert.equal(compareBoardProgress({ status: "comparing", job_status: "succeeded" }), 100);
+  });
+
+  it("keeps the new ingest and layout stages monotonic", () => {
+    const stages = ["render_pdf", "ingest", "ocr", "layout", "match"];
+    const values = stages.map((job_stage) =>
+      compareBoardProgress({ status: "comparing", job_status: "running", job_stage }),
+    );
+    assert.deepEqual(values, [20, 35, 55, 70, 85]);
+    assert.deepEqual(
+      stages.map((stage) => waitCardActiveSteps("compare", "running", stage)),
+      [1, 1, 2, 2, 3],
+    );
   });
 
   it("does not invent a percentage for failed or non-running records", () => {

@@ -103,7 +103,9 @@ export function compareBoardProgress(opts: {
   if (opts.job_status === "queued") return 0;
   const key = `${opts.job_stage || ""} ${opts.job_stage_label || ""}`.trim().toLowerCase();
   if (/(^|\s)(match|对照)(\s|$)/.test(key)) return 85;
+  if (/(^|\s)(layout|分区)(\s|$)/.test(key)) return 70;
   if (/(^|\s)(ocr|认字)(\s|$)/.test(key)) return 55;
+  if (/(^|\s)(ingest|识稿)(\s|$)/.test(key)) return 35;
   if (/(^|\s)(render_pdf|出图)(\s|$)/.test(key)) return 20;
   return undefined;
 }
@@ -148,7 +150,9 @@ export function waitCardActiveSteps(
     return 2;
   }
   if (key === "match" || key === "对照") return 3;
+  if (key === "layout" || key === "分区") return 2;
   if (key === "ocr" || key === "认字") return 2;
+  if (key === "ingest" || key === "识稿") return 1;
   if (key === "render_pdf" || key === "出图") return 1;
   return 1;
 }
