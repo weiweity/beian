@@ -1,7 +1,15 @@
-"""PDF → PNG pages (+ size meta)"""
+"""PDF → machine raster + human review surface.
+
+OCR consumes the bounded PNG.  Reviewers consume a generated SVG when the PDF
+page can be represented safely within the size budget.  Keeping those two
+surfaces separate avoids asking one full-page raster to serve both OCR and 6×
+human zoom.
+"""
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
+import sys
 
 import pymupdf
 from PIL import Image
@@ -15,6 +23,77 @@ COMPARE_MAX_SIDE = 5600
 # 仅预览/极速
 FAST_DPI = 200
 FAST_MAX_SIDE = 2400
+DEFAULT_REVIEW_SVG_MAX_BYTES = 16 * 1024 * 1024
+DEFAULT_REVIEW_SVG_TIMEOUT_S = 12.0
+DEFAULT_REVIEW_SVG_MEMORY_MB = 768
+
+
+def _render_review_svg(
+    pdf_path: Path,
+    page_index: int,
+    review_path: Path,
+    max_bytes: int,
+    *,
+    timeout_s: float = DEFAULT_REVIEW_SVG_TIMEOUT_S,
+    memory_mb: int = DEFAULT_REVIEW_SVG_MEMORY_MB,
+) -> bool:
+    """Generate an optional SVG outside the OCR worker's process.
+
+    PyMuPDF exposes SVG as one in-memory string, so checking its size after
+    ``get_svg_image`` does not protect the long-running comparison process.
+    A short-lived worker contains that peak, enforces a timeout, and applies an
+    address-space limit where the OS supports it. Any failure keeps the PNG.
+    """
+    review_path.unlink(missing_ok=True)
+    worker = Path(__file__).with_name("svg_render_worker.py")
+    command = [
+        sys.executable,
+        str(worker),
+        "--pdf",
+        str(pdf_path),
+        "--page-index",
+        str(page_index),
+        "--output",
+        str(review_path),
+        "--max-bytes",
+        str(max(0, int(max_bytes))),
+        "--memory-mb",
+        str(max(0, int(memory_mb))),
+    ]
+    try:
+        completed = subprocess.run(
+            command,
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=max(0.1, float(timeout_s)),
+        )
+    except subprocess.TimeoutExpired:
+        print("review-svg fallback: worker timeout", file=sys.stderr)
+        review_path.unlink(missing_ok=True)
+        return False
+    except (OSError, ValueError) as exc:
+        print(
+            f"review-svg fallback: worker start failed ({type(exc).__name__})",
+            file=sys.stderr,
+        )
+        review_path.unlink(missing_ok=True)
+        return False
+    valid = (
+        completed.returncode == 0
+        and review_path.is_file()
+        and 0 < review_path.stat().st_size <= max(0, int(max_bytes))
+    )
+    if not valid:
+        detail = " ".join(str(completed.stderr or "").split())[:400]
+        suffix = f" · {detail}" if detail else ""
+        print(
+            f"review-svg fallback: worker exit {completed.returncode}{suffix}",
+            file=sys.stderr,
+        )
+        review_path.unlink(missing_ok=True)
+    return valid
 
 
 def render_pdf_pages(
@@ -25,9 +104,13 @@ def render_pdf_pages(
     max_side: int = DEFAULT_MAX_SIDE,
     *,
     quality: str = "high",
+    review_svg_max_bytes: int = DEFAULT_REVIEW_SVG_MAX_BYTES,
 ) -> list[dict]:
     """
-    返回 [{path, width, height, page, name, dpi}]
+    返回 [{path, width, height, page, name, dpi, review_path?, review_name?}]
+
+    ``path`` 永远是 OCR 使用的 PNG。``review_path`` 只指向本函数生成、且
+    通过大小闸门的 SVG；生成失败时省略，调用方自然回退 PNG。
 
     quality:
       - high: Excel↔包装
@@ -67,16 +150,25 @@ def render_pdf_pages(
         # PNG 无损；大图用优化压缩级别
         p = out_dir / f"page_{i+1:02d}.png"
         p.write_bytes(pix.tobytes("png"))
-        results.append(
-            {
-                "path": str(p),
-                "name": p.name,
-                "width": pix.width,
-                "height": pix.height,
-                "page": i + 1,
-                "dpi": dpi,
-            }
-        )
+        meta = {
+            "path": str(p),
+            "name": p.name,
+            "width": pix.width,
+            "height": pix.height,
+            "page": i + 1,
+            "dpi": dpi,
+        }
+        review_path = out_dir / f"page_{i+1:02d}.svg"
+        if _render_review_svg(
+            Path(pdf_path),
+            i,
+            review_path,
+            review_svg_max_bytes,
+        ):
+            meta["review_path"] = str(review_path)
+            meta["review_name"] = review_path.name
+            meta["review_format"] = "svg"
+        results.append(meta)
     doc.close()
     return results
 

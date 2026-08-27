@@ -526,6 +526,46 @@ describe("review http", () => {
     assert.equal(res.status, 403);
   });
 
+  it("serves generated SVG review pages with a locked content policy", async () => {
+    const tid = seed({
+      id: "161616161617",
+      title: "矢量核对页",
+      product_name: "矢量核对页",
+      type: "excel_pdf",
+      status: "pending_review",
+    });
+    const pagesDir = join(process.env.WB_DATA_DIR as string, "uploads", tid, "pages");
+    mkdirSync(pagesDir, { recursive: true });
+    writeFileSync(join(pagesDir, "page_01.svg"), '<svg xmlns="http://www.w3.org/2000/svg"/>', "utf8");
+
+    const res = await app.request(`/api/tasks/${tid}/pages/page_01.svg`, { headers: authHeader() });
+
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get("content-type") || "", /^image\/svg\+xml/);
+    assert.equal(res.headers.get("x-content-type-options"), "nosniff");
+    assert.match(res.headers.get("content-security-policy") || "", /default-src 'none'/);
+  });
+
+  it("serves side SVG review pages with the same locked content policy", async () => {
+    const tid = seed({
+      id: "161616161618",
+      title: "对红矢量核对页",
+      product_name: "对红矢量核对页",
+      type: "excel_pdf",
+      status: "pending_review",
+    });
+    const sideDir = join(process.env.WB_DATA_DIR as string, "uploads", tid, "pages", "b");
+    mkdirSync(sideDir, { recursive: true });
+    writeFileSync(join(sideDir, "page_01.svg"), '<svg xmlns="http://www.w3.org/2000/svg"/>', "utf8");
+
+    const res = await app.request(`/api/tasks/${tid}/pages/b/page_01.svg`, { headers: authHeader() });
+
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get("content-type") || "", /^image\/svg\+xml/);
+    assert.equal(res.headers.get("x-content-type-options"), "nosniff");
+    assert.match(res.headers.get("content-security-policy") || "", /default-src 'none'/);
+  });
+
   it("rework is owner-scoped for reviewers", async () => {
     saveTask({
       id: "171717171717",

@@ -8,6 +8,7 @@ import openpyxl
 from rapidfuzz import fuzz
 
 from app.layout_zones import skip_sheet_field
+from app.qr_evidence import expected_qr_guide, matched_qr_guide
 
 # 字段名别名 → 规范名（匹配用）
 FIELD_ALIASES: dict[str, tuple[str, ...]] = {
@@ -1197,56 +1198,19 @@ def match_field(
                 f"净含量装型命中「{show[:40]}」{how}"
             )
 
-    # 二维码：图形区 + 引导/品牌词即可；勿要求「扫码关注…」整句 OCR 命中
+    # 二维码字段只核完整引导语。图形码 payload 是独立审计信息，不能替代文案。
     if fg == "二维码":
-        n_ocr = normalize(ocr_text or "")
-        keys = ["扫码", "公众号", "关注", "二维码", "qr", "微信", "公号"]
-        has_guide = any(normalize(k) in n_ocr for k in keys)
-        val_n = normalize(excel_value or "")
-        has_val = len(val_n) >= 4 and (
-            val_n in n_ocr or float(fuzz.partial_ratio(val_n, n_ocr[:2000])) >= 80
-        )
-        # 确认单里的品牌/主体词（去掉扫码关注等虚词）
-        brand_toks = [
-            t
-            for t in re.findall(r"[\u4e00-\u9fff]{2,}", excel_value or "")
-            if t not in ("扫码", "关注", "微信", "二维码", "请")
-        ]
-        brand_hits = [t for t in brand_toks if normalize(t) in n_ocr]
-        # 译龄 + 公众号 / 扫码 + 公众号 → 视为引导齐全
-        strong_guide = has_guide and (
-            bool(brand_hits)
-            or ("公众号" in n_ocr and any(k in n_ocr for k in ("扫码", "关注", "微信", "公号")))
-            or ("译龄" in n_ocr and "公众号" in n_ocr)
-        )
-        if has_val:
-            score = max(score, 95.0)
+        guide = matched_qr_guide(ocr_text or "", excel_value)
+        expected_guide = expected_qr_guide(excel_value)
+        if guide:
+            score = 100.0
+            chunk = guide
             cov = {
                 "coverage": 1.0,
                 "matched": 1,
                 "total": 1,
-                "hit_phrases": [excel_value[:40]],
+                "hit_phrases": [guide],
                 "miss_phrases": [],
-            }
-        elif strong_guide:
-            score = max(score, 92.0)
-            hit_show = "、".join(brand_hits[:3]) if brand_hits else "公众号/扫码引导"
-            cov = {
-                "coverage": 1.0,
-                "matched": 2,
-                "total": 2,
-                "hit_phrases": [hit_show, "扫码引导区"],
-                "miss_phrases": [],
-            }
-            chunk = chunk or hit_show
-        elif has_guide:
-            score = 80.0
-            cov = {
-                "coverage": 0.6,
-                "matched": 1,
-                "total": 2,
-                "hit_phrases": ["扫码引导区"],
-                "miss_phrases": [excel_value[:40] if excel_value else "品牌引导文案"],
             }
         else:
             score = min(score, 50.0)
@@ -1255,7 +1219,7 @@ def match_field(
                 "matched": 0,
                 "total": 1,
                 "hit_phrases": [],
-                "miss_phrases": [excel_value[:40] if excel_value else "二维码文案"],
+                "miss_phrases": [expected_guide],
             }
 
     # 长字段：覆盖率决定结论；禁止「只命中一句水」变一致
@@ -1308,13 +1272,10 @@ def match_field(
         if score >= SCORE_OK and (cov or {}).get("coverage", 0) >= 0.85:
             status, ev = (
                 "一致",
-                f"二维码引导/品牌命中「{(chunk or excel_value or '')[:36]}」"
-                f"（图形码区+文案引导，不要求整句 OCR）",
+                f"扫码关注引导语命中「{(chunk or '')[:36]}」",
             )
-        elif score >= SCORE_WARN:
-            status, ev = "疑点", f"仅见弱引导 · score={score:.0f} · 请人眼看公众号/码区"
         else:
-            status, ev = "缺失", f"未见扫码引导/二维码相关文案 · score={score:.0f}"
+            status, ev = "缺失", f"未见完整引导语「{expected_qr_guide(excel_value)}」"
     elif fg == "条形码":
         if score >= SCORE_OK:
             status, ev = "一致", f"条码全部命中 score={score:.0f}"
@@ -1366,7 +1327,10 @@ def match_field(
         status = "疑点"
         ev = f"短语命中但装型/覆盖不足（{cov.get('matched')}/{cov.get('total')}）· " + ev
 
-    if any(k in field for k in SOFT_FIELDS) and status == "缺失":
+    if fg == "二维码" and status == "缺失":
+        status = "疑点"
+        ev = "未读到完整扫码关注引导语，需人工确认 · " + ev
+    elif any(k in field for k in SOFT_FIELDS) and status == "缺失":
         status = "疑点"
         ev = "规格/条码类可能分支 · " + ev
 
@@ -1544,14 +1508,6 @@ def match_field(
                 + " · "
                 + (ev or "")
             )
-
-    # 二维码：一致也进待处理，强制人扫确认（C 端）
-    if fg == "二维码" and status == "一致":
-        status = "疑点"
-        ev = (
-            "二维码需人工扫码确认是否跳转正确（机审仅校验引导文案/码区存在） · "
-            + (ev or "")
-        )
 
     # OCR 置信度：缺失/低覆盖时若区域字置信度低 → 看不清（非硬缺失）
     ocr_low = False

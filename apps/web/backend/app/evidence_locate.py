@@ -23,6 +23,8 @@ from typing import Any
 
 from rapidfuzz import fuzz
 
+from app.qr_evidence import matched_qr_guide, qr_guide_queries
+
 
 def _norm(s: str) -> str:
     try:
@@ -425,25 +427,8 @@ def expected_zone(
         }
 
     if fg == "文案":
-        net = find_best_word("净含量", words, min_score=88.0, prefer_re=r"净含量")
-        if net:
-            z = _zone_from_anchor(
-                net, above=110, below=0, left_slack=24, width_boost=100, label="期望·脚注(净含量上)"
-            )
-            z["height"] = 100
-            return z
-        # 无净含量时：页中右栏
-        return {
-            "page": 1,
-            "left": int(page_w * 0.55),
-            "top": int(page_h * 0.42),
-            "width": int(page_w * 0.38),
-            "height": int(page_h * 0.12),
-            "role": "check",
-            "status": "warn",
-            "label": "期望·文案脚注区",
-            "locate": "expected_zone",
-        }
+        # 文案可能出现在任意包装面；没有真实短语锚时不猜版面区域。
+        return None
 
     if fg == "成分表":
         step = (
@@ -474,23 +459,8 @@ def expected_zone(
             }
 
     if fg == "二维码":
-        for q in ("公众号", "扫码关注", "扫码"):
-            b = find_best_word(q, words, min_score=86.0)
-            if b:
-                return _zone_from_anchor(
-                    b, above=40, below=80, left_slack=40, width_boost=60, label="期望·码区"
-                )
-        return {
-            "page": 1,
-            "left": int(page_w * 0.7),
-            "top": int(page_h * 0.48),
-            "width": int(page_w * 0.22),
-            "height": int(page_h * 0.12),
-            "role": "check",
-            "status": "warn",
-            "label": "期望·二维码区",
-            "locate": "expected_zone",
-        }
+        # 缺完整引导语时没有真实位置；禁止回退到猜测的右侧矩形。
+        return None
 
     if fg == "生产信息":
         b = find_best_word("备案人", words, min_score=86.0) or find_best_word(
@@ -677,6 +647,22 @@ def locate_dual_evidence(
                     hits.extend(u)
                 else:
                     hits.append(b)
+        elif fg == "二维码":
+            for guide in qr_guide_queries(excel_value):
+                b = locate_phrase_span(
+                    guide,
+                    pin_words,
+                    min_score=92.0,
+                    label="扫码关注引导语",
+                    max_window=12,
+                )
+                if not b or not matched_qr_guide(str(b.get("matched_text") or ""), excel_value):
+                    continue
+                b["role"] = "hit"
+                b["status"] = "ok"
+                b["label"] = "扫码关注引导语"
+                hits.append(b)
+                break
         else:
             # logo：先扫纯商标词，避免「使用方法：Cell…」/竖条数字
             if fg == "logo标识":
@@ -759,14 +745,6 @@ def locate_dual_evidence(
                 )
                 if b and _pin_ok(b, min_w=40):
                     hits.append(b)
-        # 二维码疑点：码区期望
-        if fg == "二维码" and zone:
-            z = dict(zone)
-            z["role"] = "check"
-            z["status"] = "warn"
-            z["label"] = "请扫码核对"
-            checks.append(z)
-
     # ── 成分 block ──
     elif fg == "成分表" or "成分" in fl:
         step = (
@@ -954,158 +932,49 @@ def locate_dual_evidence(
                     }
                 )
 
-    # ── 文案 multi ──
-    elif fg == "文案":
-        words = [
-            w
-            for w in words
-            if not str(w.get("source") or "").startswith("paddle_vl")
-            and not w.get("vl_tag")
-        ] or words
-        regions = [
-            ("英文主标题", "BRIGHTENING VITALIZING ESSENCE MASK", r"BRIGHTENING|ESSENCE"),
-            ("中文品名", "译龄光感焕能精华面膜", r"精华面膜|光感焕能"),
-            ("卖点透亮", "光感透亮", r"光感透亮|透亮"),
-            ("卖点保湿", "沁润保湿", r"沁润|保湿"),
-            ("卖点柔嫩", "柔嫩细腻", r"柔嫩|细腻"),
-            ("步骤涂", "涂·精华液", r"涂·|涂精华|1步骤|步骤1"),
-            ("步骤敷", "敷·面膜", r"敷·|敷面膜|2步骤|步骤2"),
-        ]
-        for name, q, pref in regions:
-            b = locate_phrase_span(
-                q,
-                words,
-                min_score=88.0,
-                prefer_re=pref,
-                exclude_re=r"成分|其他微量|净含量|备案|BRIGHTENING",
-                label=name,
-                max_window=6,
-            )
-            if b and int(b.get("width") or 0) < 400:
-                hits.append(b)
-        # 脚注：净含量上
-        net = locate_phrase_span("净含量", words, min_score=88.0, prefer_re=r"净含量")
-        foot_qs = [
-            ("商标脚注", "整体组合商标", r"组合商标|品牌标识|Grrshula"),
-            ("25+脚注", "25+", r"25\+|肌肤研制"),
-            ("设计元素", "设计元素", r"设计元素|产品实物"),
-            ("昵称脚注", "昵称", r"昵称|步骤01"),
-        ]
-        foot_pins = []
-        if net:
-            y_band = (max(0, int(net["top"]) - 180), int(net["top"]) + 8)
-            x_min = max(0, int(net["left"]) - 40)
-            for name, q, pref in foot_qs:
-                b = locate_phrase_span(
-                    q,
-                    words,
-                    min_score=82.0,
-                    y_band=y_band,
-                    x_min=x_min,
-                    prefer_re=pref,
-                    label=name,
-                )
-                if b:
-                    foot_pins.append(b)
-            # 扫关键词行
-            for w in _filter_words(words, y_band=y_band, x_min=x_min):
-                t = w.get("text") or ""
-                if re.search(
-                    r"组合商标|品牌标识|设计元素|25\+|昵称|Grrshula|产品实物|无其他含义",
-                    t,
-                    re.I,
-                ):
-                    bb = _box(w, role="hit", label="脚注")
-                    if bb:
-                        foot_pins.append(bb)
-        if foot_pins:
-            u = _union(foot_pins, pad=adaptive_pad(words), role="hit")
-            for b in u:
-                b["label"] = "脚注条款·净含量上"
-                b["locate"] = "footnote_band"
-                hits.append(b)
-        elif zone:
-            context.append(dict(zone, role="context", status="ok", label="脚注区上下文"))
-
-        for mp in misses[:5]:
-            q = re.sub(r"[*＊\"“”：:]", "", mp).strip()[:24]
-            y_band = None
-            x_min = None
-            if net:
-                y_band = (max(0, int(net["top"]) - 160), int(net["top"]) + 12)
-                x_min = max(0, int(net["left"]) - 40)
-            mb = locate_phrase_span(
-                q,
-                words,
-                min_score=78.0,
-                y_band=y_band,
-                x_min=x_min,
-                role="check",
-                status="warn",
-                label=f"漏印?{mp[:12]}",
-            )
-            if mb:
-                checks.append(mb)
-            elif zone:
-                z = dict(zone)
-                z["role"] = "check"
-                z["status"] = "warn"
-                z["label"] = f"漏印区:{mp[:12]}"
-                z["locate"] = "expected_zone"
-                checks.append(z)
-
-    # ── 生产 / 用法 block ──
-    elif fg in ("生产信息", "使用方法"):
+    # ── 长文案 / 生产信息 / 使用方法：只消费本次 coverage 真实短语 ──
+    elif fg in ("文案", "生产信息", "使用方法"):
         loc_w = [
             w
             for w in words
             if not str(w.get("source") or "").startswith("paddle_vl")
             and not w.get("vl_tag")
         ] or words
-        keys = (
-            ["备案人", "生产企业", "许可证", "执行标准", "产地", "检验合格", "产品名称", "沪妆"]
-            if fg == "生产信息"
-            else ["使用方法", "贮存条件", "注意", "静敷", "第一步", "第二步"]
-        )
-        pins = []
-        for k in keys:
+        # hit_phrases 已由字段匹配层从当前 Excel/OCR 计算，定位层不再内置品牌、
+        # 产品或固定版面词典。没有真实命中就不画绿框。
+        pins: list[dict] = []
+        for phrase in hits_in[:12]:
+            query = re.sub(r"[*＊\"“”]", "", phrase).strip()[:40]
+            if len(_norm(query)) < 2:
+                continue
             b = locate_phrase_span(
-                k,
+                query,
                 loc_w,
-                min_score=84.0,
-                label=k,
-                # 生产信息多在右下，避免吸到左卖点
-                x_min=(page_w * 0.42) if (fg == "生产信息" and page_w) else None,
+                min_score=88.0,
+                label=phrase[:16],
+                max_window=10,
             )
             if b and int(b.get("width") or 0) >= 30:
                 pins.append(b)
         if pins:
-            # 生产：合并为 1～2 大块（整段备案/生产企业），不要只剩「检验合格」小条
-            for cl in _cluster_by_y(pins, gap=160)[:2]:
-                u = _union(cl, pad=max(12, adaptive_pad(loc_w) + 4), role="hit")
-                for x in u:
-                    x["label"] = "生产信息" if fg == "生产信息" else "使用方法"
-                    # 生产块过窄时，向右扩到栏宽
-                    if fg == "生产信息" and int(x.get("width") or 0) < 280:
-                        x["width"] = min(
-                            int(page_w - x["left"] - 20) if page_w else 400,
-                            max(320, int(x["width"])),
-                        )
-                hits.extend(u)
-        for mp in misses[:3]:
+            hits.extend(_dedupe_boxes(pins)[:8])
+        for mp in misses[:5]:
+            query = re.sub(r"[*＊\"“”]", "", mp).strip()[:40]
+            if len(_norm(query)) < 2:
+                continue
             mb = locate_phrase_span(
-                re.sub(r"[（(][^）)]+[）)]", "", mp)[:16],
+                query,
                 loc_w,
-                min_score=82.0,
+                min_score=90.0,
                 role="check",
                 status="warn",
                 label=f"未见?{mp[:12]}",
-                x_min=(page_w * 0.42) if (fg == "生产信息" and page_w) else None,
             )
             if mb:
                 checks.append(mb)
             elif zone:
-                checks.append(dict(zone, label=f"未见区:{mp[:12]}"))
+                # 标题锚只提供上下文，不伪装成缺失原文的坐标。
+                context.append(dict(zone, role="context", status="ok", label=f"{fg}上下文"))
 
     else:
         # 通用：hit 短语 span + miss 期望

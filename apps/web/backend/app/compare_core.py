@@ -285,11 +285,7 @@ def _apply_qrcode_to_hits(
     qrcodes: list[dict],
     qr_meta: dict | None = None,
 ) -> list[dict]:
-    """
-    二维码字段：
-    - API 解出 payload → 一致（强制）
-    - API 失败/空 → 保留 L1 文案引导结果，evidence 标明降级
-    """
+    """Attach QR payload audit data without changing guide-text decisions."""
     qr_meta = qr_meta or {}
     qr_texts = [str(q.get("text") or "").strip() for q in qrcodes if q.get("text")]
     boxes = []
@@ -313,43 +309,35 @@ def _apply_qrcode_to_hits(
         h["qrcode_meta"] = qr_meta
         if qr_texts:
             joined = " | ".join(qr_texts[:5])
-            h["status"] = "一致"
-            h["score"] = 100.0
-            h["evidence"] = f"百度二维码 API 命中：{joined[:120]}"
-            h["bboxes"] = boxes or h.get("bboxes") or []
-            h["page"] = boxes[0]["page"] if boxes else h.get("page") or 1
             h["qrcode_values"] = qr_texts
-            h["doubt_bucket"] = None
-            h["match_mode"] = "qrcode_api"
+            h["qrcode_boxes"] = boxes
+            h["qrcode_payload_evidence"] = f"二维码载荷已解出：{joined[:120]}"
         else:
-            # 显式降级：不覆盖已有引导一致；缺失时标降级说明
-            deg = qr_meta.get("message") or "二维码 API 无结果，文案引导降级"
-            h["evidence"] = (h.get("evidence") or "") + f" · [{deg}]"
             h["qrcode_degraded"] = True
-            if h.get("status") == "一致":
-                h["evidence"] = f"文案引导一致（API 未解出图形码）· " + (h.get("evidence") or "")
-            elif h.get("status") in ("缺失", "疑点") and qr_meta.get("status") == "error":
-                # API 故障时不要硬缺失
-                if h.get("status") == "缺失":
-                    h["status"] = "疑点"
-                h["doubt_bucket"] = h.get("doubt_bucket") or "ocr_unclear"
     return hits
 
 
 def _page_urls(tid: str, page_metas: list[dict], side: str | None = None) -> list[dict]:
     out = []
     for m in page_metas:
+        raster_name = m["name"]
+        review_name = m.get("review_name") or raster_name
         if side:
-            url = f"/api/tasks/{tid}/pages/{side}/{m['name']}"
+            url = f"/api/tasks/{tid}/pages/{side}/{review_name}"
+            raster_url = f"/api/tasks/{tid}/pages/{side}/{raster_name}"
         else:
-            url = f"/api/tasks/{tid}/pages/{m['name']}"
+            url = f"/api/tasks/{tid}/pages/{review_name}"
+            raster_url = f"/api/tasks/{tid}/pages/{raster_name}"
         out.append(
             {
                 "url": url,
+                "raster_url": raster_url,
                 "page": m["page"],
                 "width": m["width"],
                 "height": m["height"],
-                "name": m["name"],
+                "name": raster_name,
+                "review_name": review_name,
+                "review_format": m.get("review_format") or "png",
             }
         )
     return out
