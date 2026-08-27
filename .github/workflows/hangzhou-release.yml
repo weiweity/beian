@@ -48,4 +48,12 @@ jobs:
         run: |
           rem Job killed or script threw after :8787 was stopped. Do not touch cloudflared.
           rem Do not kill node.exe. WinSW service is outside the Actions job tree.
+          sc query beian-server-8787 | find "RUNNING" >nul
+          if not errorlevel 1 exit /b 0
           sc start beian-server-8787
+          rem 1056 = ERROR_SERVICE_ALREADY_RUNNING; treat as success.
+          if errorlevel 1 (
+            sc query beian-server-8787 | find "RUNNING" >nul
+            if errorlevel 1 exit /b 1
+          )
+          exit /b 0

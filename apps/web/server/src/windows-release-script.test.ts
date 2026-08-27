@@ -119,6 +119,14 @@ describe("windows release.ps1 contract", () => {
     assert.match(script, /Test-PortListening 8787/);
   });
 
+  it("stops the WinSW service before taskkill so onfailure does not respawn", () => {
+    assert.match(script, /Stop-Service -Name "beian-server-8787"/);
+    assert.match(script, /WinSW onfailure does not respawn/);
+    assert.ok(indexOf(/Stop-Service -Name "beian-server-8787"/) < indexOf(/taskkill\.exe \/T \/F \/PID \$pid8787/));
+    assert.ok(indexOf(/Stop-Service -Name "beian-server-8787"/) < indexOf(/Invoke-Git merge --ff-only origin\/main/));
+    assert.ok(indexOf(/Get-RecentIncomingUploadCount/) < indexOf(/Stop-Service -Name "beian-server-8787"/));
+  });
+
   it("validates WB_DATA_DIR with a directory boundary before taskkill", () => {
     assert.ok(indexOf(/Test-DataDirInsideRepo/) < indexOf(/taskkill\.exe \/T \/F \/PID/));
     assert.match(script, /WB_DATA_DIR 不能在仓库内/);
@@ -164,8 +172,14 @@ describe("windows release.ps1 contract", () => {
     assert.doesNotMatch(yml, /^\s+shell: powershell\s*$/m);
     assert.match(yml, /if: failure\(\)/);
     assert.match(yml, /sc start beian-server-8787/);
+    assert.match(yml, /1056/);
+    assert.match(yml, /ERROR_SERVICE_ALREADY_RUNNING/);
+    assert.match(yml, /find "RUNNING"/);
     assert.doesNotMatch(yml, /schtasks \/Run \/TN beian-server-8787/);
     assert.doesNotMatch(yml, /ONLOGON/);
+    const startIdx = yml.indexOf("sc start beian-server-8787");
+    const runningIdx = yml.indexOf('find "RUNNING"');
+    assert.ok(runningIdx >= 0 && startIdx >= 0 && runningIdx < startIdx);
     assert.match(yml, /^[^#\n]*git -C D:\\beian fetch origin/m);
     assert.match(yml, /^[^#\n]*git -C D:\\beian checkout origin\/main -- scripts\/windows\/release\.ps1/m);
     const lockIdx = yml.search(/^[^#\n]*git -C D:\\beian checkout -- package-lock\.json/m);
