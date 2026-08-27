@@ -40,6 +40,32 @@ def test_clip_keeps_one_hit_box_for_repeated_name():
     assert out.get("name_extra_count") == 2
 
 
+def test_clip_finds_principal_name_region_across_pages():
+    regions = [
+        {
+            "id": "p1_claims",
+            "role": "claims",
+            "page": 1,
+            "left": 0,
+            "top": 0,
+            "width": 400,
+            "height": 200,
+        }
+    ]
+    hit = {
+        "field": "中文品名",
+        "field_group": "中文品名",
+        "bboxes": [
+            _box(20, 500, 300, 100, page=2),
+            _box(20, 30, 100, 40, page=1),
+        ],
+    }
+    out = clip_hit_bboxes(hit, regions)
+    chosen = next(b for b in out["bboxes"] if b.get("role") == "hit")
+    assert chosen["page"] == 1
+    assert chosen["top"] == 30
+
+
 def test_bbox_budget_hit_and_optional_check():
     hit = {
         "field": "成分表",

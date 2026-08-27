@@ -19,7 +19,7 @@ import pymupdf
 from app.fields import normalize, normalize_units
 
 # 与前端 banner 对齐：低于此版本的 excel_pdf 任务提示「请重建」
-ENGINE_VERSION = "tvt-lite-1.22"
+ENGINE_VERSION = "tvt-lite-2.0"
 ENGINE_FEATURES = [
     "excel_brief_ssot",
     "pdf_text_layer",
@@ -37,15 +37,12 @@ ENGINE_FEATURES = [
     "layout_zones",
     "inci_normalize",
     "multi_surface",
-    "vlm_typo_layer",
     "seqdiff_full_excel_ssot",
     "phrase_anchor_coverage",
     "qr_guide_not_semantic",
-    "l3_batch_json_repair",
     "ocr_probability",
     "zone_router",
     "qrcode_api_hardpath",
-    "ocr_line_merge",
     "doubt_bucket",
     "dual_track_bbox",
     "phrase_span_locate",
@@ -54,17 +51,13 @@ ENGINE_FEATURES = [
     "pack_phrase_coverage",
     "char_lcs_diff",
     "pdf_compare_high_dpi",
-    "ocr_zone_boost",
-    "paddle_ocr_vl",
     "gold_eval",
-    "l3_crop_reocr",
     "phrase_soft_copy",
     "evidence_point_boxes",
     "ocr_glue_filter",
     "evidence_locate_v2",
     "evidence_locate_v3_profiles",
     "dual_page_copy_compare",
-    "ocr_ensemble_crosscheck",
     "dual_page_report_wording",
     "baidu_ocr_paragraph",
     "layout_paragraph_cluster",
@@ -74,7 +67,6 @@ ENGINE_FEATURES = [
     "cross_zone_glue_filter",
     "dual_zone_roi_p1",
     "dual_zone_template_p2",
-    "zone_crop_reocr",
     "red_box_roi_grid",
     "side_by_side_same_boxes",
     "strict_align_rlen_085",
@@ -82,7 +74,16 @@ ENGINE_FEATURES = [
     "no_cn_tail_as_trunc",
     "hit_dedupe",
     "vertical_panel_cut",
+    "pdf_ingest_classification",
+    "page_source_routing",
+    "live_text_no_ocr",
+    "single_ocr_engine",
+    "pack_layout_regions",
+    "single_pin_evidence",
+    "bilingual_name_pair",
 ]
+
+
 def extract_pdf_text_layer(
     pdf_path: str | Path, *, max_pages: int = 3
 ) -> tuple[str, list[dict], bool]:
@@ -517,13 +518,24 @@ def merge_text_sources(
     *,
     prefer_layer: bool,
 ) -> tuple[str, list[dict], str]:
-    """合并文字层与 OCR；返回 (text, words, source_tag)"""
+    """合并文字层与 OCR；同页 OCR 优先，不同页保留各自权威词框。"""
     if prefer_layer and layer_text and len(normalize(layer_text)) >= 40:
-        # 用层文本做匹配串；框优先 OCR（像素准），没有再用映射层框
-        words = ocr_words if ocr_words else layer_words
+        # OCR 只跑非活字页时，不能因为有 OCR 词就丢掉其他页的 PDF 文字框。
+        # 同一页仍沿用 OCR 框优先，避免双源重复钉框。
+        ocr_pages = {int(w.get("page") or 1) for w in ocr_words}
+        layer_fallback = [
+            w for w in layer_words if int(w.get("page") or 1) not in ocr_pages
+        ]
+        words = list(ocr_words) + layer_fallback if ocr_words else list(layer_words)
         text = layer_text
-        if ocr_text and len(ocr_text) > len(layer_text) * 0.5:
-            # 双源拼接增强召回
+        layer_pages = {int(w.get("page") or 1) for w in layer_words}
+        has_ocr_only_page = bool(ocr_pages - layer_pages)
+        if ocr_text and (
+            has_ocr_only_page
+            or not ocr_words
+            or len(ocr_text) > len(layer_text) * 0.5
+        ):
+            # 跨页双源必须拼接；同页仅在 OCR 信息量足够时增强召回。
             text = layer_text + "\n" + ocr_text
         return text, words, "pdf_text+ocr" if ocr_words else "pdf_text"
     return ocr_text or layer_text, ocr_words or layer_words, "ocr"

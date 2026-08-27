@@ -1,4 +1,5 @@
 from app.region_ocr import recognize_pages
+from app.text_verify import ENGINE_FEATURES, ENGINE_VERSION
 
 
 def test_live_text_skips_ocr():
@@ -62,3 +63,20 @@ def test_no_engine_union_in_source():
     )
     assert "zone_boost" in ocr  # 诊断字段写 0
     assert "boost_page_ocr" not in ocr
+
+
+def test_engine_contract_matches_single_engine_pipeline():
+    assert ENGINE_VERSION == "tvt-lite-2.0"
+    assert {
+        "pdf_ingest_classification",
+        "page_source_routing",
+        "live_text_no_ocr",
+        "single_ocr_engine",
+    } <= set(ENGINE_FEATURES)
+    assert {
+        "ocr_line_merge",
+        "ocr_zone_boost",
+        "paddle_ocr_vl",
+        "ocr_ensemble_crosscheck",
+        "zone_crop_reocr",
+    }.isdisjoint(ENGINE_FEATURES)

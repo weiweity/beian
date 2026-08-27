@@ -113,9 +113,14 @@ def _pick_principal(
 ) -> tuple[dict, int]:
     if len(boxes) == 1:
         return boxes[0], 0
-    claims = principal_claims_region(regions, page=int(boxes[0].get("page") or 1))
-    if fg in _NAME_GROUPS and claims:
-        inside = [b for b in boxes if _box_in_region(b, claims)]
+    if fg in _NAME_GROUPS:
+        inside = []
+        for box in boxes:
+            claims = principal_claims_region(
+                regions, page=int(box.get("page") or 1)
+            )
+            if claims and _box_in_region(box, claims):
+                inside.append(box)
         pool = inside or boxes
         pool = sorted(pool, key=lambda b: (int(b.get("page") or 1), int(b.get("top") or 0)))
         return pool[0], max(0, len(boxes) - 1)

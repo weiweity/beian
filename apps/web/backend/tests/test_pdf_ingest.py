@@ -16,17 +16,13 @@ from app.pdf_ingest import (
     public_ingest,
 )
 from app.pdf_render import render_pdf_pages
+from app.text_verify import merge_text_sources
 
 REPO = Path(__file__).resolve().parents[4]
 
 
 def _zhuanqu_pdfs() -> list[Path]:
     roots = [REPO / "测试" / "审稿台"]
-    sibling = Path("/Users/hutou/Desktop/beian/测试/审稿台")
-    if sibling.exists() and sibling.resolve() not in {
-        r.resolve() for r in roots if r.exists()
-    }:
-        roots.append(sibling)
     out: list[Path] = []
     seen: set[str] = set()
     for root in roots:
@@ -102,8 +98,9 @@ def test_classify_thresholds():
     assert classify_page(0, 400) == "outlined"
     assert classify_page(20, 399) == "image"
     assert classify_page(50, 10) == "live_text"
-    assert classify_document(["live_text", "outlined"]) == "outlined"
-    assert classify_document(["live_text", "image"]) == "image"
+    assert classify_page(50, 400) == "outlined"
+    assert classify_document(["live_text", "outlined"]) == "mixed"
+    assert classify_document(["live_text", "image"]) == "mixed"
     assert classify_document(["outlined", "image"]) == "mixed"
 
 
@@ -180,6 +177,36 @@ def test_live_span_maps_inside_png_pixels(tmp_path: Path):
         assert span["text"]
 
 
+def test_mixed_page_sources_keep_live_and_ocr_evidence():
+    layer_text = "Live page selectable product name and filing content with enough characters"
+    ocr_text = "转曲页文案"
+    layer_words = [
+        {
+            "text": "Live page product name",
+            "page": 1,
+            "location": {"left": 1, "top": 1, "width": 80, "height": 20},
+        }
+    ]
+    ocr_words = [
+        {
+            "text": "转曲页文案",
+            "page": 2,
+            "location": {"left": 2, "top": 2, "width": 90, "height": 20},
+        }
+    ]
+    text, words, source = merge_text_sources(
+        layer_text,
+        ocr_text,
+        layer_words,
+        ocr_words,
+        prefer_layer=True,
+    )
+    assert layer_text in text
+    assert ocr_text in text
+    assert {int(w["page"]) for w in words} == {1, 2}
+    assert source == "pdf_text+ocr"
+
+
 def test_public_ingest_drops_spans_and_layer_text(tmp_path: Path):
     pdf = _live_text_pdf(tmp_path / "live.pdf")
     full = ingest_pdf(pdf, max_pages=1)
@@ -234,3 +261,4 @@ def test_surface_job_emits_ingest_without_spans(tmp_path: Path, monkeypatch, cap
     assert ingest["mode"] == "live_text"
     assert "spans" not in ingest
     assert ingest["warning"] is None
+    assert result["pack_layout"]["regions"]

@@ -13,10 +13,10 @@ PageMode = Literal["live_text", "outlined", "image"]
 DocMode = Literal["live_text", "outlined", "image", "mixed"]
 
 # 分类启发式（夹具可微调）：
-# live_text: 去掉刀版尺寸数字与 U+FFFD 后 live_chars ≥ 80（40–79 且非转曲也算活字）
-# outlined: live_chars < 40 且 drawings ≥ 400（转曲：几乎无 text object、路径 2000–7000）
+# live_text: 去掉刀版尺寸数字与 U+FFFD 后 live_chars ≥ 80（40–79 且路径不密集也算活字）
+# outlined: live_chars < 80 且 drawings ≥ 400（转曲：几乎无 text object、路径 2000–7000）
 # image: 几乎无活字且 drawings 不像转曲（大图铺满 / 矢量很少）
-# 文档级：多页取更「无字」的一档；outlined/image 优先于 live_text；outlined+image 为 mixed
+# 文档级：各页模式不一致即 mixed；具体 OCR 路由仍按页模式决定
 LIVE_TEXT_MIN_CHARS = 80
 OUTLINED_MAX_LIVE_CHARS = 40
 OUTLINED_MIN_DRAWINGS = 400
@@ -48,7 +48,7 @@ _PUBLIC_KEYS = ("mode", "pages", "live_chars", "drawings", "images", "warning")
 def classify_page(live_chars: int, drawings: int) -> PageMode:
     if live_chars >= LIVE_TEXT_MIN_CHARS:
         return "live_text"
-    if live_chars < OUTLINED_MAX_LIVE_CHARS and drawings >= OUTLINED_MIN_DRAWINGS:
+    if drawings >= OUTLINED_MIN_DRAWINGS:
         return "outlined"
     if live_chars < OUTLINED_MAX_LIVE_CHARS:
         return "image"
@@ -61,11 +61,6 @@ def classify_document(page_modes: list[str]) -> DocMode:
     uniq = set(page_modes)
     if len(uniq) == 1:
         return page_modes[0]  # type: ignore[return-value]
-    textless = uniq - {"live_text"}
-    if textless == {"outlined"}:
-        return "outlined"
-    if textless == {"image"}:
-        return "image"
     return "mixed"
 
 

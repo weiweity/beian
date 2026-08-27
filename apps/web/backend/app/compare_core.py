@@ -402,8 +402,8 @@ def run_excel_pdf_job(
     surface_b_label: str = "膜袋",
 ) -> dict[str, Any]:
     """
-    Text Verification 轻量版（tvt-lite-1.5）：
-    probability · zone 路由 · 码类硬路径 · 行合并 · 疑点分桶 · 金标评测
+    Text Verification 2.0：
+    PDF 分型 · 按页选源 · 单 OCR 引擎 · 区域路由 · 单钉证据 · 金标评测
     """
     tdir = UPLOADS / tid
     tdir.mkdir(parents=True, exist_ok=True)
@@ -515,8 +515,7 @@ def run_excel_pdf_job(
         "label_b": (secondary.get("surface") if secondary else None) or surface_b_label,
         "disclaimer": (
             "AI 仅标疑点，不构成过审结论。禁止一键全部通过。"
-            " 引擎 tvt-lite-1.5：probability·zone路由·码类硬路径·行合并·疑点分桶。"
-            " VLM 第三层漏字确认请点「漏字确认」。"
+            " 引擎 tvt-lite-2.0：活字直接读取 PDF，转曲或图稿按页单次 OCR，证据框按区域收钉。"
         ),
         "pages": pages,
         "pages_b": pages_b,
@@ -526,6 +525,7 @@ def run_excel_pdf_job(
         "text_source": primary.get("text_source"),
         "has_pdf_text_layer": primary.get("has_layer"),
         "ingest": primary.get("ingest"),
+        "pack_layout": primary.get("pack_layout"),
         "pack_profile": prof,
         "layout_zones": primary.get("layout_zones"),
         "surfaces": [
@@ -573,7 +573,9 @@ def run_excel_pdf_job(
             "layout_zones": True,
             "inci_normalize": True,
             "multi_surface": bool(secondary),
-            "vlm_typo_layer": "on_demand",
+            "pdf_ingest": "page_classified",
+            "ocr_policy": "single_engine_non_live_pages",
+            "vlm_typo_layer": "disabled",
         },
         "audit": [],
         "actor": "审核员",
