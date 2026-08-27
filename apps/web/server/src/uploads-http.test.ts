@@ -373,6 +373,116 @@ describe("upload then start", () => {
     }
   });
 
+  it("旧 multipart 与分片会话共用两路上传配额", async () => {
+    const owner = "ou_shared_upload_slots";
+    const createdIds: string[] = [];
+    const create = async (client: string) => {
+      const response = await app.request("/api/uploads/sessions", {
+        method: "POST",
+        headers: { ...authHeader(owner), "content-type": "application/json" },
+        body: JSON.stringify({
+          client_upload_id: client,
+          files: [{ field: "ai", name: `${client}.ai`, bytes: 8, last_modified: 1 }],
+        }),
+      });
+      if (response.status === 200) {
+        const body = (await response.json()) as { upload: { id: string } };
+        createdIds.push(body.upload.id);
+      }
+      return response;
+    };
+
+    try {
+      assert.equal((await create("client-shared-first")).status, 200);
+      assert.equal((await create("client-shared-second")).status, 200);
+      const legacy = new FormData();
+      legacy.set("client_upload_id", "client-legacy-third");
+      legacy.set("file", new File(["%!PS-1.0"], "legacy-third.ai"));
+      const blocked = await app.request("/api/uploads", {
+        method: "POST",
+        headers: authHeader(owner),
+        body: legacy,
+      });
+      assert.equal(blocked.status, 429);
+      assert.deepEqual(await blocked.json(), { detail: "同时最多上传 2 份，请等其中一份完成后再试" });
+    } finally {
+      for (const id of createdIds) {
+        await app.request(`/api/uploads/${id}`, { method: "DELETE", headers: authHeader(owner) });
+      }
+    }
+  });
+
+  it("旧 multipart 正在收正文时会阻止第三个分片会话", async () => {
+    const owner = "ou_shared_legacy_active";
+    const leased = await app.request("/api/uploads/sessions", {
+      method: "POST",
+      headers: { ...authHeader(owner), "content-type": "application/json" },
+      body: JSON.stringify({
+        client_upload_id: "client-shared-lease",
+        files: [{ field: "ai", name: "leased.ai", bytes: 8, last_modified: 1 }],
+      }),
+    });
+    assert.equal(leased.status, 200);
+    const leasedId = ((await leased.json()) as { upload: { id: string } }).upload.id;
+    const boundary = "beian-slow-legacy-shared-slot";
+    const encoder = new TextEncoder();
+    let releaseBody!: () => void;
+    let bodyReleased = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(
+            [
+              `--${boundary}`,
+              'Content-Disposition: form-data; name="client_upload_id"',
+              "",
+              "client-legacy-active",
+              `--${boundary}`,
+              'Content-Disposition: form-data; name="file"; filename="legacy-active.ai"',
+              "Content-Type: application/postscript",
+              "",
+              "%!PS-1.0",
+            ].join("\r\n"),
+          ),
+        );
+        releaseBody = () => {
+          if (bodyReleased) return;
+          bodyReleased = true;
+          controller.enqueue(encoder.encode(`\r\n--${boundary}--\r\n`));
+          controller.close();
+        };
+      },
+    });
+    const request = new Request("http://localhost/api/uploads", {
+      method: "POST",
+      headers: { ...authHeader(owner), "content-type": `multipart/form-data; boundary=${boundary}` },
+      body,
+      duplex: "half",
+    } as RequestInit & { duplex: "half" });
+    const legacyPromise = Promise.resolve(app.request(request));
+
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      const third = await app.request("/api/uploads/sessions", {
+        method: "POST",
+        headers: { ...authHeader(owner), "content-type": "application/json" },
+        body: JSON.stringify({
+          client_upload_id: "client-shared-blocked",
+          files: [{ field: "ai", name: "blocked.ai", bytes: 8, last_modified: 1 }],
+        }),
+      });
+      assert.equal(third.status, 429);
+      assert.deepEqual(await third.json(), { detail: "同时最多上传 2 份，请等其中一份完成后再试" });
+      releaseBody();
+      assert.equal((await legacyPromise).status, 200);
+    } finally {
+      releaseBody?.();
+      await legacyPromise.catch(() => undefined);
+      await app.request(`/api/uploads/${leasedId}`, { method: "DELETE", headers: authHeader(owner) });
+      await app.request("/api/uploads/client-legacy-active", { method: "DELETE", headers: authHeader(owner) });
+    }
+  });
+
   it("requires a paused resumable session to reacquire a channel before writing", async () => {
     const owner = "ou_chunk_reacquire";
     const createdIds: string[] = [];
@@ -571,6 +681,33 @@ describe("upload then start", () => {
     assert.deepEqual(await listed.json(), []);
   });
 
+  it("响应丢失时可按 client_upload_id 放弃未知服务端 ID 的会话", async () => {
+    const owner = "ou_discard_by_client";
+    const clientUploadId = "client-discard-response-lost";
+    const created = await app.request("/api/uploads/sessions", {
+      method: "POST",
+      headers: { ...authHeader(owner), "content-type": "application/json" },
+      body: JSON.stringify({
+        client_upload_id: clientUploadId,
+        files: [{ field: "ai", name: "response-lost.ai", bytes: 8, last_modified: 1 }],
+      }),
+    });
+    assert.equal(created.status, 200);
+
+    const removed = await app.request(`/api/uploads/${clientUploadId}`, {
+      method: "DELETE",
+      headers: authHeader(owner),
+    });
+    assert.deepEqual(await removed.json(), { ok: true });
+    const listed = await app.request("/api/uploads", { headers: authHeader(owner) });
+    assert.deepEqual(await listed.json(), []);
+    const repeated = await app.request(`/api/uploads/${clientUploadId}`, {
+      method: "DELETE",
+      headers: authHeader(owner),
+    });
+    assert.deepEqual(await repeated.json(), { ok: true, already_deleted: true });
+  });
+
   it("分片请求间隙仍在 health 保持发版租约，删除会话后立即释放", async () => {
     const owner = "ou_release_lease";
     const before = await app.request("/api/health", { headers: { host: "127.0.0.1:8787" } });
@@ -596,6 +733,65 @@ describe("upload then start", () => {
     assert.deepEqual(await removed.json(), { ok: true });
     const released = await app.request("/api/health", { headers: { host: "127.0.0.1:8787" } });
     assert.equal(((await released.json()) as { uploads: { waiting: number } }).uploads.waiting, beforeWaiting);
+  });
+
+  it("慢分片从读取正文开始就在 health 占位，发版不能误判空闲", async () => {
+    const owner = "ou_slow_chunk_health";
+    const chunk = Buffer.from("x");
+    const before = await app.request("/api/health", { headers: { host: "127.0.0.1:8787" } });
+    const beforeUploads = ((await before.json()) as { uploads: { active: number; waiting: number } }).uploads;
+    const created = await app.request("/api/uploads/sessions", {
+      method: "POST",
+      headers: { ...authHeader(owner), "content-type": "application/json" },
+      body: JSON.stringify({
+        client_upload_id: "client-slow-chunk-health",
+        files: [{ field: "ai", name: "slow.ai", bytes: chunk.length, last_modified: 1 }],
+      }),
+    });
+    assert.equal(created.status, 200);
+    const uploadId = ((await created.json()) as { upload: { id: string } }).upload.id;
+    const sessionPath = join(process.env.WB_DATA_DIR!, "uploads", "sessions", uploadId, "session.json");
+    const session = JSON.parse(readFileSync(sessionPath, "utf8")) as Record<string, unknown>;
+    writeFileSync(sessionPath, JSON.stringify({ ...session, updated_at: new Date(Date.now() - 3 * 60 * 1000).toISOString() }));
+
+    let closeBody!: () => void;
+    let bodyClosed = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(chunk);
+        closeBody = () => {
+          if (bodyClosed) return;
+          bodyClosed = true;
+          controller.close();
+        };
+      },
+    });
+    const request = new Request(`http://localhost/api/uploads/sessions/${uploadId}/files/ai`, {
+      method: "PUT",
+      headers: {
+        ...authHeader(owner),
+        "content-type": "application/octet-stream",
+        "x-upload-offset": "0",
+        "x-upload-sha256": createHash("sha256").update(chunk).digest("hex"),
+      },
+      body,
+      duplex: "half",
+    } as RequestInit & { duplex: "half" });
+    const writing = Promise.resolve(app.request(request));
+
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      const held = await app.request("/api/health", { headers: { host: "127.0.0.1:8787" } });
+      const heldUploads = ((await held.json()) as { uploads: { active: number; waiting: number } }).uploads;
+      assert.equal(heldUploads.active, beforeUploads.active + 1);
+      assert.equal(heldUploads.waiting, beforeUploads.waiting);
+      closeBody();
+      assert.equal((await writing).status, 200);
+    } finally {
+      closeBody?.();
+      await writing.catch(() => undefined);
+      await app.request(`/api/uploads/${uploadId}`, { method: "DELETE", headers: authHeader(owner) });
+    }
   });
 
   it("rejects an oversized multipart body before parsing it", async () => {

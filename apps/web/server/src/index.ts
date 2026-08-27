@@ -85,20 +85,18 @@ import {
   completeUploadSession,
   consumeReceipt,
   createUploadAdmission,
+  createUploadCoordinator,
   discardPendingUpload,
   discardReceipt,
   listPendingUploads,
   loadReceipt,
   MAX_UPLOAD_BODY_BYTES,
   purgeReceiptFiles,
-  recentUploadSessionCount,
   receiptOwner,
   restoreReceipt,
-  startUploadSession,
   stageMultipart,
   tooLarge,
   underReceiptDir,
-  UPLOAD_CONCURRENCY,
   UPLOAD_CHUNK_BYTES,
   UPLOAD_SESSION_METADATA_BYTES,
   UPLOAD_BODY_TOO_LARGE,
@@ -132,7 +130,7 @@ export const SERVER_HTTP_OPTIONS = {
   headersTimeout: 60_000,
   requestTimeout: 16 * 60 * 1000,
 } as const;
-const uploadAdmission = createUploadAdmission(UPLOAD_CONCURRENCY);
+const uploadCoordinator = createUploadCoordinator();
 // 对红仍用 Hono parseBody，单独保持单槽；新稿上传已改为双通道流式落盘。
 const reworkUploadAdmission = createUploadAdmission(1);
 
@@ -220,14 +218,13 @@ app.onError((err, c) => {
 });
 
 function liveStatus() {
-  const primaryUploads = uploadAdmission.snapshot();
+  const primaryUploads = uploadCoordinator.snapshot();
   const reworkUploads = reworkUploadAdmission.snapshot();
-  const leasedUploadSessions = recentUploadSessionCount();
   return {
     jobs: queueSnapshot(),
     uploads: {
       active: primaryUploads.active + reworkUploads.active,
-      waiting: primaryUploads.waiting + reworkUploads.waiting + leasedUploadSessions,
+      waiting: primaryUploads.waiting + reworkUploads.waiting,
     },
     feishu_notify:
       /^(1|true|yes|on)$/i.test(getSetting("FEISHU_ENABLED")) && Boolean(getSetting("FEISHU_OPEN_ID")),
@@ -404,7 +401,7 @@ app.post(
     const s = need(c, "create");
     try {
       const body = await c.req.json();
-      return c.json({ upload: startUploadSession(receiptOwner(s), body) });
+      return c.json({ upload: uploadCoordinator.start(receiptOwner(s), body) });
     } catch (err) {
       boom(err);
     }
@@ -413,6 +410,10 @@ app.post(
 
 app.put(
   "/api/uploads/sessions/:id/files/:field",
+  async (c, next) => {
+    need(c, "create");
+    await uploadCoordinator.runSession(c.req.param("id"), next);
+  },
   bodyLimit({
     maxSize: UPLOAD_CHUNK_BYTES,
     onError: (c) => c.json({ detail: "上传分片超过 1 MB" }, 413),
@@ -423,8 +424,13 @@ app.put(
       const chunk = Buffer.from(await c.req.arrayBuffer());
       const offset = Number(c.req.header("x-upload-offset") || "NaN");
       const sha256 = c.req.header("x-upload-sha256") || "";
-      const upload = await uploadAdmission.run(async () =>
-        appendUploadChunk(c.req.param("id"), receiptOwner(s), c.req.param("field"), offset, chunk, sha256),
+      const upload = appendUploadChunk(
+        c.req.param("id"),
+        receiptOwner(s),
+        c.req.param("field"),
+        offset,
+        chunk,
+        sha256,
       );
       return c.json({ upload });
     } catch (err) {
@@ -436,7 +442,9 @@ app.put(
 app.post("/api/uploads/sessions/:id/complete", async (c) => {
   const s = need(c, "create");
   try {
-    const upload = await uploadAdmission.run(async () => completeUploadSession(c.req.param("id"), receiptOwner(s)));
+    const upload = await uploadCoordinator.runSession(c.req.param("id"), async () =>
+      completeUploadSession(c.req.param("id"), receiptOwner(s)),
+    );
     return c.json({ upload });
   } catch (err) {
     boom(err);
@@ -447,7 +455,7 @@ app.post(
   "/api/uploads",
   async (c, next) => {
     need(c, "create");
-    await uploadAdmission.run(next);
+    await uploadCoordinator.runLegacy(next);
   },
   async (c) => {
     const s = need(c, "create");

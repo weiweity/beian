@@ -69,6 +69,13 @@ export type UploadSession = {
   files: UploadSessionFile[];
 };
 
+export type UploadSessionStartInput = {
+  client_upload_id?: unknown;
+  product_name?: unknown;
+  pack_surface?: unknown;
+  files?: { field?: unknown; name?: unknown; bytes?: unknown; last_modified?: unknown }[];
+};
+
 const TTL_MS = 30 * 60 * 1000;
 export const MAX_UPLOAD_FILES_BYTES = 100 * 1024 * 1024;
 /** 给 multipart boundary、字段名和文件名留协议开销；文件本身仍严格限 100 MiB。 */
@@ -87,6 +94,13 @@ const SINGLE_UPLOAD_BUSY = "已有文件正在上传，请等它完成后再试"
 
 type UploadAdmission = {
   run<T>(work: () => Promise<T>): Promise<T>;
+  snapshot(): { active: number; waiting: number };
+};
+
+export type UploadCoordinator = {
+  start(owner: string, input: UploadSessionStartInput): ListedUploadReceipt;
+  runSession<T>(sessionId: string, work: () => Promise<T>): Promise<T>;
+  runLegacy<T>(work: () => Promise<T>): Promise<T>;
   snapshot(): { active: number; waiting: number };
 };
 
@@ -119,6 +133,72 @@ export function createUploadAdmission(
       }
     },
     snapshot: () => ({ active, waiting: 0 }),
+  };
+}
+
+/**
+ * 新旧上传共用同一组两路通道。分片会话在请求间隙用磁盘租约占位；当前
+ * HTTP 请求在收正文前占位。同一分片会话的第一条活动请求复用自己的租约，
+ * 并发的第二条请求才额外占一格，避免把租约和请求重复计算。
+ */
+export function createUploadCoordinator(limit = UPLOAD_CONCURRENCY): UploadCoordinator {
+  if (!Number.isInteger(limit) || limit < 1) throw new Error("上传并发数必须大于 0");
+  const claims = new Map<symbol, string | undefined>();
+
+  function occupancy(leases: Set<string>, nextSessionId?: string): number {
+    let occupied = leases.size;
+    const claimsPerLeasedSession = new Map<string, number>();
+    for (const sessionId of [...claims.values(), nextSessionId]) {
+      if (sessionId && leases.has(sessionId)) {
+        const prior = claimsPerLeasedSession.get(sessionId) || 0;
+        if (prior > 0) occupied += 1;
+        claimsPerLeasedSession.set(sessionId, prior + 1);
+      } else {
+        occupied += 1;
+      }
+    }
+    return occupied;
+  }
+
+  function acquire(sessionId?: string): () => void {
+    const leases = recentUploadSessionIds();
+    if (occupancy(leases, sessionId) > limit) throw uploadFailure(UPLOAD_BUSY, 429);
+    const token = Symbol("upload-claim");
+    claims.set(token, sessionId);
+    return () => {
+      claims.delete(token);
+    };
+  }
+
+  async function run<T>(sessionId: string | undefined, work: () => Promise<T>): Promise<T> {
+    const release = acquire(sessionId);
+    try {
+      return await work();
+    } finally {
+      release();
+    }
+  }
+
+  return {
+    start(owner, input) {
+      let release: (() => void) | undefined;
+      try {
+        return startUploadSession(owner, input, () => {
+          release = acquire();
+        });
+      } finally {
+        release?.();
+      }
+    },
+    runSession: (sessionId, work) => run(sessionId, work),
+    runLegacy: (work) => run(undefined, work),
+    snapshot() {
+      const leases = recentUploadSessionIds();
+      const claimedLeases = new Set(
+        [...claims.values()].filter((sessionId): sessionId is string => Boolean(sessionId && leases.has(sessionId))),
+      );
+      return { active: claims.size, waiting: Math.max(0, leases.size - claimedLeases.size) };
+    },
   };
 }
 
@@ -693,10 +773,10 @@ export function sweepUploadSessions(): void {
  * 空隙误判为空闲。最近更新的持久化会话因此持有一个短租约；暂停后不会卡住
  * 整个 30 分钟 TTL，正常完成或放弃则会立即释放。
  */
-export function recentUploadSessionCount(maxAgeMs = UPLOAD_RELEASE_LEASE_MS): number {
+function recentUploadSessionIds(maxAgeMs = UPLOAD_RELEASE_LEASE_MS): Set<string> {
   sweepUploadSessions();
   const now = Date.now();
-  let count = 0;
+  const found = new Set<string>();
   for (const id of allSessionIds()) {
     try {
       const session = JSON.parse(readFileSync(sessionPath(id), "utf8")) as UploadSession;
@@ -707,13 +787,17 @@ export function recentUploadSessionCount(maxAgeMs = UPLOAD_RELEASE_LEASE_MS): nu
         Number.isFinite(updatedAt) &&
         now - updatedAt <= maxAgeMs
       ) {
-        count += 1;
+        found.add(id);
       }
     } catch {
       // sweep 会在下次读取清理损坏会话；这里只提供发版闸门快照。
     }
   }
-  return count;
+  return found;
+}
+
+export function recentUploadSessionCount(maxAgeMs = UPLOAD_RELEASE_LEASE_MS): number {
+  return recentUploadSessionIds(maxAgeMs).size;
 }
 
 function uploadSessionHasLease(session: UploadSession, maxAgeMs = UPLOAD_RELEASE_LEASE_MS): boolean {
@@ -788,12 +872,8 @@ function sessionMetadataMatches(session: UploadSession, files: UploadSessionFile
 
 export function startUploadSession(
   owner: string,
-  input: {
-    client_upload_id?: unknown;
-    product_name?: unknown;
-    pack_surface?: unknown;
-    files?: { field?: unknown; name?: unknown; bytes?: unknown; last_modified?: unknown }[];
-  },
+  input: UploadSessionStartInput,
+  reserveNewSession?: () => void,
 ): ListedUploadReceipt {
   const clientUploadId = String(input.client_upload_id || "").trim();
   if (!/^[a-zA-Z0-9_-]{8,80}$/.test(clientUploadId)) throw uploadFailure("上传标识不正确");
@@ -822,8 +902,9 @@ export function startUploadSession(
     return listedSession(existing);
   }
 
-  assertUploadSessionLeaseAvailable();
   assertReceiptCapacity(owner, files.reduce((sum, file) => sum + file.bytes, 0));
+  if (reserveNewSession) reserveNewSession();
+  else assertUploadSessionLeaseAvailable();
   const id = newReceiptId();
   const dir = sessionDir(id);
   mkdirSync(sessionsDir(), { recursive: true });
@@ -1177,7 +1258,22 @@ export function discardReceipt(id: string, owner: string): boolean {
 }
 
 export function discardPendingUpload(id: string, owner: string): boolean {
-  return discardReceipt(id, owner) || discardUploadSession(id, owner);
+  if (discardReceipt(id, owner) || discardUploadSession(id, owner)) return true;
+  if (!/^[a-zA-Z0-9_-]{8,80}$/.test(id)) return false;
+
+  let removed = false;
+  for (const receipt of listReceipts(owner)) {
+    if (receipt.client_upload_id === id) removed = discardReceipt(receipt.id, owner) || removed;
+  }
+  sweepUploadSessions();
+  for (const sessionId of allSessionIds()) {
+    const session = loadUploadSession(sessionId, owner);
+    if (session?.client_upload_id === id) {
+      retireUploadSession(sessionId);
+      removed = true;
+    }
+  }
+  return removed;
 }
 
 export function tooLarge(bytes: number): boolean {

@@ -15,6 +15,7 @@ export type PendingUploadItem = {
   at: string;
   receipt: string | null;
   error: string | null;
+  isLocal: boolean;
 };
 
 export type PendingUploadOpenAction = "active" | "resume" | "start";
@@ -44,7 +45,9 @@ export function shouldReconcileUpload(
   }
   return !receipts.some(
     (receipt) =>
-      receipt.kind === kind && receipt.client_upload_id === local.clientUploadId,
+      receipt.kind === kind &&
+      receipt.client_upload_id === local.clientUploadId &&
+      receipt.phase === "ready",
   );
 }
 
@@ -78,13 +81,16 @@ export function pendingUploadItems(
       )
     : undefined;
   if (local && local.kind === kind && ["uploading", "retrying", "confirming", "paused", "ready", "failed"].includes(local.phase)) {
-    const receipt = matchedReceipt?.id || local.receipt || null;
-    const files = matchedReceipt?.files || local.files;
     const recoveredReady = matchedReceipt?.phase === "ready";
-    const recoveredPaused = matchedReceipt?.phase === "paused";
-    const phase = recoveredReady ? "ready" : recoveredPaused && !uploadIsLocallyBusy(local.phase) ? "paused" : local.phase;
-    const received = matchedReceipt?.received ?? local.loaded;
-    const total = matchedReceipt?.bytes ?? local.total;
+    const recoveredPaused =
+      matchedReceipt?.phase === "paused" && local.phase !== "ready" && !uploadIsLocallyBusy(local.phase);
+    const useRemote = recoveredReady || recoveredPaused;
+    const receipt = recoveredReady || recoveredPaused ? matchedReceipt.id : local.receipt || null;
+    const files = useRemote ? matchedReceipt.files : local.files;
+    const phase = recoveredReady ? "ready" : recoveredPaused ? "paused" : local.phase;
+    const received = useRemote ? matchedReceipt.received : local.loaded;
+    const total = useRemote ? matchedReceipt.bytes : local.total;
+    if (matchedReceipt) seen.add(matchedReceipt.id);
     if (receipt) seen.add(receipt);
     out.push({
       key: receipt ? `receipt:${receipt}` : `active:${kind}`,
@@ -95,9 +101,10 @@ export function pendingUploadItems(
       packSurface: local.packSurface || matchedReceipt?.pack_surface || null,
       files,
       pct: total > 0 ? Math.round((received / total) * 100) : local.pct,
-      at: matchedReceipt?.created_at || local.createdAt,
+      at: useRemote ? matchedReceipt.created_at : local.createdAt,
       receipt,
-      error: recoveredReady ? null : local.error || null,
+      error: phase === "ready" ? null : local.error || null,
+      isLocal: true,
     });
   }
   for (const receipt of receipts) {
@@ -114,6 +121,7 @@ export function pendingUploadItems(
       at: receipt.created_at,
       receipt: receipt.id,
       error: null,
+      isLocal: false,
     });
   }
   return out.filter((item) =>
@@ -153,6 +161,7 @@ export function pendingUploadCard(item: PendingUploadItem, readyLabel: string): 
  */
 export function pendingUploadOpenAction(item: PendingUploadItem): PendingUploadOpenAction {
   if (uploadIsLocallyBusy(item.phase)) return "active";
+  if (item.isLocal && item.phase !== "ready") return "active";
   if (item.phase !== "ready") return item.receipt ? "resume" : "active";
   if (!item.receipt) return "active";
   return item.productName ? "start" : "resume";

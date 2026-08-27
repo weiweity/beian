@@ -137,7 +137,7 @@ describe("uploadDesk", () => {
     assert.deepEqual(items.map((item) => item.phase), ["failed", "ready"]);
   });
 
-  it("只在等待确认或失败且没有同一上传回执时轮询恢复", () => {
+  it("partial 会话继续轮询，只有完整回执才结束协调", () => {
     const confirming: UploadSnapshot = {
       ...local,
       phase: "confirming",
@@ -150,6 +150,12 @@ describe("uploadDesk", () => {
         { ...restored, client_upload_id: "client-reconcile" },
       ]),
       false,
+    );
+    assert.equal(
+      shouldReconcileUpload("compare", confirming, [
+        { ...restored, phase: "paused", received: 10, client_upload_id: "client-reconcile" },
+      ]),
+      true,
     );
     assert.equal(shouldReconcileUpload("mockup", confirming, []), false);
     assert.equal(shouldReconcileUpload("compare", { ...confirming, phase: "ready" }, []), false);
@@ -167,7 +173,7 @@ describe("uploadDesk", () => {
     assert.equal(calls, 1);
   });
 
-  it("只有完整回执可以开工，暂停上传统一回恢复页", () => {
+  it("只有完整回执可以开工，本地暂停保留文件句柄，远端暂停回恢复页", () => {
     const [ready] = pendingUploadItems("compare", local, []);
     assert.ok(ready);
     assert.equal(pendingUploadOpenAction(ready), "start");
@@ -186,6 +192,47 @@ describe("uploadDesk", () => {
     ]);
     assert.ok(paused);
     assert.equal(pendingUploadOpenAction(paused), "resume");
+
+    const localClientId = "client-local-paused";
+    const [localPaused] = pendingUploadItems(
+      "compare",
+      {
+        ...local,
+        phase: "paused",
+        receipt: undefined,
+        uploadId: paused.receipt || undefined,
+        clientUploadId: localClientId,
+      },
+      [
+        {
+          ...restored,
+          id: paused.receipt || restored.id,
+          phase: "paused",
+          client_upload_id: localClientId,
+          received: 18,
+        },
+      ],
+    );
+    assert.ok(localPaused);
+    assert.equal(pendingUploadOpenAction(localPaused), "active");
+  });
+
+  it("本地 ready 不会被看板缓存的旧 partial 快照降级", () => {
+    const ready = { ...local, clientUploadId: "client-ready-after-background" };
+    const [item] = pendingUploadItems("compare", ready, [
+      {
+        ...restored,
+        id: ready.receipt!,
+        phase: "paused",
+        received: 9,
+        client_upload_id: ready.clientUploadId,
+      },
+    ]);
+    assert.ok(item);
+    assert.equal(item.phase, "ready");
+    assert.equal(item.pct, 100);
+    assert.equal(item.receipt, ready.receipt);
+    assert.equal(pendingUploadOpenAction(item), "start");
   });
 
   it("本机仍在上传或等回执时保持当前工作台，不重挂载恢复页", () => {

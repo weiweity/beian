@@ -296,6 +296,8 @@ describe("uploadStore", () => {
     store.replaceFile("mockup", "ai", ai("失败稿.ai"));
     fake.calls[0]?.reject(new Error("上传失败"));
     await flush();
+    const failedClientId = store.get("mockup")?.clientUploadId;
+    assert.ok(failedClientId);
     assert.ok(store.get("mockup")?.files[0]?.file);
     await store.abandon("mockup");
     assert.equal(store.get("mockup"), null);
@@ -305,7 +307,21 @@ describe("uploadStore", () => {
     await flush();
     await store.abandon("mockup");
     assert.equal(store.get("mockup"), null);
-    assert.deepEqual(discarded, ["ffeeddccbbaa"]);
+    assert.deepEqual(discarded, [failedClientId, "ffeeddccbbaa"]);
+  });
+
+  it("服务端放弃失败时保留本地会话和文件，允许再次删除", async () => {
+    const fake = controlledTransport();
+    const store = createUploadStore(fake.transport, async () => {
+      throw new Error("删除暂存失败");
+    });
+    store.replaceFile("mockup", "ai", ai("待重试删除.ai"));
+    fake.calls[0]?.reject(new Error("上传失败"));
+    await flush();
+
+    await assert.rejects(store.abandon("mockup"), /删除暂存失败/);
+    assert.equal(store.get("mockup")?.files[0]?.name, "待重试删除.ai");
+    assert.ok(store.get("mockup")?.files[0]?.file);
   });
 
   it("超过 100 MB 立即拒绝，不创建网络请求", () => {

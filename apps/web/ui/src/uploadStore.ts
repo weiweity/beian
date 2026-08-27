@@ -376,7 +376,8 @@ export function createUploadStore(
 
     const savedField = current?.files.find((selected) => selected.field === field);
     const resuming = Boolean(current?.phase === "paused" && current.clientUploadId && sameBrowserFile(savedField, file));
-    const oldServerId = current?.receipt || current?.uploadId;
+    const oldServerId =
+      current?.receipt || current?.uploadId || (current && current.phase !== "draft" ? current.clientUploadId : undefined);
     if (oldServerId && !resuming) void discard(oldServerId).catch(() => undefined);
 
     // ready 后原始 File 已主动释放；若只保留另一栏的文件名，会看起来像选齐了，
@@ -445,9 +446,9 @@ export function createUploadStore(
     const current = state[kind];
     controllers[kind]?.abort();
     delete controllers[kind];
-    publish(kind, null);
-    const serverId = current?.receipt || current?.uploadId;
+    const serverId = current?.receipt || current?.uploadId || current?.clientUploadId;
     if (serverId) await discard(serverId);
+    if (state[kind]?.attempt === current?.attempt) publish(kind, null);
   }
 
   function recover(kind: UploadKind, receipt: PendingUploadReceipt): boolean {
