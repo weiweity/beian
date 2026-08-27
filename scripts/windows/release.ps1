@@ -329,9 +329,26 @@ Write-Host "pre-stop SHA=$preSha"
 $didCi = $false
 $didBuild = $false
 
+# Stop the WinSW service first. taskkill of the grandchild alone looks like a crash
+# and WinSW onfailure will respawn :8787 during merge/build.
+Write-Host "Stop-Service beian-server-8787 so WinSW onfailure does not respawn"
+$beianSvc = Get-Service -Name "beian-server-8787" -ErrorAction SilentlyContinue
+if ($beianSvc) {
+  Stop-Service -Name "beian-server-8787" -Force -ErrorAction SilentlyContinue
+  $stopped = $false
+  for ($w = 0; $w -lt 20; $w++) {
+    Start-Sleep -Seconds 1
+    $st = (Get-Service -Name "beian-server-8787" -ErrorAction SilentlyContinue).Status
+    if ($st -eq "Stopped") { $stopped = $true; break }
+  }
+  if (-not $stopped) {
+    Write-Host "Stop-Service 未在时限内 Stopped，继续清监听端口"
+  }
+}
+
 $pid8787 = Get-ListenerPid 8787
 if ($pid8787) {
-  Write-Host "stop :8787 tree pid=$pid8787 (taskkill /T /F /PID, not all node.exe)"
+  Write-Host "stop leftover :8787 tree pid=$pid8787 (taskkill /T /F /PID, not all node.exe)"
   & taskkill.exe /T /F /PID $pid8787 | Out-Null
   $freed = $false
   for ($w = 0; $w -lt 15; $w++) {
