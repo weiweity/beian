@@ -70,6 +70,17 @@ export type SyntheticReceipt = {
   kind: "compare" | "mockup";
 };
 
+type SyntheticUploadSession = {
+  id: string;
+  files: Array<{ field: string; name: string; bytes: number; received: number; last_modified?: number }>;
+  bytes: number;
+  created_at: string;
+  client_upload_id: string;
+  product_name?: string;
+  pack_surface?: string;
+  kind: "compare" | "mockup";
+};
+
 export type ApiCall = {
   method: string;
   path: string;
@@ -80,9 +91,12 @@ export type SyntheticApi = {
   tasks: SyntheticTask[];
   mockups: SyntheticMockup[];
   receipts: SyntheticReceipt[];
+  uploads: SyntheticUploadSession[];
   calls: ApiCall[];
   failDeletes: Set<string>;
   loseNextUploadResponse: boolean;
+  holdNextUploadComplete: boolean;
+  releaseHeldUpload?: () => void;
   unhandled: string[];
 };
 
@@ -185,94 +199,30 @@ export async function installHeldUploadTransport(
   page: Page,
   state: SyntheticApi,
 ): Promise<() => Promise<void>> {
-  await page.addInitScript(() => {
-    type HeldReceipt = {
-      receipt: string;
-      client_upload_id?: string;
-      files: Array<{ field: string; name: string; bytes: number }>;
-    };
-    type ReleaseWindow = Window & { __releaseE2EUpload?: () => HeldReceipt };
-    class HeldUploadRequest {
-      upload = { onprogress: null as ((event: ProgressEvent) => void) | null };
-      status = 0;
-      statusText = "";
-      responseText = "";
-      timeout = 0;
-      withCredentials = false;
-      onabort: ((event: ProgressEvent) => void) | null = null;
-      onerror: ((event: ProgressEvent) => void) | null = null;
-      onload: ((event: ProgressEvent) => void) | null = null;
-      ontimeout: ((event: ProgressEvent) => void) | null = null;
-      private aborted = false;
-
-      open() {
-        /* 只替代 E2E 页面的上传 XHR；其余 API 使用 fetch。 */
-      }
-
-      getResponseHeader(name: string) {
-        return name.toLowerCase() === "content-type" ? "application/json" : null;
-      }
-
-      send(body: Document | XMLHttpRequestBodyInit | null) {
-        const files: Array<{ field: string; name: string; bytes: number }> = [];
-        let clientUploadId: string | undefined;
-        let total = 0;
-        if (body instanceof FormData) {
-          for (const [field, value] of body.entries()) {
-            if (value instanceof File) {
-              files.push({ field, name: value.name, bytes: value.size });
-              total += value.size;
-            } else if (field === "client_upload_id") {
-              clientUploadId = String(value);
-            }
-          }
-        }
-        queueMicrotask(() => {
-          if (this.aborted) return;
-          this.upload.onprogress?.(
-            new ProgressEvent("progress", { lengthComputable: true, loaded: total, total }),
-          );
-        });
-        (window as ReleaseWindow).__releaseE2EUpload = () => {
-          if (this.aborted) throw new Error("合成上传已经中止");
-          const receipt = { receipt: "aeeeeeeeeeee", client_upload_id: clientUploadId, files };
-          this.status = 200;
-          this.statusText = "OK";
-          this.responseText = JSON.stringify(receipt);
-          this.onload?.(new ProgressEvent("load"));
-          return receipt;
-        };
-      }
-
-      abort() {
-        this.aborted = true;
-        this.onabort?.(new ProgressEvent("abort"));
-      }
-    }
-    window.XMLHttpRequest = HeldUploadRequest as unknown as typeof XMLHttpRequest;
-  });
+  state.holdNextUploadComplete = true;
   return async () => {
-    const receipt = await page.evaluate(() => {
-      const target = window as Window & {
-        __releaseE2EUpload?: () => {
-          receipt: string;
-          client_upload_id?: string;
-          files: Array<{ field: string; name: string; bytes: number }>;
-        };
-      };
-      if (!target.__releaseE2EUpload) throw new Error("合成上传还没有进入服务器确认阶段");
-      const result = target.__releaseE2EUpload();
-      delete target.__releaseE2EUpload;
-      return result;
-    });
-    state.receipts.push({
-      id: receipt.receipt,
-      client_upload_id: receipt.client_upload_id,
-      files: receipt.files,
-      bytes: receipt.files.reduce((sum, file) => sum + file.bytes, 0),
-      created_at: FIXED_TIME,
-      kind: "compare",
-    });
+    for (let i = 0; i < 100 && !state.releaseHeldUpload; i += 1) await page.waitForTimeout(10);
+    const release = state.releaseHeldUpload;
+    if (!release) throw new Error("合成上传还没有进入服务器确认阶段");
+    state.releaseHeldUpload = undefined;
+    release();
+  };
+}
+
+function readyUpload(receipt: SyntheticReceipt) {
+  return {
+    ...receipt,
+    files: receipt.files.map((file) => ({ ...file, received: file.bytes })),
+    received: receipt.bytes,
+    phase: "ready" as const,
+  };
+}
+
+function pausedUpload(upload: SyntheticUploadSession) {
+  return {
+    ...upload,
+    received: upload.files.reduce((sum, file) => sum + file.received, 0),
+    phase: "paused" as const,
   };
 }
 
@@ -305,7 +255,79 @@ async function installSyntheticApi(page: Page, state: SyntheticApi) {
       }
       if (method === "POST" && path === "/api/auth/logout") return json(route, { ok: true });
 
-      if (method === "GET" && path === "/api/uploads") return json(route, state.receipts);
+      if (method === "GET" && path === "/api/uploads") {
+        return json(route, [...state.receipts.map(readyUpload), ...state.uploads.map(pausedUpload)]);
+      }
+      if (method === "POST" && path === "/api/uploads/sessions") {
+        const data = (body || {}) as {
+          client_upload_id?: string;
+          product_name?: string;
+          pack_surface?: string;
+          files?: Array<{ field: string; name: string; bytes: number; last_modified?: number }>;
+        };
+        const completed = state.receipts.find((item) => item.client_upload_id === data.client_upload_id);
+        if (completed) return json(route, { upload: readyUpload(completed) });
+        const existing = state.uploads.find((item) => item.client_upload_id === data.client_upload_id);
+        if (existing) return json(route, { upload: pausedUpload(existing) });
+        const files = (data.files || []).map((file) => ({ ...file, received: 0 }));
+        if (!data.client_upload_id || !files.length) return json(route, { detail: "合成上传格式错误" }, 400);
+        const kind = files.some((file) => file.field === "excel" || file.field === "pdf") ? "compare" : "mockup";
+        const id = `${kind === "compare" ? "a" : "b"}${(++receiptSequence).toString(16).padStart(11, "0")}`;
+        const upload: SyntheticUploadSession = {
+          id,
+          files,
+          bytes: files.reduce((sum, file) => sum + file.bytes, 0),
+          created_at: FIXED_TIME,
+          client_upload_id: data.client_upload_id,
+          product_name: data.product_name,
+          pack_surface: data.pack_surface,
+          kind,
+        };
+        state.uploads.push(upload);
+        return json(route, { upload: pausedUpload(upload) });
+      }
+      const chunkPath = path.match(/^\/api\/uploads\/sessions\/([0-9a-f]{12})\/files\/(excel|pdf|ai)$/);
+      if (method === "PUT" && chunkPath) {
+        const upload = state.uploads.find((item) => item.id === chunkPath[1]);
+        const file = upload?.files.find((item) => item.field === chunkPath[2]);
+        if (!upload || !file) return json(route, { detail: "合成上传会话不存在" }, 404);
+        const offset = Number(request.headers()["x-upload-offset"] || 0);
+        const bytes = request.postDataBuffer()?.byteLength || 0;
+        if (offset === file.received) file.received = Math.min(file.bytes, file.received + bytes);
+        return json(route, { upload: pausedUpload(upload) });
+      }
+      const completePath = path.match(/^\/api\/uploads\/sessions\/([0-9a-f]{12})\/complete$/);
+      if (method === "POST" && completePath) {
+        if (state.holdNextUploadComplete) {
+          state.holdNextUploadComplete = false;
+          await new Promise<void>((resolve) => {
+            state.releaseHeldUpload = resolve;
+          });
+          state.releaseHeldUpload = undefined;
+        }
+        const already = state.receipts.find((item) => item.id === completePath[1]);
+        if (already) return json(route, { upload: readyUpload(already) });
+        const upload = state.uploads.find((item) => item.id === completePath[1]);
+        if (!upload) return json(route, { detail: "合成上传会话不存在" }, 404);
+        if (upload.files.some((file) => file.received !== file.bytes)) {
+          return json(route, { detail: "合成文件还没有传完" }, 409);
+        }
+        const receipt: SyntheticReceipt = {
+          id: upload.id,
+          files: upload.files.map(({ field, name, bytes }) => ({ field, name, bytes })),
+          bytes: upload.bytes,
+          created_at: upload.created_at,
+          client_upload_id: upload.client_upload_id,
+          kind: upload.kind,
+        };
+        state.uploads = state.uploads.filter((item) => item.id !== upload.id);
+        state.receipts.push(receipt);
+        if (state.loseNextUploadResponse) {
+          state.loseNextUploadResponse = false;
+          return route.abort("connectionreset");
+        }
+        return json(route, { upload: readyUpload(receipt) });
+      }
       if (method === "POST" && path === "/api/uploads") {
         const parsed = multipartFiles(request);
         if (!parsed.files.length) {
@@ -337,9 +359,11 @@ async function installSyntheticApi(page: Page, state: SyntheticApi) {
       }
       const receiptDelete = path.match(/^\/api\/uploads\/([0-9a-f]{12})$/);
       if (method === "DELETE" && receiptDelete) {
-        const before = state.receipts.length;
+        const before = state.receipts.length + state.uploads.length;
         state.receipts = state.receipts.filter((item) => item.id !== receiptDelete[1]);
-        return json(route, { ok: state.receipts.length < before });
+        state.uploads = state.uploads.filter((item) => item.id !== receiptDelete[1]);
+        const removed = state.receipts.length + state.uploads.length < before;
+        return json(route, { ok: true, ...(removed ? {} : { already_deleted: true }) });
       }
 
       if (method === "POST" && path === "/api/tasks/start") {
@@ -465,9 +489,11 @@ export const test = base.extend<{ syntheticApi: SyntheticApi }>({
       tasks: [],
       mockups: [],
       receipts: [],
+      uploads: [],
       calls: [],
       failDeletes: new Set(),
       loseNextUploadResponse: false,
+      holdNextUploadComplete: false,
       unhandled: [],
     };
     await installSyntheticApi(page, state);

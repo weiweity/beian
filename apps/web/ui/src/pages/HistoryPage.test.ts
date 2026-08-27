@@ -5,6 +5,7 @@ import type { HistoryRow } from "./historyRows.js";
 
 function row(kind: HistoryRow["kind"], color: HistoryRow["color"] = "success"): HistoryRow {
   return {
+    resource: kind === "审稿台" ? "task" : "mockup",
     kind,
     id: `${kind}-1`,
     title: "花盒",

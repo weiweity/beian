@@ -1,6 +1,7 @@
 import { useEffect, useSyncExternalStore } from "react";
 import {
   api,
+  UploadPausedError,
   UPLOAD_TIMEOUT_MS,
   type PendingUploadReceipt,
   type UploadProgress,
@@ -10,12 +11,13 @@ import { UPLOAD_TOO_LARGE, bytesTooLarge } from "./uploadLimit";
 
 export type UploadKind = "compare" | "mockup";
 export type UploadField = "excel" | "pdf" | "ai";
-export type UploadPhase = "draft" | "uploading" | "confirming" | "ready" | "failed";
+export type UploadPhase = "draft" | "uploading" | "retrying" | "confirming" | "paused" | "ready" | "failed";
 
 export type UploadFile = {
   field: UploadField;
   name: string;
   bytes: number;
+  lastModified?: number;
   file?: File;
 };
 
@@ -30,7 +32,9 @@ export type UploadSnapshot = {
   loaded: number;
   total: number;
   receipt?: string;
+  uploadId?: string;
   clientUploadId?: string;
+  retryAttempt?: number;
   error?: string;
   createdAt: string;
 };
@@ -62,9 +66,16 @@ function orderedFiles(kind: UploadKind, files: UploadFile[]): UploadFile[] {
   });
 }
 
-function uploadForm(kind: UploadKind, files: UploadFile[], clientUploadId: string): FormData {
+function uploadForm(
+  kind: UploadKind,
+  files: UploadFile[],
+  clientUploadId: string,
+  meta: { productName: string; packSurface: string },
+): FormData {
   const fd = new FormData();
   fd.append("client_upload_id", clientUploadId);
+  fd.append("product_name", meta.productName);
+  fd.append("pack_surface", meta.packSurface);
   for (const selected of files) {
     if (!selected.file) continue;
     fd.append(kind === "mockup" ? "file" : selected.field, selected.file);
@@ -83,15 +94,17 @@ function errorMessage(err: unknown): string {
 }
 
 export function uploadPhaseLine(snapshot: UploadSnapshot, readyText: string): string {
-  if (snapshot.phase === "confirming") return "服务器确认中";
-  if (snapshot.phase === "uploading") return "正在上传";
+  if (snapshot.phase === "confirming") return "文件已传完，服务器正在确认";
+  if (snapshot.phase === "retrying") return `网络波动，正在第 ${snapshot.retryAttempt || 1} 次重新连接`;
+  if (snapshot.phase === "uploading") return "正在上传到服务器";
+  if (snapshot.phase === "paused") return snapshot.error || "上传已暂停，服务器已保存收到的部分";
   if (snapshot.phase === "ready") return readyText;
   if (snapshot.phase === "failed") return snapshot.error || "上传失败，请重新上传。";
   return "等待选齐文件";
 }
 
 export function uploadIsBusy(snapshot: UploadSnapshot | null): boolean {
-  return snapshot?.phase === "uploading" || snapshot?.phase === "confirming";
+  return snapshot?.phase === "uploading" || snapshot?.phase === "retrying" || snapshot?.phase === "confirming";
 }
 
 export function createUploadStore(
@@ -115,6 +128,102 @@ export function createUploadStore(
 
   function get(kind: UploadKind) {
     return state[kind];
+  }
+
+  function completeFiles(kind: UploadKind, files: UploadFile[]): boolean {
+    const byField = new Map(files.map((file) => [file.field, file]));
+    return FIELD_ORDER[kind].every((required) => byField.get(required)?.file instanceof File);
+  }
+
+  function sameBrowserFile(saved: UploadFile | undefined, file: File | null): boolean {
+    if (!saved || !file) return false;
+    return (
+      saved.name === file.name &&
+      saved.bytes === file.size &&
+      (saved.lastModified === undefined || saved.lastModified === file.lastModified)
+    );
+  }
+
+  function runUpload(kind: UploadKind, base: UploadSnapshot): UploadSnapshot {
+    const attempt = base.attempt;
+    const clientUploadId = base.clientUploadId || newClientUploadId(attempt);
+    const controller = new AbortController();
+    controllers[kind] = controller;
+    const uploading: UploadSnapshot = {
+      ...base,
+      clientUploadId,
+      phase: "uploading",
+      error: undefined,
+      retryAttempt: undefined,
+    };
+    publish(kind, uploading);
+
+    void transport(
+      uploadForm(kind, uploading.files, clientUploadId, {
+        productName: uploading.productName,
+        packSurface: uploading.packSurface,
+      }),
+      (progress) => {
+        const latest = state[kind];
+        if (!latest || latest.attempt !== attempt) return;
+        const pct = Math.max(0, Math.min(100, Math.round(progress.pct)));
+        const phase =
+          progress.phase || (pct >= 100 ? "confirming" : "uploading");
+        publish(kind, {
+          ...latest,
+          phase,
+          pct,
+          loaded: Math.max(0, progress.loaded),
+          total: Math.max(progress.total, latest.total),
+          uploadId: progress.uploadId || latest.uploadId,
+          retryAttempt: progress.retryAttempt,
+          error: undefined,
+        });
+      },
+      controller.signal,
+    )
+      .then((receipt) => {
+        const latest = state[kind];
+        if (!latest || latest.attempt !== attempt) return;
+        delete controllers[kind];
+        const totalBytes = receipt.files.reduce((sum, selected) => sum + selected.bytes, 0) || latest.total;
+        publish(kind, {
+          ...latest,
+          phase: "ready",
+          pct: 100,
+          loaded: totalBytes,
+          total: totalBytes,
+          receipt: receipt.receipt,
+          uploadId: receipt.receipt,
+          files: latest.files.map((selected) => {
+            const saved = receipt.files.find((item) => item.field === selected.field);
+            return {
+              field: selected.field,
+              name: saved?.name ?? selected.name,
+              bytes: saved?.bytes ?? selected.bytes,
+              lastModified: selected.lastModified,
+            };
+          }),
+          retryAttempt: undefined,
+          error: undefined,
+        });
+      })
+      .catch((err: unknown) => {
+        const latest = state[kind];
+        if (!latest || latest.attempt !== attempt) return;
+        delete controllers[kind];
+        const paused = err instanceof UploadPausedError;
+        publish(kind, {
+          ...latest,
+          phase: paused ? "paused" : "failed",
+          error: errorMessage(err),
+          receipt: undefined,
+          uploadId: paused ? err.uploadId || latest.uploadId : latest.uploadId,
+          retryAttempt: undefined,
+        });
+      });
+
+    return uploading;
   }
 
   function updateMeta(kind: UploadKind, meta: UploadMeta) {
@@ -153,17 +262,29 @@ export function createUploadStore(
     const attempt = ++sequence;
     controllers[kind]?.abort();
     delete controllers[kind];
-    if (current?.receipt) void discard(current.receipt).catch(() => undefined);
+
+    const savedField = current?.files.find((selected) => selected.field === field);
+    const resuming = Boolean(current?.phase === "paused" && current.clientUploadId && sameBrowserFile(savedField, file));
+    const oldServerId = current?.receipt || current?.uploadId;
+    if (oldServerId && !resuming) void discard(oldServerId).catch(() => undefined);
 
     // ready 后原始 File 已主动释放；若只保留另一栏的文件名，会看起来像选齐了，
     // 实际却无法重传。此时更换任一栏就明确开始一组新稿，只保留新选择。
-    const reusableFiles = current?.phase === "ready" ? [] : current?.files || [];
+    const reusableFiles = current?.phase === "ready" || (current?.phase === "paused" && !resuming) ? [] : current?.files || [];
     const byField = new Map(reusableFiles.map((selected) => [selected.field, selected]));
-    if (file) byField.set(field, { field, name: file.name, bytes: file.size, file });
+    if (file) {
+      byField.set(field, {
+        field,
+        name: file.name,
+        bytes: file.size,
+        lastModified: file.lastModified,
+        file,
+      });
+    }
     else byField.delete(field);
     const files = orderedFiles(kind, [...byField.values()]);
     const total = files.reduce((sum, selected) => sum + selected.bytes, 0);
-    const clientUploadId = newClientUploadId(attempt);
+    const clientUploadId = resuming ? current?.clientUploadId : newClientUploadId(attempt);
     const base: UploadSnapshot = {
       attempt,
       kind,
@@ -175,6 +296,7 @@ export function createUploadStore(
       loaded: 0,
       total,
       clientUploadId,
+      uploadId: resuming ? current?.uploadId : undefined,
       createdAt: new Date().toISOString(),
     };
 
@@ -184,71 +306,25 @@ export function createUploadStore(
       return failed;
     }
 
-    const complete = FIELD_ORDER[kind].every((required) => byField.get(required)?.file instanceof File);
-    if (!complete) {
-      publish(kind, base);
-      return base;
+    if (!completeFiles(kind, files)) {
+      const waiting = resuming
+        ? { ...base, phase: "paused" as const, error: "服务器保留了已上传部分，请重新选择同一文件后继续" }
+        : base;
+      publish(kind, waiting);
+      return waiting;
     }
-
-    const controller = new AbortController();
-    controllers[kind] = controller;
-    const uploading = { ...base, phase: "uploading" as const };
-    publish(kind, uploading);
-
-    void transport(
-      uploadForm(kind, files, clientUploadId),
-      (progress) => {
-        const latest = state[kind];
-        if (!latest || latest.attempt !== attempt) return;
-        const pct = Math.max(0, Math.min(100, Math.round(progress.pct)));
-        publish(kind, {
-          ...latest,
-          phase: pct >= 100 ? "confirming" : "uploading",
-          pct,
-          loaded: Math.max(0, progress.loaded),
-          total: Math.max(progress.total, latest.total),
-        });
-      },
-      controller.signal,
-    )
-      .then((receipt) => {
-        const latest = state[kind];
-        if (!latest || latest.attempt !== attempt) return;
-        delete controllers[kind];
-        const totalBytes = receipt.files.reduce((sum, selected) => sum + selected.bytes, 0) || latest.total;
-        publish(kind, {
-          ...latest,
-          phase: "ready",
-          pct: 100,
-          loaded: totalBytes,
-          total: totalBytes,
-          receipt: receipt.receipt,
-          files: latest.files.map((selected) => {
-            const saved = receipt.files.find((item) => item.field === selected.field);
-            // 回执已经落盘后，开工只需要 receipt。及时丢掉原始 File，避免待开工时
-            // 浏览器继续占着整份稿件内存；文件名和字节数仍用于页面恢复展示。
-            return {
-              field: selected.field,
-              name: saved?.name ?? selected.name,
-              bytes: saved?.bytes ?? selected.bytes,
-            };
-          }),
-          error: undefined,
-        });
-      })
-      .catch((err: unknown) => {
-        const latest = state[kind];
-        if (!latest || latest.attempt !== attempt) return;
-        delete controllers[kind];
-        publish(kind, { ...latest, phase: "failed", error: errorMessage(err), receipt: undefined });
-      });
-
-    return uploading;
+    return runUpload(kind, base);
   }
 
-  function clear(kind: UploadKind, receipt?: string) {
+  function retry(kind: UploadKind): UploadSnapshot | null {
     const current = state[kind];
-    if (receipt && current?.receipt !== receipt) return;
+    if (!current || !["paused", "failed"].includes(current.phase) || !completeFiles(kind, current.files)) return current;
+    return runUpload(kind, { ...current, attempt: ++sequence, phase: "uploading", error: undefined });
+  }
+
+  function clear(kind: UploadKind, serverId?: string) {
+    const current = state[kind];
+    if (serverId && current?.receipt !== serverId && current?.uploadId !== serverId) return;
     controllers[kind]?.abort();
     delete controllers[kind];
     publish(kind, null);
@@ -259,7 +335,8 @@ export function createUploadStore(
     controllers[kind]?.abort();
     delete controllers[kind];
     publish(kind, null);
-    if (current?.receipt) await discard(current.receipt);
+    const serverId = current?.receipt || current?.uploadId;
+    if (serverId) await discard(serverId);
   }
 
   function recover(kind: UploadKind, receipt: PendingUploadReceipt): boolean {
@@ -271,26 +348,64 @@ export function createUploadStore(
     ) {
       return false;
     }
+    if (receipt.phase === "paused" && uploadIsBusy(current)) return true;
     controllers[kind]?.abort();
     delete controllers[kind];
     const attempt = ++sequence;
     publish(kind, {
       ...current,
       attempt,
-      phase: "ready",
-      pct: 100,
-      loaded: receipt.bytes,
+      phase: receipt.phase,
+      pct: receipt.bytes > 0 ? Math.round((receipt.received / receipt.bytes) * 100) : 0,
+      loaded: receipt.received,
       total: receipt.bytes,
-      receipt: receipt.id,
+      receipt: receipt.phase === "ready" ? receipt.id : undefined,
+      uploadId: receipt.id,
       files: current.files.map((selected) => {
         const saved = receipt.files.find((item) => item.field === selected.field);
         return {
           field: selected.field,
           name: saved?.name ?? selected.name,
           bytes: saved?.bytes ?? selected.bytes,
+          lastModified: saved?.last_modified ?? selected.lastModified,
+          ...(receipt.phase === "paused" && selected.file ? { file: selected.file } : {}),
         };
       }),
-      error: undefined,
+      error:
+        receipt.phase === "paused"
+          ? completeFiles(kind, current.files)
+            ? "上传已暂停，服务器已保存收到的部分"
+            : "上传已暂停，服务器已保存收到的部分；请重新选择同一文件继续"
+          : undefined,
+      createdAt: receipt.created_at,
+    });
+    return true;
+  }
+
+  function restore(kind: UploadKind, receipt: PendingUploadReceipt): boolean {
+    if (receipt.kind !== kind) return false;
+    controllers[kind]?.abort();
+    delete controllers[kind];
+    const total = receipt.bytes;
+    publish(kind, {
+      attempt: ++sequence,
+      kind,
+      phase: receipt.phase,
+      files: receipt.files.map((file) => ({
+        field: file.field as UploadField,
+        name: file.name,
+        bytes: file.bytes,
+        lastModified: file.last_modified,
+      })),
+      productName: receipt.product_name || "",
+      packSurface: receipt.pack_surface || "carton",
+      pct: total > 0 ? Math.round((receipt.received / total) * 100) : 0,
+      loaded: receipt.received,
+      total,
+      receipt: receipt.phase === "ready" ? receipt.id : undefined,
+      uploadId: receipt.id,
+      clientUploadId: receipt.client_upload_id,
+      error: receipt.phase === "paused" ? "上传已暂停，服务器已保存收到的部分；请重新选择同一文件继续" : undefined,
       createdAt: receipt.created_at,
     });
     return true;
@@ -303,7 +418,7 @@ export function createUploadStore(
     }
   }
 
-  return { subscribe, get, updateMeta, replaceFile, clear, abandon, recover, abortAll };
+  return { subscribe, get, updateMeta, replaceFile, retry, clear, abandon, recover, restore, abortAll };
 }
 
 export const uploadStore = createUploadStore();
@@ -331,7 +446,7 @@ export function useUploadReceiptRecovery(
     if (
       !enabled ||
       !clientUploadId ||
-      (phase !== "confirming" && phase !== "failed")
+      !["confirming", "retrying", "paused", "failed"].includes(phase || "")
     ) {
       return;
     }
@@ -341,9 +456,10 @@ export function useUploadReceiptRecovery(
         .uploads()
         .then((pending) => {
           if (cancelled) return;
-          const receipt = pending.find(
-            (item) => item.kind === kind && item.client_upload_id === clientUploadId,
-          );
+          const receipt = pending.find((item) => {
+            if (item.kind !== kind || item.client_upload_id !== clientUploadId) return false;
+            return item.phase === "ready" || phase === "paused" || phase === "failed";
+          });
           if (receipt) uploadStore.recover(kind, receipt);
         })
         .catch(() => undefined);

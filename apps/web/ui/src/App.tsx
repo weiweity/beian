@@ -396,9 +396,15 @@ export function App() {
         {view === "history" ? (
           <Suspense fallback={<PaneFallback label="打开历史记录…" />}>
             <HistoryPage
+              canCreate={me.perms.includes("create")}
               canDelete={me.perms.includes("delete")}
               onOpenTask={(id) => goRoute({ view: "review", taskId: id })}
               onOpenMockup={(id) => goRoute({ view: "mockup", mockupId: id })}
+              onOpenUpload={(kind, receipt) =>
+                kind === "compare"
+                  ? goRoute({ view: "new", receipt: receipt || undefined })
+                  : goRoute({ view: "mockupNew", receipt: receipt || undefined })
+              }
             />
           </Suspense>
         ) : null}

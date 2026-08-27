@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -17,6 +18,7 @@ const {
   MAX_PENDING_RECEIPTS_PER_OWNER,
   MAX_UPLOAD_BODY_BYTES,
   stageBuffers,
+  UPLOAD_CHUNK_BYTES,
 } = await import("./uploads.js");
 
 function authHeader(openId = "ou_upload_http", name = "魏炜", role: "admin" | "reviewer" = "admin") {
@@ -119,11 +121,83 @@ describe("upload then start", () => {
       "files",
       "id",
       "kind",
+      "phase",
+      "received",
     ]);
     assert.equal(rows[0]?.kind, "mockup");
     assert.equal((rows[0] as { client_upload_id?: string })?.client_upload_id, "client-list-a");
     assert.equal(rows[0]?.bytes, rows[0]?.files.reduce((sum, file) => sum + file.bytes, 0));
-    assert.deepEqual(Object.keys(rows[0]?.files[0] || {}).sort(), ["bytes", "field", "name"]);
+    assert.deepEqual(Object.keys(rows[0]?.files[0] || {}).sort(), ["bytes", "field", "name", "received"]);
+  });
+
+  it("resumes idempotent chunks and exposes a partial upload until the receipt is ready", async () => {
+    const owner = "ou_chunk_resume";
+    const source = Buffer.concat([
+      Buffer.from("%PDF-1.7\n"),
+      Buffer.alloc(UPLOAD_CHUNK_BYTES + 11 - Buffer.byteLength("%PDF-1.7\n"), 65),
+    ]);
+    const create = () =>
+      app.request("/api/uploads/sessions", {
+        method: "POST",
+        headers: { ...authHeader(owner), "content-type": "application/json" },
+        body: JSON.stringify({
+          client_upload_id: "client-chunk-resume",
+          product_name: "胶原棒花盒",
+          files: [{ field: "ai", name: "box.ai", bytes: source.length, last_modified: 1234 }],
+        }),
+      });
+    const created = await create();
+    assert.equal(created.status, 200);
+    const first = (await created.json()) as { upload: { id: string; phase: string; received: number } };
+    assert.equal(first.upload.phase, "paused");
+    assert.equal(first.upload.received, 0);
+
+    const put = (offset: number, chunk: Buffer) => {
+      const body = Uint8Array.from(chunk).buffer;
+      return app.request(`/api/uploads/sessions/${first.upload.id}/files/ai`, {
+        method: "PUT",
+        headers: {
+          ...authHeader(owner),
+          "content-type": "application/octet-stream",
+          "x-upload-offset": String(offset),
+          "x-upload-sha256": createHash("sha256").update(chunk).digest("hex"),
+        },
+        body,
+      });
+    };
+    const firstChunk = source.subarray(0, UPLOAD_CHUNK_BYTES);
+    const tailChunk = source.subarray(UPLOAD_CHUNK_BYTES);
+    const written = await put(0, firstChunk);
+    assert.equal(written.status, 200);
+    assert.equal(((await written.json()) as { upload: { received: number } }).upload.received, firstChunk.length);
+    const duplicate = await put(0, firstChunk);
+    assert.equal(duplicate.status, 200);
+    assert.equal(((await duplicate.json()) as { upload: { received: number } }).upload.received, firstChunk.length);
+    const tail = await put(firstChunk.length, tailChunk);
+    assert.equal(tail.status, 200);
+    assert.equal(((await tail.json()) as { upload: { received: number } }).upload.received, source.length);
+
+    const partial = await app.request("/api/uploads", { headers: authHeader(owner) });
+    const partialRows = (await partial.json()) as Array<{ id: string; phase: string; product_name?: string }>;
+    assert.deepEqual(partialRows.map((row) => [row.id, row.phase, row.product_name]), [
+      [first.upload.id, "paused", "胶原棒花盒"],
+    ]);
+
+    const complete = await app.request(`/api/uploads/sessions/${first.upload.id}/complete`, {
+      method: "POST",
+      headers: { ...authHeader(owner), "content-type": "application/json" },
+      body: "{}",
+    });
+    assert.equal(complete.status, 200);
+    const ready = (await complete.json()) as { upload: { id: string; phase: string; received: number } };
+    assert.equal(ready.upload.id, first.upload.id);
+    assert.equal(ready.upload.phase, "ready");
+    assert.equal(ready.upload.received, source.length);
+
+    const retriedCreate = await create();
+    assert.equal(retriedCreate.status, 200);
+    assert.equal(((await retriedCreate.json()) as { upload: { id: string; phase: string } }).upload.phase, "ready");
+    assert.equal(discardReceipt(first.upload.id, owner), true);
   });
 
   it("lets only the receipt owner discard a staged upload", async () => {
@@ -141,7 +215,10 @@ describe("upload then start", () => {
       headers: authHeader("ou_discard_other"),
     });
     assert.equal(denied.status, 200);
-    assert.deepEqual(await denied.json(), { ok: false });
+    assert.deepEqual(await denied.json(), { ok: true, already_deleted: true });
+
+    const stillOwned = await app.request("/api/uploads", { headers: authHeader("ou_discard_http") });
+    assert.equal(((await stillOwned.json()) as { id: string }[]).some((row) => row.id === staged.receipt), true);
 
     const removed = await app.request(`/api/uploads/${staged.receipt}`, {
       method: "DELETE",
@@ -149,8 +226,41 @@ describe("upload then start", () => {
     });
     assert.equal(removed.status, 200);
     assert.deepEqual(await removed.json(), { ok: true });
+    const repeated = await app.request(`/api/uploads/${staged.receipt}`, {
+      method: "DELETE",
+      headers: authHeader("ou_discard_http"),
+    });
+    assert.equal(repeated.status, 200);
+    assert.deepEqual(await repeated.json(), { ok: true, already_deleted: true });
     const listed = await app.request("/api/uploads", { headers: authHeader("ou_discard_http") });
     assert.deepEqual(await listed.json(), []);
+  });
+
+  it("分片请求间隙仍在 health 保持发版租约，删除会话后立即释放", async () => {
+    const owner = "ou_release_lease";
+    const before = await app.request("/api/health", { headers: { host: "127.0.0.1:8787" } });
+    const beforeWaiting = ((await before.json()) as { uploads: { waiting: number } }).uploads.waiting;
+    const created = await app.request("/api/uploads/sessions", {
+      method: "POST",
+      headers: { ...authHeader(owner), "content-type": "application/json" },
+      body: JSON.stringify({
+        client_upload_id: "client-release-lease",
+        files: [{ field: "ai", name: "lease.ai", bytes: 32, last_modified: 1234 }],
+      }),
+    });
+    assert.equal(created.status, 200);
+    const upload = (await created.json()) as { upload: { id: string } };
+
+    const held = await app.request("/api/health", { headers: { host: "127.0.0.1:8787" } });
+    assert.equal(((await held.json()) as { uploads: { waiting: number } }).uploads.waiting, beforeWaiting + 1);
+
+    const removed = await app.request(`/api/uploads/${upload.upload.id}`, {
+      method: "DELETE",
+      headers: authHeader(owner),
+    });
+    assert.deepEqual(await removed.json(), { ok: true });
+    const released = await app.request("/api/health", { headers: { host: "127.0.0.1:8787" } });
+    assert.equal(((await released.json()) as { uploads: { waiting: number } }).uploads.waiting, beforeWaiting);
   });
 
   it("rejects an oversized multipart body before parsing it", async () => {

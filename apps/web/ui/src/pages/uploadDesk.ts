@@ -6,7 +6,7 @@ import { stemFromFilename } from "./stemName";
 export type PendingUploadItem = {
   key: string;
   kind: UploadKind;
-  phase: Extract<UploadPhase, "uploading" | "confirming" | "ready" | "failed">;
+  phase: Extract<UploadPhase, "uploading" | "retrying" | "confirming" | "paused" | "ready" | "failed">;
   title: string;
   productName: string | null;
   files: { field: string; name: string; bytes: number }[];
@@ -35,7 +35,7 @@ export function shouldReconcileUpload(
   if (
     !local?.clientUploadId ||
     local.kind !== kind ||
-    (local.phase !== "confirming" && local.phase !== "failed")
+    !["confirming", "retrying", "paused", "failed"].includes(local.phase)
   ) {
     return false;
   }
@@ -74,22 +74,26 @@ export function pendingUploadItems(
             Boolean(local.clientUploadId && receipt.client_upload_id === local.clientUploadId)),
       )
     : undefined;
-  if (local && local.kind === kind && ["uploading", "confirming", "ready", "failed"].includes(local.phase)) {
+  if (local && local.kind === kind && ["uploading", "retrying", "confirming", "paused", "ready", "failed"].includes(local.phase)) {
     const receipt = matchedReceipt?.id || local.receipt || null;
     const files = matchedReceipt?.files || local.files;
-    const recovered = Boolean(matchedReceipt);
+    const recoveredReady = matchedReceipt?.phase === "ready";
+    const recoveredPaused = matchedReceipt?.phase === "paused";
+    const phase = recoveredReady ? "ready" : recoveredPaused && !uploadIsLocallyBusy(local.phase) ? "paused" : local.phase;
+    const received = matchedReceipt?.received ?? local.loaded;
+    const total = matchedReceipt?.bytes ?? local.total;
     if (receipt) seen.add(receipt);
     out.push({
       key: receipt ? `receipt:${receipt}` : `active:${kind}`,
       kind,
-      phase: (recovered ? "ready" : local.phase) as PendingUploadItem["phase"],
-      title: local.productName.trim() || receiptDisplayTitle(files),
-      productName: local.productName.trim() || null,
+      phase: phase as PendingUploadItem["phase"],
+      title: local.productName.trim() || matchedReceipt?.product_name || receiptDisplayTitle(files),
+      productName: local.productName.trim() || matchedReceipt?.product_name || null,
       files,
-      pct: recovered ? 100 : local.pct,
+      pct: total > 0 ? Math.round((received / total) * 100) : local.pct,
       at: matchedReceipt?.created_at || local.createdAt,
       receipt,
-      error: recovered ? null : local.error || null,
+      error: recoveredReady ? null : local.error || null,
     });
   }
   for (const receipt of receipts) {
@@ -97,11 +101,11 @@ export function pendingUploadItems(
     out.push({
       key: `receipt:${receipt.id}`,
       kind,
-      phase: "ready",
-      title: receiptDisplayTitle(receipt.files),
-      productName: null,
+      phase: receipt.phase,
+      title: receipt.product_name || receiptDisplayTitle(receipt.files),
+      productName: receipt.product_name || null,
       files: receipt.files,
-      pct: 100,
+      pct: receipt.bytes > 0 ? Math.round((receipt.received / receipt.bytes) * 100) : 0,
       at: receipt.created_at,
       receipt: receipt.id,
       error: null,
@@ -113,17 +117,31 @@ export function pendingUploadItems(
 }
 
 export function pendingUploadCard(item: PendingUploadItem, readyLabel: string): DeskCardRow {
-  const busy = item.phase === "uploading" || item.phase === "confirming";
+  const busy = uploadIsLocallyBusy(item.phase);
   const failed = item.phase === "failed";
+  const paused = item.phase === "paused";
   return {
     id: item.key,
     shortId: item.receipt ? item.receipt.slice(0, 8) : "上传中",
     title: item.title,
-    statusText: busy ? "上传中" : failed ? "上传失败" : readyLabel,
+    statusText: busy ? "上传中" : failed ? "上传失败" : paused ? "待继续上传" : readyLabel,
     statusColor: busy ? "processing" : failed ? "error" : "warning",
     at: item.at,
-    live: item.phase === "confirming" ? "服务器确认中" : item.phase === "uploading" ? `已上传 ${item.pct}%` : null,
+    live:
+      item.phase === "confirming"
+        ? "服务器确认中"
+        : item.phase === "retrying"
+          ? "网络波动，正在重连"
+          : item.phase === "uploading"
+            ? `已上传 ${item.pct}%`
+            : paused
+              ? `已保存 ${item.pct}%，点开继续`
+              : null,
     progress: busy ? item.pct : undefined,
     error: failed ? item.error || "上传失败，请重新上传。" : null,
   };
+}
+
+function uploadIsLocallyBusy(phase: UploadPhase): boolean {
+  return phase === "uploading" || phase === "retrying" || phase === "confirming";
 }

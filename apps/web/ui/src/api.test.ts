@@ -7,6 +7,7 @@ import {
   api,
   brokenApiMessage,
   transientApiFailure,
+  uploadResumable,
   uploadWithProgress,
 } from "./api.js";
 import { UPLOAD_TOO_LARGE } from "./uploadLimit.js";
@@ -50,6 +51,63 @@ describe("authenticated live status API", () => {
       const body = await api.status();
       assert.equal(body.ok, true);
       assert.deepEqual(calls, [{ input: "/api/status", credentials: "same-origin" }]);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+});
+
+describe("resumable upload", () => {
+  it("creates a session, sends one verified chunk, then waits for the ready receipt", async () => {
+    const original = globalThis.fetch;
+    const file = new File([Buffer.alloc(1024 * 1024, 65), Buffer.from("tail")], "box.ai", {
+      type: "application/postscript",
+      lastModified: 1234,
+    });
+    const fd = new FormData();
+    fd.append("client_upload_id", "client-resumable-test");
+    fd.append("product_name", "花盒");
+    fd.append("file", file);
+    const calls: Array<{ path: string; method: string; offset?: string; hash?: string }> = [];
+    const upload = (phase: "paused" | "ready", received: number) => ({
+      id: "112233445566",
+      files: [{ field: "ai", name: file.name, bytes: file.size, received, last_modified: 1234 }],
+      bytes: file.size,
+      received,
+      created_at: "2026-08-26T08:00:00.000Z",
+      client_upload_id: "client-resumable-test",
+      product_name: "花盒",
+      kind: "mockup" as const,
+      phase,
+    });
+    let received = 0;
+    globalThis.fetch = (async (input, init) => {
+      const headers = new Headers(init?.headers);
+      const path = String(input);
+      const method = String(init?.method || "GET").toUpperCase();
+      calls.push({ path, method, offset: headers.get("x-upload-offset") || undefined, hash: headers.get("x-upload-sha256") || undefined });
+      if (method === "PUT") received = Number(headers.get("x-upload-offset") || 0) + ((init?.body as ArrayBuffer)?.byteLength || 0);
+      const body = path.endsWith("/complete") ? upload("ready", file.size) : upload("paused", received);
+      return new Response(JSON.stringify({ upload: body }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    try {
+      const phases: string[] = [];
+      const receipt = await uploadResumable(fd, (progress) => phases.push(progress.phase || ""));
+      assert.equal(receipt.receipt, "112233445566");
+      assert.deepEqual(calls.map((call) => [call.method, call.path]), [
+        ["POST", "/api/uploads/sessions"],
+        ["PUT", "/api/uploads/sessions/112233445566/files/ai"],
+        ["PUT", "/api/uploads/sessions/112233445566/files/ai"],
+        ["POST", "/api/uploads/sessions/112233445566/complete"],
+      ]);
+      assert.equal(calls[1]?.offset, "0");
+      assert.equal(calls[2]?.offset, String(1024 * 1024));
+      assert.match(calls[1]?.hash || "", /^[a-f0-9]{64}$/);
+      assert.match(calls[2]?.hash || "", /^[a-f0-9]{64}$/);
+      assert.deepEqual(phases, ["uploading", "uploading", "confirming", "confirming"]);
     } finally {
       globalThis.fetch = original;
     }

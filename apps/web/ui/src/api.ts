@@ -151,14 +151,25 @@ export type UploadReceipt = {
 
 export type PendingUploadReceipt = {
   id: string;
-  files: { field: string; name: string; bytes: number }[];
+  files: { field: string; name: string; bytes: number; received: number; last_modified?: number }[];
   bytes: number;
+  received: number;
   created_at: string;
   client_upload_id?: string;
+  product_name?: string;
+  pack_surface?: string;
   kind: "compare" | "mockup";
+  phase: "ready" | "paused";
 };
 
-export type UploadProgress = { pct: number; loaded: number; total: number };
+export type UploadProgress = {
+  pct: number;
+  loaded: number;
+  total: number;
+  phase?: "uploading" | "retrying" | "confirming";
+  retryAttempt?: number;
+  uploadId?: string;
+};
 
 // 100 MB 在慢链路上传输可能超过五分钟；超时覆盖传输和服务端落盘确认。
 export const UPLOAD_TIMEOUT_MS = 15 * 60 * 1000;
@@ -240,6 +251,194 @@ export function uploadWithProgress<T>(
   });
 }
 
+export class UploadPausedError extends ApiError {
+  uploadId?: string;
+  constructor(message: string, uploadId?: string) {
+    super(0, message, false);
+    this.uploadId = uploadId;
+  }
+}
+
+const RESUMABLE_CHUNK_BYTES = 1024 * 1024;
+const RESUMABLE_RETRIES = 5;
+
+type UploadSessionResponse = { upload: PendingUploadReceipt };
+
+function abortError(): ApiError {
+  return new ApiError(0, "上传已停止", false);
+}
+
+function waitForRetry(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(abortError());
+  return new Promise((resolve, reject) => {
+    const finish = () => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    };
+    const timer = globalThis.setTimeout(finish, ms);
+    const abort = () => {
+      globalThis.clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+      reject(abortError());
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}
+
+async function sha256Hex(buffer: ArrayBuffer): Promise<string> {
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", buffer);
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function retryUploadCall<T>(
+  run: () => Promise<T>,
+  onRetry: (attempt: number) => void,
+  signal?: AbortSignal,
+  uploadId?: string,
+): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= RESUMABLE_RETRIES; attempt += 1) {
+    if (signal?.aborted) throw abortError();
+    try {
+      return await run();
+    } catch (err) {
+      lastError = err;
+      if (!transientApiFailure(err)) throw err;
+      if (attempt >= RESUMABLE_RETRIES) break;
+      onRetry(attempt + 1);
+      await waitForRetry(Math.min(1000 * 2 ** attempt, 8000), signal);
+    }
+  }
+  const detail = lastError instanceof Error ? lastError.message : "网络连接中断";
+  throw new UploadPausedError(`上传已暂停，服务器已保存收到的部分。网络恢复后点“继续上传”。${detail ? `（${detail}）` : ""}`, uploadId);
+}
+
+type SelectedUploadFile = { field: "excel" | "pdf" | "ai"; file: File };
+
+function resumableForm(fd: FormData): {
+  clientUploadId: string;
+  productName: string;
+  packSurface: string;
+  files: SelectedUploadFile[];
+} {
+  const clientUploadId = String(fd.get("client_upload_id") || "");
+  const productName = String(fd.get("product_name") || "");
+  const packSurface = String(fd.get("pack_surface") || "");
+  const files: SelectedUploadFile[] = [];
+  for (const [formField, uploadField] of [
+    ["excel", "excel"],
+    ["pdf", "pdf"],
+    ["file", "ai"],
+  ] as const) {
+    const value = fd.get(formField);
+    if (value instanceof File) files.push({ field: uploadField, file: value });
+  }
+  return { clientUploadId, productName, packSurface, files };
+}
+
+function uploadReceipt(upload: PendingUploadReceipt): UploadReceipt {
+  return {
+    receipt: upload.id,
+    client_upload_id: upload.client_upload_id,
+    files: upload.files.map(({ field, name, bytes }) => ({ field, name, bytes })),
+  };
+}
+
+/**
+ * 云盘式上传：每 1 MB 独立确认，断线后沿用 client_upload_id 与服务器 offset。
+ * 分片与完成接口都幂等，因此“服务端写成、响应丢了”也只会重试当前一步。
+ */
+export async function uploadResumable(
+  fd: FormData,
+  onProgress?: (progress: UploadProgress) => void,
+  signal?: AbortSignal,
+): Promise<UploadReceipt> {
+  const input = resumableForm(fd);
+  const total = input.files.reduce((sum, item) => sum + item.file.size, 0);
+  if (!input.clientUploadId || !input.files.length || total <= 0) throw new ApiError(400, "没有可上传的文件");
+
+  let uploadId: string | undefined;
+  let latestProgress = { loaded: 0, total, pct: 0 };
+  const retryNotice = (attempt: number) =>
+    onProgress?.({ ...latestProgress, phase: "retrying", retryAttempt: attempt, uploadId });
+  const startBody = {
+    client_upload_id: input.clientUploadId,
+    product_name: input.productName,
+    pack_surface: input.packSurface,
+    files: input.files.map(({ field, file }) => ({
+      field,
+      name: file.name,
+      bytes: file.size,
+      last_modified: file.lastModified,
+    })),
+  };
+  let session = (
+    await retryUploadCall(
+      () => request<UploadSessionResponse>("/api/uploads/sessions", { method: "POST", body: JSON.stringify(startBody) }),
+      retryNotice,
+      signal,
+    )
+  ).upload;
+  uploadId = session.id;
+  if (session.phase === "ready") return uploadReceipt(session);
+
+  let loaded = session.files.reduce((sum, file) => sum + file.received, 0);
+  latestProgress = { loaded, total, pct: Math.round((loaded / total) * 100) };
+  onProgress?.({ ...latestProgress, phase: "uploading", uploadId });
+
+  for (const selected of input.files) {
+    const serverFile = session.files.find((file) => file.field === selected.field);
+    if (!serverFile) throw new ApiError(409, "服务器上传记录不完整，请重新开始");
+    let offset = serverFile.received;
+    while (offset < selected.file.size) {
+      const end = Math.min(offset + RESUMABLE_CHUNK_BYTES, selected.file.size);
+      const buffer = await selected.file.slice(offset, end).arrayBuffer();
+      const sha256 = await sha256Hex(buffer);
+      const response = await retryUploadCall(
+        () =>
+          request<UploadSessionResponse>(
+            `/api/uploads/sessions/${encodeURIComponent(uploadId!)}/files/${selected.field}`,
+            {
+              method: "PUT",
+              headers: {
+                "Content-Type": "application/octet-stream",
+                "x-upload-offset": String(offset),
+                "x-upload-sha256": sha256,
+              },
+              body: buffer,
+            },
+          ),
+        retryNotice,
+        signal,
+        uploadId,
+      );
+      session = response.upload;
+      const updated = session.files.find((file) => file.field === selected.field);
+      if (!updated || updated.received <= offset) throw new ApiError(409, "服务器没有确认本次上传分片");
+      offset = updated.received;
+      loaded = session.files.reduce((sum, file) => sum + file.received, 0);
+      latestProgress = { loaded, total, pct: Math.min(100, Math.round((loaded / total) * 100)) };
+      onProgress?.({ ...latestProgress, phase: loaded >= total ? "confirming" : "uploading", uploadId });
+    }
+  }
+
+  latestProgress = { loaded: total, total, pct: 100 };
+  onProgress?.({ ...latestProgress, phase: "confirming", uploadId });
+  session = (
+    await retryUploadCall(
+      () =>
+        request<UploadSessionResponse>(`/api/uploads/sessions/${encodeURIComponent(uploadId!)}/complete`, {
+          method: "POST",
+          body: JSON.stringify({}),
+        }),
+      retryNotice,
+      signal,
+      uploadId,
+    )
+  ).upload;
+  return uploadReceipt(session);
+}
+
 export type Me = {
   logged_in: boolean;
   display_name: string | null;
@@ -252,6 +451,7 @@ export type Me = {
 export type HealthView = {
   ok?: boolean;
   jobs?: unknown;
+  uploads?: { active?: number; waiting?: number };
   feishu_notify?: boolean;
   version?: string;
   runtime?: string;
@@ -344,7 +544,7 @@ export const api = {
   uploads: () => request<PendingUploadReceipt[]>("/api/uploads"),
   discardUpload: (id: string) => request<{ ok: boolean }>(`/api/uploads/${id}`, { method: "DELETE" }),
   stageUpload: (fd: FormData, onProgress?: (progress: UploadProgress) => void, signal?: AbortSignal) =>
-    uploadWithProgress<UploadReceipt>("/api/uploads", fd, onProgress, signal),
+    uploadResumable(fd, onProgress, signal),
   startTask: (body: { receipt: string; product_name: string; title?: string; pack_surface?: string }) =>
     request<TaskDetail>("/api/tasks/start", { method: "POST", body: JSON.stringify(body) }),
   startMockup: (body: { receipt: string; title?: string; product_name?: string }) =>

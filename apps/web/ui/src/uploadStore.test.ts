@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { UploadProgress, UploadReceipt } from "./api.js";
+import { UploadPausedError, type UploadProgress, type UploadReceipt } from "./api.js";
 import { createUploadStore, uploadPhaseLine, type UploadTransport } from "./uploadStore.js";
 import { UPLOAD_TOO_LARGE } from "./uploadLimit.js";
 
@@ -108,7 +108,7 @@ describe("uploadStore", () => {
 
     const confirming = store.get("mockup");
     assert.equal(confirming?.phase, "confirming");
-    assert.equal(confirming && uploadPhaseLine(confirming, "可以开始"), "服务器确认中");
+    assert.equal(confirming && uploadPhaseLine(confirming, "可以开始"), "文件已传完，服务器正在确认");
 
     fake.calls[0]?.resolve({ receipt: "aabbccddeeff", files: [{ field: "file", name: "盒子.ai", bytes: 2 }] });
     await flush();
@@ -129,6 +129,38 @@ describe("uploadStore", () => {
     assert.deepEqual(store.get("mockup")?.files.map((file) => file.name), ["盒子.ai"]);
   });
 
+  it("自动重连耗尽后进入可继续状态，不丢文件或上传会话", async () => {
+    const fake = controlledTransport();
+    const store = createUploadStore(fake.transport);
+    store.replaceFile("mockup", "ai", ai());
+    fake.calls[0]?.progress?.({ pct: 48, loaded: 1, total: 2, phase: "retrying", retryAttempt: 2, uploadId: "112233445566" });
+    assert.equal(store.get("mockup")?.phase, "retrying");
+    assert.equal(store.get("mockup")?.retryAttempt, 2);
+    fake.calls[0]?.reject(new UploadPausedError("上传已暂停，可继续", "112233445566"));
+    await flush();
+    assert.equal(store.get("mockup")?.phase, "paused");
+    assert.equal(store.get("mockup")?.uploadId, "112233445566");
+    assert.ok(store.get("mockup")?.files[0]?.file);
+
+    store.retry("mockup");
+    assert.equal(fake.calls.length, 2);
+    assert.equal(store.get("mockup")?.phase, "uploading");
+  });
+
+  it("历史记录删除暂停上传后，按服务器 upload id 同步清掉本地会话", async () => {
+    const fake = controlledTransport();
+    const store = createUploadStore(fake.transport);
+    store.replaceFile("mockup", "ai", ai());
+    fake.calls[0]?.progress?.({ pct: 48, loaded: 1, total: 2, phase: "retrying", uploadId: "112233445566" });
+    fake.calls[0]?.reject(new UploadPausedError("上传已暂停，可继续", "112233445566"));
+    await flush();
+
+    store.clear("mockup", "another-upload");
+    assert.equal(store.get("mockup")?.uploadId, "112233445566");
+    store.clear("mockup", "112233445566");
+    assert.equal(store.get("mockup"), null);
+  });
+
   it("响应丢失后用同一 client id 的服务端回执恢复，并在开工后释放状态", async () => {
     const fake = controlledTransport();
     const store = createUploadStore(fake.transport);
@@ -143,9 +175,11 @@ describe("uploadStore", () => {
       id: "112233445566",
       kind: "mockup",
       client_upload_id: clientUploadId,
-      files: [{ field: "ai", name: "盒子.ai", bytes: 2 }],
+      files: [{ field: "ai", name: "盒子.ai", bytes: 2, received: 2 }],
       bytes: 2,
+      received: 2,
       created_at: "2026-08-26T08:00:00.000Z",
+      phase: "ready",
     });
     assert.equal(recovered, true);
     assert.equal(store.get("mockup")?.phase, "ready");
@@ -154,6 +188,24 @@ describe("uploadStore", () => {
 
     store.clear("mockup", "112233445566");
     assert.equal(store.get("mockup"), null);
+  });
+
+  it("整页刷新恢复部分会话后，轮询不会覆盖重选同一文件的指引", () => {
+    const store = createUploadStore(controlledTransport().transport);
+    const paused = {
+      id: "112233445566",
+      kind: "mockup" as const,
+      client_upload_id: "client-paused-refresh",
+      files: [{ field: "ai", name: "盒子.ai", bytes: 2, received: 1 }],
+      bytes: 2,
+      received: 1,
+      created_at: "2026-08-26T08:00:00.000Z",
+      phase: "paused" as const,
+    };
+    store.restore("mockup", paused);
+    assert.match(store.get("mockup")?.error || "", /重新选择同一文件/);
+    assert.equal(store.recover("mockup", paused), true);
+    assert.match(store.get("mockup")?.error || "", /重新选择同一文件/);
   });
 
   it("不会用另一次同文件上传的 client id 覆盖当前失败状态", async () => {
@@ -167,9 +219,11 @@ describe("uploadStore", () => {
         id: "223344556677",
         kind: "mockup",
         client_upload_id: "another-client-id",
-        files: [{ field: "ai", name: "盒子.ai", bytes: 2 }],
+        files: [{ field: "ai", name: "盒子.ai", bytes: 2, received: 2 }],
         bytes: 2,
+        received: 2,
         created_at: "2026-08-26T08:00:00.000Z",
+        phase: "ready",
       }),
       false,
     );

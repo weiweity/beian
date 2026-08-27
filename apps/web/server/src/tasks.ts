@@ -269,9 +269,9 @@ export function deleteTask(tid: string): void {
     throw Object.assign(new Error("对照还在跑，不能删。等结束或失败后再删。"), { status: 409 });
   }
   const p = join(tasksDir(), `${task.id}.json`);
-  unlinkSync(p);
   const uploads = join(DATA_DIR, "uploads", task.id);
-  if (existsSync(uploads)) rmSync(uploads, { recursive: true, force: true });
+  if (existsSync(uploads)) rmSync(uploads, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  unlinkSync(p);
 }
 
 export function nowIso(): string {
