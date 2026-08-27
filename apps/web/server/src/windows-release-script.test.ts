@@ -64,14 +64,19 @@ describe("windows release.ps1 contract", () => {
     assert.match(script, /Remove-Item Env:GITHUB_TOKEN/);
   });
 
-  it("restarts the last schtasks listener if upgrade fails after stop", () => {
+  it("restarts the WinSW :8787 service if upgrade fails after stop", () => {
     assert.match(script, /function Restore-BeianListener/);
     assert.match(script, /function Restore-BeianUpgrade/);
-    assert.match(script, /cmd\.exe \/c "schtasks \/Run \/TN beian-server-8787"/);
-    assert.match(script, /拉回失败 schtasks exit=/);
+    assert.match(script, /function Start-BeianWinSwService/);
+    assert.match(script, /Restart-Service -Name \$name -Force/);
+    assert.match(script, /Restart-Service beian-server-8787/);
+    assert.doesNotMatch(script, /schtasks \/Create/);
+    assert.doesNotMatch(script, /\/SC ONLOGON/);
+    assert.doesNotMatch(script, /schtasks \/Run \/TN beian-server-8787/);
+    assert.match(script, /拉回失败 Restart-Service/);
     assert.match(script, /拉回后 health 仍空/);
     assert.match(script, /已拉回 :8787/);
-    assert.match(script, /:8787 没听，schtasks \/Run beian-server-8787/);
+    assert.match(script, /:8787 没听，Restart-Service beian-server-8787/);
     assert.match(script, /:8787 仍在听，不重复拉起/);
     assert.match(script, /公网可能 502/);
     assert.match(script, /pre-stop SHA=/);
@@ -129,9 +134,10 @@ describe("windows release.ps1 contract", () => {
     assert.match(script, /health\.version=\$\(\$health\.version\) 但 VERSION=\$ver，拒绝 SMOKE ok/);
     assert.match(script, /logo 不是 PNG/);
     assert.match(script, /0x89/);
-    assert.match(script, /schtasks \/Run \/TN \$task/);
-    assert.match(script, /npm\.cmd run start -w beian-server/);
+    assert.match(script, /Start-BeianWinSwService/);
+    assert.match(script, /Restart-Service beian-server-8787 is outside that tree/);
     assert.match(script, /job process tree/);
+    assert.doesNotMatch(script, /schtasks \/Create \/TN \$task \/SC ONLOGON/);
     assert.ok(indexOf(/install @rollup\/rollup-win32-x64-msvc/) < indexOf(/\$didBuild = \$true/));
   });
 
@@ -157,7 +163,9 @@ describe("windows release.ps1 contract", () => {
     assert.match(yml, /^\s+shell: cmd\s*$/m);
     assert.doesNotMatch(yml, /^\s+shell: powershell\s*$/m);
     assert.match(yml, /if: failure\(\)/);
-    assert.match(yml, /schtasks \/Run \/TN beian-server-8787/);
+    assert.match(yml, /sc start beian-server-8787/);
+    assert.doesNotMatch(yml, /schtasks \/Run \/TN beian-server-8787/);
+    assert.doesNotMatch(yml, /ONLOGON/);
     assert.match(yml, /^[^#\n]*git -C D:\\beian fetch origin/m);
     assert.match(yml, /^[^#\n]*git -C D:\\beian checkout origin\/main -- scripts\/windows\/release\.ps1/m);
     const lockIdx = yml.search(/^[^#\n]*git -C D:\\beian checkout -- package-lock\.json/m);
