@@ -8,6 +8,7 @@ import { PENDING_REVIEW, deskClock, type DeskCardRow } from "./deskBoard";
 import { DeskCol } from "./DeskCol";
 import {
   pendingUploadCard,
+  pendingUploadOpenAction,
   pendingUploadItems,
   loadDeskReceipts,
   shouldReconcileUpload,
@@ -170,14 +171,17 @@ export function TasksPage({ canCreate, onCreate, onOpen, onResumeReceipt }: Prop
   const tableRows = useMemo(() => [...pendingCards, ...rows.map(toDeskCard)], [pendingCards, rows]);
 
   function openPending(item: PendingUploadItem) {
-    if (!item.receipt) {
+    const action = pendingUploadOpenAction(item);
+    if (action === "active") {
       onCreate();
       return;
     }
-    if (!item.productName) {
+    if (action === "resume") {
+      if (!item.receipt) return;
       onResumeReceipt(item.receipt);
       return;
     }
+    if (!item.receipt || !item.productName) return;
     const receipt = item.receipt;
     const productName = item.productName;
     modal.confirm({
@@ -191,7 +195,7 @@ export function TasksPage({ canCreate, onCreate, onOpen, onResumeReceipt }: Prop
             receipt,
             product_name: productName,
             title: productName,
-            pack_surface: localUpload?.receipt === receipt ? localUpload.packSurface : undefined,
+            pack_surface: item.packSurface || undefined,
           });
           uploadStore.clear("compare", receipt);
           setReceipts((current) => current.filter((saved) => saved.id !== receipt));

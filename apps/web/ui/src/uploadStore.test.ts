@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { UploadProgress, UploadReceipt } from "./api.js";
-import { createUploadStore, uploadPhaseLine, type UploadTransport } from "./uploadStore.js";
+import { ApiError, UploadPausedError, type UploadProgress, type UploadReceipt } from "./api.js";
+import { createUploadStore, uploadCanRetry, uploadPhaseLine, type UploadTransport } from "./uploadStore.js";
 import { UPLOAD_TOO_LARGE } from "./uploadLimit.js";
 
 type PendingCall = {
@@ -18,6 +18,15 @@ function controlledTransport() {
       calls.push({ signal, progress, resolve, reject });
     });
   return { calls, transport };
+}
+
+function memoryStorage() {
+  const values = new Map<string, string>();
+  return {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => values.set(key, value),
+    removeItem: (key: string) => values.delete(key),
+  };
 }
 
 function ai(name = "盒子.ai") {
@@ -108,7 +117,7 @@ describe("uploadStore", () => {
 
     const confirming = store.get("mockup");
     assert.equal(confirming?.phase, "confirming");
-    assert.equal(confirming && uploadPhaseLine(confirming, "可以开始"), "服务器确认中");
+    assert.equal(confirming && uploadPhaseLine(confirming, "可以开始"), "文件已传完，服务器正在确认");
 
     fake.calls[0]?.resolve({ receipt: "aabbccddeeff", files: [{ field: "file", name: "盒子.ai", bytes: 2 }] });
     await flush();
@@ -129,6 +138,96 @@ describe("uploadStore", () => {
     assert.deepEqual(store.get("mockup")?.files.map((file) => file.name), ["盒子.ai"]);
   });
 
+  it("自动重连耗尽后进入可继续状态，不丢文件或上传会话", async () => {
+    const fake = controlledTransport();
+    const store = createUploadStore(fake.transport);
+    store.replaceFile("mockup", "ai", ai());
+    fake.calls[0]?.progress?.({ pct: 48, loaded: 1, total: 2, phase: "retrying", retryAttempt: 2, uploadId: "112233445566" });
+    assert.equal(store.get("mockup")?.phase, "retrying");
+    assert.equal(store.get("mockup")?.retryAttempt, 2);
+    fake.calls[0]?.reject(new UploadPausedError("上传已暂停，可继续", "112233445566"));
+    await flush();
+    assert.equal(store.get("mockup")?.phase, "paused");
+    assert.equal(store.get("mockup")?.uploadId, "112233445566");
+    assert.ok(store.get("mockup")?.files[0]?.file);
+    assert.equal(uploadCanRetry(store.get("mockup")), true);
+
+    store.retry("mockup");
+    assert.equal(fake.calls.length, 2);
+    assert.equal(store.get("mockup")?.phase, "uploading");
+  });
+
+  it("首次会话未确认时保留为状态未知，不声称服务器已经保存分片", async () => {
+    const storage = memoryStorage();
+    const fake = controlledTransport();
+    const store = createUploadStore(fake.transport, async () => undefined, storage, "ou_unknown_session");
+    const selected = ai();
+    store.replaceFile("mockup", "ai", selected);
+    const clientUploadId = store.get("mockup")?.clientUploadId;
+    fake.calls[0]?.reject(new UploadPausedError("暂时无法确认服务器是否收到这次上传"));
+    await flush();
+
+    assert.equal(store.get("mockup")?.phase, "failed");
+    assert.equal(store.get("mockup")?.recoverable, true);
+    assert.equal(store.get("mockup")?.uploadId, undefined);
+    assert.doesNotMatch(store.get("mockup")?.error || "", /已保存收到的部分/);
+
+    const resumed = controlledTransport();
+    const restored = createUploadStore(resumed.transport, async () => undefined, storage, "ou_unknown_session");
+    assert.equal(restored.get("mockup")?.phase, "failed");
+    assert.equal(restored.get("mockup")?.recoverable, true);
+    assert.match(restored.get("mockup")?.error || "", /无法确认服务器状态/);
+
+    restored.replaceFile("mockup", "ai", selected);
+    assert.equal(resumed.calls.length, 1);
+    assert.equal(restored.get("mockup")?.phase, "uploading");
+    assert.equal(restored.get("mockup")?.clientUploadId, clientUploadId);
+  });
+
+  it("确定性文件校验失败不会被同一会话的 partial 快照覆盖", async () => {
+    const fake = controlledTransport();
+    const store = createUploadStore(fake.transport);
+    store.replaceFile("mockup", "ai", ai());
+    const clientUploadId = store.get("mockup")?.clientUploadId;
+    assert.ok(clientUploadId);
+    fake.calls[0]?.progress?.({ pct: 100, loaded: 2, total: 2, phase: "confirming", uploadId: "445566778899" });
+    fake.calls[0]?.reject(new ApiError(400, "不是有效的 AI"));
+    await flush();
+
+    const partial = {
+      id: "445566778899",
+      kind: "mockup" as const,
+      client_upload_id: clientUploadId,
+      files: [{ field: "ai", name: "盒子.ai", bytes: 2, received: 2 }],
+      bytes: 2,
+      received: 2,
+      created_at: "2026-08-26T08:00:00.000Z",
+      phase: "paused" as const,
+    };
+    assert.equal(store.get("mockup")?.phase, "failed");
+    assert.equal(store.get("mockup")?.recoverable, false);
+    assert.equal(uploadCanRetry(store.get("mockup")), false);
+    assert.equal(store.recover("mockup", partial), false);
+    assert.equal(store.get("mockup")?.error, "不是有效的 AI");
+    store.retry("mockup");
+    assert.equal(fake.calls.length, 1);
+    assert.equal(store.get("mockup")?.phase, "failed");
+  });
+
+  it("历史记录删除暂停上传后，按服务器 upload id 同步清掉本地会话", async () => {
+    const fake = controlledTransport();
+    const store = createUploadStore(fake.transport);
+    store.replaceFile("mockup", "ai", ai());
+    fake.calls[0]?.progress?.({ pct: 48, loaded: 1, total: 2, phase: "retrying", uploadId: "112233445566" });
+    fake.calls[0]?.reject(new UploadPausedError("上传已暂停，可继续", "112233445566"));
+    await flush();
+
+    store.clear("mockup", "another-upload");
+    assert.equal(store.get("mockup")?.uploadId, "112233445566");
+    store.clear("mockup", "112233445566");
+    assert.equal(store.get("mockup"), null);
+  });
+
   it("响应丢失后用同一 client id 的服务端回执恢复，并在开工后释放状态", async () => {
     const fake = controlledTransport();
     const store = createUploadStore(fake.transport);
@@ -143,9 +242,11 @@ describe("uploadStore", () => {
       id: "112233445566",
       kind: "mockup",
       client_upload_id: clientUploadId,
-      files: [{ field: "ai", name: "盒子.ai", bytes: 2 }],
+      files: [{ field: "ai", name: "盒子.ai", bytes: 2, received: 2 }],
       bytes: 2,
+      received: 2,
       created_at: "2026-08-26T08:00:00.000Z",
+      phase: "ready",
     });
     assert.equal(recovered, true);
     assert.equal(store.get("mockup")?.phase, "ready");
@@ -154,6 +255,74 @@ describe("uploadStore", () => {
 
     store.clear("mockup", "112233445566");
     assert.equal(store.get("mockup"), null);
+  });
+
+  it("整页刷新恢复部分会话后，轮询不会覆盖重选同一文件的指引", () => {
+    const store = createUploadStore(controlledTransport().transport);
+    const paused = {
+      id: "112233445566",
+      kind: "mockup" as const,
+      client_upload_id: "client-paused-refresh",
+      files: [{ field: "ai", name: "盒子.ai", bytes: 2, received: 1 }],
+      bytes: 2,
+      received: 1,
+      created_at: "2026-08-26T08:00:00.000Z",
+      phase: "paused" as const,
+    };
+    store.restore("mockup", paused);
+    assert.match(store.get("mockup")?.error || "", /重新选择同一文件/);
+    assert.equal(store.recover("mockup", paused), true);
+    assert.match(store.get("mockup")?.error || "", /重新选择同一文件/);
+  });
+
+  it("整页刷新保留本次上传身份，并在重选同一文件后续传", () => {
+    const storage = memoryStorage();
+    const firstTransport = controlledTransport();
+    const source = ai("刷新续传.ai");
+    const first = createUploadStore(firstTransport.transport, async () => undefined, storage, "ou_refresh_owner");
+    first.replaceFile("mockup", "ai", source, { productName: "刷新续传", packSurface: "carton" });
+    firstTransport.calls[0]?.progress?.({
+      pct: 50,
+      loaded: 1,
+      total: 2,
+      phase: "uploading",
+      uploadId: "112233445566",
+    });
+    const clientUploadId = first.get("mockup")?.clientUploadId;
+    assert.ok(clientUploadId);
+
+    const resumedTransport = controlledTransport();
+    const resumed = createUploadStore(resumedTransport.transport, async () => undefined, storage, "ou_refresh_owner");
+    assert.equal(resumed.get("mockup")?.phase, "paused");
+    assert.equal(resumed.get("mockup")?.clientUploadId, clientUploadId);
+    assert.equal(resumed.get("mockup")?.uploadId, "112233445566");
+    assert.equal(resumed.get("mockup")?.files[0]?.file, undefined);
+    assert.match(resumed.get("mockup")?.error || "", /重新选择同一文件/);
+
+    resumed.replaceFile("mockup", "ai", source);
+    assert.equal(resumedTransport.calls.length, 1);
+    assert.equal(resumed.get("mockup")?.clientUploadId, clientUploadId);
+    assert.equal(resumed.get("mockup")?.uploadId, "112233445566");
+    first.abortAll();
+    resumed.abortAll();
+  });
+
+  it("按登录人隔离刷新状态，切换账号不会看到上一人的文件名", () => {
+    const storage = memoryStorage();
+    const fake = controlledTransport();
+    const store = createUploadStore(fake.transport, async () => undefined, storage, "ou_owner_a");
+    store.replaceFile("mockup", "ai", ai("甲账号稿件.ai"));
+    assert.equal(store.get("mockup")?.files[0]?.name, "甲账号稿件.ai");
+
+    store.setOwner("ou_owner_b");
+    assert.equal(store.get("mockup"), null);
+
+    store.setOwner("ou_owner_a");
+    assert.equal(store.get("mockup")?.phase, "failed");
+    assert.equal(store.get("mockup")?.recoverable, true);
+    assert.match(store.get("mockup")?.error || "", /无法确认服务器状态/);
+    assert.equal(store.get("mockup")?.files[0]?.name, "甲账号稿件.ai");
+    store.abortAll();
   });
 
   it("不会用另一次同文件上传的 client id 覆盖当前失败状态", async () => {
@@ -167,9 +336,11 @@ describe("uploadStore", () => {
         id: "223344556677",
         kind: "mockup",
         client_upload_id: "another-client-id",
-        files: [{ field: "ai", name: "盒子.ai", bytes: 2 }],
+        files: [{ field: "ai", name: "盒子.ai", bytes: 2, received: 2 }],
         bytes: 2,
+        received: 2,
         created_at: "2026-08-26T08:00:00.000Z",
+        phase: "ready",
       }),
       false,
     );
@@ -185,6 +356,8 @@ describe("uploadStore", () => {
     store.replaceFile("mockup", "ai", ai("失败稿.ai"));
     fake.calls[0]?.reject(new Error("上传失败"));
     await flush();
+    const failedClientId = store.get("mockup")?.clientUploadId;
+    assert.ok(failedClientId);
     assert.ok(store.get("mockup")?.files[0]?.file);
     await store.abandon("mockup");
     assert.equal(store.get("mockup"), null);
@@ -194,12 +367,27 @@ describe("uploadStore", () => {
     await flush();
     await store.abandon("mockup");
     assert.equal(store.get("mockup"), null);
-    assert.deepEqual(discarded, ["ffeeddccbbaa"]);
+    assert.deepEqual(discarded, [failedClientId, "ffeeddccbbaa"]);
+  });
+
+  it("服务端放弃失败时保留本地会话和文件，允许再次删除", async () => {
+    const fake = controlledTransport();
+    const store = createUploadStore(fake.transport, async () => {
+      throw new Error("删除暂存失败");
+    });
+    store.replaceFile("mockup", "ai", ai("待重试删除.ai"));
+    fake.calls[0]?.reject(new Error("上传失败"));
+    await flush();
+
+    await assert.rejects(store.abandon("mockup"), /删除暂存失败/);
+    assert.equal(store.get("mockup")?.files[0]?.name, "待重试删除.ai");
+    assert.ok(store.get("mockup")?.files[0]?.file);
   });
 
   it("超过 100 MB 立即拒绝，不创建网络请求", () => {
+    const storage = memoryStorage();
     const fake = controlledTransport();
-    const store = createUploadStore(fake.transport);
+    const store = createUploadStore(fake.transport, async () => undefined, storage, "ou_oversize_owner");
     const huge = ai("超大.ai");
     Object.defineProperty(huge, "size", { value: 100 * 1024 * 1024 + 1 });
 
@@ -207,6 +395,11 @@ describe("uploadStore", () => {
     assert.equal(fake.calls.length, 0);
     assert.equal(store.get("mockup")?.phase, "failed");
     assert.equal(store.get("mockup")?.error, UPLOAD_TOO_LARGE);
+
+    const restored = createUploadStore(controlledTransport().transport, async () => undefined, storage, "ou_oversize_owner");
+    assert.equal(restored.get("mockup")?.phase, "failed");
+    assert.equal(restored.get("mockup")?.recoverable, false);
+    assert.equal(restored.get("mockup")?.error, UPLOAD_TOO_LARGE);
   });
 
   it("整页卸载入口会中止两台正在进行的请求", () => {

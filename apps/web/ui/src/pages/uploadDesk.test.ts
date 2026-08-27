@@ -6,6 +6,7 @@ import {
   matchesDeskQuery,
   loadDeskReceipts,
   pendingUploadCard,
+  pendingUploadOpenAction,
   pendingUploadItems,
   shouldReconcileUpload,
 } from "./uploadDesk.js";
@@ -31,11 +32,13 @@ const restored: PendingUploadReceipt = {
   id: "112233445566",
   kind: "compare",
   files: [
-    { field: "excel", name: "远端确认单.xlsx", bytes: 12 },
-    { field: "pdf", name: "远端包装.pdf", bytes: 24 },
+    { field: "excel", name: "远端确认单.xlsx", bytes: 12, received: 12 },
+    { field: "pdf", name: "远端包装.pdf", bytes: 24, received: 24 },
   ],
   bytes: 36,
+  received: 36,
   created_at: "2026-08-26T07:00:00.000Z",
+  phase: "ready",
 };
 
 describe("uploadDesk", () => {
@@ -58,6 +61,15 @@ describe("uploadDesk", () => {
     assert.equal(item?.title, "远端确认单");
     assert.equal(item?.productName, null);
     assert.equal(item?.receipt, "112233445566");
+  });
+
+  it("GET 恢复的待开工审稿保留包装面类型", () => {
+    const [item] = pendingUploadItems("compare", null, [
+      { ...restored, product_name: "膜袋", pack_surface: "pouch" },
+    ]);
+    assert.equal(item?.productName, "膜袋");
+    assert.equal(item?.packSurface, "pouch");
+    assert.equal(item ? pendingUploadOpenAction(item) : null, "start");
   });
 
   it("可按任一文件名搜索待开工上传", () => {
@@ -107,6 +119,30 @@ describe("uploadDesk", () => {
     assert.equal(items[0]?.receipt, recovered.id);
   });
 
+  it("确定性校验失败保留原错误，不被同一服务端 partial 快照伪装成暂停", () => {
+    const failed: UploadSnapshot = {
+      ...local,
+      phase: "failed",
+      receipt: undefined,
+      uploadId: "112233445566",
+      clientUploadId: "client-invalid-file",
+      recoverable: false,
+      error: "不是有效的 PDF",
+    };
+    const partial = {
+      ...restored,
+      phase: "paused" as const,
+      received: restored.bytes,
+      client_upload_id: "client-invalid-file",
+    };
+    const items = pendingUploadItems("compare", failed, [partial]);
+    assert.equal(items.length, 1);
+    assert.equal(items[0]?.phase, "failed");
+    assert.equal(items[0]?.error, "不是有效的 PDF");
+    assert.equal(shouldReconcileUpload("compare", failed, [partial]), false);
+    assert.equal(shouldReconcileUpload("compare", { ...failed, recoverable: true }, [partial]), true);
+  });
+
   it("相同文件的另一次上传不会被错误合并", () => {
     const failed: UploadSnapshot = {
       ...local,
@@ -115,13 +151,17 @@ describe("uploadDesk", () => {
       clientUploadId: "client-new-attempt",
       error: "上传中断。请检查网络后重新上传。",
     };
-    const older = { ...restored, client_upload_id: "client-old-attempt", files: local.files };
+    const older = {
+      ...restored,
+      client_upload_id: "client-old-attempt",
+      files: local.files.map((file) => ({ ...file, received: file.bytes })),
+    };
     const items = pendingUploadItems("compare", failed, [older]);
     assert.equal(items.length, 2);
     assert.deepEqual(items.map((item) => item.phase), ["failed", "ready"]);
   });
 
-  it("只在等待确认或失败且没有同一上传回执时轮询恢复", () => {
+  it("partial 会话继续轮询，只有完整回执才结束协调", () => {
     const confirming: UploadSnapshot = {
       ...local,
       phase: "confirming",
@@ -134,6 +174,12 @@ describe("uploadDesk", () => {
         { ...restored, client_upload_id: "client-reconcile" },
       ]),
       false,
+    );
+    assert.equal(
+      shouldReconcileUpload("compare", confirming, [
+        { ...restored, phase: "paused", received: 10, client_upload_id: "client-reconcile" },
+      ]),
+      true,
     );
     assert.equal(shouldReconcileUpload("mockup", confirming, []), false);
     assert.equal(shouldReconcileUpload("compare", { ...confirming, phase: "ready" }, []), false);
@@ -149,5 +195,75 @@ describe("uploadDesk", () => {
     assert.equal(calls, 0);
     assert.deepEqual(await loadDeskReceipts(true, load), []);
     assert.equal(calls, 1);
+  });
+
+  it("只有完整回执可以开工，本地暂停保留文件句柄，远端暂停回恢复页", () => {
+    const [ready] = pendingUploadItems("compare", local, []);
+    assert.ok(ready);
+    assert.equal(pendingUploadOpenAction(ready), "start");
+
+    const [anonymous] = pendingUploadItems("compare", null, [restored]);
+    assert.ok(anonymous);
+    assert.equal(pendingUploadOpenAction(anonymous), "resume");
+
+    const [paused] = pendingUploadItems("compare", null, [
+      {
+        ...restored,
+        phase: "paused",
+        product_name: "断点续传花盒",
+        received: 18,
+      },
+    ]);
+    assert.ok(paused);
+    assert.equal(pendingUploadOpenAction(paused), "resume");
+
+    const localClientId = "client-local-paused";
+    const [localPaused] = pendingUploadItems(
+      "compare",
+      {
+        ...local,
+        phase: "paused",
+        receipt: undefined,
+        uploadId: paused.receipt || undefined,
+        clientUploadId: localClientId,
+      },
+      [
+        {
+          ...restored,
+          id: paused.receipt || restored.id,
+          phase: "paused",
+          client_upload_id: localClientId,
+          received: 18,
+        },
+      ],
+    );
+    assert.ok(localPaused);
+    assert.equal(pendingUploadOpenAction(localPaused), "active");
+  });
+
+  it("本地 ready 不会被看板缓存的旧 partial 快照降级", () => {
+    const ready = { ...local, clientUploadId: "client-ready-after-background" };
+    const [item] = pendingUploadItems("compare", ready, [
+      {
+        ...restored,
+        id: ready.receipt!,
+        phase: "paused",
+        received: 9,
+        client_upload_id: ready.clientUploadId,
+      },
+    ]);
+    assert.ok(item);
+    assert.equal(item.phase, "ready");
+    assert.equal(item.pct, 100);
+    assert.equal(item.receipt, ready.receipt);
+    assert.equal(pendingUploadOpenAction(item), "start");
+  });
+
+  it("本机仍在上传或等回执时保持当前工作台，不重挂载恢复页", () => {
+    for (const phase of ["uploading", "retrying", "confirming"] as const) {
+      const [item] = pendingUploadItems("compare", { ...local, phase }, [restored]);
+      assert.ok(item);
+      assert.equal(pendingUploadOpenAction(item), "active");
+    }
   });
 });

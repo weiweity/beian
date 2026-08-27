@@ -681,6 +681,12 @@ describe("review http", () => {
       headers: { authorization: `Bearer ${owner.token}` },
     });
     assert.equal(ok.status, 200);
+    const retried = await app.request("/api/tasks/191919191919", {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${owner.token}` },
+    });
+    assert.equal(retried.status, 200);
+    assert.equal(((await retried.json()) as { already_deleted?: boolean }).already_deleted, true);
     const gone = await app.request("/api/tasks/191919191919", {
       headers: { authorization: `Bearer ${owner.token}` },
     });

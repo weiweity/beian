@@ -56,8 +56,8 @@ test("历史批删跳过进行中记录，并保留删除失败的部分结果",
 
   await expect(page.getByText("已删除 1 条，1 条未删除")).toBeVisible();
   await expect(page.getByText("已签字审稿")).toHaveCount(0);
-  await expect(page.getByText("已出图打样")).toBeVisible();
-  await expect(page.getByText("正在对照审稿")).toBeVisible();
+  await expect(page.locator(".ant-table").getByText("已出图打样", { exact: true })).toBeVisible();
+  await expect(page.locator(".ant-table").getByText("正在对照审稿", { exact: true })).toBeVisible();
   expect(syntheticApi.tasks.map((item) => item.id)).toEqual([liveTask.id]);
   expect(syntheticApi.mockups.map((item) => item.id)).toEqual([doneMockup.id]);
 });

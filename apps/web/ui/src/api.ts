@@ -23,6 +23,8 @@ export function brokenApiMessage(err: unknown, host = ""): string | null {
 }
 
 export const GET_TIMEOUT_MS = 15_000;
+// 分片上传没有一条覆盖全流程的长连接，但每个网络步骤仍必须有退出上限。
+export const UPLOAD_TIMEOUT_MS = 15 * 60 * 1000;
 const GET_RETRY_BASE_MS = 5_000;
 const GET_RETRY_MAX_MS = 60_000;
 type PendingGet = { epoch: number; promise: Promise<unknown> };
@@ -53,34 +55,35 @@ async function fetchJson<T>(path: string, opts: RequestInit): Promise<T> {
   if (!(opts.body instanceof FormData) && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
-  const controller = isGet(opts) ? new AbortController() : null;
+  const getRequest = isGet(opts);
+  const controller = new AbortController();
   let timedOut = false;
-  const abortFromCaller = () => controller?.abort(opts.signal?.reason);
-  if (controller && opts.signal) opts.signal.addEventListener("abort", abortFromCaller, { once: true });
-  const timeout = controller
-    ? globalThis.setTimeout(() => {
-        timedOut = true;
-        controller.abort();
-      }, GET_TIMEOUT_MS)
-    : undefined;
+  const abortFromCaller = () => controller.abort(opts.signal?.reason);
+  if (opts.signal) opts.signal.addEventListener("abort", abortFromCaller, { once: true });
+  const timeout = globalThis.setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, getRequest ? GET_TIMEOUT_MS : UPLOAD_TIMEOUT_MS);
   let res: Response;
   try {
     res = await fetch(path, {
       credentials: "same-origin",
       ...opts,
-      signal: controller?.signal || opts.signal,
+      signal: controller.signal,
       headers,
     });
   } catch (err) {
-    if (timedOut) throw new ApiError(0, "审稿服务响应超时，请稍后重试。", true);
+    if (timedOut) {
+      throw new ApiError(0, getRequest ? "审稿服务响应超时，请稍后重试。" : "上传请求响应超时，正在重试。", true);
+    }
     if (err instanceof TypeError) {
       const hint = describeBrokenApi(0, "text/html", apiHost()) || "审稿服务没回上。刷新后再试。";
       throw new ApiError(0, hint, true);
     }
     throw err;
   } finally {
-    if (timeout !== undefined) globalThis.clearTimeout(timeout);
-    if (controller && opts.signal) opts.signal.removeEventListener("abort", abortFromCaller);
+    globalThis.clearTimeout(timeout);
+    if (opts.signal) opts.signal.removeEventListener("abort", abortFromCaller);
   }
   const ct = res.headers.get("content-type") || "";
   if (res.status === 413) {
@@ -151,17 +154,25 @@ export type UploadReceipt = {
 
 export type PendingUploadReceipt = {
   id: string;
-  files: { field: string; name: string; bytes: number }[];
+  files: { field: string; name: string; bytes: number; received: number; last_modified?: number }[];
   bytes: number;
+  received: number;
   created_at: string;
   client_upload_id?: string;
+  product_name?: string;
+  pack_surface?: string;
   kind: "compare" | "mockup";
+  phase: "ready" | "paused";
 };
 
-export type UploadProgress = { pct: number; loaded: number; total: number };
-
-// 100 MB 在慢链路上传输可能超过五分钟；超时覆盖传输和服务端落盘确认。
-export const UPLOAD_TIMEOUT_MS = 15 * 60 * 1000;
+export type UploadProgress = {
+  pct: number;
+  loaded: number;
+  total: number;
+  phase?: "uploading" | "retrying" | "confirming";
+  retryAttempt?: number;
+  uploadId?: string;
+};
 
 export function uploadWithProgress<T>(
   path: string,
@@ -240,6 +251,242 @@ export function uploadWithProgress<T>(
   });
 }
 
+export class UploadPausedError extends ApiError {
+  uploadId?: string;
+  constructor(message: string, uploadId?: string) {
+    super(0, message, false);
+    this.uploadId = uploadId;
+  }
+}
+
+const RESUMABLE_CHUNK_BYTES = 1024 * 1024;
+const RESUMABLE_RETRIES = 5;
+
+type UploadSessionResponse = { upload: PendingUploadReceipt };
+
+function abortError(): ApiError {
+  return new ApiError(0, "上传已停止", false);
+}
+
+function transientUploadFailure(err: unknown): boolean {
+  // 429 是明确的并发或暂存容量拒绝；立即把服务端原因交给用户，不冒充断网。
+  return !(err instanceof ApiError && err.status === 429) && transientApiFailure(err);
+}
+
+function waitForRetry(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(abortError());
+  return new Promise((resolve, reject) => {
+    const finish = () => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    };
+    const timer = globalThis.setTimeout(finish, ms);
+    const abort = () => {
+      globalThis.clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+      reject(abortError());
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}
+
+async function sha256Hex(buffer: ArrayBuffer): Promise<string> {
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", buffer);
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function retryUploadCall<T>(
+  run: () => Promise<T>,
+  onRetry: (attempt: number) => void,
+  signal?: AbortSignal,
+  uploadId?: string,
+): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= RESUMABLE_RETRIES; attempt += 1) {
+    if (signal?.aborted) throw abortError();
+    try {
+      return await run();
+    } catch (err) {
+      lastError = err;
+      if (signal?.aborted) throw abortError();
+      if (!transientUploadFailure(err)) throw err;
+      if (attempt >= RESUMABLE_RETRIES) break;
+      onRetry(attempt + 1);
+      await waitForRetry(Math.min(1000 * 2 ** attempt, 8000), signal);
+    }
+  }
+  const detail = lastError instanceof Error ? lastError.message : "网络连接中断";
+  const message = uploadId
+    ? `上传已暂停，服务器已保存收到的部分。网络恢复后点“继续上传”。${detail ? `（${detail}）` : ""}`
+    : `暂时无法确认服务器是否收到这次上传，正在按上传标识查找。${detail ? `（${detail}）` : ""}`;
+  throw new UploadPausedError(message, uploadId);
+}
+
+type SelectedUploadFile = { field: "excel" | "pdf" | "ai"; file: File };
+
+function resumableForm(fd: FormData): {
+  clientUploadId: string;
+  productName: string;
+  packSurface: string;
+  files: SelectedUploadFile[];
+} {
+  const clientUploadId = String(fd.get("client_upload_id") || "");
+  const productName = String(fd.get("product_name") || "");
+  const packSurface = String(fd.get("pack_surface") || "");
+  const files: SelectedUploadFile[] = [];
+  for (const [formField, uploadField] of [
+    ["excel", "excel"],
+    ["pdf", "pdf"],
+    ["file", "ai"],
+  ] as const) {
+    const value = fd.get(formField);
+    if (value instanceof File) files.push({ field: uploadField, file: value });
+  }
+  return { clientUploadId, productName, packSurface, files };
+}
+
+function uploadReceipt(upload: PendingUploadReceipt): UploadReceipt {
+  return {
+    receipt: upload.id,
+    client_upload_id: upload.client_upload_id,
+    files: upload.files.map(({ field, name, bytes }) => ({ field, name, bytes })),
+  };
+}
+
+/**
+ * 云盘式上传：每 1 MB 独立确认，断线后沿用 client_upload_id 与服务器 offset。
+ * 分片与完成接口都幂等，因此“服务端写成、响应丢了”也只会重试当前一步。
+ */
+export async function uploadResumable(
+  fd: FormData,
+  onProgress?: (progress: UploadProgress) => void,
+  signal?: AbortSignal,
+): Promise<UploadReceipt> {
+  const input = resumableForm(fd);
+  const total = input.files.reduce((sum, item) => sum + item.file.size, 0);
+  if (!input.clientUploadId || !input.files.length || total <= 0) throw new ApiError(400, "没有可上传的文件");
+
+  let uploadId: string | undefined;
+  let latestProgress = { loaded: 0, total, pct: 0 };
+  const retryNotice = (attempt: number) =>
+    onProgress?.({ ...latestProgress, phase: "retrying", retryAttempt: attempt, uploadId });
+  const startBody = {
+    client_upload_id: input.clientUploadId,
+    product_name: input.productName,
+    pack_surface: input.packSurface,
+    files: input.files.map(({ field, file }) => ({
+      field,
+      name: file.name,
+      bytes: file.size,
+      last_modified: file.lastModified,
+    })),
+  };
+  let session = (
+    await retryUploadCall(
+      () => request<UploadSessionResponse>("/api/uploads/sessions", { method: "POST", body: JSON.stringify(startBody) }),
+      retryNotice,
+      signal,
+    )
+  ).upload;
+  uploadId = session.id;
+  if (session.phase === "ready") return uploadReceipt(session);
+
+  let loaded = session.files.reduce((sum, file) => sum + file.received, 0);
+  latestProgress = { loaded, total, pct: Math.round((loaded / total) * 100) };
+  onProgress?.({ ...latestProgress, phase: "uploading", uploadId });
+
+  for (const selected of input.files) {
+    const serverFile = session.files.find((file) => file.field === selected.field);
+    if (!serverFile) throw new ApiError(409, "服务器上传记录不完整，请重新开始");
+
+    // 文件名、大小和修改时间都可能碰撞。续传前把服务器已确认的区段逐块重放，
+    // 由服务端比较落盘内容的 SHA-256；任何一块不同都必须拒绝，不能拼成混合稿。
+    let confirmedPrefix = serverFile.received;
+    if (confirmedPrefix > selected.file.size) throw new ApiError(409, "服务器上传进度超过文件大小，请重新开始");
+    let verified = 0;
+    while (verified < confirmedPrefix) {
+      const end = Math.min(verified + RESUMABLE_CHUNK_BYTES, confirmedPrefix);
+      const buffer = await selected.file.slice(verified, end).arrayBuffer();
+      const sha256 = await sha256Hex(buffer);
+      const response = await retryUploadCall(
+        () =>
+          request<UploadSessionResponse>(
+            `/api/uploads/sessions/${encodeURIComponent(uploadId!)}/files/${selected.field}`,
+            {
+              method: "PUT",
+              headers: {
+                "Content-Type": "application/octet-stream",
+                "x-upload-offset": String(verified),
+                "x-upload-sha256": sha256,
+              },
+              body: buffer,
+            },
+          ),
+        retryNotice,
+        signal,
+        uploadId,
+      );
+      session = response.upload;
+      const checked = session.files.find((file) => file.field === selected.field);
+      if (!checked || checked.received < end) throw new ApiError(409, "服务器没有确认续传文件校验");
+      if (checked.received > selected.file.size) throw new ApiError(409, "服务器上传进度超过文件大小，请重新开始");
+      verified = end;
+      // 另一标签页可能推进了同一会话。只扩大“待校验前缀”，不能直接跳到它报告的 offset。
+      confirmedPrefix = Math.max(confirmedPrefix, checked.received);
+    }
+
+    let offset = verified;
+    while (offset < selected.file.size) {
+      const end = Math.min(offset + RESUMABLE_CHUNK_BYTES, selected.file.size);
+      const buffer = await selected.file.slice(offset, end).arrayBuffer();
+      const sha256 = await sha256Hex(buffer);
+      const response = await retryUploadCall(
+        () =>
+          request<UploadSessionResponse>(
+            `/api/uploads/sessions/${encodeURIComponent(uploadId!)}/files/${selected.field}`,
+            {
+              method: "PUT",
+              headers: {
+                "Content-Type": "application/octet-stream",
+                "x-upload-offset": String(offset),
+                "x-upload-sha256": sha256,
+              },
+              body: buffer,
+            },
+          ),
+        retryNotice,
+        signal,
+        uploadId,
+      );
+      session = response.upload;
+      const updated = session.files.find((file) => file.field === selected.field);
+      if (!updated || updated.received < end) throw new ApiError(409, "服务器没有确认本次上传分片");
+      if (updated.received > selected.file.size) throw new ApiError(409, "服务器上传进度超过文件大小，请重新开始");
+      // 即便并发页面已把服务端推进得更远，本页也只前进到自己刚校验过的末端。
+      offset = end;
+      loaded = session.files.reduce((sum, file) => sum + file.received, 0);
+      latestProgress = { loaded, total, pct: Math.min(100, Math.round((loaded / total) * 100)) };
+      onProgress?.({ ...latestProgress, phase: loaded >= total ? "confirming" : "uploading", uploadId });
+    }
+  }
+
+  latestProgress = { loaded: total, total, pct: 100 };
+  onProgress?.({ ...latestProgress, phase: "confirming", uploadId });
+  session = (
+    await retryUploadCall(
+      () =>
+        request<UploadSessionResponse>(`/api/uploads/sessions/${encodeURIComponent(uploadId!)}/complete`, {
+          method: "POST",
+          body: JSON.stringify({}),
+        }),
+      retryNotice,
+      signal,
+      uploadId,
+    )
+  ).upload;
+  return uploadReceipt(session);
+}
+
 export type Me = {
   logged_in: boolean;
   display_name: string | null;
@@ -252,6 +499,7 @@ export type Me = {
 export type HealthView = {
   ok?: boolean;
   jobs?: unknown;
+  uploads?: { active?: number; waiting?: number };
   feishu_notify?: boolean;
   version?: string;
   runtime?: string;
@@ -344,7 +592,7 @@ export const api = {
   uploads: () => request<PendingUploadReceipt[]>("/api/uploads"),
   discardUpload: (id: string) => request<{ ok: boolean }>(`/api/uploads/${id}`, { method: "DELETE" }),
   stageUpload: (fd: FormData, onProgress?: (progress: UploadProgress) => void, signal?: AbortSignal) =>
-    uploadWithProgress<UploadReceipt>("/api/uploads", fd, onProgress, signal),
+    uploadResumable(fd, onProgress, signal),
   startTask: (body: { receipt: string; product_name: string; title?: string; pack_surface?: string }) =>
     request<TaskDetail>("/api/tasks/start", { method: "POST", body: JSON.stringify(body) }),
   startMockup: (body: { receipt: string; title?: string; product_name?: string }) =>
