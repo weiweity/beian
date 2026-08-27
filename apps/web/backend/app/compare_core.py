@@ -10,10 +10,14 @@ from pathlib import Path
 from typing import Any
 
 from app import config, layout_zones, pack_profile, text_verify
-from app.baidu_ocr import ocr_image_bytes, qrcode_image_bytes
+from app.baidu_ocr import qrcode_image_bytes
 from app.claims_rules import build_claims_report
-from app.fields import compare_fields, parse_excel_fields
+from app.field_verify import clip_hit_bboxes, verify_fields
+from app.fields import parse_excel_fields
+from app.pack_layout import detect_regions
+from app.pdf_ingest import ingest_pdf, public_ingest
 from app.pdf_render import render_pdf_pages
+from app.region_ocr import recognize_pages
 
 ROOT = Path(__file__).resolve().parents[1]
 TID_RE = re.compile(r"^[0-9a-f]{12}$")
@@ -76,163 +80,11 @@ def _summary(hits: list[dict]) -> dict[str, int]:
     return s
 
 
-def _ocr_pages(page_metas: list[dict]) -> tuple[str, list[dict], str, dict]:
-    """
-    返回 (text, words, engine_tag, ocr_meta)
-    含 probability + 百度段落 + 行合并 + 裁块二次 OCR + 可选 Paddle-VL。
-    words 带 paragraph_id（百度）时，双页比对走段级 1:1。
-    """
-    all_words: list[dict] = []
-    texts: list[str] = []
-    api_used = "accurate"
-    prob_means: list[float] = []
-    boost_meta_all: list[dict] = []
-    paragraph_pages: list[dict] = []
-    para_total = 0
-    for meta in page_metas:
-        data = Path(meta["path"]).read_bytes()
-        text, words, info = ocr_image_bytes(
-            data, with_location=True, paragraph=True
-        )
-        api_used = info.get("api", api_used)
-        if info.get("prob_mean") is not None:
-            prob_means.append(float(info["prob_mean"]))
-        page_words: list[dict] = []
-        page_n = int(meta["page"])
-        # 多页时 paragraph_id 加页偏移，避免串段
-        pid_offset = (page_n - 1) * 1000
-        for w in words:
-            w = dict(w)
-            w["page"] = page_n
-            if w.get("paragraph_id") is not None:
-                try:
-                    w["paragraph_id"] = int(w["paragraph_id"]) + pid_offset
-                except Exception:
-                    pass
-            page_words.append(w)
-            all_words.append(w)
-        texts.append(text)
-        n_para = len(info.get("paragraphs") or [])
-        para_total += n_para
-        paragraph_pages.append(
-            {
-                "page": page_n,
-                "n": n_para,
-                "source": info.get("paragraph_source"),
-            }
-        )
-        # 裁块二次 OCR：成分右栏 / 脚注 / 生产（同 accurate，坐标回全图）
-        try:
-            from app.ocr_zone_boost import boost_page_ocr
-
-            extra_t, extra_w, bmeta = boost_page_ocr(
-                meta["path"], page_words, page=int(meta["page"])
-            )
-            boost_meta_all.append(bmeta)
-            if extra_t or extra_w:
-                for w in extra_w:
-                    all_words.append(w)
-                texts.append(extra_t)
-        except Exception as e:
-            boost_meta_all.append({"ok": False, "error": str(e)[:120]})
-
-    raw_text = "\n\n".join(texts)
-    # P1：行合并，提升整句覆盖（Excel 路径仍受益；双页优先用 paragraph_id）
-    try:
-        from app.ocr_postprocess import merge_ocr_lines
-
-        merged_text, merged_words = merge_ocr_lines(all_words)
-        if merged_text and len(merged_text) >= max(20, int(len(raw_text) * 0.4)):
-            pack_text = merged_text + "\n" + raw_text
-            words_out = merged_words or all_words
-            merge_tag = "line_merge"
-        else:
-            pack_text, words_out, merge_tag = raw_text, all_words, "no_merge"
-    except Exception:
-        pack_text, words_out, merge_tag = raw_text, all_words, "merge_error"
-
-    # 保证 boost 原文一定在匹配串里（行合并可能丢掉）
-    if any((b or {}).get("ok") for b in boost_meta_all):
-        pack_text = pack_text + "\n" + raw_text
-
-    boost_ok = sum(1 for b in boost_meta_all if (b or {}).get("ok"))
-
-    # P2：PaddleOCR-VL 文档解析增强（异步；失败不阻断主路径）
-    paddle_meta: dict = {"enabled": False, "ok": False}
-    try:
-        from app.baidu_paddle_vl import paddle_vl_enabled, parse_image_file
-
-        if paddle_vl_enabled() and page_metas:
-            paddle_meta["enabled"] = True
-            vl_texts: list[str] = []
-            vl_words: list[dict] = []
-            vl_pages: list[dict] = []
-            for meta_p in page_metas[:2]:
-                pw = int(meta_p.get("width") or 0) or None
-                ph = int(meta_p.get("height") or 0) or None
-                res = parse_image_file(
-                    meta_p["path"],
-                    page=int(meta_p.get("page") or 1),
-                    page_w=pw,
-                    page_h=ph,
-                )
-                vl_pages.append(
-                    {
-                        "page": meta_p.get("page"),
-                        "ok": res.get("ok"),
-                        "error": res.get("error"),
-                        "task_id": res.get("task_id"),
-                        "text_len": len(res.get("text") or ""),
-                        "words": len(res.get("words") or []),
-                    }
-                )
-                if res.get("ok"):
-                    if res.get("text"):
-                        vl_texts.append(f"[paddle_vl_p{meta_p.get('page')}]\n{res['text']}")
-                    for w in res.get("words") or []:
-                        ww = dict(w)
-                        ww["page"] = int(meta_p.get("page") or 1)
-                        vl_words.append(ww)
-            if vl_texts:
-                pack_text = pack_text + "\n" + "\n".join(vl_texts)
-            if vl_words:
-                words_out = list(words_out) + vl_words
-            paddle_meta.update(
-                {
-                    "ok": any(p.get("ok") for p in vl_pages),
-                    "pages": vl_pages,
-                    "extra_words": len(vl_words),
-                    "extra_text_len": sum(len(t) for t in vl_texts),
-                }
-            )
-    except Exception as e:
-        paddle_meta = {"enabled": True, "ok": False, "error": str(e)[:200]}
-
-    meta = {
-        "api": api_used,
-        "probability": bool(prob_means),
-        "prob_mean": round(sum(prob_means) / len(prob_means), 4) if prob_means else None,
-        "line_merge": merge_tag,
-        "words": len(words_out),
-        "paragraph": {
-            "enabled": True,
-            "total": para_total,
-            "pages": paragraph_pages,
-        },
-        "zone_boost": {
-            "pages": boost_ok,
-            "detail": boost_meta_all,
-        },
-        "paddle_vl": paddle_meta,
-    }
-    tag = f"baidu:{api_used}+{merge_tag}"
-    if para_total:
-        tag += f"+para{para_total}"
-    if boost_ok:
-        tag += "+zone_boost"
-    if paddle_meta.get("ok"):
-        tag += "+paddle_vl"
-    return pack_text, words_out, tag, meta
+def _ocr_pages(
+    page_metas: list[dict], ingested: dict | None = None
+) -> tuple[str, list[dict], str, dict]:
+    """单引擎认字。活字跳过 OCR；禁止 zone_boost / Paddle-VL 拼进同一词表。"""
+    return recognize_pages(page_metas, ingested)
 
 
 def _qrcode_pages(page_metas: list[dict]) -> tuple[list[dict], dict]:
@@ -375,26 +227,28 @@ def _surface_job(
     pages_dir.mkdir(parents=True, exist_ok=True)
     emit_stage("render_pdf")
     page_metas = render_pdf_pages(pdf, pages_dir, max_pages=max_pages, quality="high")
-    layer_text, layer_blocks, has_layer = text_verify.extract_pdf_text_layer(
-        pdf, max_pages=max_pages
-    )
-    layer_px = (
-        text_verify.map_pdf_blocks_to_pixels(layer_blocks, page_metas)
-        if has_layer
-        else []
-    )
+    emit_stage("ingest")
+    ingested = ingest_pdf(pdf, page_metas, max_pages=max_pages)
+    layer_text = ingested.get("layer_text") or ""
+    has_layer = bool(ingested.get("has_layer"))
+    layer_px = ingested.get("spans") or []
     layer_words = text_verify.words_from_text_blocks(layer_px)
     emit_stage("ocr")
-    ocr_text, ocr_words, ocr_engine, ocr_meta = _ocr_pages(page_metas)
+    ocr_text, ocr_words, ocr_engine, ocr_meta = _ocr_pages(page_metas, ingested)
+    prefer_layer = has_layer or ingested.get("mode") == "live_text"
     pack_text, words, text_source = text_verify.merge_text_sources(
         layer_text,
         ocr_text,
         layer_words,
         ocr_words,
-        prefer_layer=has_layer,
+        prefer_layer=prefer_layer,
     )
-    ph = int(page_metas[0]["height"]) if page_metas else 2400
-    zones = layout_zones.detect_zones(words, page_height=ph)
+    emit_stage("layout")
+    layout = detect_regions(words, page_metas)
+    zones = layout.get("zones") or layout_zones.detect_zones(
+        words, page_height=int(page_metas[0]["height"]) if page_metas else 2400
+    )
+    regions = layout.get("regions") or []
     excel_net = next(
         (f.get("excel_value") or "" for f in fields if f.get("field_group") == "净含量"),
         "",
@@ -439,14 +293,14 @@ def _surface_job(
         (f.get("excel_value") or "") + "\n" + (f.get("remark") or "") for f in fields
     )
     emit_stage("match")
-    hits = compare_fields(
+    hits = verify_fields(
         fields,
         words,
         pack_text,
-        attach_sequence_diff=True,
         pack_profile=profile,
-        excel_joined=excel_joined_pre,
         zones=zones,
+        regions=regions,
+        excel_joined=excel_joined_pre,
     )
     # 面标签
     for h in hits:
@@ -484,6 +338,10 @@ def _surface_job(
                     rev_boxes.append(b)
         except Exception:
             rev_boxes = []
+        rev_hit = clip_hit_bboxes(
+            {"field": "reverse_extra", "field_group": "文案", "bboxes": rev_boxes},
+            regions,
+        )
         hits.append(
             {
                 "id": f"{pages_subdir}_reverse_extra",
@@ -497,7 +355,7 @@ def _surface_job(
                 ),
                 "score": 55.0,
                 "decision": "pending",
-                "bboxes": rev_boxes,
+                "bboxes": rev_hit.get("bboxes") or [],
                 "page": 1,
                 "category": "reverse_extra",
                 "no_bbox": not bool(rev_boxes),
@@ -529,10 +387,17 @@ def _surface_job(
             k: {kk: vv for kk, vv in v.items() if kk != "box"}
             for k, v in zones.items()
         },
+        "pack_layout": {
+            "regions": [
+                {k: r.get(k) for k in ("id", "role", "page", "left", "top", "width", "height")}
+                for r in regions
+            ]
+        },
         "reverse_extras": reverse_extras,
         "qrcodes": qrcodes,
         "qrcode_meta": qr_meta,
         "ocr_meta": ocr_meta,
+        "ingest": public_ingest(ingested),
     }
 
 
@@ -672,6 +537,7 @@ def run_excel_pdf_job(
         "ocr_text": (pack_all or "")[:12000],
         "text_source": primary.get("text_source"),
         "has_pdf_text_layer": primary.get("has_layer"),
+        "ingest": primary.get("ingest"),
         "pack_profile": prof,
         "layout_zones": primary.get("layout_zones"),
         "surfaces": [
@@ -680,6 +546,7 @@ def run_excel_pdf_job(
                 "pages": len(f.get("pages") or []),
                 "profile": f.get("pack_profile"),
                 "zones": f.get("layout_zones"),
+                "ingest": f.get("ingest"),
             }
             for f in faces
         ],

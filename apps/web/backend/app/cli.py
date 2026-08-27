@@ -140,6 +140,7 @@ def cmd_rework(args: argparse.Namespace) -> int:
     task["artwork_v2"] = "artwork_v2.pdf"
     task["pages_v2"] = result.get("pages") or []
     task["hits_v2"] = result.get("hits") or []
+    task["ingest"] = result.get("ingest")
     task["status"] = "in_review"
     prior = [
         h
