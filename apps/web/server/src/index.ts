@@ -20,6 +20,15 @@ import { compress } from "hono/compress";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import { HTTPException } from "hono/http-exception";
 import { cacheHeaderFor, REDIRECT_CACHE } from "./cacheHeaders.js";
+import {
+  createReleaseAdmission,
+  holdReleaseUntilResponseSettles,
+  isReleaseProtectedRequest,
+  releaseReadiness,
+  RELEASE_CONTROL_PROTOCOL,
+  RELEASE_CONTROL_TEST_TOKEN,
+  RELEASE_DRAIN_MESSAGE,
+} from "./releaseAdmission.js";
 import { isSpaPath, legacyDeskRedirect, spaIndexAction } from "./spaIndex.js";
 import { COOKIE, DATA_DIR, HOST, PORT, REPO_ROOT, UI_DIST, UI_PUBLIC, cookieSecure } from "./config.js";
 import { billingSnapshot, loadVendorBills, resetBillingCache } from "./billing.js";
@@ -27,6 +36,8 @@ import { notifyTaskComplete, sendText } from "./notify.js";
 import {
   decorateQueueAhead,
   enqueue,
+  launchNotification,
+  notificationSnapshot,
   publicTask,
   queueSnapshot,
   reclaimOnBoot,
@@ -78,6 +89,11 @@ import {
   type StructureFaceDecision,
 } from "./mockup.js";
 import { assertIllustratorReady } from "./aiRaster.js";
+import {
+  assertIllustratorAgentReady,
+  publicIllustratorAgentStatus,
+  readIllustratorAgentStatus,
+} from "./illustratorAgent.js";
 import { confirmPackagingStructure } from "./workers.js";
 import { skipPackSheetField } from "./sheetSkip.js";
 import {
@@ -124,7 +140,7 @@ import {
 type Env = { Variables: { session: Session } };
 
 const app = new Hono<Env>();
-const VERSION = "0.19.0.0";
+const VERSION = "0.20.0.0";
 /** 浏览器给 100 MB 慢速上传 15 分钟；服务端多留 1 分钟完成落盘和回执。 */
 export const SERVER_HTTP_OPTIONS = {
   headersTimeout: 60_000,
@@ -133,15 +149,46 @@ export const SERVER_HTTP_OPTIONS = {
 const uploadCoordinator = createUploadCoordinator();
 // 对红仍用 Hono parseBody，单独保持单槽；新稿上传已改为双通道流式落盘。
 const reworkUploadAdmission = createUploadAdmission(1);
+const releaseControlPath = join(DATA_DIR, "runtime", "release-control.json");
+const releaseDrainFencePath = join(DATA_DIR, "runtime", "release-drain.json");
+const releaseAdmission = createReleaseAdmission(
+  process.env.VITEST === "1" ? RELEASE_CONTROL_TEST_TOKEN : undefined,
+  { fencePath: releaseDrainFencePath },
+);
 
-app.use(compress());
-
-app.use("/api/*", async (c, next) => {
-  const tok = c.req.header("authorization") || (getCookie(c, COOKIE) ? `Bearer ${getCookie(c, COOKIE)}` : "");
-  const sess = getSession(tok);
-  if (sess) c.set("session", sess);
-  await next();
+app.use("*", async (c, next) => {
+  const protectedRequest = isReleaseProtectedRequest(c.req.method, c.req.path);
+  let release = protectedRequest ? releaseAdmission.acquire() : undefined;
+  if (protectedRequest && !release) throw new HTTPException(503, { message: RELEASE_DRAIN_MESSAGE });
+  const settle = (): void => {
+    release?.();
+    release = undefined;
+  };
+  try {
+    if (c.req.path.startsWith("/api/") && protectedRequest) {
+      // Acquire before session lookup: getSession can prune expired sessions or
+      // persist role reconciliation, and those writes must be in the drain count.
+      const cookie = getCookie(c, COOKIE);
+      const tok = c.req.header("authorization") || (cookie ? `Bearer ${cookie}` : "");
+      const sess = getSession(tok);
+      if (sess) c.set("session", sess);
+    }
+    await next();
+    if (release && c.req.method.toUpperCase() !== "HEAD" && c.res.body) {
+      c.res = holdReleaseUntilResponseSettles(c.res, settle);
+    } else {
+      settle();
+    }
+  } catch (err) {
+    settle();
+    throw err;
+  }
 });
+
+// Admission must wrap compression as well as the route handler. Otherwise the
+// inner lease can settle after compress() has consumed the source stream but
+// before the final gzip body has reached the client.
+app.use(compress());
 
 function need(c: { get: (k: "session") => Session | undefined }, perm: string): Session {
   const s = c.get("session");
@@ -217,11 +264,19 @@ app.onError((err, c) => {
   return c.json({ detail: "服务器错误" }, 500);
 });
 
-function liveStatus() {
+function liveStatus(includeAgentDiagnostics = false) {
   const primaryUploads = uploadCoordinator.snapshot();
   const reworkUploads = reworkUploadAdmission.snapshot();
+  const jobs = queueSnapshot();
+  const agent = readIllustratorAgentStatus();
   return {
-    jobs: queueSnapshot(),
+    jobs: {
+      ...jobs,
+      illustrator: {
+        ...jobs.illustrator,
+        agent: includeAgentDiagnostics ? agent : publicIllustratorAgentStatus(agent),
+      },
+    },
     uploads: {
       active: primaryUploads.active + reworkUploads.active,
       waiting: primaryUploads.waiting + reworkUploads.waiting,
@@ -238,9 +293,98 @@ function isDirectLoopbackHealth(c: Context): boolean {
   return !forwarded && isLoopbackHost(c.req.header("host") || "");
 }
 
+function releaseControlToken(c: Context): string {
+  return c.req.header("x-beian-release-token") || "";
+}
+
+function releaseControlLease(c: Context): string {
+  return c.req.header("x-beian-release-lease") || "";
+}
+
+function releaseControlPayload(admission: ReturnType<typeof releaseAdmission.snapshot>) {
+  const jobs = queueSnapshot();
+  const primaryUploads = uploadCoordinator.snapshot();
+  const reworkUploads = reworkUploadAdmission.snapshot();
+  const readiness = releaseReadiness({
+    admission,
+    jobs: [jobs.ocr, jobs.blender, jobs.illustrator],
+    jobsUnknown: jobs.unknown,
+    uploads: {
+      active: primaryUploads.active + reworkUploads.active,
+      waiting: primaryUploads.waiting + reworkUploads.waiting,
+    },
+    notifications: notificationSnapshot(),
+    illustratorState: readIllustratorAgentStatus().state,
+  });
+  return {
+    ok: true,
+    protocol: RELEASE_CONTROL_PROTOCOL,
+    instance_id: releaseAdmission.instanceId,
+    version: VERSION,
+    pid: process.pid,
+    ...admission,
+    ...readiness,
+  };
+}
+
+app.get("/api/internal/release/identity", (c) => {
+  try {
+    const instanceId = releaseAdmission.identity(releaseControlToken(c));
+    return c.json({
+      ok: true,
+      protocol: RELEASE_CONTROL_PROTOCOL,
+      instance_id: instanceId,
+      version: VERSION,
+      pid: process.pid,
+    });
+  } catch (err) {
+    boom(err);
+  }
+});
+
+app.post("/api/internal/release/drain", (c) => {
+  try {
+    return c.json(releaseControlPayload(
+      releaseAdmission.enter(releaseControlToken(c), releaseControlLease(c)),
+    ));
+  } catch (err) {
+    boom(err);
+  }
+});
+
+app.put("/api/internal/release/drain", (c) => {
+  try {
+    return c.json(releaseControlPayload(
+      releaseAdmission.promote(releaseControlToken(c), releaseControlLease(c)),
+    ));
+  } catch (err) {
+    boom(err);
+  }
+});
+
+app.get("/api/internal/release/drain", (c) => {
+  try {
+    return c.json(releaseControlPayload(
+      releaseAdmission.inspect(releaseControlToken(c), releaseControlLease(c)),
+    ));
+  } catch (err) {
+    boom(err);
+  }
+});
+
+app.delete("/api/internal/release/drain", (c) => {
+  try {
+    return c.json(releaseControlPayload(
+      releaseAdmission.leave(releaseControlToken(c), releaseControlLease(c)),
+    ));
+  } catch (err) {
+    boom(err);
+  }
+});
+
 app.get("/api/health", (c) => {
   const base = { ok: true, version: VERSION, runtime: "typescript" };
-  if (isDirectLoopbackHealth(c)) return c.json({ ...base, ...liveStatus() });
+  if (isDirectLoopbackHealth(c)) return c.json({ ...base, ...liveStatus(true) });
   return c.json({
     ...base,
     // 公网发版核对保留 jobs.illustrator 存在性合同，但不公开作业数量。
@@ -249,8 +393,13 @@ app.get("/api/health", (c) => {
 });
 
 app.get("/api/status", (c) => {
-  need(c, "read");
-  return c.json({ ok: true, version: VERSION, runtime: "typescript", ...liveStatus() });
+  const session = need(c, "read");
+  return c.json({
+    ok: true,
+    version: VERSION,
+    runtime: "typescript",
+    ...liveStatus(session.role === "admin"),
+  });
 });
 
 app.get("/api/auth/me", (c) => {
@@ -576,6 +725,7 @@ app.post("/api/mockups/start", async (c) => {
   try {
     assertBlenderReady();
     illustratorExecutable = assertIllustratorReady();
+    assertIllustratorAgentReady();
   } catch (e) {
     boom(e);
   }
@@ -754,9 +904,7 @@ app.post("/api/tasks/:tid/complete", async (c) => {
   task.conclusion = conclusion;
   task.complete_kind = issues.length ? "rework" : "signed";
   saveTask(task);
-  void notifyTaskComplete(task, s.display_name).catch((err) => {
-    console.warn("feishu notify failed:", err instanceof Error ? err.message : err);
-  });
+  launchNotification(`signed task ${task.id}`, () => notifyTaskComplete(task, s.display_name));
   return c.json(publicTask(task, viewerFromSession(s)));
 });
 
@@ -1140,6 +1288,7 @@ if (process.env.VITEST !== "1") {
     throw new Error("公网模式必须把 WB_DATA_DIR 设到仓库外");
   }
   mkdirSync(join(DATA_DIR, "tasks"), { recursive: true });
+  releaseAdmission.controlFile(releaseControlPath, VERSION);
   reclaimOnBoot();
   serve({ fetch: app.fetch, hostname: HOST, port: PORT, serverOptions: SERVER_HTTP_OPTIONS }, (info) => {
     console.log(`beian-server ${VERSION} http://${info.address}:${info.port}`);

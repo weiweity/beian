@@ -17,7 +17,7 @@
 新增独立的 `workers/packaging/structure_v2` 深模块，以版本化 `PackagingStructure v1` 作为唯一结构事实源：
 
 1. 输入适配器只把可验证的显式语义翻译为 IR。当前实现是结构 sidecar 与 Illustrator 语义导出；ISO 19593、CF2、DXF 等必须取得真实样本并完成独立适配器验证后再接入。
-   Illustrator 语义导出只有一份 `export_structure.jsx`：macOS 由 AppleScript 调用，Windows 由 `Illustrator.Application` COM 的 `DoJavaScriptFile` 调用。平台桥只负责生命周期与启动，不复制结构算法。
+   Illustrator 语义导出只有一份 `export_structure.jsx`：macOS 由 AppleScript 调用；Windows 的 LocalSystem worker 通过 UTF-8 命名管道请求登录桌面的 PowerShell Agent，Agent 再调用现有 `cscript` / `run_export.vbs`，由 VBS `GetObject` 连接同一交互会话中的 Illustrator 并执行 JSX。平台桥只负责会话、生命周期、超时与错误合同，不复制结构算法。
 2. IR 显式记录顶点、`cut/crease/perforation/glue/ignore` 边、面、折角、六面角色、artwork 变换和来源对象。
 3. 使用 Shapely/GEOS 做吸附、线合并、polygonize 和 dangle/cut/invalid-ring 诊断。
 4. 只有验证为 `accepted` 的 IR 才能生成 `ResolvedPackagingJob` 并调用现有 Blender；歧义结构进入人工确认，不再自动猜。
@@ -31,6 +31,21 @@
 - Adobe Illustrator scripting 能读取路径属性，但不能凭 PathItem 本身证明包装领域语义。
 - Shapely/GEOS 已提供 `snap`、`line_merge` 和 `polygonize_full` 及拓扑错误输出。
 - FOLD 图模型证明 vertices/edges/faces/assignment/fold-angle 的抽象可复用；因规范仍是 rough draft，本项目不直接采用 `.fold` 作为生产合同。
+- Microsoft 明确说明 Windows 服务运行在 Session 0，带 GUI 的程序应拆成登录用户侧进程，并通过命名管道等 IPC 与服务通信；命名管道默认 ACL 还会给 Everyone 与匿名账户读权限，因此本项目显式只授权 LocalSystem 与当前登录管理员。
+- Windows Task Scheduler 的 `InteractiveToken` 只在用户已登录的现成交互会话运行，符合“注销即不可打样、绝不静默降级到 Session 0”的失败语义。
+- Adobe 官方说明 Illustrator 支持 Visual Basic、AppleScript 与 JavaScript/ExtendScript。本项目据此保留一份 JSX，把 Windows VBS 和 macOS AppleScript 限定为平台启动桥，而不是两套结构识别实现。
+
+交叉验证来源：[Microsoft Interactive Services](https://learn.microsoft.com/en-us/windows/win32/services/interactive-services)、[Microsoft Named Pipe Security](https://learn.microsoft.com/en-us/windows/win32/ipc/named-pipe-security-and-access-rights)、[Microsoft InteractiveToken](https://learn.microsoft.com/en-us/windows/win32/taskschd/taskfolder-registertaskdefinition)、[Adobe Illustrator scripts](https://helpx.adobe.com/illustrator/desktop/automate-visualize-data/automate-actions/install-and-run-scripts.html)。
+
+## Windows 交互会话边界
+
+1. `beian-server-8787` 与 self-hosted runner 保持 LocalSystem / Session 0；二者不得直接 `Start-Process Illustrator.exe`、`CreateObject("Illustrator.Application")` 或连接隐藏恢复稿。
+2. 登录任务 `beian-illustrator-agent` 使用 `InteractiveToken` 在管理员现有 Session 1 启动。Agent 是单实例管道泵；只有它可按设置页已采用的绝对路径拉起同会话 Illustrator。
+3. 管道协议固定为版本化 UTF-8 JSON；PS5/cscript 的中文系统代码页只封闭在 Agent 内部解码，不能越过管道污染 Python 错误合同。
+4. 管道 ACL 只允许 LocalSystem 与当前登录管理员。请求只能选择固定 exporter、`probe`、`run` 或 `smoke`，不能提交任意脚本或命令。
+5. Agent 写原子心跳，并绑定交互用户 SID、脚本 SHA-256、发布版本、checkout、管道名与 PID。Hono 在领取打样回执前检查协议、Session、身份、状态与新鲜度；Python 连接后还核对实际管道服务 PID。随后 Agent 在真正执行时按需启动并验证同会话可见窗口、可执行路径与文档列表。注销、Agent 离线、Session 0、身份不符或无可见窗口都失败关闭；不自动补拉隐藏实例。
+6. 每个请求只有一条绝对期限，抢执行锁前后、预热、COM、JSX 和清理共用预算。拿锁后、进入 cscript/COM 前先写所有 Agent 实例共用的持久执行围栏；只有成功或已经证明清理完成的失败才能删除。Agent 中断、cscript 退出未确认或文档无法证明已清空时围栏保留、心跳保持 `faulted`，其他实例即使取得文件锁也拒绝继续。围栏只能由交互管理员在确认 Agent、Illustrator、AIRobin、cscript/wscript 都已退出后，以显式 `-ClearFaultFence` 重装动作清除，自动发版和普通重启不能代替人工确认。
+7. VBS 只 `GetObject`，运行前列出文档名并拒绝未知已开稿；运行后只关闭本次源稿的精确路径，不关闭用户稿件。`cscript` 有硬超时，超时只杀本次子进程。
 
 ## 边界
 
@@ -40,7 +55,8 @@
 - 私有稿件、人工真值和金标输出留在 Git 外。
 - Mac L0 不替代杭州 Illustrator/Blender L1/L2。
 - GLB 必须同时通过轴向、毫米尺寸和 front/right/back/left/top/bottom 六面贴图绑定验证；不能用「模型能打开」替代六面完整性。
-- PR 只在同仓分支触发杭州 self-hosted 冒烟：先等本机 Illustrator 队列空闲，再用 COM `DoJavaScriptFile` 执行一次临时 JSX；不改 `D:\beian`、不重启 `:8787`、不接触稿件。完整 L2 仍需真实黄金样本。
+- 杭州 self-hosted runner 是生产执行边界，只接受 `main` push；PR 与可选择任意 ref 的 `workflow_dispatch` 均不得在其上执行代码。Mac L0 先验证协议和失败路径，合入后的不可变目标 SHA 由 `hangzhou-release` 在 transaction fence 内同步生产 InteractiveToken Agent，再通过管道 → VBS → 唯一 JSX 做 L1 身份冒烟；通过后才开放业务。冒烟不接触真实稿件，完整 L2 仍需人工核定的黄金样本。
+- 一次性 0.19→0.20 离线自举只能重跑同一条失败的可信 `main` push，不能新建手工分发或从分支选择 SHA。此安全边界优先于合并前 Windows 冒烟；Windows 回归失败会触发发版事务回滚并保持业务关闭，不能让未合并代码先进入生产桌面。
 - 私有语料仍需持续补齐人工真值；这决定可自动接受的覆盖率，不再决定是否回退旧引擎。未覆盖样本必须失败关闭。
 
 ## 后果

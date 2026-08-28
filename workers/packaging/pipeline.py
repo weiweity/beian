@@ -38,6 +38,8 @@ ILLUSTRATOR_JSX = ROOT / "illustrator" / "export_ai.jsx"
 ILLUSTRATOR_STRUCTURE_JSX = ROOT / "illustrator" / "export_structure.jsx"
 ILLUSTRATOR_RUNNER = ROOT / "illustrator" / "run_export.applescript"
 ILLUSTRATOR_WINDOWS_RUNNER = ROOT / "illustrator" / "run_export.vbs"
+ILLUSTRATOR_AGENT_CLIENT = ROOT / "illustrator" / "illustrator_agent.py"
+ILLUSTRATOR_AGENT_SERVER = ROOT.parents[1] / "scripts" / "windows" / "illustrator-agent.ps1"
 DIELINE_SCRIPT = ROOT / "dieline.py"
 STRUCTURE_V2_FILES = tuple(sorted((ROOT / "structure_v2").glob("*.py")))
 
@@ -220,6 +222,8 @@ def job_fingerprint(
         ILLUSTRATOR_STRUCTURE_JSX,
         ILLUSTRATOR_RUNNER,
         ILLUSTRATOR_WINDOWS_RUNNER,
+        ILLUSTRATOR_AGENT_CLIENT,
+        ILLUSTRATOR_AGENT_SERVER,
         DIELINE_SCRIPT,
         *STRUCTURE_V2_FILES,
         *extra_paths,
@@ -447,11 +451,28 @@ def run_illustrator_fallback(
     ]
     process = subprocess.run(command, capture_output=True, text=True)
     log_path.write_text(process.stdout + "\n" + process.stderr, encoding="utf-8")
-    if process.returncode != 0 or not result_path.is_file():
-        raise PipelineError(f"Illustrator标准化失败，日志={log_path}")
-    result = load_json(result_path)
+    result: dict[str, Any] | None = None
+    if result_path.is_file():
+        try:
+            result = load_json(result_path)
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            result = None
+    if process.returncode != 0 or result is None:
+        raise illustrator_export_failure(
+            operation="normalize",
+            returncode=process.returncode,
+            stdout=process.stdout,
+            stderr=process.stderr,
+            result=result,
+        )
     if not result.get("success"):
-        raise PipelineError(f"Illustrator标准化失败：{result.get('error')}，日志={log_path}")
+        raise illustrator_export_failure(
+            operation="normalize",
+            returncode=process.returncode,
+            stdout=process.stdout,
+            stderr=process.stderr,
+            result=result,
+        )
     return result
 
 
@@ -464,44 +485,151 @@ def _last_worker_diagnostic(*values: object) -> str:
     return "Illustrator worker returned no diagnostic"
 
 
-def illustrator_structure_failure(
+def _agent_error_payload(stderr: str) -> dict[str, Any]:
+    """Read the worker's last-line JSON without rebuilding an error state machine from prose."""
+    lines = [item.strip() for item in str(stderr or "").splitlines() if item.strip()]
+    for line in reversed(lines):
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict) and value.get("kind") == "illustrator_agent_error":
+            return value
+    return {}
+
+
+def illustrator_export_failure(
     *,
+    operation: str,
     returncode: int,
     stdout: str = "",
     stderr: str = "",
     result: dict[str, Any] | None = None,
 ) -> PipelineError:
+    if operation not in {"normalize", "structure"}:
+        raise ValueError(f"unsupported Illustrator export operation: {operation}")
     result = dict(result or {})
+    agent_error = _agent_error_payload(stderr)
+    agent_code = str(agent_error.get("code") or "")
     result_error = result.get("error") or result.get("semantic_errors") or result.get("missing_outputs")
-    cause = _last_worker_diagnostic(result_error, stderr, stdout, f"worker exit {returncode}")
+    cause = _last_worker_diagnostic(
+        result_error,
+        agent_error.get("message"),
+        stderr,
+        stdout,
+        f"worker exit {returncode}",
+    )
     lowered = cause.lower()
 
-    if "no other open documents" in lowered or "requires no other open documents" in lowered:
+    if (
+        agent_code == "illustrator_documents_open"
+        or "illustrator_documents_open" in lowered
+        or "no other open documents" in lowered
+        or "requires no other open documents" in lowered
+    ):
         return PipelineError(
             "Illustrator 还有其他稿件打开，请关闭后重新打样",
             code="illustrator_documents_open",
             cause=cause,
             fix="关闭 Illustrator 中其他文档，仅保留本次自动任务",
         )
-    if returncode == 3 or "timed out" in lowered or "timeout" in lowered:
+    if agent_code == "illustrator_configuration_mismatch" or "illustrator_configuration_mismatch" in lowered:
         return PipelineError(
-            "Illustrator 处理超时，请关闭其他稿件后重试",
+            "Illustrator 配置已变化，请让管理员在开工板重新扫描后再打样",
+            code="illustrator_configuration_mismatch",
+            cause=cause,
+            fix="在杭州设置页重新扫描并采用 Illustrator 路径",
+        )
+    if agent_code == "illustrator_process_identity_mismatch":
+        return PipelineError(
+            "Illustrator 进程与开工板路径不一致，请让管理员处理后重试",
+            code="illustrator_process_identity_mismatch",
+            cause=cause,
+            fix="关闭异常 Illustrator 进程，在杭州设置页重新扫描后重试",
+        )
+    if agent_code in {"illustrator_agent_faulted", "illustrator_recovery_failed"}:
+        return PipelineError(
+            "Illustrator 自动清理失败，请让管理员确认桌面稿件后重启代理",
+            code=agent_code,
+            cause=cause,
+            fix="确认并关闭残留稿件，再重新登录杭州电脑或重启桌面代理",
+        )
+    if agent_code in {
+        "illustrator_agent_offline",
+        "illustrator_agent_wrong_session",
+        "illustrator_agent_wrong_platform",
+        "illustrator_no_window",
+    } or any(
+        code in lowered
+        for code in (
+            "illustrator_agent_offline",
+            "illustrator_agent_wrong_session",
+            "illustrator_agent_wrong_platform",
+            "illustrator_no_window",
+        )
+    ):
+        return PipelineError(
+            "Illustrator 桌面代理未在线，请让管理员登录杭州电脑后重新打样",
+            code="illustrator_agent_offline",
+            cause=cause,
+            fix="保持管理员登录在交互桌面；不要从 Session 0 服务直接启动 Illustrator",
+        )
+    if agent_code == "illustrator_agent_protocol_error":
+        return PipelineError(
+            "Illustrator 桌面代理通信异常，请让管理员重启代理后重试",
+            code="illustrator_agent_protocol_error",
+            cause=cause,
+            fix="重新登录杭州电脑以重启桌面代理；仍失败由管理员查看代理日志",
+        )
+    if agent_code == "illustrator_not_found":
+        return PipelineError(
+            "没有找到 Illustrator，请让管理员在开工板重新扫描",
+            code="illustrator_not_found",
+            cause=cause,
+            fix="在杭州电脑设置页重新扫描 Illustrator 后再打样",
+        )
+    if agent_code in {"illustrator_timeout", "illustrator_agent_busy"} or returncode == 3 or "timed out" in lowered or "timeout" in lowered:
+        return PipelineError(
+            "Illustrator 处理超时，请确认桌面没有弹窗后重试",
             code="illustrator_timeout",
             cause=cause,
-            fix="关闭其他 Illustrator 文档后重试；仍超时再查 worker 日志",
+            fix="查看交互桌面的许可、恢复或模态弹窗；处理后重新打样",
+        )
+    if agent_code in {
+        "illustrator_bridge_missing",
+        "illustrator_bridge_failed",
+        "illustrator_agent_internal_error",
+        "illustrator_agent_invalid_request",
+        "illustrator_agent_path_denied",
+        "illustrator_agent_file_missing",
+        "illustrator_agent_invalid_json",
+    } or any(
+        code in lowered
+        for code in (
+            "illustrator_bridge_missing",
+            "illustrator_bridge_failed",
+            "illustrator_agent_internal_error",
+        )
+    ):
+        return PipelineError(
+            "Illustrator 桌面桥执行失败，请重新打样",
+            code="illustrator_bridge_failed",
+            cause=cause,
+            fix="确认交互桌面无许可或恢复弹窗；仍失败由管理员查看任务日志",
         )
     if (
-        returncode == 6
+        agent_code == "illustrator_unavailable"
+        or returncode == 6
         or "com unavailable" in lowered
         or "warm-up failed" in lowered
         or "launch failed" in lowered
         or "probe" in lowered
     ):
         return PipelineError(
-            "Illustrator 没有启动成功，请在杭州电脑打开后重试",
+            "Illustrator 没有启动成功，请让管理员登录杭州电脑后重试",
             code="illustrator_unavailable",
             cause=cause,
-            fix="在交互桌面启动 Illustrator，并确认没有弹窗或其他打开文档",
+            fix="确认桌面代理在线，且 Illustrator 没有许可、恢复或模态弹窗",
         )
     if returncode == 5 or result.get("missing_outputs"):
         return PipelineError(
@@ -510,18 +638,27 @@ def illustrator_structure_failure(
             cause=cause,
             fix="重试一次；仍失败由管理员查看该任务的 Illustrator 日志",
         )
-    if result and (not result.get("success") or result.get("semantic_errors")):
+    if operation == "structure" and result and (
+        not result.get("success") or result.get("semantic_errors")
+    ):
         return PipelineError(
             "Illustrator 没有读到完整结构语义，请检查结构标记后重试",
             code="illustrator_structure_invalid",
             cause=cause,
             fix="检查 packaging:cut/crease 与六面标记，修正后重新打样",
         )
+    if operation == "structure":
+        return PipelineError(
+            "Illustrator 结构语义导出失败，请重新打样",
+            code="illustrator_structure_export_failed",
+            cause=cause,
+            fix="确认结构标记与交互桌面状态；仍失败由管理员查看任务日志",
+        )
     return PipelineError(
-        "Illustrator 结构语义导出失败，请关闭其他稿件后重试",
-        code="illustrator_structure_export_failed",
+        "Illustrator 标准化失败，请重新打样",
+        code="illustrator_normalize_failed",
         cause=cause,
-        fix="关闭其他 Illustrator 文档后重试；仍失败由管理员查看任务日志",
+        fix="确认交互桌面状态；仍失败由管理员查看任务日志",
     )
 
 
@@ -581,7 +718,8 @@ def run_illustrator_structure_export(
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
             result = None
     if process.returncode != 0 or result is None:
-        raise illustrator_structure_failure(
+        raise illustrator_export_failure(
+            operation="structure",
             returncode=process.returncode,
             stdout=process.stdout,
             stderr=process.stderr,
@@ -598,7 +736,8 @@ def run_illustrator_structure_export(
         detail = dict(result)
         if missing:
             detail["missing_outputs"] = missing
-        raise illustrator_structure_failure(
+        raise illustrator_export_failure(
+            operation="structure",
             returncode=process.returncode,
             stdout=process.stdout,
             stderr=process.stderr,

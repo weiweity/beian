@@ -26,4 +26,4 @@
 
 这是一条验收边界，不等于其中能力都未实现：平面出图已改用 pymupdf、页内 GLB 查看与 OOXML PPT 已落地，但仍不作为刘籽烨 8/31 Excel↔PDF 终审的签收条件。
 
-Illustrator COM 的杭州实机验收、GLB 旋转业务验收、10 分钟 SLA、Windows 开机自启、SQLite、通用异步队列、飞书正式发版、ERP/BI/自动过审。
+Illustrator 会话桥的代码实现不等于杭州实机验收；Illustrator/Blender L1/L2、GLB 旋转业务验收、10 分钟 SLA、Tunnel 掉线告警、SQLite、通用异步队列、飞书正式发版、ERP/BI/自动过审仍不作为刘籽烨 8/31 人终审门。Hono 和 Tunnel 可作为系统服务，Illustrator Agent 必须保持登录用户的交互任务，不能为了“开机自启”退回 Session 0。

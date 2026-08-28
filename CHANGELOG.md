@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.20.0.0] - 2026-08-28
+
+### Added
+
+- Windows 新增 InteractiveToken Session 1 Illustrator 桌面代理：LocalSystem worker 与自托管 runner 只通过受 ACL 保护的 UTF-8 JSON 命名管道请求既有 VBS/唯一 JSX，不再从 Session 0 拉起隐藏 Adobe 实例。
+- 代理心跳绑定交互用户 SID、脚本 SHA-256、发布版本、Git checkout 与命名管道；客户端同时核对心跳 PID 和实际管道服务 PID，可信 `main` 发版在重新开放业务前验证当前 checkout 的完整 Session 1 管道合同。
+
+### Changed
+
+- 打样开工在消耗上传回执前检查桌面代理；Agent 接单后验证同会话可见窗口、配置中的 Illustrator 可执行路径和空文档列表，并以单一绝对期限覆盖预热、COM、JSX 与清理。
+- 杭州发版在切换 8787 前先通过本机随机令牌 + 2 分钟续租 admission drain 原子停止动态页面和全部业务 API 请求（含 SPA 会话检查及会清理 session/OAuth 状态的 GET），并等待响应正文 close/cancel/error、内存 worker 槽、持久作业、上传、作业通知 outbox 与签字通知全部收尾；不可读任务/打样记录会稳定返回 `jobs_unknown`，不再被跳过。仅静态资源、health 和 release control 豁免。Hono 只向发布脚本返回稳定的 `ready/blocker_codes`。journal/watchdog 落盘后短租约提升为不自动过期的 transaction fence，发版超时、进程中断或重启也不会自行开放接单；只有匹配 `lease_id` 的提交/恢复路径可以解除。旧 0.19 没有 control，首次切换必须在旧 8787 已停的批准维护窗显式传 `-AllowLegacyOfflineBootstrap`，不允许带竞态自动自举。
+- Actions bootstrap 改为用 GitHub Contents API 将事件 SHA 的四个发版组件下载到 `RUNNER_TEMP`，再把同一个完整 `GITHUB_SHA` 传为不可变 `TargetSha`，不再在 journal 前 checkout/reset 生产 index；依赖核对、VERSION、journal、Git 锁 owner、ff-only 与最终 HEAD 全部绑定该 SHA，main 后续推进不会让旧协议顺带部署新提交。`package-lock.json` 只恢复工作树 blob且不切分支。停服前建立只允许 SYSTEM/管理员访问的原子发版 journal、旧 UI 哈希快照和独立 SYSTEM watchdog；npm 依赖指纹改由 Node 解析真实 lockfile（兼容 `packages[""]`），并在停服前对 npm 图、tsx、真实 Hono 服务入口、Vite、Rollup、Python 依赖及 worker import 做离线冷启动探针。探针无法启动时不会复用陈旧的 `LASTEXITCODE`。真实依赖变化或本地运行环境不完整会保持旧站在线并拒绝发版。构建、Agent、重启、冒烟、Actions 取消或进程中断都按停机前 SHA/VERSION、UI 快照和 Agent 身份离线恢复，不执行 npm/Python 在线安装或重建旧 UI；恢复先切回旧 SHA，再对实际将启动的旧树重跑离线探针。merge 前不可变记录 owner/operation/ref/TargetSha、全缺失锁基线、精确策略哈希和起始 FILETIME；恢复只处理 index、HEAD/main、ORIG_HEAD 及对应 reflog 的七个精确锁，mutable stage 或后续 `recovery_failed` 不能扩大授权，首个失败来源也不会被覆盖。目标/回滚 UI 与 Agent 身份复核通过后才解除 journal。
+- 发版控制新增随机实例身份的 loopback 在线挑战，替代 PID + 宽松时间窗；发版/恢复及 Illustrator 执行改用 ACL 运行目录内的独占文件锁，临时 Agent 请求在抢锁前后都受同一绝对到期时间约束，watchdog 会持续重试到 journal 被解除。
+- 目标 Node 在冒烟和事务提交期间继承同一 admission transaction fence，确认提交后才原子开放业务写入；一次性 `0.19→0.20` 维护窗新增两次稳定的持久任务、上传与桌面 worker 离线交接检查。
+- Agent 任务升级按管理员 SID 识别当前登录会话，安装和卸载都等待任务及心跳 PID 真正退出；新 checkout 只有在旧进程退出后才注册启动。
+- 杭州 self-hosted 生产 runner 只接受 `main` push；删除 PR 冒烟和可选择任意 ref 的手工分发入口。Illustrator L1 改在不可变目标 SHA 已合入、目标服务仍受 transaction fence 拒写时执行，成功后才开放业务。
+- 一次性 `0.19→0.20` 离线自举只允许对同一条可信 `main` push 的失败任务执行 **Re-run failed jobs**；首轮仍失败关闭，脚本继续核验精确版本、离线状态和空闲证据。
+
+### Fixed
+
+- 修复 Session 0 Illustrator 崩溃并自动恢复上一单后，后续任务持续误报“还有其他稿件打开”的根因；PowerShell 代理保留系统代码页读取 cscript，再统一输出 UTF-8 JSON 错误合同。
+- 修复失败清理被静默吞掉并把代理重新标成 idle、已删除的 PR 冒烟误复用生产代理、嵌套超时相加超出作业预算，以及同名错误进程可能被当成已配置 Illustrator 的问题。
+- 修复 cscript 超时后无限 `WaitForExit()`、清理最终 probe 超时却回到 idle，以及发版空闲检查后仍可能接进新单的竞态；无法证明退出或空文档时统一保持 `faulted`。
+- Illustrator 执行前新增所有 Agent 实例共用的持久安全围栏；进程崩溃或清理未确认时后续实例也不能越过。围栏只能由交互管理员在确认 Agent、Illustrator 与 cscript 均已清空后显式解除。`0.20+` 回滚代际同样先继承原 release transaction fence，核对版本/control/listener 后才恢复接单。
+- 修复旧版 `comparing` 任务重启回收后缺少 `job_kind`、被队列永久计为 `jobs_unknown` 的迁移问题；现在会落成完整的 `compare/failed` 终态。
+
+### For contributors
+
+- L0 覆盖心跳身份、故障保持、结构化错误、缓存失效、发版忙门和生产 runner 隔离；真实 Windows PowerShell 5.1、InteractiveToken、Illustrator COM/JSX 与生产真稿仍由杭州 L1/L2 验收，Mac 绿灯不替代上线。
+
 ## [0.19.0.0] - 2026-08-28
 
 ### Added

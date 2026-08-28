@@ -9,6 +9,8 @@ Related: `DESIGN.md`（设置 = 外观 / 开工板 / 费用 / 密钥）、`docs/
 
 > 历史范围（2026-08-26）：本文的评审图和未勾选任务记录的是批准时快照，不代表当前发布状态。现行实现已将设置写入和本机扫描统一限制为 admin；接口、权限与杭州发版合同以 `AGENTS.md`、`README.md` 和 `scripts/windows/README.md` 为准。
 
+> 实现更新（2026-08-28）：T8 已按独立立项的方案 A 在 `0.20.0.0` 分支实现为 Session 1 `InteractiveToken` PowerShell Agent。LocalSystem 的 8787/runner 只通过受限 UTF-8 命名管道调用现有 VBS/唯一 JSX，不再在 Session 0 启动 Illustrator；注销、Agent 离线、checkout 身份不符或清理失败时 fail-closed。执行前还会写所有 Agent 实例共用的持久故障围栏，清理未确认时只能由交互管理员核对桌面与进程后显式清除，自动升版不能复位。PR 不触达杭州生产 runner；L1 在可信 `main` 发版的 transaction fence 内完成。这里的旧评审结论“本波不做”仅保留作历史记录。Mac L0 已覆盖合同，杭州真实 Illustrator L1 与黄金稿 Blender L2 仍是发布验收门，不能由代码完成状态替代。
+
 本文**不取代** 8/31 人终审。刘籽烨签完一单真实 Excel↔PDF 仍是章程验收。本文覆盖魏炜怎么把杭州 Windows 点绿，以及打样台遇到 `.ai` 时怎么用本机 Illustrator 转栅格。
 
 ## Problem Statement
@@ -238,7 +240,7 @@ COVERAGE: 现网未覆盖本波新路径  |  GAPS: 上表全部 [GAP] 进 server
   - Files: `settings.ts` 或新 `scanLocal.ts`, `SettingsPage.tsx`
 - [ ] **T3 (P1)** — Illustrator 槽 + 假 COM 子进程合同（最后一行 JSON / 失败人话）
   - Files: `jobs.ts`, `mockup.ts`, `jobs.test.ts`
-- [ ] **T4 (P2)** — 真 COM worker（仅 Windows）+ 会话桥/服务（用户要坚持；可后于 T1–T3）
+- [x] **T4 (P2)** — 真 COM worker（仅 Windows）+ Session 1 会话桥（代码在 `0.20.0.0` 分支完成；杭州 L1/L2 待验收）
   - Files: `scripts/windows/`, 新 worker
 - [ ] **T5 (P2)** — MiniMax 国产模型短列表（设置项，不是探测）
   - Files: `settings.ts` catalog
@@ -427,7 +429,7 @@ finding above. Run with Claude Code or Codex; checkbox as you ship.
   - Surfaced by: Pass 2 D8、Pass 3 D9
   - Files: `SettingsPage.tsx`, 飞书 OAuth 回调落地
   - Verify: 全部检测时当前行「检测中 N/7」；保存百度 Key 后回到开工板且只测 baidu；OAuth 回调落开工板
-- [ ] **T4 (P1, human: ~4h / CC: ~35min)** — admin 扫盘 + 开工板候选条 + 采用才保存
+- [x] **T4 (P1, human: ~4h / CC: ~35min)** — admin 扫盘 + 开工板候选条 + 采用才保存
   - Surfaced by: Pass 7 D12、eng 扫盘白名单
   - Files: `apps/web/server/src/settings.ts` 或 `scanLocal.ts`, `SettingsPage.tsx`
   - Verify: 非 admin 403；不 spawn exe；多个 Illustrator 单选；采用后该行变可用；超时列出搜过的目录
@@ -439,14 +441,14 @@ finding above. Run with Claude Code or Codex; checkbox as you ship.
   - Surfaced by: Pass 6 D10
   - Files: `app.css`, `SettingsPage.tsx`
   - Verify: 390 清单通栏，行右按钮 ≥44px；桌面仍左栏 208px
-- [ ] **T7 (P1, human: ~1d / CC: ~45min)** — Illustrator 槽 + 假 COM 合同（eng T3）
+- [x] **T7 (P1, human: ~1d / CC: ~45min)** — Illustrator 槽 + 假 COM 合同（eng T3）
   - Surfaced by: eng-review；本屏只表达路径绿
   - Files: `jobs.ts`, `mockup.ts`, `jobs.test.ts`
   - Verify: 假 COM 子进程、非 admin 403、.ai 不占 OCR 槽、失败人话
-- [ ] **T8 (P2, human: ~2d / CC: ~2h)** — 真 COM + 会话桥 — **本波不做**（Codex D8=A）
+- [x] **T8 (P2, human: ~2d / CC: ~2h)** — 真 COM + Session 1 会话桥 — **后续独立立项已完成代码，杭州 L1/L2 待验收**
   - Surfaced by: eng D4；外面声音：假 COM 不能证明 Session 0
   - Files: `scripts/windows/`
-  - Verify: 杭州真机先手动开一次 Illustrator COM，再单独立项
+  - Verify: PR 不得触达杭州生产 runner；可信 `main` push 的 `hangzhou-release` 在 transaction fence 内同步 InteractiveToken 登录任务并跑管道 → VBS → JSX，probe 必须返回 Session > 0、可见窗口、空文档列表及匹配的 checkout/脚本身份；通过后才开放业务，真实稿另跑 L2
 
 _No new tasks from Pass 4 slop beyond T1 删 health-card._
 
@@ -464,4 +466,3 @@ _No new tasks from Pass 4 slop beyond T1 删 health-card._
 - **CROSS-MODEL:** 设计要傻瓜进度，Codex 要诚实探测合同。已采用文案修正。T8 用户先选全做，后接受推迟。
 - **VERDICT:** ENG + DESIGN CLEARED — implement T1–T4+T7 on a **new** branch. Do not ship `feat/health-read-version-file`. Do not Hangzhou pull.
 NO UNRESOLVED DECISIONS
-

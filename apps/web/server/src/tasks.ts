@@ -145,17 +145,78 @@ export function saveTask(task: Task): void {
   replaceFile(p, JSON.stringify(task, null, 2));
 }
 
-export function loadAllTasks(): Task[] {
+const TASK_STATUSES = new Set(["comparing", "compare_failed", "pending_review", "in_review", "completed"]);
+const TASK_JOB_KINDS = new Set(["compare", "rework"]);
+const TASK_JOB_STATUSES = new Set(["queued", "running", "succeeded", "failed"]);
+
+/**
+ * Durable job state is a release-safety contract, not just a TypeScript hint.
+ * A parseable but contradictory record must block release rather than vanish
+ * from the running/queued counters.
+ */
+function hasValidTaskJobState(task: Task): boolean {
+  if (!TASK_STATUSES.has(task.status)) return false;
+  const hasKind = task.job_kind !== undefined;
+  const hasJobStatus = task.job_status !== undefined;
+  const hasPid = task.job_pid !== undefined;
+  if (hasKind !== hasJobStatus) return false;
+  if (!hasKind) return !hasPid && task.status !== "comparing";
+  if (!TASK_JOB_KINDS.has(String(task.job_kind)) || !TASK_JOB_STATUSES.has(String(task.job_status))) return false;
+  if (hasPid && (!Number.isSafeInteger(task.job_pid) || Number(task.job_pid) <= 0 || task.job_status !== "running")) {
+    return false;
+  }
+  if (task.job_status === "queued" || task.job_status === "running") return task.status === "comparing";
+  if (task.job_status === "succeeded") {
+    return task.status === "pending_review" || task.status === "in_review" || task.status === "completed";
+  }
+  if (task.job_kind === "compare") return task.status === "compare_failed";
+  return task.status === "pending_review" || task.status === "in_review" || task.status === "completed";
+}
+
+function isLegacyInterruptedTask(task: Task): boolean {
+  return task.status === "comparing"
+    && task.job_kind === undefined
+    && task.job_status === undefined
+    && task.job_pid === undefined;
+}
+
+function readTaskStore(allowLegacyInterrupted: boolean): { tasks: Task[]; unreadable: number } {
   const items: Task[] = [];
+  let unreadable = 0;
   for (const name of readdirSync(tasksDir())) {
     if (!name.endsWith(".json")) continue;
     try {
-      items.push(JSON.parse(readFileSync(join(tasksDir(), name), "utf8")) as Task);
+      const task = JSON.parse(readFileSync(join(tasksDir(), name), "utf8")) as Task;
+      const expectedId = name.slice(0, -".json".length);
+      if (
+        !task
+        || typeof task !== "object"
+        || Array.isArray(task)
+        || !isTid(task.id)
+        || task.id !== expectedId
+        || (!hasValidTaskJobState(task) && !(allowLegacyInterrupted && isLegacyInterruptedTask(task)))
+      ) {
+        throw new Error("invalid task record");
+      }
+      items.push(task);
     } catch {
-      /* skip */
+      unreadable += 1;
     }
   }
-  return items;
+  return { tasks: items, unreadable };
+}
+
+export function taskStoreSnapshot(): { tasks: Task[]; unreadable: number } {
+  return readTaskStore(false);
+}
+
+/** Only boot recovery may see the one known v0.10 shape and convert it to failed. */
+export function loadTasksForRecovery(): Task[] {
+  return readTaskStore(true).tasks;
+}
+
+export function loadAllTasks(): Task[] {
+  return taskStoreSnapshot().tasks;
 }
 
 export function taskOwner(task: Task): string {
@@ -178,15 +239,7 @@ export function assertCanAccessTask(task: Task, viewer: Viewer): void {
 
 export function listTasks(q: string, viewer: Viewer): Record<string, unknown>[] {
   const needle = q.trim().toLowerCase();
-  const items: Task[] = [];
-  for (const name of readdirSync(tasksDir())) {
-    if (!name.endsWith(".json")) continue;
-    try {
-      items.push(JSON.parse(readFileSync(join(tasksDir(), name), "utf8")) as Task);
-    } catch {
-      /* skip */
-    }
-  }
+  const items = taskStoreSnapshot().tasks;
   const filtered = items.filter((t) => {
     if (!canAccessOwner(taskOwner(t), viewer)) return false;
     if (needle) {

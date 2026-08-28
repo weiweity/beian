@@ -6,7 +6,7 @@
 
 - 同稿件哈希绑定的 `packaging-structure/1` JSON sidecar；
 - Illustrator 中对象的备注、对象名或图层名精确写成 `packaging:cut`、`packaging:crease`、`packaging:perforation`、`packaging:glue` 或 `packaging:ignore`，由语义导出器同时生成结构 JSON 和隐藏这些对象后的 artwork PDF。
-- macOS 用 AppleScript、Windows 用 `Illustrator.Application` COM + VBScript 启动桥；两端都执行 `export_structure.jsx`，不维护第二套 Windows 识别算法。Windows 清单必须传开工板扫描到的 `Illustrator.exe`。
+- macOS 用 AppleScript；Windows worker 通过 UTF-8 命名管道请求登录桌面的 PowerShell Agent，Agent 再调用现有 VBScript/COM。两端都执行 `export_structure.jsx`，不维护第二套 Windows 识别算法。Windows 清单必须传开工板扫描到的 `Illustrator.exe`；LocalSystem 服务和 runner 禁止自己拉起 Illustrator。
 
 为迁移旧稿，导出器还可在服务端已识别出的刀线层中提取“仅描边、无填充”的矩形网络，形成 `illustrator-stroke-proposal/1` 候选。候选不是结构事实：必须由管理员叠着真实 artwork 选择六个盒面和旋转，确认后才裁掉未选几何并进入同一严格解析器；它不会自动接受，也不会回退旧方盒算法。
 
@@ -44,7 +44,7 @@ V2 任务在产品项中写 `"structure_engine": "v2"`。显式 sidecar 可写 `
 ## 输入边界
 
 - PDF 兼容 AI 直接走高速通道，不启动 Illustrator。平面 PNG 用 pymupdf 按 MediaBox 整页出图（细 CropBox 不按可见条带放大）。杭州 Windows 与对照共用 `apps/web/backend/.venv` 里的 pymupdf，不要装 macOS Quick Look。pymupdf 失败时，本机若有 `/usr/bin/qlmanage` 才兜底。
-- 原生 AI 或非 PDF 兼容 AI 自动通过 Illustrator 导出完整稿和印刷层 PDF，再进入相同建模流程。
+- 原生 AI 或非 PDF 兼容 AI 自动通过 Illustrator 导出完整稿和印刷层 PDF，再进入相同建模流程。Windows 上管理员必须保持登录，`beian-illustrator-agent` 的 Session 和心跳必须正常；Agent 接单后按需启动并验证同会话可见窗口与文档列表。生产任务与可信 `main` 发版内的 L1 请求共用同一个执行锁及持久故障围栏，执行中断或清理未确认后不能由另一请求接手；只能按 `scripts/windows/README.md` 的交互管理员流程确认并清除。用户注销、Agent 离线或 faulted 时开始接口返回 412，不消耗待开工回执，也不退回 Session 0。
 - Illustrator 冷启动和复杂转曲稿解析可能较慢，建议保持应用常驻并批量处理异常稿；兜底 Worker 默认 7 分钟硬超时。
 - 相同结构只需新增任务记录即可并行处理；缓存键包含源稿、结构 sidecar、清理后的 artwork 和流程版本。
 - `structure_v2` 用 Shapely/GEOS 做单位归一、吸附、noding、polygonize 和拓扑诊断。结构可闭合但六面角色/方向有歧义时返回 `review_required`，由管理员确认；缺语义、曲线路径需专用适配器或超过安全上限时返回可执行的 `review_required` / `unsupported`，不会进入 Blender。
@@ -53,7 +53,7 @@ V2 任务在产品项中写 `"structure_engine": "v2"`。显式 sidecar 可写 `
 
 ## Illustrator 兜底验证
 
-强制让一份正常 AI 走 Illustrator 通道，用于安装或升级后的真实稿 L2。PR 上的 Windows L1 只验证 COM 能返回版本、没有其他文档打开，并通过同一 `DoJavaScriptFile` 桥执行临时 JSX；它不读取真实稿，也不冒充 `structure.json` / artwork PDF 的 L2 证据：
+强制让一份正常 AI 走 Illustrator 通道，用于安装或升级后的真实稿 L2。可信 `main` release transaction 内的 Windows L1 只通过同一 Session 1 命名管道验证 Illustrator 能返回版本、存在可见窗口、没有其他文档打开，并执行固定 smoke JSX；它不读取真实稿，也不冒充 `structure.json` / artwork PDF 的 L2 证据。runner 自身保持 Session 0，不直接启动或 COM Illustrator：
 
     python3 pipeline.py examples/jobs_illustrator_smoke.json \
       --workers 1 --force-illustrator --no-ppt

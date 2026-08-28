@@ -171,15 +171,65 @@ export function findMockupBySourceReceipt(receiptId: string, owner: string): Moc
 }
 
 export function loadAllMockups(): MockupJob[] {
+  return mockupStoreSnapshot().jobs;
+}
+
+const MOCKUP_STATUSES = new Set(["queued", "running", "review_required", "unsupported", "done", "failed"]);
+const MOCKUP_JOB_STATUSES = new Set(["queued", "running", "waiting_input", "succeeded", "failed"]);
+
+/** Keep corrupt or contradictory durable state out of release counters. */
+function hasValidMockupJobState(job: MockupJob): boolean {
+  if (!MOCKUP_STATUSES.has(job.status)) return false;
+  const hasKind = job.job_kind !== undefined;
+  const hasJobStatus = job.job_status !== undefined;
+  const hasPid = job.job_pid !== undefined;
+  if (hasKind !== hasJobStatus) return false;
+  if (!hasKind) return !hasPid && (job.status === "done" || job.status === "failed");
+  if (job.job_kind !== "mockup" || !MOCKUP_JOB_STATUSES.has(String(job.job_status))) return false;
+  if (hasPid && (!Number.isSafeInteger(job.job_pid) || Number(job.job_pid) <= 0 || job.job_status !== "running")) {
+    return false;
+  }
+  if (job.job_status === "queued") return job.status === "queued";
+  if (job.job_status === "running") return job.status === "running";
+  if (job.job_status === "waiting_input") {
+    return job.status === "review_required" || job.status === "unsupported";
+  }
+  if (job.job_status === "succeeded") return job.status === "done";
+  return job.status === "failed";
+}
+
+/**
+ * 发版闸门必须直接核对磁盘，不能让内存 cache 掩盖半写或损坏的 job.json。
+ * 业务列表仍只返回可解析记录；不可读数量由 jobs 模块变成 jobs_unknown。
+ */
+export function mockupStoreSnapshot(): { jobs: MockupJob[]; unreadable: number } {
   const root = mockupRoot();
   const out: MockupJob[] = [];
-  if (!existsSync(root)) return out;
+  let unreadable = 0;
+  if (!existsSync(root)) return { jobs: out, unreadable };
   for (const name of readdirSync(root, { withFileTypes: true })) {
     if (!name.isDirectory()) continue;
-    const job = loadMockup(name.name);
-    if (job) out.push(job);
+    const path = jobPath(name.name, false);
+    try {
+      const job = JSON.parse(readFileSync(path, "utf8")) as MockupJob;
+      if (
+        !job
+        || typeof job !== "object"
+        || Array.isArray(job)
+        || !isTid(job.id)
+        || job.id !== name.name
+        || !hasValidMockupJobState(job)
+      ) {
+        throw new Error("invalid mockup record");
+      }
+      rememberMockup(job);
+      out.push(job);
+    } catch {
+      cache.delete(name.name);
+      unreadable += 1;
+    }
   }
-  return out;
+  return { jobs: out, unreadable };
 }
 
 export function listJobs(): MockupJob[] {
