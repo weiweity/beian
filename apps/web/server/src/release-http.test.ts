@@ -147,7 +147,7 @@ describe("release drain http", () => {
     assert.equal(enteredBody.ok, true);
     assert.equal(enteredBody.protocol, RELEASE_CONTROL_PROTOCOL);
     assert.match(String(enteredBody.instance_id), /^[A-Za-z0-9_-]{32,128}$/);
-    assert.equal(enteredBody.version, "0.20.0.0");
+    assert.equal(enteredBody.version, "0.20.1.0");
     assert.equal(enteredBody.state, "draining");
     assert.equal(enteredBody.active, 0);
     assert.equal(enteredBody.ready, true);
