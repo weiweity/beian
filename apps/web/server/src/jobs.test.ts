@@ -11,6 +11,8 @@ const { deleteTask, loadTask, replaceFile, saveTask } = await import("./tasks.js
 const {
   decorateQueueAhead,
   enqueue,
+  launchNotification,
+  notificationSnapshot,
   publicTask,
   queueSnapshot,
   reclaimOnBoot,
@@ -55,6 +57,56 @@ afterEach(() => {
 });
 
 describe("jobs dispatcher", () => {
+  it("fails release snapshots closed on corrupt records while retaining the live slot", () => {
+    setJobsTestHooks({
+      runCompare: () => new Promise(() => undefined),
+    });
+    const id = tid(9);
+    queuedCompare(id, "2026-08-20T09:59:00.000Z");
+    enqueue({ kind: "compare", id });
+    writeFileSync(join(process.env.WB_DATA_DIR || "", "tasks", `${id}.json`), "{half-written", "utf8");
+    const snapshot = queueSnapshot();
+    assert.equal(snapshot.ocr.running, 1);
+    assert.equal(snapshot.unknown, 1);
+  });
+
+  it("fails release snapshots closed on unknown enums and contradictory active state", () => {
+    const tasks = join(process.env.WB_DATA_DIR || "", "tasks");
+    mkdirSync(tasks, { recursive: true });
+    writeFileSync(join(tasks, `${tid(61)}.json`), JSON.stringify({
+      id: tid(61),
+      title: "非法枚举",
+      type: "excel_pdf",
+      status: "comparing",
+      job_kind: "compare",
+      job_status: "runnng",
+    }));
+    writeFileSync(join(tasks, `${tid(62)}.json`), JSON.stringify({
+      id: tid(62),
+      title: "矛盾状态",
+      type: "excel_pdf",
+      status: "pending_review",
+      job_kind: "compare",
+      job_status: "running",
+      job_pid: 4242,
+    }));
+    const snapshot = queueSnapshot();
+    assert.equal(snapshot.ocr.running, 0);
+    assert.equal(snapshot.unknown, 2);
+  });
+
+  it("counts every detached notification until its operation settles", async () => {
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    launchNotification("signed task test", () => gate);
+    assert.deepEqual(notificationSnapshot(), { active: 1 });
+    release?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepEqual(notificationSnapshot(), { active: 0 });
+  });
+
   it("second compare stays queued while the OCR slot is full", async () => {
     const resolvers: Array<(v: { code: number; stdout: string; stderr: string; timedOut: boolean }) => void> = [];
     setJobsTestHooks({
@@ -569,6 +621,7 @@ describe("jobs dispatcher", () => {
     }
     const t = loadTask(tid(21));
     assert.equal(t.job_status, "succeeded");
+    assert.deepEqual(notificationSnapshot(), { active: 1 });
     t.status = "completed";
     t.complete_kind = "signed";
     t.conclusion = "人看过了";
@@ -579,6 +632,7 @@ describe("jobs dispatcher", () => {
     assert.equal(fresh.status, "completed");
     assert.equal(fresh.complete_kind, "signed");
     assert.equal(fresh.notify_sent, true);
+    assert.deepEqual(notificationSnapshot(), { active: 0 });
   });
 
   it("does not recreate a task deleted while its notification is in flight", async () => {
@@ -713,7 +767,7 @@ describe("jobs dispatcher", () => {
     assert.equal(t.job_error, "对照中断");
   });
 
-  it("reclaim does not rerun a pending_review task with a dead pid", () => {
+  it("quarantines a pending_review task that contradicts its running job state", () => {
     let killedThis = 0;
     setJobsTestHooks({
       killTree: (pid: number) => {
@@ -737,8 +791,9 @@ describe("jobs dispatcher", () => {
     reclaimOnBoot();
     const t = loadTask(tid(37));
     assert.equal(t.status, "pending_review");
-    assert.equal(t.job_status, "succeeded");
+    assert.equal(t.job_status, "running");
     assert.equal(killedThis, 0);
+    assert.equal(queueSnapshot().unknown, 1);
   });
 
   it("does not resend Feishu when notify_sent is already true", async () => {
@@ -1050,7 +1105,7 @@ describe("jobs dispatcher", () => {
     assert.equal(job?.files?.some((f) => f.key === "glb"), true);
   });
 
-  it("reclaim mockup orphan requeues once; second fail is 打样中断; done is not rerun", async () => {
+  it("reclaims valid mockup orphans but quarantines a done/running contradiction", async () => {
     const { saveMockup, loadMockup } = await import("./mockup.js");
     setJobsTestHooks({
       runPack: () =>
@@ -1090,7 +1145,8 @@ describe("jobs dispatcher", () => {
     assert.ok(loadMockup(tid(50))?.job_status === "queued" || loadMockup(tid(50))?.job_status === "running");
     assert.equal(loadMockup(tid(51))?.job_status, "failed");
     assert.equal(loadMockup(tid(51))?.job_error, "打样中断");
-    assert.equal(loadMockup(tid(52))?.job_status, "succeeded");
+    assert.equal(loadMockup(tid(52))?.job_status, "running");
+    assert.equal(queueSnapshot().unknown, 1);
   });
 
   it("rework success becomes in_review and keeps v1 hits", async () => {
@@ -1152,7 +1208,10 @@ describe("jobs dispatcher", () => {
     reclaimOnBoot();
     const t = loadTask(tid(60));
     assert.equal(t.status, "compare_failed");
+    assert.equal(t.job_kind, "compare");
+    assert.equal(t.job_status, "failed");
     assert.equal(t.job_error, "对照中断");
+    assert.equal(queueSnapshot().unknown, 0);
   });
 
   it("reclaim of a long-running orphan is 超时 not a rerun", () => {

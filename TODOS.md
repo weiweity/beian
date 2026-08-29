@@ -64,7 +64,7 @@
 ## P1 — 包装语义结构 V2 上线闸门
 
 - [ ] **真实稿结构真值与杭州 L2**
-  `0.14.0.0` 已提供语义结构、六面确认、精确贴图和 Windows Illustrator L1，但私有 Phase 0 的 13 份真实稿仍为 `pending_manual`。逐份由管理员确认或明确判为不支持，并为每个受支持结构族保留至少一份黄金样本；杭州真实 Illustrator + Blender L2 通过前，`PACKAGING_STRUCTURE_V2_ENABLED` 必须保持关闭。V2 打开并稳定一个发布周期后，删除旧控制路径和临时闸门。
+  `0.14.0.0` 已提供语义结构，后续版本已把网页固定到 V2 并删除运行时旧引擎开关；无法证明结构时 fail-closed。私有 Phase 0 的 13 份真实稿仍为 `pending_manual`。逐份由管理员确认或明确判为不支持，并为每个受支持结构族保留至少一份黄金样本；杭州真实 Illustrator + Blender L2 通过前不得把 Mac L0 或可信主线的身份冒烟写成真稿生产验收。
 
 ## P2 — 开工板向导页画面（设计审查 2026-08-21）
 
@@ -83,9 +83,9 @@
   打样 PDF 栅格走 pymupdf（对照同一 `.venv`）；macOS qlmanage 仅兜底。杭州不依赖 Quick Look。  
   **Completed:** v0.12.11.0 (2026-08-24)
 - [x] **Illustrator COM 接线**
-  macOS AppleScript 与 Windows VBScript/COM 共用 `export_structure.jsx`；PR 的杭州自托管 L1 会验证 COM → JSX 调用，不改生产工作树、不重启 8787。真实稿仍由上面的 V2 L2 闸门验收。
-  **Completed:** v0.14.0.0 (2026-08-27)
-- [ ] Windows 开机自启 + Tunnel 掉线告警
+  macOS AppleScript 与 Windows VBScript/COM 共用 `export_structure.jsx`；`0.20.0.0` 增加 InteractiveToken Session 1 Agent，LocalSystem worker/runner 只通过受限命名管道调用现有 VBS/JSX，不再拉起 Session 0 Illustrator。Agent 身份、checkout、超时与故障恢复均 fail-closed；合入后由可信 `main` release transaction 在业务仍被 fence 阻断时执行生产 L1 身份冒烟；真实稿仍由上面的 V2 L2 闸门验收。
+  **Completed in code:** v0.20.0.0 (2026-08-28；杭州 L1/L2 待验收)
+- [ ] Tunnel 掉线告警（`beian-server-8787` 与 cloudflared 已是 Windows 服务；Illustrator Agent 按设计只在管理员登录会话运行，不改成开机 Session 0 服务）
 - [ ] SQLite / 异步通用队列
 - [ ] 压测并继续优化现有 CSS `transform` 1–6× 审稿缩放；保持当前轻量方案，不引入 OpenSeadragon
 - [ ] 飞书机器人收文件回报告（网页路径的备选）

@@ -1,4 +1,4 @@
-# Windows 备忘（8/31 不承诺开机自启）
+# Windows 生产备忘
 
 第一期只要这台机器能跑：
 
@@ -26,19 +26,52 @@ cmd.exe 才用 `set WB_DATA_DIR=...`。PowerShell 里写 `set` 不会进子进�
 
 代码读取 `WB_DATA_DIR`。公网模式（`WB_PUBLIC=1`）若仍指向仓库内 `backend\data`，进程会拒绝启动。
 
+## Illustrator 登录桌面 Agent
+
+`beian-server-8787` 与 Actions runner 是 LocalSystem / Session 0；Illustrator 是带 GUI 的桌面程序，两者不能在同一会话内直接自动化。`release.ps1` 会同步计划任务 `beian-illustrator-agent`：它使用 `InteractiveToken`，只在当前管理员已登录的交互会话启动 `scripts\windows\illustrator-agent.ps1`。锁屏或 UU 断开不会注销；真正注销后 Agent 停止，打样入口返回可重试的 412，不会从服务进程补拉隐藏 Illustrator。
+
+Agent 只做会话桥：UTF-8 JSON 命名管道 `beian.illustrator.v1` → 现有 `cscript run_export.vbs` → 唯一 `export_structure.jsx`。COM 仍留在 VBS；PowerShell 不加载 `Illustrator.Application`。管道 ACL 只允许 LocalSystem 与注册的管理员，心跳绑定 SID、脚本哈希、版本、checkout、管道和 PID；客户端再核对实际管道服务 PID。协议只接受固定的 `probe` / `run` / `smoke`，不执行调用方传来的任意命令或脚本。PS5/cscript 的 GBK 输出由 Agent 在边界内按系统代码页解码，再编码为 UTF-8 JSON。
+
+运行证据写到 `$env:WB_DATA_DIR\runtime\illustrator-agent.json`，日志在 `$env:WB_DATA_DIR\logs\illustrator-agent.jsonl`。从 `D:\beian` 只读探测：
+
+```powershell
+& $env:WB_PYTHON workers\packaging\illustrator\illustrator_agent.py probe --timeout 120
+```
+
+返回必须包含 `ok=true`、`session_id>0`、可见窗口、Illustrator PID 与空文档名列表。Session 0、无窗口、心跳过期或未知已开稿都不能继续打样。每次执行在 cscript/COM 前写 `$env:WB_DATA_DIR\runtime\illustrator-fault.json` 持久围栏，正常完成或已证明清理完成才删除；Agent 崩溃、cscript 未确认退出或文档清不干净时，所有 Agent 实例都保持 `faulted`，发版和新任务一并拒绝。不能编辑心跳把它改回 idle，也不能靠重启/升版自动清围栏。
+
+管理员确认桌面无稿，并确认 Illustrator、AIRobin、cscript、wscript 及其他临时 Agent 都已退出后，在**交互式、已提升权限**的 PowerShell 运行下列显式恢复；脚本会再次核对会话、管理员身份、任务和进程，随后清围栏并重装登录任务。LocalSystem、Session 0、仍有桌面自动化进程或普通卸载都不能清除：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\windows\install-illustrator-agent.ps1 -ClearFaultFence
+```
+
+不要安装 PowerShell 7、.NET SDK 或 pywin32，也不要手工在 Session 0 启动 Illustrator。
+
 Clash 开系统代理时，备案域名和 `127.0.0.1` 必须直连。self-hosted runner 若走 `127.0.0.1:7897` 会被拒绝（`Runner connect error`），设 DIRECT 或关掉 Clash 再听 job。控制台里「所提供的模式无法找到文件」乱码，是 cmd/PowerShell 在 GBK 下找不到通配文件，不是 8787 挂了。
 
 ## CD（只在杭州本机）
 
-合进 GitHub `main` 后，本机 **GitHub Actions self-hosted runner**（标签 `hangzhou`）跑下面的脚本。没有 runner 时仍可在杭州手工执行。脚本随仓库走。
+合进 GitHub `main` 后，本机 **GitHub Actions self-hosted runner**（标签 `hangzhou`）只接受该次 `main` push，运行 `.github/workflows/hangzhou-release.yml`。workflow 从事件提交下载经过绑定的发布组件，并把同一个完整 `GITHUB_SHA` 交给 `release.ps1`。杭州仓库里的脚本可能落后于事件提交，因此没有“直接运行本地 `release.ps1`”的兜底入口。runner 灰掉时先恢复同一 runner，再对刚才那条可信 push run 使用 **Re-run failed jobs**；被在途作业挡住时先让作业结束，再重跑同一 run。不要创建可选 ref 的手工 workflow，也不要从分支或本地 checkout 发版。
 
-看板没有对照中。仓库根目录 PowerShell（不要并行跑）：
+发版按一个有 journal 的事务执行：
 
-```
-powershell -ExecutionPolicy Bypass -File scripts\windows\release.ps1
-```
+1. 8787 仍在线时，Actions 用 GitHub Contents API 把事件 SHA 对应的 `release.ps1`、`release-recover.ps1`、Agent 安装器和依赖指纹工具下载到 `RUNNER_TEMP`，再把同一个完整 `GITHUB_SHA` 作为 `-TargetSha` 显式传入 `D:\beian`；bootstrap 不 fetch/checkout/reset 生产 index。脚本自身带认证 fetch，只改 refs；它确认目标 commit 属于 `origin/main`、当前 HEAD 可 ff-only 到目标，并把依赖核对、VERSION、journal 与最终 HEAD 全部绑定该不可变 SHA。后续 main 即使推进到另一个提交，也不会由旧脚本顺带部署；过期或倒退目标会在停服前退出。npm 弄脏的 `package-lock.json` 直接按 HEAD blob 恢复工作树，不切分支、不写 index，并校验工作树、`main`、`WB_DATA_DIR`、Python、Windows Rollup。随后由 Node 解析真实 `package-lock.json`（包括 npm 的空键 `packages[""]`）比较当前 SHA 与目标 SHA 的规范化依赖图及 Python requirements，并实际执行 npm `--offline` 图校验、tsx、真实 `apps/web/server/src/index.ts` 的 Hono 服务入口导入、Vite、Rollup 原生模块、`pip check` 与 worker import 冷启动探针；原生命令无法启动时直接失败，不复用先前命令的 `LASTEXITCODE`。只变根版本号不算依赖变化；真实依赖变化、环境不完整、网络、401、Clash、未提交改动、本地额外 commit 或既有 Git 锁都在停服前失败。
+2. Hono 用随机控制令牌和发布方生成的 `lease_id` 原子进入 admission drain。除不可变静态资源、health 和受 token 保护的 release control 外，动态页面和所有业务 API（包括 SPA 会话检查及会清理 session/OAuth 状态的 GET）暂时返回“系统正在安全升版”；在途计数保持到响应正文 close/cancel/error，避免停服截断 GLB/PPT/PNG。队列同时合并磁盘记录与内存 worker 槽；任何不可读任务/打样记录都形成 `jobs_unknown`。只有请求、作业、上传租约、作业通知 outbox、签字通知和 Agent 全部空闲，Hono 才返回稳定的 `ready/blocker_codes`。
+3. 停服前把恢复脚本、Agent 安装器、旧 `apps\web\ui\dist` 的逐文件 SHA-256 快照及原子 journal 写到 `$env:WB_DATA_DIR\runtime\release\`。目录 ACL 只允许 LocalSystem 与本机 Administrators；journal 记录停机前 SHA/VERSION、发布 PID/精确进程启动 FILETIME、脚本与 UI 快照哈希。SYSTEM 任务 `beian-release-watchdog` 每分钟检查一次，省略 repetition duration，直到 journal 被成功解除前持续重试；ACL 目录内的独占 `release.lock` 保证正常发版和恢复不能并行，不依赖可被低权限进程预占的全局命名 mutex。journal 写成后，在线短租约通过 loopback `PUT` 提升为没有到期时间的 transaction fence；首次 legacy 离线切换直接写同样的 transaction fence。
+4. 只通过 WinSW `Stop-Service beian-server-8787` 停服务。服务状态已停但 8787 仍监听时直接失败并恢复，不对 netstat PID 做 `taskkill`，不杀全部 `node.exe`，也不动 cloudflared。
+5. `git merge --ff-only <TargetSha>` 后必须确认 `HEAD == TargetSha`，并再次证明该目标的依赖图未变；随后直接复用停服前验证过的 `node_modules` 与 Python 环境，只编新 UI、按新 checkout 同步 InteractiveToken Agent，最后重启 WinSW。目标 Node 启动前会重写同一 `lease_id` 的 transaction fence，因此新进程从第一条请求起仍处于 drain；版本、listener、品牌 PNG 与 journal commit 全部成功后，脚本才通过已验证的新 control 原子解除。`committed` 是不可逆切换点：之后不再回旧树；若 Actions 恰好在放行前后中断，独立 recovery 会重启并核对同一目标版本、幂等解除 fence，避免“新版本接单后又回滚”。
+6. merge、构建、Agent 同步、重启或冒烟失败时，独立恢复脚本按 journal 恢复旧 UI 快照、回到精确的停机前 SHA/VERSION，再对实际将启动的旧树重跑同一组离线冷启动探针，并恢复旧 checkout 对应的 Agent 任务；最终再次核对 SHA、UI 指纹和 Agent 身份。merge 前 journal 会在确认精确锁白名单全部不存在后写入不可变 owner、operation、ref、基线、策略哈希和起始 FILETIME；恢复只处理 `index.lock`、HEAD/main、ORIG_HEAD 及对应 reflog 的七个精确候选。恢复进程取得独占锁后必须重新读取并验证 journal，锁前快照不能提供路径或身份授权。发布进程或任一 Git 进程仍活、字段被覆盖、锁更早、策略不符或不能独占时都保留现场，`recovery_failed` 重试也不能扩大删除授权；首个 `failed_from_stage` 不会被后续重试覆盖。恢复路径不执行 npm/Python 在线安装，也不重建旧 UI。回滚目标为 `0.20+` 时，旧 Node 启动前也先写同一 `lease_id` 的 transaction fence，核对 health/version/control/listener 后才原子开放；回滚到不认识 admission 和持久 Illustrator fault fence 的 legacy 版本时，恢复会先保持 8787 停止，并要求 fault 文件以及 Illustrator/AIRobin/cscript/wscript 全部不存在，否则保留 journal 等待人工清场，不会启动旧服务。Actions 被取消、PowerShell 被杀、发版超过两分钟或机器短时掉电时，watchdog 继续做同一恢复；不会因时钟到期把未知版本或尚未验证的回滚代际开放接单。
 
-脚本会：查 health（对照/打样/Illustrator 在跑或排队就失败）→ 校验 `$env:WB_DATA_DIR` 不在仓库内 → Actions 用 cmd `git fetch` 再检出 `origin/main` 的 `release.ps1`（PowerShell 5 不要把 git stderr 当失败；盘上旧脚本才能被新 YAML 自愈）→ 脚本把该文件 `checkout HEAD` 清脏 → 再 `fetch`（只看 LASTEXITCODE；若 `cannot lock ref 'refs/remotes/origin/main'`，只删这一条再 fetch；网络/401/Clash 失败不要动 tracking ref）并把 `package-lock.json` 复位到 HEAD（丢掉 npm 改脏的锁文件）→ 还有别的已跟踪改动、或本地 main 比 origin 多 commit，**先失败、不停 8787** → **再** 先 `Stop-Service beian-server-8787`（避免 WinSW onfailure 把杀掉的子进程当崩溃拉回），再 `taskkill /T /F /PID` 只清残留监听树（不杀全部 node.exe，不动 cloudflared）→ `Invoke-Git merge --ff-only origin/main` + 锁文件有变才 `npm ci` + 补 Windows 的 Rollup 可选包 + 编 UI + 用 `WB_PYTHON`（对照那个 `.venv`）`pip install -r apps/web/backend/requirements.txt`（打样 `pipeline.py` 跟对照共用这个解释器，需要 `pypdf`、`pymupdf`；平面出图不靠 qlmanage）+ `Restart-Service beian-server-8787`（WinSW，开机自启，不依赖登录）。Git 拉码之后清掉 `GITHUB_TOKEN` 再跑 npm。merge/编/起失败时：`git reset --hard` 回停机前 SHA（只回这次升版，不是收拾操作员脏文件），缺 `node_modules`/`dist` 就在旧树上重装重编，再 `Restart-Service beian-server-8787`。Actions 超时/取消时 workflow 的 `if: failure()` 若服务已 RUNNING 则成功退出，否则 `sc start`；`sc` 1056（已在跑）当成功。顺利时公网会空 2–5 分钟。health 不通且 8787 仍在听，或还有 python/blender，会失败，不会当空闲。文件是 UTF-8 BOM，给中文 Windows 的 PowerShell 5 用。
+恢复失败会保留 `$env:WB_DATA_DIR\runtime\release\release-journal.json` 和 `beian-release-watchdog`，`last_error` 是当前阻塞；不要删 journal、不要手工 `sc start` 掩盖现场。下一次发版会先要求这笔旧事务恢复完成。`release.ps1` 与独立恢复脚本都带 UTF-8 BOM，供中文 Windows PowerShell 5.1 正确解析。
+
+当前脚本会在依赖图复核和新 UI 构建后、重启 8787 前停掉旧 Agent 登录任务并按新 checkout 重新注册/启动，避免发版后旧 Agent 进程继续执行旧脚本；旧 PID 未退出、Agent 正 busy 或 faulted 都拒绝切换，回滚会按旧 checkout 恢复任务。它沿用已注册的管理员 principal，只同步 InteractiveToken 任务，不会把 Illustrator 注册成 Session 0 服务。目标 8787 在 transaction fence 后启动并通过 health/version 身份核对后，发版脚本还会调用生产 Agent 完成管道 → VBS → 唯一 JSX 的 Session 1 冒烟；Session、可见窗口、空文档、脚本哈希、发布版本、checkout 或管道服务 PID 任一不符都会回滚，业务仍不开放。PR 和可选择 ref 的手工工作流都不能触达杭州生产 runner。
+
+从 `0.20.0.0` 起，停服务前还会读取 `$env:WB_DATA_DIR\runtime\release-control.json`，用其中不打印的随机令牌和发布方生成的 `lease_id` 让 Hono 原子进入 admission drain。每个 Node 进程同时生成随机 `instance_id`；PowerShell 必须用 control token 向 loopback identity 接口在线挑战，并同时匹配协议、实例、版本、PID 和真实 8787 listener，不能只凭容易复用的 PID 或宽松时间窗认领进程。除不可变静态资源、health 和受令牌保护的控制接口外，动态页面和全部业务 API 都会暂时返回“系统正在安全升版”；这样新增路由默认纳入，避免 SPA、session/OAuth 清理等隐藏写入漏过。Hono 聚合在途请求、队列、上传租约、作业通知 outbox、签字通知与 Agent 状态，只向 PowerShell 返回稳定的 `ready/blocker_codes`，发布脚本不再理解任务目录、状态或心跳结构。journal 落盘前使用 2 分钟可续租 lease，发版在这个准备阶段中断才会自动恢复接单；journal 与 watchdog 就绪后立即提升为不自动过期的 transaction fence，此后只能由匹配 `lease_id` 的提交或恢复路径解除。升版失败时脚本强制重启 WinSW，并要求 `/api/health.version` 精确等于回滚树 `VERSION`；`0.20.0.0` 及以后还必须完成上述在线实例核对，旧版本回滚才允许没有 control 文件。control 文件只有在记录的 PID 已退出时才会作为陈旧文件清理。
+
+依赖升级必须先作为独立运维变更把新旧运行环境都预置并可离线验证，再调整本合同；当前脚本不会在停服后临时访问 npm/PyPI。这样依赖变更会明确保持旧服务，而不是把生产可用性赌在外网。
+
+`0.19.x → 0.20.0.0` 首次切换时，旧 Node 尚不会生成 release control，不能在继续对外接单时安全自举。合并后的第一条可信 `main` push run 会 fail-closed 并保持旧服务；不要创建手工 workflow，也不要从分支重跑。杭州管理员进入一次经批准的维护窗并停止旧 WinSW 服务，然后在 GitHub Actions 打开**刚才那一条失败的 push run**，选择 **Re-run failed jobs**。重跑保留同一个不可变 `GITHUB_SHA`，且只有 `event=push`、`ref=refs/heads/main`、`run_attempt>1` 时 workflow 才传一次性授权。脚本仍会连续两次只读核对持久任务状态、最近两分钟分片会话、30 分钟内 multipart 临时目录、仓库所属进程以及 Illustrator/Blender/cscript 桌面自动化；任一活动项或不可读记录都会拒绝切换，并且只接受精确的 0.19→0.20。后续版本即使重跑也不能绕过 control/version 门。从 `0.20.0.0` 起 control 文件缺失、版本/实例/PID 不符或 drain 无法解除都会拒绝发版，不再退回非原子空闲检查。令牌和 lease 只在杭州数据目录及 loopback 请求头内使用，不写日志、仓库或 Actions 输出。
 
 `-Restart` 现在多余，行为一样。Mac 禁止 `cloudflared tunnel run beian`。
 
@@ -54,3 +87,4 @@ powershell -ExecutionPolicy Bypass -File scripts\windows\release.ps1
 2. 已有任务 JSON 可以被替换（Windows 上目标文件已存在时 replace 成功）。
 3. 超时之后，任务管理器里没有第二条 python / blender。
 4. 打开首页，侧栏狐狸标和导航图标应显示。`http://127.0.0.1:8787/brand/logo-mark.png` 应是 PNG，不是 404（v0.12.0.1 修了 Windows 把 `/brand` 目录多拼一层；图在 `apps/web/ui/public/brand`，不要另拷一份）。
+5. 本机 `GET /api/health` 或登录后的 `GET /api/status` 应带 `jobs.illustrator.agent.ready=true`，且 probe 返回 Session 1、可见窗口和空文档列表。可信 `main` release transaction 内的 L1 只证明管道 → VBS → JSX 的身份链；真实稿结构、六面贴图和 Blender 仍需单独 L2。

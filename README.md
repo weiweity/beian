@@ -11,7 +11,7 @@
 | `apps/web/ui` | React + Ant Design 6 审稿台 / 打样台 / 历史 / 设置 |
 | `apps/web/server` | Hono + TypeScript，对外 HTTP `:8787` |
 | `apps/web/backend` | Python 对照 worker（TS 用 `python -m app.cli` 调用）。PDF 按页分为活字 / 转曲 / 图片：活字直接读文字层，其他页只跑一次 OCR，再进入既有字段规则与单钉证据收敛 |
-| `workers/packaging/` | 2D→3D CLI，打样台调用。V2 以显式 `cut/crease/...` 语义为结构事实；旧稿只能从已识别的刀线层生成待人工确认的描边候选，不能自动接受。拓扑或面序歧义进入管理员六面确认，不再按颜色或 bbox 静默套盒。平面出图用 pymupdf（对照同一 Python）；杭州不需要 macOS qlmanage。PPT 用两张白底写 OOXML；两张白底再合成一页 PDF。缺 PPT/PDF 仍算出图 |
+| `workers/packaging/` | 2D→3D CLI，打样台调用。V2 以显式 `cut/crease/...` 语义为结构事实；旧稿只能从已识别的刀线层生成待人工确认的描边候选，不能自动接受。拓扑或面序歧义进入管理员六面确认，不再按颜色或 bbox 静默套盒。macOS 用 AppleScript，Windows 由登录桌面的 Illustrator Agent 经命名管道执行现有 VBS/JSX，服务进程不在 Session 0 拉起 Illustrator。平面出图用 pymupdf（对照同一 Python）；杭州不需要 macOS qlmanage。PPT 用两张白底写 OOXML；两张白底再合成一页 PDF。缺 PPT/PDF 仍算出图 |
 | `docs/` | 章程、ADR、设计 |
 
 旧 `apps/web/frontend` 已删除。网页入口只有 `apps/web/ui` + Hono `apps/web/server`；对照规则和 Blender 仍是 Python。见 `docs/adr-002-typescript-http.md`。
@@ -47,12 +47,13 @@
 - 审稿双井或打样 `.ai` 选齐后会按 1 MiB 分片上传。进度到 100% 只表示浏览器已发完，看到「服务器确认中」后还要等「待开工」；网络波动会自动重连 3 次，仍失败则显示「已暂停」，服务器保留已收到的字节。SPA 换台和整页刷新都能找回上传会话；重新选择同一份文件会从服务器偏移量继续。要换稿点「停止并删除 / 删除暂存」，会同步清掉服务器会话或待开工回执。
 - 打样台可按品名/文件名搜索，并在看板与表格之间切换。新稿支持两份同时上传，第三份会提示等待其中一份完成。历史记录同时列出上传中、服务器确认、已暂停、待开工、处理中和已结束记录；有删除权限时点「编辑」可全选并批量删除可删除记录，进行中的作业不能删除。删除请求丢响应时可安全重试。核对页默认打开已完成的第二版（如有），可切回上一版，也可用「全屏核对」。页图优先加载可放大的矢量核对面，生成或加载失败时自动退回高清 PNG；横向核对窗先列疑点，再并排显示疑点/错误点、Excel 应印和稿上 OCR。
 - 网页新打样单固定进入语义结构 V2，不再回落到旧刀线猜测。状态分开显示：`识别结构中` → `待确认结构` / `当前不支持` → `打样中`。显式结构语义可直接进入严格拓扑验证；没有对象语义的旧 AI 只会从已识别的刀线层生成描边候选，并把真实 artwork 放在候选图下供管理员确认 front/right/back/left/top/bottom 与旋转。未确认或无法闭合时不会进 Blender。杭州 Windows Illustrator/Blender L1/L2 仍是合并部署门，不再是运行时开关。
+- Windows 打样要求管理员处于已登录的交互桌面，登录任务 `beian-illustrator-agent` 会在 Session 1 建立受 ACL 保护的 UTF-8 命名管道。Hono 和 Actions runner 仍可留在 LocalSystem/Session 0，但只能通过该管道请求 Illustrator；用户注销、Agent 心跳过期或持久故障围栏尚未由交互管理员确认清除时，开始打样会在领取上传回执前返回可重试的 412，不会退回 Session 0 启动 Adobe。锁屏或 UU 断开不等于注销；恢复步骤见 `scripts/windows/README.md`。
 
 5173 登录闪或 `/api` 返回 HTML / 空 Content-Type：打开 http://127.0.0.1:8787/，或重启 `npm run dev:ui`。飞书授权失败回到飞书重试，不要把远程验收人指到本机。JSON 404（任务不存在等）不是 Vite 挂了。
 
 不要跑 uvicorn。没有 `app.main`。产品入口只有 Hono `:8787`。
 
-测服务端、界面和对照 CLI：仓库根目录 `npm test`（Mac；不打外网）。浏览器交互回归另跑 `npm run test:e2e`；它使用 Vite + 合成 API，验证页面行为，不替代真实 Hono `:8787` 或杭州 Windows L1。杭州生产只做 health/logo 冒烟，不跑单测。只要服务端：`npm run test -w beian-server`。只要界面：`npm run test -w beian-ui`。
+测服务端、界面和对照 CLI：仓库根目录 `npm test`（Mac；不打外网）。浏览器交互回归另跑 `npm run test:e2e`；它使用 Vite + 合成 API，验证页面行为，不替代真实 Hono `:8787` 或杭州 Windows L1。杭州生产不跑单测；可信 `main` release transaction 会检查 health/version/listener/logo，并通过生产 Session 1 Agent 完成管道 → VBS → 唯一 JSX 的身份冒烟。真实稿结构、六面贴图和 Blender 仍属于人工 L2。只要服务端：`npm run test -w beian-server`。只要界面：`npm run test -w beian-ui`。
 
 ## Docker（当前未交付）
 
@@ -108,4 +109,4 @@ docker buildx build --platform linux/amd64 -t beian:review-amd64 --load .
 
 ## 生产
 
-杭州 Windows + Cloudflare Named Tunnel → `127.0.0.1:8787`。Mac 只做开发。合进 `main` 后，杭州 **self-hosted runner**（标签 `hangzhou`）跑 `scripts/windows/release.ps1`。对照在跑会失败并保持旧进程；先停 8787 那棵树再拉码，不动 cloudflared，不杀全部 node.exe。也可在杭州手工执行同一脚本。侧栏/拒绝页图标走 `/brand/…`（`apps/web/ui/public`）；Windows 上若 404，确认已拉到 v0.12.0.1+，冒烟见 `scripts/windows/README.md`。
+杭州 Windows + Cloudflare Named Tunnel → `127.0.0.1:8787`。Mac 只做开发。合进 `main` 后，杭州 **self-hosted runner**（标签 `hangzhou`）跑 `scripts/windows/release.ps1`。workflow 先用 GitHub API 把事件 commit 的发版组件下载到 `RUNNER_TEMP`，并把同一个不可变 `GITHUB_SHA` 传给脚本；依赖核对、VERSION、journal、Git 锁所有权、ff-only 和最终 HEAD 全部绑定该 SHA，即使后续 main 已推进也不会用旧恢复协议部署新提交。bootstrap 不会在恢复 journal 建立前 checkout/reset 生产 index。空闲时 Hono 以可续租、会自动过期的 drain 原子停止动态页面和全部业务 API 请求，并等响应正文真正结束、内存 worker 槽、持久作业、上传、作业通知 outbox 与签字通知收尾；不可读任务记录会给出 `jobs_unknown`，不再当成空闲。静态资源、health 和 release control 保持可用。受 ACL 保护的 journal 与 SYSTEM watchdog 落盘后，短租约提升为不自动过期的事务围栏，只有同一提交/恢复事务能解除。停服前还要证明 npm/Python 依赖图未变，并实际导入真实 Hono 服务入口，确认现有运行环境可离线冷启动和旧 UI 快照可恢复；真实依赖变化或环境不完整会保持旧站在线并拒绝发版。回滚先切回旧 SHA、再探测实际将启动的旧树，不联网安装或重建旧 UI；硬中断遗留的 index、HEAD/main、ORIG_HEAD 及对应 reflog 锁，只有在 journal 的不可变 merge 所有权、全缺失基线、精确白名单、进程、时间和独占句柄全部吻合时才会逐个删除。全程不动 cloudflared、不杀全部 node.exe，也不按 netstat PID 强杀。脚本会同步 InteractiveToken 登录任务 `beian-illustrator-agent`，但不会把 Illustrator 变成 Session 0 服务；没有登录桌面时打样明确失败。`0.19→0.20` 的一次性维护窗和恢复证据见 `scripts/windows/README.md`。侧栏/拒绝页图标走 `/brand/…`（`apps/web/ui/public`）；Windows 上若 404，确认已拉到 v0.12.0.1+。

@@ -721,7 +721,11 @@ describe("review http", () => {
       jobs?: {
         ocr?: { running: number; queued: number };
         blender?: { running: number; queued: number };
-        illustrator?: { running: number; queued: number };
+        illustrator?: {
+          running: number;
+          queued: number;
+          agent?: { required?: boolean; ready?: boolean; mode?: string };
+        };
       };
       uploads?: { active: number; waiting: number };
     };
@@ -732,6 +736,9 @@ describe("review http", () => {
     assert.equal(typeof body.jobs?.blender?.queued, "number");
     assert.equal(typeof body.jobs?.illustrator?.running, "number");
     assert.equal(typeof body.jobs?.illustrator?.queued, "number");
+    assert.equal(body.jobs?.illustrator?.agent?.required, false);
+    assert.equal(body.jobs?.illustrator?.agent?.ready, true);
+    assert.equal(body.jobs?.illustrator?.agent?.mode, "native");
     assert.equal(typeof body.uploads?.active, "number");
     assert.equal(typeof body.uploads?.waiting, "number");
   });

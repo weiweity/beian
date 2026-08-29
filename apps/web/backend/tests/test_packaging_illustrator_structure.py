@@ -12,6 +12,10 @@ WORKER = PACKAGING / "illustrator" / "illustrator_worker.py"
 PIPELINE = PACKAGING / "pipeline.py"
 EXPORTER = PACKAGING / "illustrator" / "export_structure.jsx"
 WINDOWS_RUNNER = PACKAGING / "illustrator" / "run_export.vbs"
+AGENT_CLIENT = PACKAGING / "illustrator" / "illustrator_agent.py"
+AGENT_SCRIPT = PACKAGING.parents[1] / "scripts" / "windows" / "illustrator-agent.ps1"
+AGENT_INSTALLER = PACKAGING.parents[1] / "scripts" / "windows" / "install-illustrator-agent.ps1"
+AGENT_SMOKE = PACKAGING.parents[1] / "scripts" / "windows" / "illustrator-jsx-smoke.ps1"
 
 
 def load_worker():
@@ -24,6 +28,14 @@ def load_worker():
 
 def load_pipeline():
     spec = importlib.util.spec_from_file_location("packaging_pipeline_error_contract", PIPELINE)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_agent_client():
+    spec = importlib.util.spec_from_file_location("packaging_illustrator_agent_client", AGENT_CLIENT)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -77,68 +89,460 @@ def test_proposal_paths_are_cleaned_from_artwork_without_hiding_the_whole_layer(
     assert "documentRef.layers[layerIndex].visible =" not in source
 
 
-def test_windows_bridge_runs_the_same_bound_jsx_exporter(tmp_path: Path):
-    worker = load_worker()
-    exporter = tmp_path / "worker.jsx"
-    exporter.write_text("jsonStringify(result);\n", encoding="utf-8")
-    config = tmp_path / r"C:\supply\data\jobs\O'Brien\结构.json"
-    runtime = worker.materialize_runtime_jsx(exporter, config)
-    source = runtime.read_text(encoding="utf-8")
-    assert source.startswith(
-        "var PIPELINE_CONFIG_PATH = " + json.dumps(str(config), ensure_ascii=True) + ";\n"
-    )
-    assert source.endswith("jsonStringify(result);\n")
-
-    command = worker.windows_runner_command(
+def test_windows_pipe_contract_is_utf8_json_and_request_correlated():
+    client = load_agent_client()
+    request_id, raw = client.encode_request(
         "run",
-        runtime,
-        cscript=Path(r"C:\Windows\System32\cscript.exe"),
+        config_path=r"C:\supply\data\mockups\abc\illustrator_input.json",
+        exporter="structure",
+        timeout_seconds=420,
+        request_id="request-1",
     )
-    assert command == [
-        r"C:\Windows\System32\cscript.exe",
-        "//Nologo",
-        str(WINDOWS_RUNNER),
-        "run",
-        str(runtime),
-    ]
+    assert request_id == "request-1"
+    assert raw.endswith(b"\n")
+    parsed = json.loads(raw.decode("utf-8"))
+    assert parsed["protocol"] == "beian.illustrator.v1"
+    assert parsed["exporter"] == "structure"
+    response = client.decode_response(
+        json.dumps(
+            {
+                "protocol": "beian.illustrator.v1",
+                "id": "request-1",
+                "ok": True,
+                "illustrator_version": "30.5.1",
+            }
+        ).encode("utf-8"),
+        "request-1",
+    )
+    assert response["illustrator_version"] == "30.5.1"
 
 
-def test_windows_bridge_uses_official_com_jsx_entrypoint_and_guards_open_docs():
-    source = WINDOWS_RUNNER.read_text(encoding="utf-8")
-    assert 'CreateObject("Illustrator.Application")' in source
-    assert "DoJavaScriptFile" in source
-    assert "appRef.Documents.Count <> 0" in source
-    assert "Shell.Application" not in source
+def test_windows_pipe_contract_preserves_agent_error_details():
+    client = load_agent_client()
+    with pytest.raises(client.IllustratorAgentError) as caught:
+        client.decode_response(
+            json.dumps(
+                {
+                    "protocol": "beian.illustrator.v1",
+                    "id": "request-2",
+                    "ok": False,
+                    "code": "illustrator_documents_open",
+                    "message": "Illustrator has open documents",
+                    "details": {"documents": [{"name": "[recovered].ai"}]},
+                }
+            ).encode("utf-8"),
+            "request-2",
+        )
+    assert caught.value.code == "illustrator_documents_open"
+    assert caught.value.details["documents"][0]["name"] == "[recovered].ai"
 
 
-def test_windows_probe_contract_rejects_malformed_output():
-    worker = load_worker()
-    assert worker.parse_windows_probe("30.0\t0") == ("30.0", 0)
-    try:
-        worker.parse_windows_probe("not-a-contract")
-    except ValueError as error:
-        assert "invalid response" in str(error)
-    else:
-        raise AssertionError("malformed Windows probe must fail closed")
+@pytest.mark.parametrize(
+    ("command", "kwargs", "message"),
+    [
+        ("unknown", {}, "unsupported"),
+        ("run", {"exporter": "structure"}, "config_path"),
+        ("run", {"config_path": r"C:\\job.json", "exporter": "other"}, "exporter"),
+    ],
+)
+def test_windows_pipe_contract_rejects_invalid_requests(
+    command: str,
+    kwargs: dict,
+    message: str,
+):
+    client = load_agent_client()
+
+    with pytest.raises(ValueError, match=message):
+        client.encode_request(command, **kwargs)
 
 
-def test_windows_warmup_refuses_to_touch_an_open_illustrator_document(
+def test_windows_pipe_contract_clamps_timeout_to_agent_bounds():
+    client = load_agent_client()
+
+    _, minimum = client.encode_request("probe", timeout_seconds=0, request_id="minimum")
+    _, maximum = client.encode_request("probe", timeout_seconds=9999, request_id="maximum")
+
+    assert json.loads(minimum)["timeout_ms"] == 30_000
+    assert json.loads(maximum)["timeout_ms"] == 600_000
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        b"\xff",
+        b"not-json",
+        json.dumps(["not", "an", "object"]).encode("utf-8"),
+        json.dumps(
+            {"protocol": "beian.illustrator.v1", "id": "other", "ok": True}
+        ).encode("utf-8"),
+    ],
+)
+def test_windows_pipe_contract_rejects_malformed_or_uncorrelated_responses(raw: bytes):
+    client = load_agent_client()
+
+    with pytest.raises(client.IllustratorAgentError) as caught:
+        client.decode_response(raw, "request-3")
+
+    assert caught.value.code == "illustrator_agent_protocol_error"
+
+
+def test_windows_worker_records_agent_success_without_running_a_second_bridge(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
     worker = load_worker()
-    application = tmp_path / "Illustrator.exe"
-    application.write_bytes(b"exe")
-    monkeypatch.setattr(worker.subprocess, "Popen", lambda *args, **kwargs: object())
-    monkeypatch.setattr(
-        worker.subprocess,
-        "run",
-        lambda *args, **kwargs: worker.subprocess.CompletedProcess(
-            args[0], 0, "30.0\t1", ""
+    config_path = tmp_path / "illustrator-input.json"
+    result_path = tmp_path / "result.json"
+    full_pdf = tmp_path / "full.pdf"
+    print_pdf = tmp_path / "print.pdf"
+    structure_json = tmp_path / "structure.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "application": str(tmp_path / "Illustrator.exe"),
+                "source_ai": str(tmp_path / "source.ai"),
+                "full_pdf": str(full_pdf),
+                "print_pdf": str(print_pdf),
+                "structure_json": str(structure_json),
+                "result_json": str(result_path),
+            }
         ),
+        encoding="utf-8",
     )
-    with pytest.raises(RuntimeError, match="no other open documents"):
-        worker.warm_up_windows_illustrator(application, 30)
+
+    def fake_request(command: str, **kwargs):
+        assert command == "run"
+        assert kwargs["exporter"] == "structure"
+        for path in (full_pdf, print_pdf, structure_json):
+            path.write_bytes(b"output")
+        result_path.write_text(
+            json.dumps(
+                {
+                    "success": True,
+                    "full_pdf": str(full_pdf),
+                    "print_pdf": str(print_pdf),
+                    "structure_json": str(structure_json),
+                }
+            ),
+            encoding="utf-8",
+        )
+        return {
+            "illustrator_version": "30.5.1",
+            "warmup_elapsed_ms": 250,
+        }
+
+    monkeypatch.setattr(worker.sys, "platform", "win32")
+    monkeypatch.setattr(worker, "request_agent", fake_request)
+    monkeypatch.setattr(worker.sys, "argv", [str(WORKER), str(config_path)])
+
+    assert worker.main() == 0
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+    assert result["illustrator_version"] == "30.5.1"
+    assert result["warmup_elapsed_s"] == 0.25
+    assert json.loads(config_path.read_text(encoding="utf-8"))["document_already_open"] is False
+
+
+def test_windows_worker_preserves_agent_error_code_and_does_not_fabricate_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    worker = load_worker()
+    config_path = tmp_path / "illustrator-input.json"
+    result_path = tmp_path / "result.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "application": str(tmp_path / "Illustrator.exe"),
+                "source_ai": str(tmp_path / "source.ai"),
+                "full_pdf": str(tmp_path / "full.pdf"),
+                "print_pdf": str(tmp_path / "print.pdf"),
+                "result_json": str(result_path),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fail_request(*_args, **_kwargs):
+        raise worker.IllustratorAgentError(
+            "illustrator_documents_open",
+            "Illustrator has open documents",
+            details={"documents": [{"name": "[recovered].ai"}]},
+        )
+
+    monkeypatch.setattr(worker.sys, "platform", "win32")
+    monkeypatch.setattr(worker, "request_agent", fail_request)
+    monkeypatch.setattr(worker.sys, "argv", [str(WORKER), str(config_path)])
+
+    assert worker.main() == 2
+    assert not result_path.exists()
+    stderr = capsys.readouterr().err
+    payload = json.loads(stderr.strip().splitlines()[-1])
+    assert payload["kind"] == "illustrator_agent_error"
+    assert payload["code"] == "illustrator_documents_open"
+    assert payload["details"]["documents"][0]["name"] == "[recovered].ai"
+
+
+def test_windows_bridge_uses_official_com_jsx_entrypoint_and_guards_open_docs():
+    source = WINDOWS_RUNNER.read_text(encoding="utf-8")
+    assert 'GetObject(, "Illustrator.Application")' in source
+    assert 'CreateObject("Illustrator.Application")' not in source
+    assert "DoJavaScriptFile" in source
+    assert "appRef.Documents.Count <> 0" in source
+    assert 'mode = "close-owned"' in source
+    assert '"DOCUMENT" & vbTab' in source
+    assert "Shell.Application" not in source
+
+
+def test_agent_client_and_server_changes_invalidate_pipeline_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    pipeline = load_pipeline()
+    source = tmp_path / "source.ai"
+    template = tmp_path / "template.json"
+    client = tmp_path / "illustrator_agent.py"
+    server = tmp_path / "illustrator-agent.ps1"
+    source.write_bytes(b"ai")
+    template.write_text("{}", encoding="utf-8")
+    client.write_text("client-v1", encoding="utf-8")
+    server.write_text("server-v1", encoding="utf-8")
+    monkeypatch.setattr(pipeline, "ILLUSTRATOR_AGENT_CLIENT", client)
+    monkeypatch.setattr(pipeline, "ILLUSTRATOR_AGENT_SERVER", server)
+
+    first = pipeline.job_fingerprint(source, template, {"structure_engine": "v2"})
+    client.write_text("client-v2", encoding="utf-8")
+    second = pipeline.job_fingerprint(source, template, {"structure_engine": "v2"})
+    server.write_text("server-v2", encoding="utf-8")
+    third = pipeline.job_fingerprint(source, template, {"structure_engine": "v2"})
+
+    assert first != second
+    assert second != third
+
+
+def test_windows_worker_has_no_session_zero_launch_or_direct_com_path():
+    source = WORKER.read_text(encoding="utf-8")
+    assert "request_agent(" in source
+    assert "subprocess.Popen" not in source
+    assert "run_export.vbs" not in source
+    assert "CreateObject" not in source
+
+
+def test_session_one_agent_is_acl_bounded_timeout_safe_and_fixed_exporter_only():
+    source = AGENT_SCRIPT.read_text(encoding="utf-8")
+    assert "NamedPipeServerStream" in source
+    assert "PipeSecurity" in source
+    assert "S-1-5-18" in source
+    assert "UTF8Encoding" in source
+    assert "illustrator-agent-$PipeHash.lock" in source
+    assert "illustrator-execution.lock" in source
+    assert "illustrator-fault.json" in source
+    assert "beian.illustrator.fault.v1" in source
+    assert "[System.IO.FileShare]::None" in source
+    assert "System.Threading.Mutex" not in source
+    assert "SessionId" in source
+    assert "MainWindowHandle" in source
+    assert "Start-Process -FilePath $Executable" in source
+    assert "$process.WaitForExit($sliceMs)" in source
+    assert 'Write-Heartbeat "busy"' in source
+    assert "Read-PipeRequestLine" in source
+    assert ".ReadAsync(" in source
+    assert "request body is too large" in source
+    assert "HeartbeatName" in source
+    assert "ExpectedUserSid" in source
+    assert "script_sha256" in source
+    assert "release_version" in source
+    assert 'Write-Heartbeat "faulted"' in source
+    assert "illustrator_recovery_failed" in source
+    assert 'Write-AgentFaultFence "active" "illustrator_execution_incomplete" $requestId' in source
+    assert 'Write-AgentFaultFence "faulted" $code $requestId' in source
+    assert "function Read-AgentFaultFence" in source
+    assert "function Import-AgentFaultFence" in source
+    assert "function Get-AgentHeartbeatState" in source
+    assert "function Assert-AgentFenceAfterExecutionLock" in source
+    assert "Assert-AgentNotFaulted" in source
+    import_fence = source[source.index("function Import-AgentFaultFence") : source.index("function Set-AgentFaultedFromFence")]
+    assert '$fence.State -eq "faulted"' in import_fence
+    assert '$fence.State -eq "active"' not in import_fence
+    heartbeat_state = source[source.index("function Get-AgentHeartbeatState") : source.index("function Write-AgentFaultFence")]
+    assert "[System.IO.FileShare]::None" in heartbeat_state
+    assert "catch [System.IO.IOException]" in heartbeat_state
+    assert 'return "busy"' in heartbeat_state
+    assert 'Write-AgentFaultFence "faulted"' in heartbeat_state
+    request_loop = source[source.index("$line = Read-PipeRequestLine") : source.index("$response = [ordered]@{")]
+    assert request_loop.index("Assert-AgentNotFaulted") < request_loop.index("Enter-ExecutionLock $deadline")
+    assert request_loop.index("Enter-ExecutionLock $deadline") < request_loop.index("Assert-AgentFenceAfterExecutionLock")
+    assert request_loop.index("Assert-AgentFenceAfterExecutionLock") < request_loop.index('Write-AgentFaultFence "active"')
+    assert source.index('Write-AgentFaultFence "active"') < source.index("Invoke-AgentRequest $request $deadline")
+    assert source.index("Clear-AgentFaultFence", source.index("Invoke-AgentRequest $request $deadline")) < source.index(
+        "$writer.WriteLine(($response", source.index("Invoke-AgentRequest $request $deadline")
+    )
+    assert "$process.Kill()" in source
+    assert "$process.WaitForExit(5000)" in source
+    invoke_cscript = source[source.index("function Invoke-Cscript") : source.index("function Convert-ProbeOutput")]
+    assert "try {" in invoke_cscript
+    assert "} finally {" in invoke_cscript
+    assert "$processStarted -and -not $exitProven" in invoke_cscript
+    assert "cscript.exe could not be terminated safely after an agent-side failure" in invoke_cscript
+    assert invoke_cscript.index('Write-Heartbeat "busy"') < invoke_cscript.index("} finally {")
+    assert invoke_cscript.index("$process.Kill()", invoke_cscript.index("} finally {")) < invoke_cscript.index(
+        "$process.WaitForExit(5000)", invoke_cscript.index("} finally {")
+    )
+    ensure_illustrator = source[
+        source.index("function Ensure-Illustrator") : source.index("function Assert-NoOpenDocuments")
+    ]
+    assert '$probeCode = [string]$_.Exception.Data["AgentCode"]' in ensure_illustrator
+    assert 'if ($probeCode -eq "illustrator_recovery_failed")' in ensure_illustrator
+    assert ensure_illustrator.index('if ($probeCode -eq "illustrator_recovery_failed")') < ensure_illustrator.index(
+        "$lastMessage = $_.Exception.Message"
+    )
+    run_request = source[source.index("function Invoke-RunRequest") : source.index("function Invoke-ProbeRequest")]
+    post_run_probe = run_request[
+        run_request.index("try {\n    $after = Invoke-BridgeProbe") : run_request.index(
+            "if ([int]$after.document_count"
+        )
+    ]
+    assert '$originalCode = [string]$original.Data["AgentCode"]' in post_run_probe
+    assert 'if ($originalCode -eq "illustrator_recovery_failed")' in post_run_probe
+    assert post_run_probe.index('if ($originalCode -eq "illustrator_recovery_failed")') < post_run_probe.index(
+        "Restore-OwnedDocumentState"
+    )
+    assert 'Throw-AgentFailure "illustrator_recovery_failed" "Timed-out cscript.exe did not exit after termination"' in source
+    assert 'Throw-AgentFailure "illustrator_recovery_failed" "Illustrator cleanup could not be verified before the deadline"' in source
+    enter_lock = source[source.index("function Enter-ExecutionLock") : source.index("function New-PipeServer")]
+    first_deadline = enter_lock.index("Get-RemainingMilliseconds")
+    acquire = enter_lock.index("[System.IO.FileStream]::new")
+    second_deadline = enter_lock.index("Get-RemainingMilliseconds", acquire)
+    assert first_deadline < acquire < second_deadline
+    assert "$lock.Dispose()" in enter_lock
+    assert '"export_structure.jsx"' in source
+    assert '"export_ai.jsx"' in source
+    assert "DoJavaScriptFile" not in source
+    assert "Illustrator.Application" not in source
+
+
+def test_agent_task_is_interactive_token_single_instance_and_passwordless():
+    source = AGENT_INSTALLER.read_text(encoding="utf-8")
+    assert "New-ScheduledTaskTrigger -AtLogOn" in source
+    assert "-LogonType Interactive" in source
+    assert "InteractiveToken" in source
+    assert 'MultipleInstances = "IgnoreNew"' in source
+    assert "ExecutionTimeLimit = [TimeSpan]::Zero" in source
+    assert "-Password" not in source
+    assert "New-Service" not in source
+    assert source.index("Stop-ScheduledTask") < source.index("Register-ScheduledTask")
+    assert "HeartbeatName" in source
+    assert "ExpectedUserSid" in source
+    assert "Set-AgentRuntimeAcl" in source
+    assert "Stop-AgentTaskAndWait" in source
+    assert "Get-AgentHeartbeatPid" in source
+    assert "$activeSid.Value -eq $interactiveSid.Value" in source
+    assert "Stop-AgentTaskAndWait $TaskName $heartbeat" in source
+    assert "ClearFaultFence" in source
+    assert "Assert-FaultClearAuthority" in source
+    assert "Assert-FaultClearWorkspaceIdle" in source
+    assert "illustrator-fault.json" in source
+    assert "S-1-5-18" in source
+    assert 'Get-Process -Name "Illustrator", "AIRobin", "cscript", "wscript"' in source
+
+
+def test_windows_l1_smoke_requires_an_explicitly_idle_production_agent():
+    source = AGENT_SMOKE.read_text(encoding="utf-8")
+    assert '$agentState -eq "idle"' in source
+    assert '$agentState -ne "busy"' not in source
+    assert '$agentState -eq "faulted"' in source
+    assert "interactive administrator must verify the desktop before L1" in source
+    assert '"Administrator"' not in source
+
+
+def test_temporary_agent_task_supports_scheduler_owned_expiry_after_hard_cancel():
+    installer = AGENT_INSTALLER.read_text(encoding="utf-8")
+    agent = AGENT_SCRIPT.read_text(encoding="utf-8")
+
+    assert "[DateTime]$ExpiresAt" in installer
+    assert "$trigger.EndBoundary" in installer
+    assert "DeleteExpiredTaskAfter" in installer
+    assert '"-ExpiresAtUtc"' in installer
+    assert "$settingsArguments.ExecutionTimeLimit = $temporaryLimit" in installer
+    assert "$settingsArguments.DeleteExpiredTaskAfter = New-TimeSpan -Minutes 10" in installer
+    assert "expiry must be in the future" in installer
+    assert "[string]$ExpiresAtUtc" in agent
+    assert "$AgentExpiresAt = [DateTimeOffset]::Parse($ExpiresAtUtc).UtcDateTime" in agent
+    assert "$deadline -gt $AgentExpiresAt" in agent
+    assert 'Throw-AgentFailure "illustrator_agent_expiring"' in agent
+    assert ":AgentLoop while ($true)" in agent
+    assert "break AgentLoop" in agent
+
+
+def test_agent_client_binds_pipe_to_current_heartbeat_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    client = load_agent_client()
+    agent_script = tmp_path / "illustrator-agent.ps1"
+    version_file = tmp_path / "VERSION"
+    agent_script.write_text("agent-v1", encoding="utf-8")
+    version_file.write_text("0.20.0.0\n", encoding="utf-8")
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    heartbeat_name = "illustrator-agent-test.json"
+    heartbeat = {
+        "protocol": client.PROTOCOL,
+        "pipe": "test-pipe",
+        "pid": 4321,
+        "session_id": 1,
+        "state": "idle",
+        "updated_at": "2099-01-01T00:00:00+00:00",
+        "script_sha256": client._file_sha256(agent_script),
+        "release_version": "0.20.0.0",
+    }
+    runtime.joinpath(heartbeat_name).write_text(json.dumps(heartbeat), encoding="utf-8")
+    monkeypatch.setenv("WB_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(client, "AGENT_SCRIPT", agent_script)
+    monkeypatch.setattr(client, "VERSION_FILE", version_file)
+    monkeypatch.setattr(client.time, "time", lambda: 4070908800.0)
+
+    assert client._expected_agent_pid(heartbeat_name, "test-pipe") == 4321
+
+
+def test_agent_client_rejects_faulted_heartbeat(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    client = load_agent_client()
+    agent_script = tmp_path / "illustrator-agent.ps1"
+    version_file = tmp_path / "VERSION"
+    agent_script.write_text("agent-v1", encoding="utf-8")
+    version_file.write_text("0.20.0.0\n", encoding="utf-8")
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    heartbeat_name = "illustrator-agent-test.json"
+    runtime.joinpath(heartbeat_name).write_text(
+        json.dumps(
+            {
+                "protocol": client.PROTOCOL,
+                "pipe": "test-pipe",
+                "pid": 4321,
+                "session_id": 1,
+                "state": "faulted",
+                "last_code": "illustrator_recovery_failed",
+                "updated_at": "2099-01-01T00:00:00+00:00",
+                "script_sha256": client._file_sha256(agent_script),
+                "release_version": "0.20.0.0",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("WB_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(client, "AGENT_SCRIPT", agent_script)
+    monkeypatch.setattr(client, "VERSION_FILE", version_file)
+    monkeypatch.setattr(client.time, "time", lambda: 4070908800.0)
+
+    with pytest.raises(client.IllustratorAgentError) as caught:
+        client._expected_agent_pid(heartbeat_name, "test-pipe")
+
+    assert caught.value.code == "illustrator_agent_faulted"
+    assert caught.value.details["last_code"] == "illustrator_recovery_failed"
 
 
 @pytest.mark.parametrize(
@@ -147,6 +551,36 @@ def test_windows_warmup_refuses_to_touch_an_open_illustrator_document(
         (6, "Illustrator COM unavailable", "illustrator_unavailable", "没有启动成功"),
         (2, "Illustrator semantic export requires no other open documents", "illustrator_documents_open", "其他稿件"),
         (3, "Illustrator export timed out after 30s", "illustrator_timeout", "处理超时"),
+        (
+            6,
+            '{"kind":"illustrator_agent_error","ok":false,"code":"illustrator_agent_offline","message":"pipe unavailable","details":{}}',
+            "illustrator_agent_offline",
+            "桌面代理未在线",
+        ),
+        (
+            2,
+            '{"kind":"illustrator_agent_error","ok":false,"code":"illustrator_configuration_mismatch","message":"path changed","details":{}}',
+            "illustrator_configuration_mismatch",
+            "配置已变化",
+        ),
+        (
+            2,
+            '{"kind":"illustrator_agent_error","ok":false,"code":"illustrator_bridge_failed","message":"JSX failed","details":{}}',
+            "illustrator_bridge_failed",
+            "桌面桥执行失败",
+        ),
+        (
+            6,
+            '{"kind":"illustrator_agent_error","ok":false,"code":"illustrator_recovery_failed","message":"cleanup failed","details":{}}',
+            "illustrator_recovery_failed",
+            "自动清理失败",
+        ),
+        (
+            6,
+            '{"kind":"illustrator_agent_error","ok":false,"code":"illustrator_process_identity_mismatch","message":"wrong executable","details":{}}',
+            "illustrator_process_identity_mismatch",
+            "进程与开工板路径不一致",
+        ),
     ],
 )
 def test_structure_export_failure_has_actionable_public_contract(
@@ -156,7 +590,9 @@ def test_structure_export_failure_has_actionable_public_contract(
     expected_message: str,
 ):
     pipeline = load_pipeline()
-    error = pipeline.illustrator_structure_failure(returncode=returncode, stderr=stderr)
+    error = pipeline.illustrator_export_failure(
+        operation="structure", returncode=returncode, stderr=stderr
+    )
 
     payload = error.as_dict()
     assert payload["code"] == expected_code
@@ -166,9 +602,23 @@ def test_structure_export_failure_has_actionable_public_contract(
     assert payload["fix"]
 
 
+def test_legacy_normalize_uses_the_same_agent_failure_contract_without_structure_wording():
+    pipeline = load_pipeline()
+    error = pipeline.illustrator_export_failure(
+        operation="normalize",
+        returncode=2,
+        stderr="worker returned malformed result",
+    )
+
+    payload = error.as_dict()
+    assert payload["code"] == "illustrator_normalize_failed"
+    assert payload["error"] == "Illustrator 标准化失败，请重新打样"
+
+
 def test_structure_export_failure_keeps_private_cause_out_of_public_message():
     pipeline = load_pipeline()
-    error = pipeline.illustrator_structure_failure(
+    error = pipeline.illustrator_export_failure(
+        operation="structure",
         returncode=2,
         stderr=r"JSX failed at C:\supply\data\mockups\secret\illustrator.log",
     )
@@ -201,7 +651,8 @@ def test_structure_export_maps_invalid_or_incomplete_result_contracts(
 ):
     pipeline = load_pipeline()
 
-    error = pipeline.illustrator_structure_failure(
+    error = pipeline.illustrator_export_failure(
+        operation="structure",
         returncode=returncode,
         stdout="worker returned malformed result" if result is None else "",
         result=result,
