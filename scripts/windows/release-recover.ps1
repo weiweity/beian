@@ -23,6 +23,54 @@ $JournalPath = [System.IO.Path]::GetFullPath($JournalPath)
 $ReleaseRuntimeDir = [System.IO.Path]::GetDirectoryName($JournalPath)
 $ReleaseLockPath = Join-Path $ReleaseRuntimeDir "release.lock"
 
+function Invoke-GitResult([string]$RepositoryRoot, [object[]]$GitArgs) {
+  if (-not $GitArgs -or $GitArgs.Count -eq 0) {
+    throw "release recovery Git invocation has no arguments"
+  }
+  $lines = @(& git -C $RepositoryRoot @GitArgs)
+  # The recovery worker is standalone by design. Capture the native exit code
+  # here, before callers inspect or filter output, so PS5 pipeline semantics
+  # cannot turn a successful Git command into an apparent -1 exit.
+  $exitCode = $LASTEXITCODE
+  if ($null -eq $exitCode) { $exitCode = -1 }
+  return [PSCustomObject]@{
+    ExitCode = [int]$exitCode
+    Lines = [object[]]$lines
+  }
+}
+
+function Invoke-GitChecked(
+  [string]$RepositoryRoot,
+  [string]$What,
+  [object[]]$GitArgs
+) {
+  $result = Invoke-GitResult $RepositoryRoot $GitArgs
+  if ([int]$result.ExitCode -ne 0) {
+    throw "$What exit=$($result.ExitCode)"
+  }
+  return @($result.Lines)
+}
+
+function Get-GitSingleLine(
+  [string]$RepositoryRoot,
+  [string]$What,
+  [object[]]$GitArgs
+) {
+  $result = Invoke-GitResult $RepositoryRoot $GitArgs
+  if ([int]$result.ExitCode -ne 0) {
+    throw "$What exit=$($result.ExitCode)"
+  }
+  $lines = @(
+    $result.Lines |
+      ForEach-Object { ([string]$_).Trim() } |
+      Where-Object { $_ -ne "" }
+  )
+  if ($lines.Count -ne 1) {
+    throw "$What returned $($lines.Count) lines"
+  }
+  return [string]$lines[0]
+}
+
 function Get-TextSha256([string]$Text) {
   $sha = [System.Security.Cryptography.SHA256]::Create()
   try {
@@ -657,18 +705,20 @@ try {
   if ([string]$journal.ui_snapshot_sha256 -notmatch '^[0-9a-f]{64}$') {
     throw "release recovery UI snapshot identity is invalid"
   }
-  & git -C $root cat-file -e ($preSha + "^{commit}")
-  if ($LASTEXITCODE -ne 0) { throw "release recovery target commit is unavailable" }
-  & git -C $root cat-file -e ($targetSha + "^{commit}")
-  if ($LASTEXITCODE -ne 0) { throw "requested release commit is unavailable" }
+  Invoke-GitChecked $root "release recovery target commit is unavailable" @(
+    "cat-file", "-e", ($preSha + "^{commit}")
+  ) | Out-Null
+  Invoke-GitChecked $root "requested release commit is unavailable" @(
+    "cat-file", "-e", ($targetSha + "^{commit}")
+  ) | Out-Null
 
-  $currentSha = [string](& git -C $root rev-parse HEAD | Select-Object -First 1)
+  $currentSha = Get-GitSingleLine $root "cannot resolve current release HEAD" @("rev-parse", "HEAD")
   $service = Get-Service -Name "beian-server-8787" -ErrorAction SilentlyContinue
   if ([string]$journal.stage -eq "committed") {
     if (
       $targetSha -notmatch '^[0-9a-f]{40}$' -or
       $targetVersion -notmatch '^\d+\.\d+\.\d+\.\d+$' -or
-      $currentSha.Trim() -ne $targetSha
+      $currentSha -ne $targetSha
     ) {
       throw "committed release identity does not match the checked-out target"
     }
@@ -783,10 +833,11 @@ try {
   Write-AtomicJournal $journal
   Stop-BeianService
   Restore-UiSnapshot $uiSnapshot ([string]$journal.ui_snapshot_sha256) $root
-  & git -C $root reset --hard $preSha
-  if ($LASTEXITCODE -ne 0) { throw "git reset to the pre-release SHA failed" }
-  $restoredSha = [string](& git -C $root rev-parse HEAD | Select-Object -First 1)
-  if ($LASTEXITCODE -ne 0 -or $restoredSha.Trim() -ne $preSha) {
+  Invoke-GitChecked $root "git reset to the pre-release SHA failed" @(
+    "reset", "--hard", $preSha
+  ) | ForEach-Object { Write-Host ([string]$_) }
+  $restoredSha = Get-GitSingleLine $root "cannot resolve restored HEAD" @("rev-parse", "HEAD")
+  if ($restoredSha -ne $preSha) {
     throw "restored HEAD does not match the pre-release SHA"
   }
   $treeVersion = [System.IO.File]::ReadAllText((Join-Path $root "VERSION")).Trim()
@@ -825,8 +876,8 @@ try {
   if ($preSupportsDrain) {
     Open-ReleaseDrain $dataRoot $preVersion ([string]$journal.release_lease_id)
   }
-  $finalSha = [string](& git -C $root rev-parse HEAD | Select-Object -First 1)
-  if ($LASTEXITCODE -ne 0 -or $finalSha.Trim() -ne $preSha) {
+  $finalSha = Get-GitSingleLine $root "cannot resolve final recovered HEAD" @("rev-parse", "HEAD")
+  if ($finalSha -ne $preSha) {
     throw "final recovered HEAD does not match the journal"
   }
   if ((Get-DirectoryFingerprint (Join-Path $root "apps\web\ui\dist")) -ne [string]$journal.ui_snapshot_sha256) {

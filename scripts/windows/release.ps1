@@ -53,8 +53,51 @@ $ReleaseJournalState = $null
 $ReleaseUiSnapshotSha256 = ""
 $Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 
-function Assert-GitOk([string]$What) {
-  if ($LASTEXITCODE -ne 0) { throw "$What 失败 exit=$LASTEXITCODE" }
+function Invoke-GitResult([object[]]$GitArgs) {
+  if (-not $GitArgs -or $GitArgs.Count -eq 0) {
+    throw "Invoke-GitResult requires at least one Git argument"
+  }
+  $AuthHeader = Get-GithubAuthHeader
+  if ($AuthHeader) {
+    $lines = @(& git -c "http.extraheader=$AuthHeader" @GitArgs)
+  } else {
+    $lines = @(& git @GitArgs)
+  }
+  # Capture this immediately, before the native output enters any PowerShell
+  # pipeline. Windows PowerShell 5 can otherwise report -1 after a downstream
+  # cmdlet stops early even though git itself exited successfully.
+  $exitCode = $LASTEXITCODE
+  if ($null -eq $exitCode) { $exitCode = -1 }
+  return [PSCustomObject]@{
+    ExitCode = [int]$exitCode
+    Lines = [object[]]$lines
+  }
+}
+
+function Assert-GitResult([object]$Result, [string]$What) {
+  if ([int]$Result.ExitCode -ne 0) {
+    throw "$What 失败 exit=$($Result.ExitCode)"
+  }
+}
+
+function Invoke-GitChecked([string]$What, [object[]]$GitArgs) {
+  $result = Invoke-GitResult -GitArgs $GitArgs
+  Assert-GitResult $result $What
+  return @($result.Lines)
+}
+
+function Get-GitSingleLine([string]$What, [object[]]$GitArgs) {
+  $result = Invoke-GitResult -GitArgs $GitArgs
+  Assert-GitResult $result $What
+  $lines = @(
+    $result.Lines |
+      ForEach-Object { ([string]$_).Trim() } |
+      Where-Object { $_ -ne "" }
+  )
+  if ($lines.Count -ne 1) {
+    throw "$What 输出应恰好一行，实际 $($lines.Count) 行"
+  }
+  return [string]$lines[0]
 }
 
 function Get-TextSha256([string]$Text) {
@@ -100,26 +143,24 @@ function Assert-GitMergeLocksAbsent([string]$Phase) {
 
 function Get-RevisionText([string]$Revision, [string]$RelativePath) {
   $gitPath = $RelativePath.Replace('\', '/')
-  $lines = @(Invoke-Git show ("$Revision`:$gitPath"))
-  Assert-GitOk "git show $Revision`:$gitPath"
+  $lines = @(Invoke-GitChecked "git show $Revision`:$gitPath" @("show", "$Revision`:$gitPath"))
   return ($lines -join "`n").Trim()
 }
 
 function Restore-NpmLockfileWorktree {
   $relative = "package-lock.json"
   $path = Join-Path $Root $relative
-  $expected = [string](Invoke-Git rev-parse ("HEAD:" + $relative) | Select-Object -First 1)
-  Assert-GitOk "git rev-parse HEAD:$relative"
-  $actual = [string](Invoke-Git hash-object -- $relative | Select-Object -First 1)
-  Assert-GitOk "git hash-object $relative"
-  if ($actual.Trim() -eq $expected.Trim()) { return }
-  $contents = (Get-RevisionText "HEAD" $relative) + "`n"
-  [System.IO.File]::WriteAllText($path, $contents, $Utf8NoBom)
-  $restored = [string](Invoke-Git hash-object -- $relative | Select-Object -First 1)
-  Assert-GitOk "git hash-object restored $relative"
-  if ($restored.Trim() -ne $expected.Trim()) {
-    throw "无法按 HEAD 精确恢复 package-lock.json 工作树"
+  $expected = Get-GitSingleLine "git rev-parse HEAD:$relative" @("rev-parse", ("HEAD:" + $relative))
+  $actual = Get-GitSingleLine "git hash-object $relative" @("hash-object", "--", $relative)
+  if ($actual -ne $expected) {
+    $contents = (Get-RevisionText "HEAD" $relative) + "`n"
+    [System.IO.File]::WriteAllText($path, $contents, $Utf8NoBom)
+    $restored = Get-GitSingleLine "git hash-object restored $relative" @("hash-object", "--", $relative)
+    if ($restored -ne $expected) {
+      throw "无法按 HEAD 精确恢复 package-lock.json 工作树"
+    }
   }
+  Write-Host "native Git result contract verified before service stop"
 }
 
 function Get-NpmDependencyGraphFingerprint([string]$Revision) {
@@ -323,17 +364,6 @@ function Get-GithubAuthHeader {
   return "AUTHORIZATION: basic $Encoded"
 }
 
-# Use $args (not an advanced function) so PS5 does not eat --ff-only as a named parameter.
-function Invoke-Git {
-  $GitArgs = @($args)
-  $AuthHeader = Get-GithubAuthHeader
-  if ($AuthHeader) {
-    & git -c "http.extraheader=$AuthHeader" @GitArgs
-  } else {
-    & git @GitArgs
-  }
-}
-
 function Clear-GithubToken {
   if ($env:GITHUB_TOKEN) {
     Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
@@ -395,12 +425,13 @@ function Fetch-OriginMain {
     }
     if ($msg -match "cannot lock ref 'refs/remotes/origin/main'") {
       Write-Host "origin/main ref 拧了，删掉再 fetch"
-      git update-ref -d refs/remotes/origin/main
+      Invoke-GitChecked "git update-ref -d origin/main" @(
+        "update-ref", "-d", "refs/remotes/origin/main"
+      ) | Out-Null
       $code = Invoke-GitFetch
       if ($code -eq 0) { return }
     }
-    Write-Host "git fetch origin 失败"
-    $global:LASTEXITCODE = $code
+    throw "git fetch origin 失败 exit=$code"
   } finally {
     if (Test-Path $log) { Remove-Item $log -Force -ErrorAction SilentlyContinue }
   }
@@ -409,17 +440,15 @@ function Fetch-OriginMain {
 function Resolve-ReleaseTarget([string]$RequestedSha) {
   $resolved = [string]$RequestedSha
   if (-not $resolved) {
-    $resolved = [string](Invoke-Git rev-parse origin/main | Select-Object -First 1)
-    Assert-GitOk "git rev-parse origin/main"
+    $resolved = Get-GitSingleLine "git rev-parse origin/main" @("rev-parse", "origin/main")
   }
   $resolved = $resolved.Trim().ToLowerInvariant()
   if ($resolved -notmatch '^[0-9a-f]{40}$') {
     throw "TargetSha 必须是完整的 40 位 Git commit SHA"
   }
-  Invoke-Git cat-file -e ($resolved + "^{commit}") | Out-Null
-  Assert-GitOk "git cat-file TargetSha"
-  Invoke-Git merge-base --is-ancestor $resolved origin/main
-  if ($LASTEXITCODE -ne 0) {
+  Invoke-GitChecked "git cat-file TargetSha" @("cat-file", "-e", ($resolved + "^{commit}")) | Out-Null
+  $ancestor = Invoke-GitResult -GitArgs @("merge-base", "--is-ancestor", $resolved, "origin/main")
+  if ([int]$ancestor.ExitCode -ne 0) {
     throw "TargetSha 不属于当前 origin/main，拒绝用其他分支或悬空提交升生产"
   }
   return $resolved
@@ -761,8 +790,19 @@ function Assert-LegacyOfflineIdle {
 
 function Assert-LegacyBootstrapVersion([string]$PreVersion, [string]$TargetRevision) {
   $targetVersion = Get-RevisionText $TargetRevision "VERSION"
-  if ($PreVersion -notmatch '^0\.19\.\d+\.\d+$' -or $targetVersion -ne "0.20.0.0") {
-    throw "-AllowLegacyOfflineBootstrap 只允许已批准的 0.19.x -> 0.20.0.0 首次切换；当前=$PreVersion 目标=$targetVersion"
+  try {
+    $preRelease = [version]$PreVersion
+    $targetRelease = [version]$targetVersion
+  } catch {
+    throw "-AllowLegacyOfflineBootstrap 的版本格式无效；当前=$PreVersion 目标=$targetVersion"
+  }
+  if (
+    $preRelease -lt [version]"0.19.0.0" -or
+    $preRelease -ge [version]"0.20.0.0" -or
+    $targetRelease -lt [version]"0.20.0.0" -or
+    $targetRelease -ge [version]"0.21.0.0"
+  ) {
+    throw "-AllowLegacyOfflineBootstrap 只允许已批准的 0.19.x -> 0.20.x 首次切换；当前=$PreVersion 目标=$targetVersion"
   }
 }
 
@@ -1051,6 +1091,47 @@ function Release-ReleaseLock {
   }
 }
 
+function Remove-UnarmedReleaseRuntime {
+  if (Test-Path -LiteralPath $ReleaseJournalPath -PathType Leaf) { return }
+
+  try {
+    Unregister-ScheduledTask -TaskName $ReleaseWatchdogTask -Confirm:$false -ErrorAction SilentlyContinue
+  } catch {
+    Write-Warning "release pre-journal cleanup could not unregister watchdog: $($_.Exception.Message)"
+  }
+
+  # Only delete artifacts owned by this release transaction. File.Delete avoids
+  # the Windows PowerShell 5 FileSystemProvider failure that can mask the real
+  # pre-journal exception; an unknown entry keeps the runtime directory intact.
+  foreach ($path in @(
+    $ReleaseRecoveryPath,
+    $ReleaseInstallerPath,
+    $ReleaseDependencyCheckPath,
+    $ReleaseLockPath
+  )) {
+    try {
+      [System.IO.File]::Delete($path)
+    } catch {
+      Write-Warning "release pre-journal cleanup could not delete $path`: $($_.Exception.Message)"
+    }
+  }
+
+  if ([System.IO.Directory]::Exists($ReleaseUiSnapshotDir)) {
+    try {
+      [System.IO.Directory]::Delete($ReleaseUiSnapshotDir, $true)
+    } catch {
+      Write-Warning "release pre-journal cleanup could not delete UI snapshot: $($_.Exception.Message)"
+    }
+  }
+  if ([System.IO.Directory]::Exists($ReleaseRuntimeDir)) {
+    try {
+      [System.IO.Directory]::Delete($ReleaseRuntimeDir, $false)
+    } catch {
+      Write-Warning "release pre-journal cleanup left an unknown runtime artifact: $($_.Exception.Message)"
+    }
+  }
+}
+
 function Invoke-ArmedRecovery([string]$Why) {
   if (-not $ReleaseJournalState -and -not (Test-Path -LiteralPath $ReleaseJournalPath)) { return }
   # committed 是不可逆切换点：目标进程已在 drain 中通过完整冒烟。之后即使
@@ -1116,7 +1197,6 @@ try {
 # components to RUNNER_TEMP, so the production checkout needs no bootstrap
 # checkout/reset and cannot strand an unowned index.lock before the journal.
 Fetch-OriginMain
-Assert-GitOk "git fetch"
 $TargetSha = Resolve-ReleaseTarget $TargetSha
 $requestedTargetVersion = Get-RevisionText $TargetSha "VERSION"
 if ($requestedTargetVersion -notmatch '^\d+\.\d+\.\d+\.\d+$') {
@@ -1125,24 +1205,25 @@ if ($requestedTargetVersion -notmatch '^\d+\.\d+\.\d+\.\d+$') {
 Write-Host "release target locked SHA=$TargetSha VERSION=$requestedTargetVersion"
 Write-Host "restore package-lock.json worktree from HEAD without touching the index"
 Restore-NpmLockfileWorktree
-$branch = [string](Invoke-Git symbolic-ref --quiet --short HEAD | Select-Object -First 1)
-Assert-GitOk "git symbolic-ref --short HEAD"
-if ($branch.Trim() -ne "main") {
+$branch = Get-GitSingleLine "git symbolic-ref --short HEAD" @(
+  "symbolic-ref", "--quiet", "--short", "HEAD"
+)
+if ($branch -ne "main") {
   throw "当前分支不是 main，拒绝切分支或停 8787"
 }
-$rawStatus = Invoke-Git status --porcelain --untracked-files=no
-Assert-GitOk "git status"
+$rawStatus = @(Invoke-GitChecked "git status" @("status", "--porcelain", "--untracked-files=no"))
 $dirty = @($rawStatus | ForEach-Object { [string]$_ } | Where-Object { $_.Trim() -ne "" })
 if ($dirty.Count -gt 0) {
   throw "工作树有未提交改动，拒绝停 8787:`n$($dirty -join "`n")"
 }
-$preSha = (git rev-parse HEAD).Trim().ToLowerInvariant()
-Invoke-Git merge-base --is-ancestor $preSha $TargetSha
-if ($LASTEXITCODE -ne 0) {
+$preSha = (Get-GitSingleLine "git rev-parse HEAD" @("rev-parse", "HEAD")).ToLowerInvariant()
+$fastForward = Invoke-GitResult -GitArgs @("merge-base", "--is-ancestor", $preSha, $TargetSha)
+if ([int]$fastForward.ExitCode -ne 0) {
   throw "当前 HEAD 不能 ff-only 到 TargetSha；过期 workflow 不得回退或部署旁支"
 }
-$ahead = (git rev-list --count origin/main..HEAD).Trim()
-if ($LASTEXITCODE -ne 0) { throw "git rev-list 失败 exit=$LASTEXITCODE" }
+$ahead = Get-GitSingleLine "git rev-list origin/main..HEAD" @(
+  "rev-list", "--count", "origin/main..HEAD"
+)
 if ($ahead -ne "0") {
   throw "本地 main 比 origin/main 多 $ahead 个 commit，拒绝停 8787"
 }
@@ -1245,13 +1326,13 @@ try {
 try {
   Arm-GitMergeTransaction
   Set-ReleaseJournalStage "merging"
-  Invoke-Git merge --ff-only $TargetSha
-  Assert-GitOk "git merge --ff-only TargetSha"
-  $mergedHeadSha = (git rev-parse HEAD).Trim().ToLowerInvariant()
+  Invoke-GitChecked "git merge --ff-only TargetSha" @("merge", "--ff-only", $TargetSha) |
+    ForEach-Object { Write-Host ([string]$_) }
+  $mergedHeadSha = (Get-GitSingleLine "git rev-parse merged HEAD" @("rev-parse", "HEAD")).ToLowerInvariant()
   if ($mergedHeadSha -ne $TargetSha) {
     throw "merge 后 HEAD=$mergedHeadSha，不是停服前锁定的 TargetSha=$TargetSha"
   }
-  $sha = (git rev-parse --short HEAD).Trim()
+  $sha = Get-GitSingleLine "git rev-parse --short HEAD" @("rev-parse", "--short", "HEAD")
   $ver = (Get-Content -Raw VERSION).Trim()
   if ($ver -ne $requestedTargetVersion) {
     throw "merge 后 VERSION=$ver，不是停服前锁定的 $requestedTargetVersion"
@@ -1333,11 +1414,9 @@ try {
 }
 } finally {
   Release-ReleaseLock
-  if (-not (Test-Path -LiteralPath $ReleaseJournalPath -PathType Leaf)) {
-    Unregister-ScheduledTask -TaskName $ReleaseWatchdogTask -Confirm:$false -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath $ReleaseRecoveryPath -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath $ReleaseInstallerPath -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath $ReleaseLockPath -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath $ReleaseRuntimeDir -Force -ErrorAction SilentlyContinue
+  try {
+    Remove-UnarmedReleaseRuntime
+  } catch {
+    Write-Warning "release pre-journal cleanup itself failed: $($_.Exception.Message)"
   }
 }

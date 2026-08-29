@@ -12,6 +12,19 @@ const script = scriptBytes.toString("utf8").replace(/^\uFEFF/, "");
 const recoveryPath = join(dirname(fileURLToPath(import.meta.url)), "../../../../scripts/windows/release-recover.ps1");
 const recoveryBytes = readFileSync(recoveryPath);
 const recovery = recoveryBytes.toString("utf8").replace(/^\uFEFF/, "");
+const illustratorScriptPaths = [
+  "scripts/windows/illustrator-jsx-smoke.ps1",
+  "scripts/windows/install-illustrator-agent.ps1",
+  "scripts/windows/illustrator-agent.ps1",
+] as const;
+const windowsNativeGitScripts = new Map<string, string>([
+  ["scripts/windows/release.ps1", script],
+  ["scripts/windows/release-recover.ps1", recovery],
+  ...illustratorScriptPaths.map((relativePath) => [
+    relativePath,
+    readFileSync(join(repoRoot, relativePath), "utf8").replace(/^\uFEFF/, ""),
+  ] as const),
+]);
 const dependencyCheckPath = join(repoRoot, "scripts/windows/release-dependency-check.mjs");
 const dependencyCheck = readFileSync(dependencyCheckPath, "utf8");
 
@@ -22,6 +35,42 @@ function indexOf(re: RegExp): number {
 }
 
 describe("windows release.ps1 contract", () => {
+  it("captures native Git output before inspecting its explicit exit code", () => {
+    const earlyStoppingNativePipeline = /(?:Invoke-Git|&\s*git\b|\bgit\s+-C\b)[^\r\n]*\|\s*Select-Object\s+-First\s+1/i;
+
+    for (const [relativePath, source] of windowsNativeGitScripts) {
+      assert.doesNotMatch(
+        source,
+        earlyStoppingNativePipeline,
+        `${relativePath} must not truncate a live native Git pipeline`,
+      );
+    }
+
+    assert.match(script, /function Invoke-GitResult/);
+    assert.match(script, /function Get-GitSingleLine/);
+    assert.match(
+      script,
+      /\$lines = @\(& git[\s\S]{0,500}\$exitCode = \$LASTEXITCODE[\s\S]{0,300}ExitCode = \[int\]\$exitCode/,
+    );
+    assert.doesNotMatch(script, /function Assert-GitOk/);
+    assert.doesNotMatch(script, /\$global:LASTEXITCODE/);
+
+    assert.match(recovery, /function Invoke-GitResult/);
+    assert.match(recovery, /function Get-GitSingleLine/);
+    assert.match(
+      recovery,
+      /\$lines = @\(& git -C \$RepositoryRoot @GitArgs\)[\s\S]{0,500}\$exitCode = \$LASTEXITCODE[\s\S]{0,300}ExitCode = \[int\]\$exitCode/,
+    );
+    for (const relativePath of illustratorScriptPaths) {
+      const source = windowsNativeGitScripts.get(relativePath) ?? "";
+      assert.match(source, /function Get-GitCheckoutIdentity/);
+      assert.match(
+        source,
+        /\$lines = @\(& git -C \$RepositoryRoot rev-parse HEAD 2>\$null\)[\s\S]{0,200}\$exitCode = \$LASTEXITCODE[\s\S]{0,300}\$values = @\(/,
+      );
+    }
+  });
+
   it("is Hangzhou CD that always stops 8787 before pull", () => {
     assert.equal(scriptBytes[0], 0xef);
     assert.equal(scriptBytes[1], 0xbb);
@@ -30,7 +79,7 @@ describe("windows release.ps1 contract", () => {
     assert.match(script, /Hangzhou production CD/);
     assert.match(script, /live pull-while-serving is gone/);
     assert.match(script, /function Fetch-OriginMain/);
-    assert.match(script, /git update-ref -d refs\/remotes\/origin\/main/);
+    assert.match(script, /"update-ref", "-d", "refs\/remotes\/origin\/main"/);
     assert.match(script, /cannot lock ref 'refs\/remotes\/origin\/main'/);
     assert.match(script, /网络\/401\/Clash 失败不要动 origin\/main/);
     assert.match(script, /^Fetch-OriginMain$/m);
@@ -47,21 +96,22 @@ describe("windows release.ps1 contract", () => {
     assert.doesNotMatch(script, /Write-Host \$msg/);
     assert.match(script, /Remove-Item \$log -Force/);
     assert.match(script, /Get-Content \$log -Raw -Encoding \$enc/);
-    assert.match(script, /\$global:LASTEXITCODE = \$code/);
-    assert.ok(indexOf(/Stop-Service beian-server-8787 so WinSW onfailure does not respawn/) < indexOf(/Invoke-Git merge --ff-only \$TargetSha/));
+    assert.match(script, /throw "git fetch origin 失败 exit=\$code"/);
+    assert.ok(indexOf(/Stop-Service beian-server-8787 so WinSW onfailure does not respawn/) < indexOf(/"merge", "--ff-only", \$TargetSha/));
   });
 
   it("resets npm-dirty lockfile and refuses other tracked dirt before stopping 8787", () => {
     assert.match(script, /function Restore-NpmLockfileWorktree/);
+    assert.match(script, /native Git result contract verified before service stop/);
     assert.ok(indexOf(/^Restore-NpmLockfileWorktree$/m) < indexOf(/工作树有未提交改动，拒绝停 8787/));
     assert.ok(indexOf(/^Restore-NpmLockfileWorktree$/m) < indexOf(/Stop-Service beian-server-8787 so WinSW onfailure does not respawn/));
-    assert.match(script, /symbolic-ref --quiet --short HEAD/);
+    assert.match(script, /"symbolic-ref", "--quiet", "--short", "HEAD"/);
     assert.match(script, /当前分支不是 main，拒绝切分支或停 8787/);
-    assert.doesNotMatch(script, /Invoke-Git\s+(?:checkout|reset)\b/);
+    assert.doesNotMatch(script, /Invoke-GitChecked[^\n]+@\("(?:checkout|reset)"/);
     assert.ok(indexOf(/工作树有未提交改动，拒绝停 8787/) < indexOf(/Stop-Service beian-server-8787 so WinSW onfailure does not respawn/));
     assert.ok(indexOf(/本地 main 比 origin\/main 多/) < indexOf(/Stop-Service beian-server-8787 so WinSW onfailure does not respawn/));
-    assert.match(script, /status --porcelain --untracked-files=no/);
-    assert.match(script, /origin\/main\.\.HEAD/);
+    assert.match(script, /"status", "--porcelain", "--untracked-files=no"/);
+    assert.match(script, /"rev-list", "--count", "origin\/main\.\.HEAD"/);
   });
 
   it("binds the bootstrap, dependency checks, merge, and journal to one immutable target SHA", () => {
@@ -72,11 +122,11 @@ describe("windows release.ps1 contract", () => {
     assert.match(script, /\[string\]\$TargetSha = ""/);
     assert.match(script, /function Resolve-ReleaseTarget/);
     assert.match(script, /TargetSha 必须是完整的 40 位 Git commit SHA/);
-    assert.match(script, /merge-base --is-ancestor \$resolved origin\/main/);
-    assert.match(script, /merge-base --is-ancestor \$preSha \$TargetSha/);
+    assert.match(script, /"merge-base", "--is-ancestor", \$resolved, "origin\/main"/);
+    assert.match(script, /"merge-base", "--is-ancestor", \$preSha, \$TargetSha/);
     assert.match(script, /过期 workflow 不得回退或部署旁支/);
-    assert.match(script, /Invoke-Git merge --ff-only \$TargetSha/);
-    assert.match(script, /\$mergedHeadSha = \(git rev-parse HEAD\)/);
+    assert.match(script, /"merge", "--ff-only", \$TargetSha/);
+    assert.match(script, /\$mergedHeadSha = \(Get-GitSingleLine "git rev-parse merged HEAD"/);
     assert.match(script, /\$mergedHeadSha -ne \$TargetSha/);
     assert.match(script, /merge 后 HEAD=.*不是停服前锁定的 TargetSha/);
     assert.doesNotMatch(script, /\$targetSha\b/);
@@ -85,11 +135,11 @@ describe("windows release.ps1 contract", () => {
     assert.match(script, /git_transaction_target_sha = \$TargetSha/);
     assert.match(recovery, /git_transaction_target_sha/);
     assert.match(recovery, /immutable target SHA/);
-    assert.doesNotMatch(script, /Invoke-Git merge --ff-only origin\/main/);
+    assert.doesNotMatch(script, /"merge", "--ff-only", "origin\/main"/);
     assert.doesNotMatch(script, /Assert-OfflineDependencyHandoff \$preSha "origin\/main"/);
     assert.match(yml, /\?ref=' \+ \[Uri\]::EscapeDataString\(\$env:GITHUB_SHA\)/);
     assert.match(yml, /'-TargetSha',\$env:GITHUB_SHA/);
-    const mergeIdx = script.indexOf("Invoke-Git merge --ff-only $TargetSha");
+    const mergeIdx = script.indexOf('"merge", "--ff-only", $TargetSha');
     const secondDependencyCheck = script.lastIndexOf("Assert-OfflineDependencyHandoff $preSha $TargetSha $releasePython");
     const buildIdx = script.indexOf('Set-ReleaseJournalStage "ui_build"');
     assert.ok(mergeIdx >= 0 && secondDependencyCheck > mergeIdx && secondDependencyCheck < buildIdx);
@@ -123,6 +173,30 @@ describe("windows release.ps1 contract", () => {
     assert.doesNotMatch(recovery, /\bnpm\s+(?:ci|install|run)\b/);
     assert.doesNotMatch(recovery, /pip\s+install/);
     assert.match(script, /Remove-Item Env:GITHUB_TOKEN/);
+  });
+
+  it("cleans every pre-journal runtime artifact without masking the original release failure", () => {
+    const cleanupStart = indexOf(/function Remove-UnarmedReleaseRuntime/);
+    const cleanupEnd = script.indexOf("\nfunction ", cleanupStart + 1);
+    const cleanup = script.slice(cleanupStart, cleanupEnd);
+
+    for (const ownedPath of [
+      "$ReleaseRecoveryPath",
+      "$ReleaseInstallerPath",
+      "$ReleaseDependencyCheckPath",
+      "$ReleaseLockPath",
+      "$ReleaseUiSnapshotDir",
+    ]) {
+      assert.ok(cleanup.includes(ownedPath), `pre-journal cleanup missing ${ownedPath}`);
+    }
+    assert.match(cleanup, /\[System\.IO\.File\]::Delete\(\$path\)/);
+    assert.match(cleanup, /\[System\.IO\.Directory\]::Delete\(\$ReleaseUiSnapshotDir, \$true\)/);
+    assert.match(cleanup, /\[System\.IO\.Directory\]::Delete\(\$ReleaseRuntimeDir, \$false\)/);
+    assert.match(cleanup, /catch \{[\s\S]*Write-Warning/);
+
+    const finalCleanup = script.slice(script.lastIndexOf("} finally {"));
+    assert.match(finalCleanup, /try \{[\s\S]*Remove-UnarmedReleaseRuntime[\s\S]*catch \{[\s\S]*Write-Warning/);
+    assert.doesNotMatch(finalCleanup, /Remove-Item[^\n]+\$ReleaseRuntimeDir/);
   });
 
   it("arms an independent rollback transaction before stopping", () => {
@@ -191,7 +265,7 @@ describe("windows release.ps1 contract", () => {
     assert.match(script, /git_transaction_baseline = "all-absent"/);
     assert.match(script, /git_transaction_target_sha = \$TargetSha/);
     assert.match(script, /git_transaction_lock_policy_sha256/);
-    assert.ok(indexOf(/Arm-GitMergeTransaction/) < indexOf(/Invoke-Git merge --ff-only \$TargetSha/));
+    assert.ok(indexOf(/Arm-GitMergeTransaction/) < indexOf(/"merge", "--ff-only", \$TargetSha/));
     assert.match(recovery, /function Remove-StaleReleaseGitLocks/);
     for (const lock of [
       "index.lock",
@@ -218,7 +292,7 @@ describe("windows release.ps1 contract", () => {
     assert.match(recovery, /if \(-not \[string\]\$latest\.failed_from_stage\)/);
     assert.doesNotMatch(recovery, /Remove-Item[^\n]+\*\.lock/i);
     assert.doesNotMatch(recovery, /Remove-Item[^\n]+\.git[^\n]+-Recurse/i);
-    assert.match(recovery, /git -C \$root reset --hard \$preSha/);
+    assert.match(recovery, /"reset", "--hard", \$preSha/);
     assert.match(recovery, /restored HEAD does not match/);
     assert.match(recovery, /restored VERSION does not match/);
     assert.match(recovery, /function Restore-UiSnapshot/);
@@ -260,8 +334,8 @@ describe("windows release.ps1 contract", () => {
     assert.ok(legacyGateCalls[1] < legacyStarts[1]);
     assert.match(recovery, /stage -eq "committed"/);
     assert.match(recovery, /finalized committed release/);
-    assert.ok(recovery.indexOf("git -C $root reset --hard $preSha") < recovery.indexOf("Assert-RecoveryRuntimeIntegrity $root $python"));
-    assert.ok(recovery.indexOf("Restore-UiSnapshot $uiSnapshot") < recovery.indexOf("git -C $root reset --hard $preSha"));
+    assert.ok(recovery.indexOf('"reset", "--hard", $preSha') < recovery.indexOf("Assert-RecoveryRuntimeIntegrity $root $python"));
+    assert.ok(recovery.indexOf("Restore-UiSnapshot $uiSnapshot") < recovery.indexOf('"reset", "--hard", $preSha'));
     assert.match(recovery, /fastRecoveryStage/);
     assert.match(recovery, /-not \[bool\]\$journal\.ui_mutated/);
     assert.match(recovery, /-not \[bool\]\$journal\.agent_mutated/);
@@ -391,8 +465,12 @@ describe("windows release.ps1 contract", () => {
 
   it("requires a stable offline handoff for the one-time legacy bootstrap", () => {
     assert.match(script, /function Assert-LegacyBootstrapVersion/);
-    assert.match(script, /\^0\\\.19\\\.\\d\+\\\.\\d\+\$/);
-    assert.match(script, /targetVersion -ne "0\.20\.0\.0"/);
+    assert.match(script, /\$preRelease -lt \[version\]"0\.19\.0\.0"/);
+    assert.match(script, /\$preRelease -ge \[version\]"0\.20\.0\.0"/);
+    assert.match(script, /\$targetRelease -lt \[version\]"0\.20\.0\.0"/);
+    assert.match(script, /\$targetRelease -ge \[version\]"0\.21\.0\.0"/);
+    assert.match(script, /0\.19\.x -> 0\.20\.x 首次切换/);
+    assert.doesNotMatch(script, /targetVersion -ne "0\.20\.0\.0"/);
     assert.match(script, /function Assert-LegacyOfflineIdle/);
     assert.match(script, /Get-LegacyOfflineBlockers/);
     assert.match(script, /active_job:/);
@@ -422,7 +500,7 @@ describe("windows release.ps1 contract", () => {
     assert.match(script, /function Stop-BeianWinSwService/);
     assert.match(script, /Stop-Service -Name \$name -Force/);
     assert.match(script, /WinSW onfailure does not respawn/);
-    assert.ok(indexOf(/Stop-Service -Name \$name -Force/) < indexOf(/Invoke-Git merge --ff-only \$TargetSha/));
+    assert.ok(indexOf(/Stop-Service -Name \$name -Force/) < indexOf(/"merge", "--ff-only", \$TargetSha/));
     assert.ok(indexOf(/release drain 最终复核失败/) < indexOf(/Stop-Service beian-server-8787 so WinSW onfailure does not respawn/));
     assert.match(script, /WinSW 已 Stopped 但 8787 仍在监听/);
   });
@@ -522,7 +600,7 @@ describe("windows release.ps1 contract", () => {
   });
 
   it("uses GITHUB_TOKEN for git when Actions provides it, never prints the token", () => {
-    assert.match(script, /function Invoke-Git/);
+    assert.match(script, /function Invoke-GitResult/);
     assert.match(script, /function Get-GithubAuthHeader/);
     assert.match(script, /x-access-token:/);
     assert.match(script, /ToBase64String/);
@@ -530,7 +608,7 @@ describe("windows release.ps1 contract", () => {
     assert.doesNotMatch(script, /http.extraheader=AUTHORIZATION: bearer/);
     assert.match(script, /function Invoke-GitFetch/);
     assert.match(script, /Invoke-GitFetch -LogPath \$log/);
-    assert.match(script, /Invoke-Git merge --ff-only \$TargetSha/);
+    assert.match(script, /"merge", "--ff-only", \$TargetSha/);
     assert.doesNotMatch(script, /Write-Host.*GITHUB_TOKEN/);
     assert.match(script, /GITHUB_TOKEN/);
   });
