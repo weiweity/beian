@@ -28,6 +28,7 @@ jobs:
           cache: npm
           cache-dependency-path: |
             package-lock.json
+            apps/web/ui/package-lock.json
             tools/quality/package-lock.json
 
       - name: Set up Python
@@ -42,6 +43,7 @@ jobs:
       - name: Install Node dependencies
         run: |
           npm ci
+          npm ci --prefix apps/web/ui --include=optional
           npm ci --prefix tools/quality
 
       - name: Install Python and quality dependencies
