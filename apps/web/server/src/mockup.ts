@@ -59,6 +59,25 @@ export type StructureFaceDecision = {
   quarter_turns: 0 | 1 | 2 | 3;
 };
 
+export type StructureNetProposal = {
+  id: string;
+  face_ids: string[];
+  body_face_ids: [string, string, string, string];
+  cap_face_ids: [string, string];
+  strip_axis: "x" | "y";
+  bounds_mm?: [number, number, number, number];
+};
+
+export type StructureAnchorDecision = {
+  proposal_id: string;
+  front_face_id: string;
+  quarter_turns: 0 | 1 | 2 | 3;
+};
+
+export type StructureConfirmationDecision =
+  | { anchor: StructureAnchorDecision }
+  | { faces: StructureFaceDecision[] };
+
 const cache = new Map<string, MockupJob>();
 const activeStructureConfirmations = new Set<string>();
 export const MAX_MOCKUP_CACHE_ITEMS = 256;
@@ -280,6 +299,7 @@ function finitePointPairs(value: unknown): Array<[number, number]> | undefined {
 
 export function loadStructurePreview(job: MockupJob): {
   faces: StructurePreviewFace[];
+  net_proposals: StructureNetProposal[];
   page_size_mm?: [number, number];
   image_url?: string;
 } | undefined {
@@ -289,7 +309,7 @@ export function loadStructurePreview(job: MockupJob): {
     const contents = readFileSync(path);
     if (contents.byteLength > 25 * 1024 * 1024) return undefined;
     const resolution = JSON.parse(contents.toString("utf8")) as {
-      topology?: { face_proposal?: unknown[] };
+      topology?: { face_proposal?: unknown[]; net_proposals?: unknown[] };
       structure?: { source?: { page_size?: unknown } };
     };
     const raw = resolution.topology?.face_proposal;
@@ -314,6 +334,45 @@ export function loadStructurePreview(job: MockupJob): {
       });
     }
     if (!faces.length) return undefined;
+    const faceIds = new Set(faces.map((face) => face.id));
+    const netProposals: StructureNetProposal[] = [];
+    const rawNets = resolution.topology?.net_proposals;
+    if (Array.isArray(rawNets) && rawNets.length <= 24) {
+      for (const value of rawNets) {
+        if (!value || typeof value !== "object") continue;
+        const net = value as Record<string, unknown>;
+        const id = typeof net.id === "string" ? net.id : "";
+        const faceIdsRaw = Array.isArray(net.face_ids) ? net.face_ids.map(String) : [];
+        const bodyIds = Array.isArray(net.body_face_ids) ? net.body_face_ids.map(String) : [];
+        const capIds = Array.isArray(net.cap_face_ids) ? net.cap_face_ids.map(String) : [];
+        const stripAxis = net.strip_axis === "x" || net.strip_axis === "y" ? net.strip_axis : null;
+        const bounds = finiteNumbers(net.bounds_mm, 4);
+        if (
+          !/^box-net-\d{4}$/.test(id) ||
+          faceIdsRaw.length !== 6 ||
+          new Set(faceIdsRaw).size !== 6 ||
+          bodyIds.length !== 4 ||
+          new Set(bodyIds).size !== 4 ||
+          capIds.length !== 2 ||
+          new Set(capIds).size !== 2 ||
+          new Set([...bodyIds, ...capIds]).size !== 6 ||
+          !stripAxis ||
+          bodyIds.some((faceId) => !faceIdsRaw.includes(faceId)) ||
+          capIds.some((faceId) => !faceIdsRaw.includes(faceId)) ||
+          faceIdsRaw.some((faceId) => !faceIds.has(faceId))
+        ) {
+          continue;
+        }
+        netProposals.push({
+          id,
+          face_ids: faceIdsRaw,
+          body_face_ids: bodyIds as StructureNetProposal["body_face_ids"],
+          cap_face_ids: capIds as StructureNetProposal["cap_face_ids"],
+          strip_axis: stripAxis,
+          ...(bounds ? { bounds_mm: bounds as StructureNetProposal["bounds_mm"] } : {}),
+        });
+      }
+    }
     const pageSize = finiteNumbers(resolution.structure?.source?.page_size, 2);
     const previewPath = job.structure_artwork_preview_path;
     const hasPreview = Boolean(
@@ -323,6 +382,7 @@ export function loadStructurePreview(job: MockupJob): {
     );
     return {
       faces,
+      net_proposals: netProposals,
       ...(pageSize && pageSize.every((value) => value > 0)
         ? { page_size_mm: pageSize as [number, number] }
         : {}),
@@ -335,7 +395,7 @@ export function loadStructurePreview(job: MockupJob): {
 
 export function prepareStructureConfirmation(
   job: MockupJob,
-  faces: StructureFaceDecision[],
+  decision: StructureConfirmationDecision,
 ): { source: string; resolution: string; decisions: string; output: string } {
   const required = {
     source: job.source_path,
@@ -348,10 +408,20 @@ export function prepareStructureConfirmation(
     }
   }
   const root = join(mockupRoot(), job.id);
-  const normalizedFaces = [...faces].sort((left, right) =>
-    left.role.localeCompare(right.role) || left.id.localeCompare(right.id),
-  );
-  const decisionsPayload = JSON.stringify({ faces: normalizedFaces }, null, 2);
+  const normalizedDecision: StructureConfirmationDecision = "anchor" in decision
+    ? {
+        anchor: {
+          proposal_id: decision.anchor.proposal_id,
+          front_face_id: decision.anchor.front_face_id,
+          quarter_turns: decision.anchor.quarter_turns,
+        },
+      }
+    : {
+        faces: [...decision.faces].sort((left, right) =>
+          left.role.localeCompare(right.role) || left.id.localeCompare(right.id),
+        ),
+      };
+  const decisionsPayload = JSON.stringify(normalizedDecision, null, 2);
   const decisionId = createHash("sha256").update(decisionsPayload).digest("hex").slice(0, 16);
   const decisions = join(root, `structure_decisions-${decisionId}.json`);
   const output = join(root, `structure_approved-${decisionId}.json`);

@@ -251,7 +251,7 @@ describe("publicMockup", () => {
       files: [{ key: "glb", path: "/secret/data/mockups/m1/box.glb", name: "box.glb" }],
       structure_status: "review_required",
       structure_code: "structure_face_mapping_incomplete",
-      structure_message: "请确认六个盒面。",
+      structure_message: "请选择完整盒型的正面和朝向。",
       structure_resolution_path: "/secret/data/mockups/m1/structure_resolution.json",
       structure_sidecar_path: "/secret/data/mockups/m1/structure.json",
       structure_artwork_path: "/secret/data/mockups/m1/artwork.pdf",
@@ -266,7 +266,7 @@ describe("publicMockup", () => {
 });
 
 describe("mockup structure confirmation http", () => {
-  it("requires an admin before accepting any face decisions", async () => {
+  it("requires an admin before accepting a structure anchor", async () => {
     const id = "faceac100001";
     saveMockup({
       id,
@@ -283,14 +283,16 @@ describe("mockup structure confirmation http", () => {
     const res = await app.request(`/api/mockups/${id}/structure`, {
       method: "POST",
       headers: { authorization: `Bearer ${reviewer.token}`, "content-type": "application/json" },
-      body: JSON.stringify({ faces: [] }),
+      body: JSON.stringify({
+        anchor: { proposal_id: "box-net-0001", front_face_id: "proposal-face-0001", quarter_turns: 0 },
+      }),
     });
     assert.equal(res.status, 403);
     const body = (await res.json()) as { detail?: string };
     assert.match(String(body.detail || ""), /管理员/);
   });
 
-  it("rejects an incomplete six-face decision before invoking the worker", async () => {
+  it("rejects every malformed structure anchor before invoking the worker", async () => {
     const id = "faceba000002";
     saveMockup({
       id,
@@ -304,14 +306,25 @@ describe("mockup structure confirmation http", () => {
       structure_status: "review_required",
     });
     const admin = issueSession("魏炜", "admin", "ou_structure_admin", "feishu");
-    const res = await app.request(`/api/mockups/${id}/structure`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${admin.token}`, "content-type": "application/json" },
-      body: JSON.stringify({ faces: [{ id: "one", role: "front", quarter_turns: 0 }] }),
-    });
-    assert.equal(res.status, 400);
-    const body = (await res.json()) as { detail?: string };
-    assert.match(String(body.detail || ""), /六个盒面/);
+    const invalidBodies = [
+      {},
+      { anchor: { proposal_id: "raw-rectangle-10", front_face_id: "proposal-face-0001", quarter_turns: 0 } },
+      { anchor: { proposal_id: "box-net-0001", front_face_id: "", quarter_turns: 0 } },
+      { anchor: { proposal_id: "box-net-0001", front_face_id: "../escape", quarter_turns: 0 } },
+      { anchor: { proposal_id: "box-net-0001", front_face_id: "proposal-face-0001", quarter_turns: true } },
+      { anchor: { proposal_id: "box-net-0001", front_face_id: "proposal-face-0001", quarter_turns: "1" } },
+      { anchor: { proposal_id: "box-net-0001", front_face_id: "proposal-face-0001", quarter_turns: 4 } },
+    ];
+    for (const invalidBody of invalidBodies) {
+      const res = await app.request(`/api/mockups/${id}/structure`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${admin.token}`, "content-type": "application/json" },
+        body: JSON.stringify(invalidBody),
+      });
+      assert.equal(res.status, 400);
+      const body = (await res.json()) as { detail?: string };
+      assert.match(String(body.detail || ""), /完整盒型.*正面|完整盒型、正面或方向/);
+    }
   });
 });
 
