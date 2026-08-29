@@ -10,6 +10,7 @@
 
 ### For contributors
 
+- 新增 GitHub-hosted PR 复杂度门禁：Knip 与 Vulture 使用只读、单调缩小的 68 条基线，新增发现、过期条目或相对 base 扩张都会失败；本地默认自动解析目标分支并在缺失时失败关闭，同文件同名诊断按重数核对，不能通过扩基线或折叠第二处诊断制造假绿。扫描范围显式覆盖 Playwright 支撑代码、仓库脚本与宿主 JSX，动态入口逐个列名，不用通配符掩盖孤儿文件。Knip 独立锁在 `tools/quality` 并使用独立 Node 版本合同，不改变产品 L0 或杭州生产依赖指纹，深度扫描只生成报告、不自动删除代码。
 - L0 覆盖五份 Windows 脚本的原生命令退出码顺序、预事务清理边界和 legacy 版本门；真实 PowerShell 5.1、WinSW、Session 1 Illustrator 与发布恢复仍须在合入后的杭州 L1 验证，Mac 通过不等于已上线。
 - 文档地图现已区分当前合同、部分被替代设计与纯历史记录；`DESIGN.md` 同步为网页打样固定走 Packaging Structure V2，并写清旧 AI 只能生成待管理员确认的刀线候选。
 

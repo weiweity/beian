@@ -101,7 +101,7 @@ MiniMax 未开语义复核是「未用」，不是「可用」；探测是 `GET 
 
 三层。`npm test` 只等于 L0。不要在杭州跑单测。不要单测打外网、OCR、Blender、Illustrator COM。
 
-- L0 单测（Mac，`/ship` 必绿）：仓库根目录 `npm test`
+- L0 单测（Mac，`/ship` 必绿）：仓库根目录 `npm test`。复杂度工具链独立运行，不把 Knip 的 Node 版本要求泄漏到产品 `Node >=20` 合同；`/ship` 还必须在 Node 20.19+ 或 22.12+ 下执行 `npm run test:quality` 和 `npm run quality`。
   - 服务端：`npm run test -w beian-server`（`node:test`，`apps/web/server/src/*.test.ts`）
   - 界面：`npm run test -w beian-ui`（`node:test`，`src/**/*.test.ts` 自动发现；纯函数，不引入 RTL）
   - 对照 worker：`cd apps/web/backend && .venv/bin/python -m pytest -q`（CLI 契约 + 对照/打样单测。没有 FastAPI 测试）
@@ -109,6 +109,8 @@ MiniMax 未开语义复核是「未用」，不是「可用」；探测是 `GET 
 - L2 金标（人核定后）：`apps/web/backend/scripts/run_eval.py`。未核定的 `data/gold` 不进默认 `npm test`
 - 类型：`npm run typecheck -w beian-server` 与 `npm run build -w beian-ui`
 - 浏览器交互（Mac）：`npm run test:e2e`（Vite + 合成 API，只验证页面行为，不替代真实 Hono / Windows L1）
+- 复杂度门禁（Mac / GitHub-hosted PR）：`npm run quality`；基线只读、只能经评审缩小，新增发现、过期条目或相对 base 扩张都失败。本地自动解析 `origin/HEAD`（再回退 `origin/main` / `main`），找不到目标分支就失败关闭；CI 使用 PR base 精确 SHA。同文件同名诊断按重数比较，行号移动不改变身份，但新增第二处不能被折叠。`npm run quality:deep` 只生成手工清理报告，不自动删除。
+- `.github/workflows/quality.yml` 禁止使用杭州/self-hosted runner；Knip 只锁在 `tools/quality`，Vulture 只放 `requirements-quality.txt`，两者不得进入杭州生产依赖图。
 - 新逻辑要有行为测试（含失败路径）。不要把密钥写进测试。
 
 ## 设计哲学
