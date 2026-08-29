@@ -25,6 +25,17 @@ const windowsNativeGitScripts = new Map<string, string>([
     readFileSync(join(repoRoot, relativePath), "utf8").replace(/^\uFEFF/, ""),
   ] as const),
 ]);
+const atomicReplaceScripts = new Map<string, { source: string; expectedCalls: number }>([
+  ["scripts/windows/release.ps1", { source: script, expectedCalls: 3 }],
+  ["scripts/windows/release-recover.ps1", { source: recovery, expectedCalls: 2 }],
+  [
+    "scripts/windows/illustrator-agent.ps1",
+    {
+      source: readFileSync(join(repoRoot, "scripts/windows/illustrator-agent.ps1"), "utf8").replace(/^\uFEFF/, ""),
+      expectedCalls: 1,
+    },
+  ],
+]);
 const dependencyCheckPath = join(repoRoot, "scripts/windows/release-dependency-check.mjs");
 const dependencyCheck = readFileSync(dependencyCheckPath, "utf8");
 
@@ -35,6 +46,29 @@ function indexOf(re: RegExp): number {
 }
 
 describe("windows release.ps1 contract", () => {
+  it("passes a true CLR null backup path to every atomic file replacement", () => {
+    const nullBackup = "[System.Management.Automation.Language.NullString]::Value";
+
+    for (const [relativePath, { source, expectedCalls }] of atomicReplaceScripts) {
+      const calls = source.match(/\[System\.IO\.File\]::Replace\([^\r\n]+\)/g) ?? [];
+      assert.equal(calls.length, expectedCalls, `${relativePath} atomic replace call count changed`);
+      for (const call of calls) {
+        assert.ok(call.includes(nullBackup), `${relativePath} must pass a real CLR null backup path: ${call}`);
+      }
+      assert.doesNotMatch(
+        source,
+        /\[System\.IO\.File\]::Replace\([^\r\n]+,\s*\$null\s*\)/,
+        `${relativePath} must not let PowerShell 5.1 coerce $null to an empty string path`,
+      );
+    }
+
+    const qualityWorkflow = readFileSync(join(repoRoot, ".github/workflows/quality.yml"), "utf8");
+    assert.match(qualityWorkflow, /^  windows-powershell-contract:\s*$/m);
+    assert.match(qualityWorkflow, /^    runs-on: windows-2022\s*$/m);
+    assert.match(qualityWorkflow, /\[System\.Management\.Automation\.Language\.NullString\]::Value/);
+    assert.doesNotMatch(qualityWorkflow, /runs-on:\s*\[self-hosted,\s*hangzhou\]/);
+  });
+
   it("captures native Git output before inspecting its explicit exit code", () => {
     const earlyStoppingNativePipeline = /(?:Invoke-Git|&\s*git\b|\bgit\s+-C\b)[^\r\n]*\|\s*Select-Object\s+-First\s+1/i;
 

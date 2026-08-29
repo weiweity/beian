@@ -123,7 +123,7 @@ function Write-AtomicJson([string]$Path, [object]$Value) {
   for ($attempt = 0; $attempt -lt 5; $attempt++) {
     try {
       if (Test-Path -LiteralPath $Path) {
-        [System.IO.File]::Replace($temporary, $Path, $null)
+        [System.IO.File]::Replace($temporary, $Path, [System.Management.Automation.Language.NullString]::Value)
       } else {
         [System.IO.File]::Move($temporary, $Path)
       }

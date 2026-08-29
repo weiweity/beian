@@ -148,7 +148,7 @@ function Write-AtomicJournal([object]$Journal) {
   )
   try {
     if (Test-Path -LiteralPath $JournalPath) {
-      [System.IO.File]::Replace($temporary, $JournalPath, $null)
+      [System.IO.File]::Replace($temporary, $JournalPath, [System.Management.Automation.Language.NullString]::Value)
     } else {
       [System.IO.File]::Move($temporary, $JournalPath)
     }
@@ -290,7 +290,7 @@ function Write-RecoveryStartupDrainFence(
   )
   try {
     if (Test-Path -LiteralPath $path) {
-      [System.IO.File]::Replace($temporary, $path, $null)
+      [System.IO.File]::Replace($temporary, $path, [System.Management.Automation.Language.NullString]::Value)
     } else {
       [System.IO.File]::Move($temporary, $path)
     }
