@@ -62,8 +62,8 @@ jobs:
         if: github.event_name != 'pull_request'
         run: npm run quality
 
-      - name: Run complete L0 suite
-        run: npm test
-
       - name: Run strict type and UI build checks
         run: npm run typecheck
+
+      - name: Run complete L0 suite
+        run: npm test

@@ -405,6 +405,10 @@ describe("repository quality policy", () => {
     assert.match(quality, /npm test/);
     assert.doesNotMatch(quality, /self-hosted|hangzhou|release\.ps1|environment:/i);
     assert.match(quality, /npm run typecheck/);
+    assert.ok(
+      quality.indexOf("run: npm run typecheck") < quality.indexOf("run: npm test"),
+      "UI build must exist before server SPA tests run in a clean checkout",
+    );
     assert.match(production, /runs-on:\s*\[self-hosted, hangzhou\]/);
     assert.doesNotMatch(production, /^\s{2}pull_request:\s*$/m);
   });
