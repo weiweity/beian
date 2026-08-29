@@ -78,6 +78,10 @@
 
 ## P3 — 9 月以后
 
+- [ ] **退役核对原型清理（独立 PR）**
+  2026-08-29 合并前审计确认：`apps/web/ui/src/pages/reviewSplit.ts` 仅被自身测试引用；`apps/web/backend/app/baidu_paddle_vl.py`、`graphics_diff.py`、`ocr_ensemble.py`、`ocr_zone_boost.py` 未被当前产品入口、脚本或 worker 调用，其中区域 OCR 回归还明确断言后两条旧路径不进入 `compare_core`。不要混入 Windows 发布修复 PR；独立删除时同步移除 `reviewSplit.test.ts`，并先保留完整 L0 作为行为门。
+- [ ] **测试文件无用导入清理**
+  严格 `tsc --noUnusedLocals --noUnusedParameters` 只报 `jobs.test.ts` 的 `tryStart`、`tasks.test.ts` 的 `writeFileSync`、`workers.test.ts` 的 `join`；生产源码没有同类告警。作为独立机械清理处理，不为此改变默认测试编译合同。
 - [x] 3D Worker 接线（打样台调用 pipeline；缺 Blender 会失败而不是装可用）
 - [x] **qlmanage 替换（平面出图）**  
   打样 PDF 栅格走 pymupdf（对照同一 `.venv`）；macOS qlmanage 仅兜底。杭州不依赖 Quick Look。  

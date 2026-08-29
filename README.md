@@ -21,14 +21,21 @@
 | 文件 | 内容 |
 |---|---|
 | `DESIGN.md` | 视觉、侧栏、审稿/打样文案 |
+| `apps/web/README.md` | Web 子系统边界、入口与本地启动关系 |
+| `apps/web/ui/README.md` | UI 开发、构建与浏览器回归入口 |
+| `apps/web/backend/data/gold/README.md` | L2 金标数据格式与人工核定边界 |
 | `docs/00-charter.md` | 8/31 章程 |
+| `docs/adr-001-frontend-stack.md` | 历史前端选型；旧前端已退场，以当前 React + Hono 结构为准 |
 | `docs/adr-002-typescript-http.md` | 为什么对外 HTTP 是 TypeScript |
 | `docs/adr-003-settings-overlay.md` | 本机设置覆盖密钥文件 |
 | `docs/adr-004-ousterhout-design.md` | 深模块、唯一入口、8/31 前不拆引擎 |
 | `docs/adr-005-packaging-structure-v2.md` | 包装语义 IR、人工确认闸门与 V1 退场条件 |
 | `docs/designs/compare-pdf-ingest-v2.md` | PDF 按页选源、单 OCR、版面区域与单钉证据合同 |
+| `docs/designs/review-job-module.md` | 当前对照、对红、打样入队与失败语义合同 |
+| `docs/designs/review-rework-loop.md` | 部分被替代；保留对红循环与金标语义的历史依据 |
+| `docs/designs/hangzhou-setup-board.md` | 部分被替代的杭州开工板批准快照；现行运维合同见本 README 与 Windows README |
+| `docs/designs/two-desks-review-and-mockup.md` | 已被替代的早期两张台需求发现记录 |
 | `docs/risks.md` | 密钥、Tunnel、3D 验收门 |
-| `docs/designs/` | 对红循环、两张台、作业模块（对照/对红/打样入队） |
 | `CHANGELOG.md` | 已发布版本 |
 | `TODOS.md` | 未做项 |
 | `AGENTS.md` | 给代理的硬约束、加长作业合同、易忘约定（MICRO 不改 `package.json` 三位；禁止 `git add -A`） |

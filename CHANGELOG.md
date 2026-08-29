@@ -11,6 +11,7 @@
 ### For contributors
 
 - L0 覆盖五份 Windows 脚本的原生命令退出码顺序、预事务清理边界和 legacy 版本门；真实 PowerShell 5.1、WinSW、Session 1 Illustrator 与发布恢复仍须在合入后的杭州 L1 验证，Mac 通过不等于已上线。
+- 文档地图现已区分当前合同、部分被替代设计与纯历史记录；`DESIGN.md` 同步为网页打样固定走 Packaging Structure V2，并写清旧 AI 只能生成待管理员确认的刀线候选。
 
 ## [0.20.0.0] - 2026-08-28
 
