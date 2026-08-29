@@ -110,7 +110,7 @@ MiniMax 未开语义复核是「未用」，不是「可用」；探测是 `GET 
 - 类型：`npm run typecheck -w beian-server` 与 `npm run build -w beian-ui`
 - 浏览器交互（Mac）：`npm run test:e2e`（Vite + 合成 API，只验证页面行为，不替代真实 Hono / Windows L1）
 - 复杂度门禁（Mac / GitHub-hosted PR）：`npm run quality`；基线只读、只能经评审缩小，新增发现、过期条目或相对 base 扩张都失败。本地自动解析 `origin/HEAD`（再回退 `origin/main` / `main`），找不到目标分支就失败关闭；CI 使用 PR base 精确 SHA。同文件同名诊断按重数比较，行号移动不改变身份，但新增第二处不能被折叠。`npm run quality:deep` 只生成手工清理报告，不自动删除。
-- `.github/workflows/quality.yml` 禁止使用杭州/self-hosted runner；Knip 只锁在 `tools/quality`，Vulture 只放 `requirements-quality.txt`，两者不得进入杭州生产依赖图。
+- `.github/workflows/quality.yml` 的 Linux Node 22 质量 job 与 `windows-2022` PowerShell 5.1 `.NET File.Replace` 合同 job 都使用 GitHub-hosted runner；禁止使用杭州/self-hosted runner。Windows job 只验证无备份原子替换，不调用 `release.ps1`、不替代杭州 L1。Knip 只锁在 `tools/quality`，Vulture 只放 `requirements-quality.txt`，两者不得进入杭州生产依赖图。
 - 新逻辑要有行为测试（含失败路径）。不要把密钥写进测试。
 
 ## 设计哲学
@@ -138,7 +138,7 @@ MiniMax 未开语义复核是「未用」，不是「可用」；探测是 `GET 
 
 ## Deploy Configuration (configured by /setup-deploy)
 
-- Platform: 杭州 Windows（UU 远程「人事-台式」）+ Cloudflare Named Tunnel。不是 Fly / Vercel。GitHub Actions 只跑 **self-hosted `hangzhou`**（机器名 `hangzhou-windows`），禁止 GitHub-hosted runner 升生产。
+- Platform: 杭州 Windows（UU 远程「人事-台式」）+ Cloudflare Named Tunnel。不是 Fly / Vercel。生产发布的 GitHub Actions 只跑 **self-hosted `hangzhou`**（机器名 `hangzhou-windows`）；GitHub-hosted runner 只跑 `.github/workflows/quality.yml` 的质量合同，禁止升生产。
 - Production URL: https://www.jianghua.site
 - Deploy workflow: `.github/workflows/hangzhou-release.yml`（仅 `push` `main`；从事件 SHA 下载发布组件到 `RUNNER_TEMP`，再以不可变 `TargetSha` 操作 `D:\beian`；PR 与可选择 ref 的 `workflow_dispatch` 禁止触达生产 runner）。
 - Deploy status command: 无平台 CLI。看 [hangzhou-release](https://github.com/weiweity/beian/actions/workflows/hangzhou-release.yml) 是否绿。杭州环回才是杭州进程：`curl -sS http://127.0.0.1:8787/api/health`。公网 health 仅在 Named Tunnel 跑在杭州时有效。

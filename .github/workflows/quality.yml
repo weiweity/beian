@@ -12,6 +12,43 @@ permissions:
   contents: read
 
 jobs:
+  windows-powershell-contract:
+    runs-on: windows-2022
+    timeout-minutes: 5
+    steps:
+      - name: Verify Windows PowerShell 5.1 atomic replace contract
+        shell: powershell
+        run: |
+          if ($PSVersionTable.PSEdition -ne "Desktop" -or $PSVersionTable.PSVersion.Major -ne 5) {
+            throw "Expected Windows PowerShell 5.1 Desktop, got $($PSVersionTable.PSEdition) $($PSVersionTable.PSVersion)"
+          }
+
+          $testRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("beian-file-replace-" + [Guid]::NewGuid().ToString("N"))
+          [System.IO.Directory]::CreateDirectory($testRoot) | Out-Null
+          try {
+            $source = Join-Path $testRoot "source.txt"
+            $destination = Join-Path $testRoot "destination.txt"
+            [System.IO.File]::WriteAllText($source, "new")
+            [System.IO.File]::WriteAllText($destination, "old")
+
+            [System.IO.File]::Replace(
+              $source,
+              $destination,
+              [System.Management.Automation.Language.NullString]::Value
+            )
+
+            if ([System.IO.File]::ReadAllText($destination) -ne "new") {
+              throw "Atomic replacement did not update the destination"
+            }
+            if (Test-Path -LiteralPath $source) {
+              throw "Atomic replacement left the source file behind"
+            }
+          } finally {
+            if (Test-Path -LiteralPath $testRoot) {
+              Remove-Item -LiteralPath $testRoot -Recurse -Force
+            }
+          }
+
   quality:
     runs-on: ubuntu-latest
     timeout-minutes: 12

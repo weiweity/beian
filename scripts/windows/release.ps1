@@ -606,7 +606,7 @@ function Write-StartupDrainFence([string]$LeaseId) {
   )
   try {
     if (Test-Path -LiteralPath $ReleaseDrainFencePath) {
-      [System.IO.File]::Replace($temporary, $ReleaseDrainFencePath, $null)
+      [System.IO.File]::Replace($temporary, $ReleaseDrainFencePath, [System.Management.Automation.Language.NullString]::Value)
     } else {
       [System.IO.File]::Move($temporary, $ReleaseDrainFencePath)
     }
@@ -865,7 +865,7 @@ function Write-AtomicReleaseJournal {
   )
   try {
     if (Test-Path -LiteralPath $ReleaseJournalPath) {
-      [System.IO.File]::Replace($temporary, $ReleaseJournalPath, $null)
+      [System.IO.File]::Replace($temporary, $ReleaseJournalPath, [System.Management.Automation.Language.NullString]::Value)
     } else {
       [System.IO.File]::Move($temporary, $ReleaseJournalPath)
     }
@@ -921,7 +921,7 @@ function Copy-AtomicFile([string]$Source, [string]$Destination) {
   Copy-Item -LiteralPath $Source -Destination $temporary -Force
   try {
     if (Test-Path -LiteralPath $Destination) {
-      [System.IO.File]::Replace($temporary, $Destination, $null)
+      [System.IO.File]::Replace($temporary, $Destination, [System.Management.Automation.Language.NullString]::Value)
     } else {
       [System.IO.File]::Move($temporary, $Destination)
     }

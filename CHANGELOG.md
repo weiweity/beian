@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.20.2.0] - 2026-08-30
+
+### Fixed
+
+- 修复杭州 Windows PowerShell 5.1 调用 `.NET File.Replace` 时把 `$null` 备份路径绑定为空字符串、导致发版在停服前报“路径格式不合法”的问题；发布、独立恢复和 Illustrator Agent 的 6 个原子替换点统一传入真正的 CLR null。
+
+### For contributors
+
+- 新增 GitHub-hosted `windows-2022` PowerShell 5.1 合同测试，真实验证无备份文件的原子替换语义；静态门禁同时锁定全部 6 个调用点，禁止回退到 `$null`，且不使用杭州 self-hosted 生产 runner。
+
 ## [0.20.1.0] - 2026-08-29
 
 ### Fixed
