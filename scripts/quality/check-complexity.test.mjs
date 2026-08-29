@@ -396,7 +396,6 @@ describe("repository quality policy", () => {
   it("isolates PR quality checks from Hangzhou production", () => {
     const quality = readFileSync(join(root, ".github/workflows/quality.yml"), "utf8");
     const production = readFileSync(join(root, ".github/workflows/hangzhou-release.yml"), "utf8");
-    const uiLock = JSON.parse(readFileSync(join(root, "apps/web/ui/package-lock.json"), "utf8"));
     assert.match(quality, /^\s{2}pull_request:\s*$/m);
     assert.match(quality, /runs-on:\s*ubuntu-latest/);
     assert.match(quality, /timeout-minutes:\s*12/);
@@ -404,13 +403,10 @@ describe("repository quality policy", () => {
     assert.match(quality, /npm run quality/);
     assert.match(quality, /npm run test:quality/);
     assert.match(quality, /npm test/);
-    assert.match(quality, /apps\/web\/ui\/package-lock\.json/);
-    assert.match(quality, /npm ci --prefix apps\/web\/ui --include=optional/);
-    assert.equal(
-      uiLock.packages["node_modules/@rollup/rollup-linux-x64-gnu"]?.version,
-      uiLock.packages["node_modules/rollup"]?.version,
-      "the isolated UI lock must carry Rollup's Linux native package",
-    );
+    assert.doesNotMatch(quality, /npm ci --prefix apps\/web\/ui/);
+    assert.match(quality, /require\.resolve\('@rollup\/rollup-linux-x64-gnu'/);
+    assert.match(quality, /apps\/web\/ui\/node_modules\/rollup\/package\.json/);
+    assert.match(quality, /--no-save --package-lock=false --ignore-scripts/);
     assert.doesNotMatch(quality, /self-hosted|hangzhou|release\.ps1|environment:/i);
     assert.match(quality, /npm run typecheck/);
     assert.ok(

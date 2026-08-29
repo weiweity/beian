@@ -28,7 +28,6 @@ jobs:
           cache: npm
           cache-dependency-path: |
             package-lock.json
-            apps/web/ui/package-lock.json
             tools/quality/package-lock.json
 
       - name: Set up Python
@@ -43,8 +42,15 @@ jobs:
       - name: Install Node dependencies
         run: |
           npm ci
-          npm ci --prefix apps/web/ui --include=optional
           npm ci --prefix tools/quality
+
+      - name: Repair npm optional Rollup native on Linux
+        run: |
+          if ! node -e "try { require.resolve('@rollup/rollup-linux-x64-gnu', { paths: ['./apps/web/ui'] }); } catch { process.exit(1); }"; then
+            rollup_native_version="$(node -p "require('./apps/web/ui/node_modules/rollup/package.json').version")"
+            npm install --prefix apps/web/ui --no-save --package-lock=false --ignore-scripts \
+              "@rollup/rollup-linux-x64-gnu@${rollup_native_version}"
+          fi
 
       - name: Install Python and quality dependencies
         run: |

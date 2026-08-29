@@ -64,6 +64,7 @@ finding 身份由工具、类型、仓库相对路径和符号组成；行号只
 - Knip 精确锁在独立的 `tools/quality/package-lock.json`；该目录不是 npm workspace，不进入根 `package.json` / `package-lock.json`，因此不会改变杭州 release dependency fingerprint。
 - Vulture 精确锁在 `apps/web/backend/requirements-quality.txt`，不得进入生产 `requirements.txt`。
 - `.github/workflows/quality.yml` 只使用 GitHub-hosted Linux Node 22，分别安装产品依赖与 `tools/quality`，再运行 `npm run test:quality`、`npm run quality`、完整 `npm test` 和严格 `npm run typecheck`/UI build。质量工具链要求 Node 20.19+ 或 22.12+，不并入产品 `Node >=20` 的 L0 合同。
+- npm 的跨平台 optional-dependency 缺口会让 macOS 生成的根 lock 漏掉 Rollup Linux 原生包（[npm/cli#4828](https://github.com/npm/cli/issues/4828)）。CI 只在缺包时从已安装 Rollup 读取精确版本，以 `--no-save --package-lock=false` 补齐 Linux 包；不修改产品 manifest/lock，不把质量 CI 需求带入杭州依赖图。
 - 质量 workflow 不使用杭州/self-hosted runner，不调用 `release.ps1`，不持有生产环境或密钥。
 - `.github/workflows/hangzhou-release.yml` 保持只接收可信 `main` push，不因质量治理改变。
 
