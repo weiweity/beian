@@ -1,0 +1,43 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "workspaces": {
+    ".": {
+      "entry": [
+        "scripts/quality/check-complexity.mjs!",
+        "scripts/quality/*.test.mjs",
+        "scripts/windows/release-dependency-check.mjs!",
+        "workers/packaging/ppt/build_product_ppt.mjs!",
+        "workers/packaging/illustrator/export_ai.jsx!",
+        "workers/packaging/illustrator/export_structure.jsx!",
+        "workers/packaging/illustrator/runner_probe.jsx!"
+      ],
+      "project": [
+        "scripts/**/*.{js,cjs,mjs,jsx,ts,tsx}!",
+        "workers/packaging/**/*.{js,cjs,mjs,jsx,ts,tsx}!"
+      ]
+    },
+    "apps/web/server": {
+      "entry": ["src/index.ts!"],
+      "project": [
+        "src/**/*.ts!",
+        "!src/**/*.test.ts!",
+        "!src/testTemp.ts!"
+      ]
+    },
+    "apps/web/ui": {
+      "entry": [
+        "src/main.tsx!",
+        "vite.config.ts!",
+        "playwright.config.ts",
+        "e2e/**/*.spec.ts"
+      ],
+      "project": [
+        "src/**/*.{ts,tsx}!",
+        "vite.config.ts!",
+        "!src/**/*.test.ts!",
+        "playwright.config.ts",
+        "e2e/**/*.ts"
+      ]
+    }
+  }
+}

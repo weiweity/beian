@@ -6,7 +6,7 @@ import {
   type Route,
 } from "@playwright/test";
 
-export type SyntheticHit = {
+type SyntheticHit = {
   id: string;
   field: string;
   status: string;
@@ -61,7 +61,7 @@ export type SyntheticMockup = {
   files: Array<{ key: string; name: string }>;
 };
 
-export type SyntheticReceipt = {
+type SyntheticReceipt = {
   id: string;
   files: Array<{ field: string; name: string; bytes: number }>;
   bytes: number;
@@ -83,7 +83,7 @@ type SyntheticUploadSession = {
   kind: "compare" | "mockup";
 };
 
-export type ApiCall = {
+type ApiCall = {
   method: string;
   path: string;
   body?: unknown;

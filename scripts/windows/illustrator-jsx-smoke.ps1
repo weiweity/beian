@@ -6,6 +6,20 @@ $ErrorActionPreference = "Stop"
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 if (-not $env:WB_DATA_DIR) { $env:WB_DATA_DIR = "C:\supply\data" }
 
+function Get-GitCheckoutIdentity([string]$RepositoryRoot, [string]$FailureMessage) {
+  $lines = @(& git -C $RepositoryRoot rev-parse HEAD 2>$null)
+  $exitCode = $LASTEXITCODE
+  $values = @(
+    $lines |
+      ForEach-Object { ([string]$_).Trim().ToLowerInvariant() } |
+      Where-Object { $_ -ne "" }
+  )
+  if ($exitCode -ne 0 -or $values.Count -ne 1 -or $values[0] -notmatch '^[0-9a-f]{40}$') {
+    throw $FailureMessage
+  }
+  return [string]$values[0]
+}
+
 function Wait-IllustratorSlotIdle {
   for ($attempt = 0; $attempt -lt 60; $attempt++) {
     try {
@@ -119,9 +133,7 @@ if (-not (Test-Path -LiteralPath $agentScript -PathType Leaf)) { throw "illustra
 
 $expectedRelease = ([System.IO.File]::ReadAllText($versionPath)).Trim()
 $expectedScriptSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $agentScript).Hash.ToLowerInvariant()
-$expectedBuild = [string](& git -C $Root rev-parse HEAD 2>$null | Select-Object -First 1)
-$expectedBuild = $expectedBuild.Trim()
-if ($LASTEXITCODE -ne 0 -or -not $expectedBuild) { throw "Illustrator smoke cannot resolve checkout identity" }
+$expectedBuild = Get-GitCheckoutIdentity $Root "Illustrator smoke cannot resolve checkout identity"
 
 Wait-IllustratorSlotIdle
 $selectedHeartbeat = "illustrator-agent.json"

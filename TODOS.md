@@ -55,7 +55,7 @@
 ## P2 — 上传续传与崩溃恢复
 
 - [x] **字节级分片断点续传**
-  1 MiB 分片、SHA-256 校验、服务端持久化偏移量、同一 `client_upload_id` 幂等重放；网络错误自动重连 5 次，暂停或整页刷新后重新选择同一文件可从服务端偏移量继续。上传会话与待开工回执统一受 30 分钟 TTL 和容量限制。
+  1 MiB 分片、SHA-256 校验、服务端持久化偏移量、同一 `client_upload_id` 幂等重放；网络错误自动重连 3 次，暂停或整页刷新后重新选择同一文件可从服务端偏移量继续。上传会话与待开工回执统一受 30 分钟 TTL 和容量限制。
   **Completed:** v0.17.0.0 (2026-08-27)
 
 - [ ] **领取回执的进程崩溃窗口**
@@ -78,6 +78,10 @@
 
 ## P3 — 9 月以后
 
+- [ ] **退役核对原型清理（独立 PR）**
+  2026-08-29 合并前审计确认：`apps/web/ui/src/pages/reviewSplit.ts` 仅被自身测试引用；`apps/web/backend/app/baidu_paddle_vl.py`、`graphics_diff.py`、`ocr_ensemble.py`、`ocr_zone_boost.py` 未被当前产品入口、脚本或 worker 调用；`workers/packaging/illustrator/create_smoke_fixture.jsx` 没有仓库调用方，现作为基线候选保留，删除前仍要确认是否存在仓库外人工冒烟流程。其中区域 OCR 回归还明确断言后两条旧路径不进入 `compare_core`。持续质量门禁已落地，深审候选可用 `npm run quality:deep` 复核；不要混入治理或 Windows 发布 PR，独立删除时同步移除相关测试，按 ADR-006 四类证据核验并保留完整 L0。
+- [x] **测试文件无用导入清理**
+  2026-08-29 已移除 `jobs.test.ts` 的 `tryStart`、`tasks.test.ts` 的 `writeFileSync`、`workers.test.ts` 的 `join`，并在 server `tsconfig.json` 启用 `noUnusedLocals` / `noUnusedParameters`；生产源码和测试统一受编译门禁约束。
 - [x] 3D Worker 接线（打样台调用 pipeline；缺 Blender 会失败而不是装可用）
 - [x] **qlmanage 替换（平面出图）**  
   打样 PDF 栅格走 pymupdf（对照同一 `.venv`）；macOS qlmanage 仅兜底。杭州不依赖 Quick Look。  
