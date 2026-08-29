@@ -397,6 +397,37 @@ describe("mockup post", { concurrency: false }, () => {
     }
   });
 
+  it("keeps the receipt when the Windows Session 1 Illustrator agent is offline", async () => {
+    const prevBin = process.env.BLENDER_EXECUTABLE;
+    const prevAi = process.env.ILLUSTRATOR_EXECUTABLE;
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+    process.env.BLENDER_EXECUTABLE = process.execPath;
+    process.env.ILLUSTRATOR_EXECUTABLE = process.execPath;
+    try {
+      const sess = issueSession("籽烨", "reviewer", "ou_mockup_agent_offline", "feishu");
+      const receipt = await stageAi(sess.token);
+      Object.defineProperty(process, "platform", { ...platformDescriptor, value: "win32" });
+
+      const res = await startMockup(sess.token, receipt);
+      assert.equal(res.status, 412);
+      const body = (await res.json()) as { detail?: string };
+      assert.match(String(body.detail || ""), /桌面代理未在线/);
+
+      const pending = await app.request("/api/uploads", {
+        headers: { authorization: `Bearer ${sess.token}` },
+      });
+      assert.equal(pending.status, 200);
+      const rows = (await pending.json()) as { id?: string; phase?: string }[];
+      assert.equal(rows.some((row) => row.id === receipt && row.phase === "ready"), true);
+    } finally {
+      if (platformDescriptor) Object.defineProperty(process, "platform", platformDescriptor);
+      if (prevBin !== undefined) process.env.BLENDER_EXECUTABLE = prevBin;
+      else delete process.env.BLENDER_EXECUTABLE;
+      if (prevAi !== undefined) process.env.ILLUSTRATOR_EXECUTABLE = prevAi;
+      else delete process.env.ILLUSTRATOR_EXECUTABLE;
+    }
+  });
+
   it("refuses start without a receipt", async () => {
     const prevBin = process.env.BLENDER_EXECUTABLE;
     const prevAi = process.env.ILLUSTRATOR_EXECUTABLE;

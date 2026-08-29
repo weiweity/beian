@@ -6,7 +6,6 @@ name: hangzhou-release
 on:
   push:
     branches: [main]
-  workflow_dispatch:
 
 concurrency:
   group: hangzhou-production
@@ -17,6 +16,7 @@ permissions:
 
 jobs:
   release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: [self-hosted, hangzhou]
     timeout-minutes: 40
     env:
@@ -25,6 +25,10 @@ jobs:
       WB_DEV_DISPLAY_LOGIN: "false"
       WB_PYTHON: D:\beian\apps\web\backend\.venv\Scripts\python.exe
       GIT_TERMINAL_PROMPT: "0"
+      # The first trusted main push fails closed on legacy 0.19. After the
+      # approved maintenance stop, only "Re-run failed jobs" for that same
+      # immutable push SHA may authorize the one-time 0.20 bootstrap.
+      ALLOW_LEGACY_OFFLINE_BOOTSTRAP: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.run_attempt > 1 && 'true' || 'false' }}
     steps:
       - name: Drain, pull, build, restart :8787
         # cmd wrapper: Actions powershell shell dotsources a temp .ps1 under the
@@ -34,22 +38,21 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          rem On-disk script lags origin until pull. Drop npm-dirty lockfile first.
-          rem cmd fetch: git stderr is not a failed errorlevel. PS5 Stop treats it as NativeCommandError.
-          rem Then copy origin/main's release.ps1 so this land can self-heal a broken on-disk CD script.
-          git -C D:\beian checkout -- package-lock.json
-          if errorlevel 1 exit /b 1
-          powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$auth = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('x-access-token:' + $env:GITHUB_TOKEN)); & git -C D:\beian -c ('http.extraheader=AUTHORIZATION: basic ' + $auth) fetch origin; exit $LASTEXITCODE"
-          if errorlevel 1 exit /b 1
-          git -C D:\beian checkout origin/main -- scripts/windows/release.ps1
-          if errorlevel 1 exit /b 1
-          powershell.exe -NoProfile -ExecutionPolicy Bypass -File D:\beian\scripts\windows\release.ps1
+          rem Download the exact event commit's CD components to RUNNER_TEMP via GitHub API.
+          rem Bootstrap must not checkout/reset D:\beian before release.ps1 owns a journal.
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $dir=Join-Path $env:RUNNER_TEMP ('beian-release-' + $env:GITHUB_RUN_ID + '-' + $env:GITHUB_RUN_ATTEMPT); $headers=@{ Authorization=('Bearer ' + $env:GITHUB_TOKEN); Accept='application/vnd.github.raw+json'; 'X-GitHub-Api-Version'='2022-11-28' }; $files=@('release.ps1','release-recover.ps1','install-illustrator-agent.ps1','release-dependency-check.mjs'); $code=1; try { New-Item -ItemType Directory -Force -Path $dir | Out-Null; foreach ($name in $files) { $uri=('https://api.github.com/repos/' + $env:GITHUB_REPOSITORY + '/contents/scripts/windows/' + $name + '?ref=' + [Uri]::EscapeDataString($env:GITHUB_SHA)); Invoke-WebRequest -UseBasicParsing -Headers $headers -Uri $uri -OutFile (Join-Path $dir $name) }; $engine=Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'; $arguments=@('-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $dir 'release.ps1'),'-RepositoryRoot','D:\beian','-ReleaseSourceDir',$dir,'-TargetSha',$env:GITHUB_SHA); if ($env:ALLOW_LEGACY_OFFLINE_BOOTSTRAP -eq 'true') { $arguments += '-AllowLegacyOfflineBootstrap' }; & $engine @arguments; $code=$LASTEXITCODE } finally { Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue }; exit $code"
       - name: Start last 8787 if release died after stop
         if: failure()
         shell: cmd
         run: |
-          rem Job killed or script threw after :8787 was stopped. Do not touch cloudflared.
-          rem Do not kill node.exe. WinSW service is outside the Actions job tree.
+          rem If release.ps1 died after arming, use the journal-bound rollback first.
+          if exist C:\supply\data\runtime\release\release-journal.json (
+            if not exist C:\supply\data\runtime\release\release-recover.ps1 exit /b 1
+            powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\supply\data\runtime\release\release-recover.ps1 -JournalPath C:\supply\data\runtime\release\release-journal.json -TaskName beian-release-watchdog -Force
+            if errorlevel 1 exit /b 1
+          )
+          rem No armed transaction remains. Do not touch cloudflared or kill node.exe.
+          rem WinSW service is outside the Actions job tree.
           sc query beian-server-8787 | find "RUNNING" >nul
           if not errorlevel 1 exit /b 0
           sc start beian-server-8787

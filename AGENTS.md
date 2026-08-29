@@ -64,7 +64,7 @@ When the user's request matches an available skill, invoke it via the Skill tool
 - 缺陷 → /investigate
 - 发 PR → /ship（只在 Mac 开发机。杭州生产机禁止 /ship 产品功能。）没听到用户说 `/ship` 或「开始 ship」不要出 PR。用户说「先不进入 ship」就只改代码。
 - 合 main → /land-and-deploy（只合 GitHub。不重启杭州、不改 DNS。）
-- 杭州上线 → 合 `main` 后等 `hangzhou-release` 变绿，再等约 20 秒，公网 health 的 version 等于刚合进去的 VERSION。不要报已上线。不要给杭州贴 pull / rebuild / 重启 8787 的升级提示词，除非 runner 灰掉或对照挡住发版。`release.ps1` 碰到 `cannot lock ref origin/main` 要删掉这条 ref 再 fetch，不要秒红。
+- 杭州上线 → 合 `main` 后等 `hangzhou-release` 变绿，再等约 20 秒，公网 health 的 version 等于刚合进去的 VERSION。不要报已上线。不要给杭州贴 pull / rebuild / 重启 8787 或本地执行 `release.ps1` 的升级提示词。runner 灰掉先恢复同一 runner；在途作业挡住发版就等作业结束，然后只重跑刚才那条可信 `main` push run。
 - 用户贴的 `www.jianghua.site` / 开工板截图是杭州当前 VERSION，不是你工作区未合的分支。没 land 绿之前不要拿公网画面证明「已经改好了」。
 - 配置发布 → /setup-deploy
 - 写 issue → /spec
@@ -81,7 +81,7 @@ MiniMax 未开语义复核是「未用」，不是「可用」；探测是 `GET 
 
 开工板是线性进度 + 7 行清单，不要画成圆环仪表，不要用「通 / 不通」当状态字。界面单测只测纯函数，不引入 RTL。
 
-杭州打样平面出图走 pymupdf（对照同一 `.venv`），不要让人装 qlmanage。macOS Quick Look 只在 pymupdf 失败时兜底。打样结构以 `docs/adr-005-packaging-structure-v2.md` 为准：显式语义 → 拓扑验证 → 必要时管理员六面确认 → 现有 Blender；无语义或不安全结构不得进入 Blender，不得回退颜色/图层名/bbox/模板猜测。Illustrator 语义导出只维护一份 JSX：macOS AppleScript 与 Windows VBScript/COM 只是平台启动桥，Windows 清单必须带开工板扫描到的 `Illustrator.exe`。`PACKAGING_STRUCTURE_V2_ENABLED` 是临时迁移闸门，默认关；Phase 0 私有真值和杭州 Windows L1/L2 未绿前不得打开，稳定一个发布周期后随旧控制路径删除。PR 的 `windows-packaging-v2` 只验证杭州 COM→JSX，不替代真实稿 L2。GLB 除轴向和毫米尺寸外，还必须验证六个已确认面的纹理来源、方向与镜像，底面空贴图不得通过。离开核对页后看板/侧栏/历史记录仍看阶段，不要只把进度画在 WaitCard 上。核对页优先 SVG、失败自动退高清 PNG；缩放用 CSS transform，不要接 OpenSeadragon。核对窗液态玻璃浮在整页最上面（含侧栏），进页展开并叠在左侧栏上，可随意拖，不挤页图；窗不盖签字；收起/展开有动画，可拖，边框上下左右和斜角都能缩放；疑点列表置顶，当前字段三列证据横排，定位和人工操作在下；隐藏钉只藏圆圈；显示框单独开关。打样台和打样单主区白底深字（深色主题也是）；GLB 中性环境；每张图右上角下载；页头「下载 PPT」（没写成仍显示，点了出「PPT 没写成，白底仍可下」），不提供 PDF 下载入口；点下载底部提示不挡操作；GLB 全屏居中；截图时下载钮藏起来；全屏被拒写「全屏打不开」。已经出过的白底图要重新打样才会变。打样 PPT 先用两张白底写 OOXML，不依赖 Node；写不出才试演示文稿运行时。缺 PPT 不要把整单判失败；内部仍用两张白底合成 PDF（页底先铺白；pymupdf 写不出且还没落盘才用已装 Pillow，不要盖掉已写成的文件，不要新装包）。
+杭州打样平面出图走 pymupdf（对照同一 `.venv`），不要让人装 qlmanage。macOS Quick Look 只在 pymupdf 失败时兜底。打样结构以 `docs/adr-005-packaging-structure-v2.md` 为准：显式语义 → 拓扑验证 → 必要时管理员六面确认 → 现有 Blender；无语义或不安全结构不得进入 Blender，不得回退颜色/图层名/bbox/模板猜测。Illustrator 语义导出只维护一份 JSX：macOS AppleScript 与 Windows VBScript/COM 只是平台启动桥，Windows 清单必须带开工板扫描到的 `Illustrator.exe`。网页新打样已固定走 V2，不再有 `PACKAGING_STRUCTURE_V2_ENABLED` 运行时开关；Phase 0 私有真值和杭州 Windows L1/L2 未绿前，不能把代码完成或身份冒烟写成真实生产验收。PR 不得在杭州生产 self-hosted runner 执行；Windows L1 由可信 `main` 发版在 transaction fence 内验证 COM→JSX，不替代真实稿 L2。GLB 除轴向和毫米尺寸外，还必须验证六个已确认面的纹理来源、方向与镜像，底面空贴图不得通过。离开核对页后看板/侧栏/历史记录仍看阶段，不要只把进度画在 WaitCard 上。核对页优先 SVG、失败自动退高清 PNG；缩放用 CSS transform，不要接 OpenSeadragon。核对窗液态玻璃浮在整页最上面（含侧栏），进页展开并叠在左侧栏上，可随意拖，不挤页图；窗不盖签字；收起/展开有动画，可拖，边框上下左右和斜角都能缩放；疑点列表置顶，当前字段三列证据横排，定位和人工操作在下；隐藏钉只藏圆圈；显示框单独开关。打样台和打样单主区白底深字（深色主题也是）；GLB 中性环境；每张图右上角下载；页头「下载 PPT」（没写成仍显示，点了出「PPT 没写成，白底仍可下」），不提供 PDF 下载入口；点下载底部提示不挡操作；GLB 全屏居中；截图时下载钮藏起来；全屏被拒写「全屏打不开」。已经出过的白底图要重新打样才会变。打样 PPT 先用两张白底写 OOXML，不依赖 Node；写不出才试演示文稿运行时。缺 PPT 不要把整单判失败；内部仍用两张白底合成 PDF（页底先铺白；pymupdf 写不出且还没落盘才用已装 Pillow，不要盖掉已写成的文件，不要新装包）。
 
 ## Design System
 
@@ -105,7 +105,7 @@ MiniMax 未开语义复核是「未用」，不是「可用」；探测是 `GET 
   - 服务端：`npm run test -w beian-server`（`node:test`，`apps/web/server/src/*.test.ts`）
   - 界面：`npm run test -w beian-ui`（`node:test`，`src/**/*.test.ts` 自动发现；纯函数，不引入 RTL）
   - 对照 worker：`cd apps/web/backend && .venv/bin/python -m pytest -q`（CLI 契约 + 对照/打样单测。没有 FastAPI 测试）
-- L1 冒烟（杭州 `hangzhou-release`）：`release.ps1` 查 health.ok、version==VERSION、`jobs.illustrator`、logo PNG。不跑 `npm test`
+- L1 冒烟（杭州 `hangzhou-release`）：`release.ps1` 在 transaction fence 内查 health.ok、version==VERSION、8787 listener、logo PNG，并通过生产 Session 1 Agent 验证管道 → VBS → 唯一 JSX 的身份链。不跑 `npm test`，也不替代真实稿 L2
 - L2 金标（人核定后）：`apps/web/backend/scripts/run_eval.py`。未核定的 `data/gold` 不进默认 `npm test`
 - 类型：`npm run typecheck -w beian-server` 与 `npm run build -w beian-ui`
 - 浏览器交互（Mac）：`npm run test:e2e`（Vite + 合成 API，只验证页面行为，不替代真实 Hono / Windows L1）
@@ -138,7 +138,7 @@ MiniMax 未开语义复核是「未用」，不是「可用」；探测是 `GET 
 
 - Platform: 杭州 Windows（UU 远程「人事-台式」）+ Cloudflare Named Tunnel。不是 Fly / Vercel。GitHub Actions 只跑 **self-hosted `hangzhou`**（机器名 `hangzhou-windows`），禁止 GitHub-hosted runner 升生产。
 - Production URL: https://www.jianghua.site
-- Deploy workflow: `.github/workflows/hangzhou-release.yml`（`push` `main` / `workflow_dispatch` → 本机 `D:\beian\scripts\windows\release.ps1`）。
+- Deploy workflow: `.github/workflows/hangzhou-release.yml`（仅 `push` `main`；从事件 SHA 下载发布组件到 `RUNNER_TEMP`，再以不可变 `TargetSha` 操作 `D:\beian`；PR 与可选择 ref 的 `workflow_dispatch` 禁止触达生产 runner）。
 - Deploy status command: 无平台 CLI。看 [hangzhou-release](https://github.com/weiweity/beian/actions/workflows/hangzhou-release.yml) 是否绿。杭州环回才是杭州进程：`curl -sS http://127.0.0.1:8787/api/health`。公网 health 仅在 Named Tunnel 跑在杭州时有效。
 - Merge method: squash
 - Project type: web app（Hono `:8787`）
@@ -153,15 +153,15 @@ MiniMax 未开语义复核是「未用」，不是「可用」；探测是 `GET 
 ### Custom deploy hooks
 
 - Pre-merge: `/ship` 已跑 `npm test` 与 ui build。Mac `/land-and-deploy` 只合 GitHub。
-- Deploy trigger: **合进 `main` 后由杭州 self-hosted runner 跑 `release.ps1`**。对照/打样/Illustrator 在跑会失败并保持旧进程。日常 Mac 只合 `main`、等 Actions 绿。杭州手工补跑同一脚本只在 runner 灰或对照挡住时由杭州自己执行，Mac 不要主动贴：
+- Deploy trigger: **合进 `main` 后，只由杭州 self-hosted runner 处理该次可信 `main` push**。workflow 从事件提交下载绑定过的发布组件，并把同一个完整 `GITHUB_SHA` 作为不可变 `TargetSha` 交给 `release.ps1`；杭州 checkout 里的本地脚本不是兜底入口。runner 灰掉就先恢复同一 runner；对照/打样/Illustrator 在途就等作业结束，然后仅对刚才那条 push run 使用 **Re-run failed jobs**。`0.19.x → 0.20.0.0` 首次切换也是在批准维护窗停止旧 WinSW 后重跑同一失败 run，不创建 `workflow_dispatch`，不从分支、本地 checkout 或另一 SHA 发版。
 
-  Actions 用 cmd `git fetch`（不要 PowerShell 把 git 的 stderr 当失败），再 `checkout origin/main -- scripts/windows/release.ps1`，这样盘上旧脚本坏了也能自愈。脚本进进程后先把该文件 `checkout HEAD` 清脏，再 `fetch`（只看 LASTEXITCODE；`cannot lock ref origin/main` 只删这一条再拉，网络失败不要动 tracking ref）、丢掉 npm 改脏的 `package-lock.json`；若还有别的本地改动则**不停** 8787。通过后才停监听 8787 的进程树再 `merge --ff-only`（2–5 分钟公网空白）。锁文件没变则跳过 `npm ci`。Git 之后清掉 `GITHUB_TOKEN` 再跑 npm。merge/编/起失败时回到停机前 SHA 再装/编，然后 `Restart-Service beian-server-8787`（WinSW）。停 8787 时先 `Stop-Service` 再清残留监听，避免 WinSW onfailure 在 merge/build 期间把进程拉回来。Actions `if: failure()` 先看服务是否 RUNNING，再 `sc start`；1056（已在跑）当成功。不动 cloudflared，不杀全部 `node.exe`。PowerShell 环境变量用 `$env:WB_DATA_DIR`（不要 `set`）。密钥用网页开工板填，不进仓库。Cloudflare Tunnel 只在杭州以 Windows 服务 + token 跑，指 `http://127.0.0.1:8787`。Mac 必须停掉 `cloudflared tunnel run beian`。不要用 `./scripts/dev-start.sh` 当杭州生产启动（zsh）。细节见 `scripts/windows/README.md`。
+  发布脚本在不停服时完成不可变 SHA、依赖图、离线运行时和 admission readiness 核对；随后用 ACL journal、SYSTEM watchdog、WinSW 停服、ff-only、UI 构建、InteractiveToken Agent 同步、transaction fence 和 Session 1 L1 身份冒烟组成一个恢复事务。恢复必须在独占锁内重读 journal；回滚到不理解 fault fence 的 legacy 版本前会保持 8787 停止，并要求 Illustrator fault 文件及 Illustrator/AIRobin/cscript/wscript 全部不存在。脚本不杀全部 `node.exe`，不做 PID 型 listener 清理，不动 cloudflared，不在停服后在线安装 npm/Python 依赖。密钥只在杭州数据目录和 loopback 控制头内，不进仓库或日志。细节见 `scripts/windows/README.md`。
 
 - 杭州 Grok 禁止：在生产机 `/ship` 新功能、改产品代码当开发机用、把生产隧道指到 Mac、对照跑着时 pull/重启、`git reset --hard`。发版后若只脏 `package-lock.json`，杭州自己 `git checkout -- package-lock.json`。
 - Mac Grok 禁止：
   - `cloudflared tunnel run beian`（隧道只能在杭州，抢了就 1033/串台）
   - 合完 PR 立刻说「已上线」
-  - 给杭州贴 pull / rebuild / 重启 8787 的升级提示词（除非 GitHub Settings → Actions → Runners 里 `hangzhou-windows` 变灰，或对照/打样/Illustrator 挡住发版）
+  - 给杭州贴 pull / rebuild / 重启 8787 或本地执行 `release.ps1` 的升级提示词；runner 灰掉只恢复 runner，在途作业结束后只重跑同一可信 push run
   - 把 `www.jianghua.site` 当本机开发入口
   - 改 Cloudflare DNS、飞书控制台、买云、映射端口
   - 指挥杭州改产品代码或当开发机

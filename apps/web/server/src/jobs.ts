@@ -8,17 +8,20 @@ import {
   isMockupJobFile,
   loadAllMockups,
   loadMockup,
+  mockupStoreSnapshot,
   resetMockupCache,
   saveMockup,
   type MockupJob,
 } from "./mockup.js";
 import {
   loadAllTasks,
+  loadTasksForRecovery,
   loadTask,
   nowIso,
   saveTask,
   assertCanAccessTask,
   taskOwner,
+  taskStoreSnapshot,
   type JobKind,
   type Task,
   type Viewer,
@@ -96,6 +99,7 @@ export type JobsTestHooks = {
 };
 
 let hooks: JobsTestHooks = {};
+let activeNotifications = 0;
 
 export function setJobsTestHooks(next: JobsTestHooks): void {
   hooks = next;
@@ -109,13 +113,20 @@ export function resetJobsTestHooks(): void {
   resetMockupCache();
 }
 
+export function notificationSnapshot(): { active: number } {
+  return { active: activeNotifications };
+}
+
 export function queueSnapshot(): {
   ocr: { running: number; queued: number };
   blender: { running: number; queued: number };
   illustrator: { running: number; queued: number };
+  unknown: number;
 } {
-  const tasks = loadAllTasks();
-  const mocks = loadAllMockups();
+  const taskStore = taskStoreSnapshot();
+  const mockupStore = mockupStoreSnapshot();
+  const tasks = taskStore.tasks;
+  const mocks = mockupStore.jobs;
   const ocrQueued = tasks.filter((t) => isOcr(t.job_kind) && t.job_status === "queued").length;
   const ocrRunning = tasks.filter((t) => isOcr(t.job_kind) && t.job_status === "running").length;
   const ai = mocks.filter((j) => needsIllustrator(j));
@@ -123,12 +134,15 @@ export function queueSnapshot(): {
   const bQueued = rest.filter((j) => j.job_status === "queued").length;
   const bRunning = rest.filter((j) => j.job_status === "running" && j.job_stage !== "illustrator").length;
   return {
-    ocr: { running: ocrRunning, queued: ocrQueued },
-    blender: { running: bRunning, queued: bQueued },
+    // Disk state is durable; live slots close the short window before a worker
+    // PID/status update is persisted and keep corrupted active records fail-closed.
+    ocr: { running: Math.max(ocrRunning, live.ocr ? 1 : 0), queued: ocrQueued },
+    blender: { running: Math.max(bRunning, live.blender ? 1 : 0), queued: bQueued },
     illustrator: {
-      running: ai.filter((j) => j.job_status === "running").length,
+      running: Math.max(ai.filter((j) => j.job_status === "running").length, live.illustrator ? 1 : 0),
       queued: ai.filter((j) => j.job_status === "queued").length,
     },
+    unknown: taskStore.unreadable + mockupStore.unreadable,
   };
 }
 
@@ -177,16 +191,16 @@ export function reclaimOnBoot(): void {
   live.ocr = null;
   live.blender = null;
   live.illustrator = null;
-  for (const task of loadAllTasks()) reclaimTask(task);
+  for (const task of loadTasksForRecovery()) reclaimTask(task);
   for (const job of loadAllMockups()) reclaimMockup(job);
   for (const task of loadAllTasks()) {
     if (task.notify_job_id && !task.notify_sent && (task.job_status === "succeeded" || task.job_status === "failed")) {
-      launchNotify(`task ${task.id}`, fireTaskNotify(task, task.job_status === "succeeded"));
+      launchNotification(`task ${task.id}`, () => fireTaskNotify(task, task.job_status === "succeeded"));
     }
   }
   for (const job of loadAllMockups()) {
     if (job.notify_job_id && !job.notify_sent && (job.job_status === "succeeded" || job.job_status === "failed")) {
-      launchNotify(`mockup ${job.id}`, fireMockupNotify(job, job.job_status === "succeeded"));
+      launchNotification(`mockup ${job.id}`, () => fireMockupNotify(job, job.job_status === "succeeded"));
     }
   }
   tryStart();
@@ -589,7 +603,7 @@ function finishOcr(id: string, startedAt: string, result: RunPythonResult): void
   task.job_status = "succeeded";
   task.job_error = undefined;
   saveTask(task);
-  launchNotify(`task ${task.id}`, fireTaskNotify(task, true));
+  launchNotification(`task ${task.id}`, () => fireTaskNotify(task, true));
   (hooks.bookkeeping || compareBookkeeping)(true, { task_id: task.id, actor: taskOwner(task) });
   tryStart();
 }
@@ -607,7 +621,7 @@ function markOcrFailed(task: Task, publicMsg: string): void {
   delete task.job_pid;
   attachRenderedPages(task);
   saveTask(task);
-  launchNotify(`task ${task.id}`, fireTaskNotify(task, false));
+  launchNotification(`task ${task.id}`, () => fireTaskNotify(task, false));
   (hooks.bookkeeping || compareBookkeeping)(false, { task_id: task.id, actor: taskOwner(task) });
   tryStart();
 }
@@ -684,7 +698,7 @@ function finishMockup(id: string, startedAt: string, result: RunPythonResult): v
   job.job_status = "succeeded";
   job.job_error = undefined;
   saveMockup(job);
-  launchNotify(`mockup ${job.id}`, fireMockupNotify(job, true));
+  launchNotification(`mockup ${job.id}`, () => fireMockupNotify(job, true));
   tryStart();
 }
 
@@ -696,7 +710,7 @@ function markMockupFailed(job: MockupJob, msg: string): void {
   job.job_finished_at = job.job_finished_at || nowIso();
   delete job.job_pid;
   saveMockup(job);
-  launchNotify(`mockup ${job.id}`, fireMockupNotify(job, false));
+  launchNotification(`mockup ${job.id}`, () => fireMockupNotify(job, false));
   tryStart();
 }
 
@@ -858,11 +872,23 @@ async function fireTaskNotify(task: Task, ok: boolean): Promise<void> {
   }
 }
 
-function launchNotify(label: string, operation: Promise<void>): void {
-  void operation.catch((err: unknown) => {
-    const cause = err instanceof Error ? err.message : String(err);
-    console.warn(`jobs ${label}: 通知收尾异常。cause=${cause} fix=保留作业结果，启动时重试通知`);
-  });
+/**
+ * 所有脱离 HTTP 生命周期的通知都从这里登记。发版排空只依赖 active 计数，
+ * 不需要知道通知来自作业完成还是人工签字。
+ */
+export function launchNotification(label: string, operation: () => Promise<void>): void {
+  // Acquire before invoking the async operation. A release drain starting in
+  // the same event-loop turn must wait for the local notify_sent outbox commit.
+  activeNotifications += 1;
+  void Promise.resolve()
+    .then(operation)
+    .catch((err: unknown) => {
+      const cause = err instanceof Error ? err.message : String(err);
+      console.warn(`jobs ${label}: 通知收尾异常。cause=${cause} fix=保留作业结果，启动时重试通知`);
+    })
+    .finally(() => {
+      activeNotifications = Math.max(0, activeNotifications - 1);
+    });
 }
 
 async function fireMockupNotify(job: MockupJob, ok: boolean): Promise<void> {
@@ -901,6 +927,7 @@ function reclaimTask(task: Task): void {
   if (task.status === "compare_failed" && task.job_finished_at) return;
   if (task.status === "comparing" && task.job_status !== "queued" && task.job_status !== "running") {
     task.status = "compare_failed";
+    task.job_kind = "compare";
     task.job_status = "failed";
     task.job_error = "对照中断";
     task.error = "对照中断";

@@ -2,6 +2,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "n
 import { execFile } from "node:child_process";
 import { join, resolve } from "node:path";
 import { DATA_DIR, PYTHON_APP } from "./config.js";
+import { readIllustratorAgentStatus } from "./illustratorAgent.js";
 import { whichLark } from "./larkBin.js";
 import { httpsJson } from "./outbound.js";
 
@@ -538,6 +539,9 @@ function probeIllustrator(): ProbeResult {
   const p = illustratorBin();
   if (!p) return { id, ok: false, message: "还没填 Illustrator 路径。点扫描这台电脑。" };
   if (!existsSync(p)) return { id, ok: false, message: "这个路径不存在" };
+  const agent = readIllustratorAgentStatus();
+  if (agent.required && !agent.ready) return { id, ok: false, message: agent.message };
+  if (agent.required) return { id, ok: true, message: `${agent.message} · ${p}` };
   return { id, ok: true, message: `已确认路径 · ${p}（探测不启动 Illustrator）` };
 }
 
