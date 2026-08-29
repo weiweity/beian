@@ -45,21 +45,78 @@ function indexOf(re: RegExp): number {
   return m.index;
 }
 
+function extractPowerShellCalls(source: string, marker: string): string[] {
+  const calls: string[] = [];
+  let cursor = 0;
+
+  while (cursor < source.length) {
+    const start = source.indexOf(marker, cursor);
+    if (start < 0) break;
+    const open = source.indexOf("(", start + marker.length);
+    assert.notEqual(open, -1, `missing opening parenthesis after ${marker}`);
+
+    let depth = 0;
+    let quote: "'" | '"' | null = null;
+    let escaped = false;
+    let end = -1;
+    for (let index = open; index < source.length; index += 1) {
+      const char = source[index];
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (char === "`") {
+        escaped = true;
+        continue;
+      }
+      if (quote) {
+        if (char === quote) quote = null;
+        continue;
+      }
+      if (char === "'" || char === '"') {
+        quote = char;
+        continue;
+      }
+      if (char === "(") depth += 1;
+      if (char === ")") {
+        depth -= 1;
+        if (depth === 0) {
+          end = index + 1;
+          break;
+        }
+      }
+    }
+
+    assert.notEqual(end, -1, `unterminated ${marker} call`);
+    calls.push(source.slice(start, end));
+    cursor = end;
+  }
+
+  return calls;
+}
+
 describe("windows release.ps1 contract", () => {
   it("passes a true CLR null backup path to every atomic file replacement", () => {
     const nullBackup = "[System.Management.Automation.Language.NullString]::Value";
+    const marker = "[System.IO.File]::Replace";
+
+    assert.equal(
+      extractPowerShellCalls(`${marker}(\n  $source,\n  $destination,\n  $null\n)`, marker).length,
+      1,
+      "the contract parser must see multiline replacements",
+    );
 
     for (const [relativePath, { source, expectedCalls }] of atomicReplaceScripts) {
-      const calls = source.match(/\[System\.IO\.File\]::Replace\([^\r\n]+\)/g) ?? [];
+      const calls = extractPowerShellCalls(source, marker);
       assert.equal(calls.length, expectedCalls, `${relativePath} atomic replace call count changed`);
       for (const call of calls) {
         assert.ok(call.includes(nullBackup), `${relativePath} must pass a real CLR null backup path: ${call}`);
+        assert.doesNotMatch(
+          call,
+          /,\s*\$null\s*\)$/,
+          `${relativePath} must not let PowerShell 5.1 coerce $null to an empty string path`,
+        );
       }
-      assert.doesNotMatch(
-        source,
-        /\[System\.IO\.File\]::Replace\([^\r\n]+,\s*\$null\s*\)/,
-        `${relativePath} must not let PowerShell 5.1 coerce $null to an empty string path`,
-      );
     }
 
     const qualityWorkflow = readFileSync(join(repoRoot, ".github/workflows/quality.yml"), "utf8");
