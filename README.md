@@ -21,14 +21,22 @@
 | 文件 | 内容 |
 |---|---|
 | `DESIGN.md` | 视觉、侧栏、审稿/打样文案 |
+| `apps/web/README.md` | Web 子系统边界、入口与本地启动关系 |
+| `apps/web/ui/README.md` | UI 开发、构建与浏览器回归入口 |
+| `apps/web/backend/data/gold/README.md` | L2 金标数据格式与人工核定边界 |
 | `docs/00-charter.md` | 8/31 章程 |
+| `docs/adr-001-frontend-stack.md` | 历史前端选型；旧前端已退场，以当前 React + Hono 结构为准 |
 | `docs/adr-002-typescript-http.md` | 为什么对外 HTTP 是 TypeScript |
 | `docs/adr-003-settings-overlay.md` | 本机设置覆盖密钥文件 |
 | `docs/adr-004-ousterhout-design.md` | 深模块、唯一入口、8/31 前不拆引擎 |
 | `docs/adr-005-packaging-structure-v2.md` | 包装语义 IR、人工确认闸门与 V1 退场条件 |
+| `docs/adr-006-continuous-complexity-governance.md` | TypeScript 控制面 / Python 计算内核边界、死代码单调基线与 PR 质量门禁 |
 | `docs/designs/compare-pdf-ingest-v2.md` | PDF 按页选源、单 OCR、版面区域与单钉证据合同 |
+| `docs/designs/review-job-module.md` | 当前对照、对红、打样入队与失败语义合同 |
+| `docs/designs/review-rework-loop.md` | 部分被替代；保留对红循环与金标语义的历史依据 |
+| `docs/designs/hangzhou-setup-board.md` | 部分被替代的杭州开工板批准快照；现行运维合同见本 README 与 Windows README |
+| `docs/designs/two-desks-review-and-mockup.md` | 已被替代的早期两张台需求发现记录 |
 | `docs/risks.md` | 密钥、Tunnel、3D 验收门 |
-| `docs/designs/` | 对红循环、两张台、作业模块（对照/对红/打样入队） |
 | `CHANGELOG.md` | 已发布版本 |
 | `TODOS.md` | 未做项 |
 | `AGENTS.md` | 给代理的硬约束、加长作业合同、易忘约定（MICRO 不改 `package.json` 三位；禁止 `git add -A`） |
@@ -53,7 +61,7 @@
 
 不要跑 uvicorn。没有 `app.main`。产品入口只有 Hono `:8787`。
 
-测服务端、界面和对照 CLI：仓库根目录 `npm test`（Mac；不打外网）。浏览器交互回归另跑 `npm run test:e2e`；它使用 Vite + 合成 API，验证页面行为，不替代真实 Hono `:8787` 或杭州 Windows L1。杭州生产不跑单测；可信 `main` release transaction 会检查 health/version/listener/logo，并通过生产 Session 1 Agent 完成管道 → VBS → 唯一 JSX 的身份冒烟。真实稿结构、六面贴图和 Blender 仍属于人工 L2。只要服务端：`npm run test -w beian-server`。只要界面：`npm run test -w beian-ui`。
+测服务端、界面和对照 CLI：仓库根目录 `npm test`（Mac；不打外网）。复杂度治理使用隔离的质量工具链：Mac 首次运行先在 Node 20.19+ 或 22.12+ 下执行 `npm ci --prefix tools/quality`，再把 Vulture 装进现有 worker 虚拟环境：`apps/web/backend/.venv/bin/python -m pip install -r apps/web/backend/requirements-quality.txt`；随后运行 `npm run test:quality` 和 `npm run quality`。PR 使用 Node 22 依次执行质量合同、单调基线、完整 L0 与独立类型检查，`/ship` 同样要求这些门禁都绿。`npm run quality` 检查 Knip 与高置信 Vulture，并要求 `config/quality/dead-code-baseline.json` 只减不增；TypeScript 则由 `npm run typecheck` 独立检查。本地会自动从 `origin/HEAD`（回退 `origin/main` / `main`）读取目标分支基线，找不到就失败并要求显式传 `--base-ref`，PR CI 则使用精确 base SHA。同文件同名诊断按出现次数核对，不会因行号移动误报，也不会把新增的第二处折叠掉。编排器只读基线，不会自动删代码。人工清理前可跑 `npm run quality:deep` 查看 production/低置信候选。Knip 锁在 `tools/quality/package-lock.json`，Vulture 锁在 `apps/web/backend/requirements-quality.txt`；两者都不进入产品 Node 合同或杭州生产依赖图。浏览器交互回归另跑 `npm run test:e2e`；它使用 Vite + 合成 API，验证页面行为，不替代真实 Hono `:8787` 或杭州 Windows L1。杭州生产不跑单测；可信 `main` release transaction 会检查 health/version/listener/logo，并通过生产 Session 1 Agent 完成管道 → VBS → 唯一 JSX 的身份冒烟。真实稿结构、六面贴图和 Blender 仍属于人工 L2。只要服务端：`npm run test -w beian-server`。只要界面：`npm run test -w beian-ui`。
 
 ## Docker（当前未交付）
 

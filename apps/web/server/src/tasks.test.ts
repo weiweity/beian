@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { writeFileSync } from "node:fs";
 import { describe, it, before } from "node:test";
 import { makeTestTempDir } from "./testTemp.js";
 

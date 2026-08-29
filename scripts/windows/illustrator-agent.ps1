@@ -24,6 +24,20 @@ $AgentUser = [string]$AgentIdentity.Name
 $AgentUserSid = [string]$AgentIdentity.User.Value
 $AgentExpiresAt = [DateTime]::MaxValue
 
+function Get-GitCheckoutIdentity([string]$RepositoryRoot, [string]$FailureMessage) {
+  $lines = @(& git -C $RepositoryRoot rev-parse HEAD 2>$null)
+  $exitCode = $LASTEXITCODE
+  $values = @(
+    $lines |
+      ForEach-Object { ([string]$_).Trim().ToLowerInvariant() } |
+      Where-Object { $_ -ne "" }
+  )
+  if ($exitCode -ne 0 -or $values.Count -ne 1 -or $values[0] -notmatch '^[0-9a-f]{40}$') {
+    throw $FailureMessage
+  }
+  return [string]$values[0]
+}
+
 if ($ExpiresAtUtc) {
   try {
     $AgentExpiresAt = [DateTimeOffset]::Parse($ExpiresAtUtc).UtcDateTime
@@ -63,9 +77,8 @@ $CurrentReleaseVersion = ([System.IO.File]::ReadAllText($VersionPath)).Trim()
 if ($CurrentReleaseVersion -ne $ReleaseVersion) {
   throw "Illustrator agent release identity does not match this checkout"
 }
-$CurrentBuildIdentity = [string](& git -C $Root rev-parse HEAD 2>$null | Select-Object -First 1)
-$CurrentBuildIdentity = $CurrentBuildIdentity.Trim()
-if ($LASTEXITCODE -ne 0 -or -not $BuildIdentity -or $CurrentBuildIdentity -ne $BuildIdentity) {
+$CurrentBuildIdentity = Get-GitCheckoutIdentity $Root "Illustrator agent cannot resolve this checkout identity"
+if (-not $BuildIdentity -or $CurrentBuildIdentity -ne $BuildIdentity) {
   throw "Illustrator agent build identity does not match this checkout"
 }
 $PipeHashBytes = [System.Security.Cryptography.SHA256]::Create().ComputeHash(

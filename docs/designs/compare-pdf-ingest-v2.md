@@ -1,6 +1,6 @@
 # Design: 对照 PDF 入稿与证据路由 V2
 
-Status: IMPLEMENTED（`0.16.0.0` 发布候选）
+Status: IMPLEMENTED（`0.16.0.0`）
 
 Scope: `apps/web/backend` 对照 worker + 审稿页证据消费
 

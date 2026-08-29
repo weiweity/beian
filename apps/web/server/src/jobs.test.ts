@@ -18,7 +18,6 @@ const {
   reclaimOnBoot,
   resetJobsTestHooks,
   setJobsTestHooks,
-  tryStart,
 } = await import("./jobs.js");
 
 function wipeJobDisk() {

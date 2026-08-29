@@ -25,7 +25,7 @@
 - 对照 worker：`apps/web/backend`（Python，由 TS `app.cli` 调用）
 - 3D CLI：`workers/packaging/`
 - 本机配置：侧栏「设置」→ 默认 `apps/web/backend/data/settings.json` + `settings.secrets.json`（gitignore；`WB_DATA_DIR` 可改）。密钥不要写进前端或仓库。
-- 文档入口：`README.md`（启动、设置）、`DESIGN.md`（视觉）、`docs/00-charter.md`（8/31 章程）、`docs/adr-004-ousterhout-design.md`（深模块）、`docs/designs/review-job-module.md`（对照/对红/打样入队）、`CHANGELOG.md`、`TODOS.md`。实现约定见下面「设计哲学」。
+- 文档入口：`README.md`（完整文档地图、启动、设置）、`DESIGN.md`（视觉）、`docs/00-charter.md`（8/31 章程）、`docs/adr-004-ousterhout-design.md`（深模块）、`docs/designs/review-job-module.md`（对照/对红/打样入队）、`CHANGELOG.md`、`TODOS.md`。实现约定见下面「设计哲学」。
 - 入口：开发口 `:5173`（Vite 听本机网卡，`/api` 反代到 8787）；产品/验收入口 `:8787`。不要再加第三个 HTTP 入口。
 - 旧 `apps/web/frontend/` 已删除；网页入口只有 `apps/web/ui` + Hono `apps/web/server`。
 
@@ -71,7 +71,7 @@ When the user's request matches an available skill, invoke it via the Skill tool
 
 ## 易忘约定（防记忆漂移）
 
-升 VERSION 时：`VERSION` 文件和 `apps/web/server/src/index.ts` 里的 `VERSION` 常量必须同号。`package.json` 只写三位（npm 不认第四位）：MICRO（`0.12.8.0` → `0.12.8.1`）三位不动；PATCH/MINOR/MAJOR 才改三位。4 位号，本线现为 `0.13.x.0`。用户点名大版本才跳 MINOR。开放 PR 的 VERSION 若落后于 `main`，不合；先 `/ship` 重占号。
+升 VERSION 时：`VERSION` 文件和 `apps/web/server/src/index.ts` 里的 `VERSION` 常量必须同号。`package.json` 只写三位（npm 不认第四位）：MICRO（`0.12.8.0` → `0.12.8.1`）三位不动；PATCH/MINOR/MAJOR 才改三位。4 位号，本线现为 `0.20.x.0`。用户点名大版本才跳 MINOR。开放 PR 的 VERSION 若落后于 `main`，不合；先 `/ship` 重占号。
 
 魏炜飞书真名或花名「魏炜」才是杭州机箱管理员，能扫 Blender / Illustrator（含 PATH）。不要凭显示名「管理员」提权。升版后旧 cookie 仍是审核员，要重新走飞书登录。伸美其他人默认审稿员：能进审稿台，不能扫本机 exe。2026-08-24 当周不做品牌登录闪屏、申请权限工单（office-hours D1=A）。
 
@@ -101,7 +101,7 @@ MiniMax 未开语义复核是「未用」，不是「可用」；探测是 `GET 
 
 三层。`npm test` 只等于 L0。不要在杭州跑单测。不要单测打外网、OCR、Blender、Illustrator COM。
 
-- L0 单测（Mac，`/ship` 必绿）：仓库根目录 `npm test`
+- L0 单测（Mac，`/ship` 必绿）：仓库根目录 `npm test`。复杂度工具链独立运行，不把 Knip 的 Node 版本要求泄漏到产品 `Node >=20` 合同；`/ship` 还必须在 Node 20.19+ 或 22.12+ 下执行 `npm run test:quality` 和 `npm run quality`。
   - 服务端：`npm run test -w beian-server`（`node:test`，`apps/web/server/src/*.test.ts`）
   - 界面：`npm run test -w beian-ui`（`node:test`，`src/**/*.test.ts` 自动发现；纯函数，不引入 RTL）
   - 对照 worker：`cd apps/web/backend && .venv/bin/python -m pytest -q`（CLI 契约 + 对照/打样单测。没有 FastAPI 测试）
@@ -109,6 +109,8 @@ MiniMax 未开语义复核是「未用」，不是「可用」；探测是 `GET 
 - L2 金标（人核定后）：`apps/web/backend/scripts/run_eval.py`。未核定的 `data/gold` 不进默认 `npm test`
 - 类型：`npm run typecheck -w beian-server` 与 `npm run build -w beian-ui`
 - 浏览器交互（Mac）：`npm run test:e2e`（Vite + 合成 API，只验证页面行为，不替代真实 Hono / Windows L1）
+- 复杂度门禁（Mac / GitHub-hosted PR）：`npm run quality`；基线只读、只能经评审缩小，新增发现、过期条目或相对 base 扩张都失败。本地自动解析 `origin/HEAD`（再回退 `origin/main` / `main`），找不到目标分支就失败关闭；CI 使用 PR base 精确 SHA。同文件同名诊断按重数比较，行号移动不改变身份，但新增第二处不能被折叠。`npm run quality:deep` 只生成手工清理报告，不自动删除。
+- `.github/workflows/quality.yml` 禁止使用杭州/self-hosted runner；Knip 只锁在 `tools/quality`，Vulture 只放 `requirements-quality.txt`，两者不得进入杭州生产依赖图。
 - 新逻辑要有行为测试（含失败路径）。不要把密钥写进测试。
 
 ## 设计哲学
@@ -153,7 +155,7 @@ MiniMax 未开语义复核是「未用」，不是「可用」；探测是 `GET 
 ### Custom deploy hooks
 
 - Pre-merge: `/ship` 已跑 `npm test` 与 ui build。Mac `/land-and-deploy` 只合 GitHub。
-- Deploy trigger: **合进 `main` 后，只由杭州 self-hosted runner 处理该次可信 `main` push**。workflow 从事件提交下载绑定过的发布组件，并把同一个完整 `GITHUB_SHA` 作为不可变 `TargetSha` 交给 `release.ps1`；杭州 checkout 里的本地脚本不是兜底入口。runner 灰掉就先恢复同一 runner；对照/打样/Illustrator 在途就等作业结束，然后仅对刚才那条 push run 使用 **Re-run failed jobs**。`0.19.x → 0.20.0.0` 首次切换也是在批准维护窗停止旧 WinSW 后重跑同一失败 run，不创建 `workflow_dispatch`，不从分支、本地 checkout 或另一 SHA 发版。
+- Deploy trigger: **合进 `main` 后，只由杭州 self-hosted runner 处理该次可信 `main` push**。workflow 从事件提交下载绑定过的发布组件，并把同一个完整 `GITHUB_SHA` 作为不可变 `TargetSha` 交给 `release.ps1`；杭州 checkout 里的本地脚本不是兜底入口。runner 灰掉就先恢复同一 runner；对照/打样/Illustrator 在途就等作业结束，然后仅对刚才那条 push run 使用 **Re-run failed jobs**。`0.19.x → 0.20.x` 首次切换也是在批准维护窗停止旧 WinSW 后重跑同一失败 run，不创建 `workflow_dispatch`，不从分支、本地 checkout 或另一 SHA 发版；来源已是 `0.20` 或目标达到 `0.21` 时不得复用该授权。
 
   发布脚本在不停服时完成不可变 SHA、依赖图、离线运行时和 admission readiness 核对；随后用 ACL journal、SYSTEM watchdog、WinSW 停服、ff-only、UI 构建、InteractiveToken Agent 同步、transaction fence 和 Session 1 L1 身份冒烟组成一个恢复事务。恢复必须在独占锁内重读 journal；回滚到不理解 fault fence 的 legacy 版本前会保持 8787 停止，并要求 Illustrator fault 文件及 Illustrator/AIRobin/cscript/wscript 全部不存在。脚本不杀全部 `node.exe`，不做 PID 型 listener 清理，不动 cloudflared，不在停服后在线安装 npm/Python 依赖。密钥只在杭州数据目录和 loopback 控制头内，不进仓库或日志。细节见 `scripts/windows/README.md`。
 

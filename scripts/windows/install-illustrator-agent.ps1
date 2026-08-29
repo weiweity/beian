@@ -13,6 +13,20 @@ param(
 Set-StrictMode -Version 2
 $ErrorActionPreference = "Stop"
 
+function Get-GitCheckoutIdentity([string]$RepositoryRoot, [string]$FailureMessage) {
+  $lines = @(& git -C $RepositoryRoot rev-parse HEAD 2>$null)
+  $exitCode = $LASTEXITCODE
+  $values = @(
+    $lines |
+      ForEach-Object { ([string]$_).Trim().ToLowerInvariant() } |
+      Where-Object { $_ -ne "" }
+  )
+  if ($exitCode -ne 0 -or $values.Count -ne 1 -or $values[0] -notmatch '^[0-9a-f]{40}$') {
+    throw $FailureMessage
+  }
+  return [string]$values[0]
+}
+
 if (-not $DataRoot) {
   $DataRoot = if ($env:WB_DATA_DIR) { $env:WB_DATA_DIR } else { "C:\supply\data" }
 }
@@ -184,11 +198,7 @@ if (-not (Test-Path -LiteralPath $releaseVersionPath -PathType Leaf)) {
 }
 $releaseVersion = ([System.IO.File]::ReadAllText($releaseVersionPath)).Trim()
 $scriptSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $agent).Hash.ToLowerInvariant()
-$buildIdentity = [string](& git -C $Root rev-parse HEAD 2>$null | Select-Object -First 1)
-$buildIdentity = $buildIdentity.Trim()
-if ($LASTEXITCODE -ne 0 -or -not $buildIdentity) {
-  throw "Cannot resolve checkout identity for Illustrator agent"
-}
+$buildIdentity = Get-GitCheckoutIdentity $Root "Cannot resolve checkout identity for Illustrator agent"
 
 function Quote-TaskArgument([string]$Value) {
   return '"' + $Value.Replace('"', '\"') + '"'
