@@ -19,6 +19,8 @@ from typing import Any
 PROTOCOL = "beian.illustrator.v1"
 DEFAULT_PIPE_NAME = "beian-illustrator-v1"
 MAX_RESPONSE_BYTES = 64 * 1024
+HEARTBEAT_STALE_SECONDS = 30
+HEARTBEAT_FUTURE_SKEW_SECONDS = 5
 REPO_ROOT = Path(__file__).resolve().parents[3]
 AGENT_SCRIPT = REPO_ROOT / "scripts" / "windows" / "illustrator-agent.ps1"
 VERSION_FILE = REPO_ROOT / "VERSION"
@@ -173,6 +175,7 @@ def _expected_agent_pid(heartbeat_name: str, pipe_name: str) -> int:
         ).timestamp()
     except (TypeError, ValueError):
         updated_epoch = 0
+    heartbeat_age = time.time() - updated_epoch
     try:
         session_id = int(heartbeat.get("session_id") or 0)
         pid = int(heartbeat.get("pid") or 0)
@@ -186,7 +189,8 @@ def _expected_agent_pid(heartbeat_name: str, pipe_name: str) -> int:
         or str(heartbeat.get("script_sha256") or "").lower() != expected_script_sha
         or heartbeat.get("release_version") != expected_version
         or session_id <= 0
-        or abs(time.time() - updated_epoch) > 30
+        or heartbeat_age < -HEARTBEAT_FUTURE_SKEW_SECONDS
+        or heartbeat_age > HEARTBEAT_STALE_SECONDS
     ):
         raise IllustratorAgentError(
             "illustrator_agent_protocol_error",

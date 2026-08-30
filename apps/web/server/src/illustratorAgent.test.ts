@@ -4,16 +4,25 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 import { makeTestTempDir } from "./testTemp.js";
 import {
+  ILLUSTRATOR_AGENT_FUTURE_SKEW_MS,
+  ILLUSTRATOR_AGENT_HEARTBEAT_INTERVAL_MS,
   ILLUSTRATOR_AGENT_PROTOCOL,
   ILLUSTRATOR_AGENT_PIPE,
   ILLUSTRATOR_AGENT_RELEASE_VERSION,
   ILLUSTRATOR_AGENT_SCRIPT_SHA256,
+  ILLUSTRATOR_AGENT_STALE_MS,
   assertIllustratorAgentReady,
   publicIllustratorAgentStatus,
   readIllustratorAgentStatus,
 } from "./illustratorAgent.js";
 
 describe("Illustrator desktop agent heartbeat", () => {
+  it("uses one bounded heartbeat timing contract", () => {
+    assert.equal(ILLUSTRATOR_AGENT_HEARTBEAT_INTERVAL_MS, 5_000);
+    assert.equal(ILLUSTRATOR_AGENT_STALE_MS, 30_000);
+    assert.equal(ILLUSTRATOR_AGENT_FUTURE_SKEW_MS, 5_000);
+  });
+
   it("does not change the existing macOS AppleScript path", () => {
     const status = readIllustratorAgentStatus({ platform: "darwin" });
     assert.equal(status.required, false);
@@ -64,7 +73,7 @@ describe("Illustrator desktop agent heartbeat", () => {
     assert.equal(sessionZero.state, "wrong_session");
   });
 
-  it("rejects stale or incompatible heartbeats", () => {
+  it("accepts scheduling jitter up to 30 seconds and preserves stale diagnostics", () => {
     const dir = makeTestTempDir("beian-agent-stale-");
     const path = join(dir, "agent.json");
     writeFileSync(path, JSON.stringify({
@@ -75,16 +84,36 @@ describe("Illustrator desktop agent heartbeat", () => {
       pipe: ILLUSTRATOR_AGENT_PIPE,
       state: "idle",
       updated_at: "2026-08-28T02:00:00.000Z",
+      last_code: "illustrator_unavailable",
       script_sha256: ILLUSTRATOR_AGENT_SCRIPT_SHA256,
       release_version: ILLUSTRATOR_AGENT_RELEASE_VERSION,
     }));
-    const stale = readIllustratorAgentStatus({
+    const delayed = readIllustratorAgentStatus({
       platform: "win32",
       heartbeatPath: path,
       nowMs: Date.parse("2026-08-28T02:00:20.001Z"),
     });
+    assert.equal(delayed.ready, true);
+    assert.equal(delayed.age_ms, 20_001);
+
+    const stale = readIllustratorAgentStatus({
+      platform: "win32",
+      heartbeatPath: path,
+      nowMs: Date.parse("2026-08-28T02:00:30.001Z"),
+    });
     assert.equal(stale.ready, false);
     assert.equal(stale.state, "stale");
+    assert.equal(stale.age_ms, 30_001);
+    assert.equal(stale.pid, 24068);
+    assert.equal(stale.updated_at, "2026-08-28T02:00:00.000Z");
+    assert.equal(stale.last_code, "illustrator_unavailable");
+    assert.match(stale.message, /可能已注销或代理异常退出/);
+
+    assert.throws(() => assertIllustratorAgentReady(stale), /心跳已停止/);
+  });
+
+  it("rejects an incompatible heartbeat before freshness", () => {
+    const path = join(makeTestTempDir("beian-agent-incompatible-"), "agent.json");
 
     writeFileSync(path, JSON.stringify({
       protocol: "old-protocol",
@@ -155,6 +184,8 @@ describe("Illustrator desktop agent heartbeat", () => {
 
     assert.equal(status.ready, false);
     assert.equal(status.state, "stale");
+    assert.equal(status.age_ms, -6_000);
+    assert.match(status.message, /时钟不同步/);
   });
 
   it("keeps a fresh busy agent ready and exposes bounded diagnostics", () => {

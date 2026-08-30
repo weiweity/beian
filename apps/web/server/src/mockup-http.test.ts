@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { makeTestTempDir } from "./testTemp.js";
@@ -13,6 +13,13 @@ const { app } = await import("./index.js");
 const { issueSession } = await import("./auth.js");
 const { DATA_DIR } = await import("./config.js");
 const { publicMockup, saveMockup } = await import("./mockup.js");
+const {
+  ILLUSTRATOR_AGENT_HEARTBEAT,
+  ILLUSTRATOR_AGENT_PIPE,
+  ILLUSTRATOR_AGENT_PROTOCOL,
+  ILLUSTRATOR_AGENT_RELEASE_VERSION,
+  ILLUSTRATOR_AGENT_SCRIPT_SHA256,
+} = await import("./illustratorAgent.js");
 
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
@@ -433,6 +440,52 @@ describe("mockup post", { concurrency: false }, () => {
       const rows = (await pending.json()) as { id?: string; phase?: string }[];
       assert.equal(rows.some((row) => row.id === receipt && row.phase === "ready"), true);
     } finally {
+      if (platformDescriptor) Object.defineProperty(process, "platform", platformDescriptor);
+      if (prevBin !== undefined) process.env.BLENDER_EXECUTABLE = prevBin;
+      else delete process.env.BLENDER_EXECUTABLE;
+      if (prevAi !== undefined) process.env.ILLUSTRATOR_EXECUTABLE = prevAi;
+      else delete process.env.ILLUSTRATOR_EXECUTABLE;
+    }
+  });
+
+  it("returns a diagnostic 412 and keeps the receipt when the Windows agent heartbeat is stale", async () => {
+    const prevBin = process.env.BLENDER_EXECUTABLE;
+    const prevAi = process.env.ILLUSTRATOR_EXECUTABLE;
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+    process.env.BLENDER_EXECUTABLE = process.execPath;
+    process.env.ILLUSTRATOR_EXECUTABLE = process.execPath;
+    mkdirSync(join(DATA_DIR, "runtime"), { recursive: true });
+    writeFileSync(ILLUSTRATOR_AGENT_HEARTBEAT, JSON.stringify({
+      protocol: ILLUSTRATOR_AGENT_PROTOCOL,
+      pid: 24068,
+      session_id: 1,
+      user: "HANGZHOU\\Administrator",
+      user_sid: "S-1-5-21-1000-500",
+      pipe: ILLUSTRATOR_AGENT_PIPE,
+      state: "idle",
+      updated_at: new Date(Date.now() - 30_001).toISOString(),
+      last_code: "illustrator_unavailable",
+      script_sha256: ILLUSTRATOR_AGENT_SCRIPT_SHA256,
+      release_version: ILLUSTRATOR_AGENT_RELEASE_VERSION,
+    }));
+    try {
+      const sess = issueSession("籽烨", "reviewer", "ou_mockup_agent_stale", "feishu");
+      const receipt = await stageAi(sess.token, "stale-agent.ai");
+      Object.defineProperty(process, "platform", { ...platformDescriptor, value: "win32" });
+
+      const res = await startMockup(sess.token, receipt);
+      assert.equal(res.status, 412);
+      const body = (await res.json()) as { detail?: string };
+      assert.match(String(body.detail || ""), /心跳已停止/);
+
+      const pending = await app.request("/api/uploads", {
+        headers: { authorization: `Bearer ${sess.token}` },
+      });
+      assert.equal(pending.status, 200);
+      const rows = (await pending.json()) as { id?: string; phase?: string }[];
+      assert.equal(rows.some((row) => row.id === receipt && row.phase === "ready"), true);
+    } finally {
+      rmSync(ILLUSTRATOR_AGENT_HEARTBEAT, { force: true });
       if (platformDescriptor) Object.defineProperty(process, "platform", platformDescriptor);
       if (prevBin !== undefined) process.env.BLENDER_EXECUTABLE = prevBin;
       else delete process.env.BLENDER_EXECUTABLE;

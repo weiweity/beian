@@ -30,6 +30,8 @@ cmd.exe 才用 `set WB_DATA_DIR=...`。PowerShell 里写 `set` 不会进子进�
 
 `beian-server-8787` 与 Actions runner 是 LocalSystem / Session 0；Illustrator 是带 GUI 的桌面程序，两者不能在同一会话内直接自动化。`release.ps1` 会同步计划任务 `beian-illustrator-agent`：它使用 `InteractiveToken`，只在当前管理员已登录的交互会话启动 `scripts\windows\illustrator-agent.ps1`。锁屏或 UU 断开不会注销；真正注销后 Agent 停止，打样入口返回可重试的 412，不会从服务进程补拉隐藏 Illustrator。
 
+Agent 空闲、读请求、等待执行锁和执行 cscript/COM 时都最多每 5 秒刷新一次心跳；Hono 与 Python 客户端统一在心跳停止超过 30 秒后拒绝接单。持久登录任务对异常进程退出每分钟重试，最多 60 次；临时 L1 任务仍只重试 3 次。此重试不跨越注销，也不把 Adobe 拉到 Session 0。
+
 Agent 只做会话桥：UTF-8 JSON 命名管道 `beian.illustrator.v1` → 现有 `cscript run_export.vbs` → 唯一 `export_structure.jsx`。COM 仍留在 VBS；PowerShell 不加载 `Illustrator.Application`。管道 ACL 只允许 LocalSystem 与注册的管理员，心跳绑定 SID、脚本哈希、版本、checkout、管道和 PID；客户端再核对实际管道服务 PID。协议只接受固定的 `probe` / `run` / `smoke`，不执行调用方传来的任意命令或脚本。PS5/cscript 的 GBK 输出由 Agent 在边界内按系统代码页解码，再编码为 UTF-8 JSON。
 
 运行证据写到 `$env:WB_DATA_DIR\runtime\illustrator-agent.json`，日志在 `$env:WB_DATA_DIR\logs\illustrator-agent.jsonl`。从 `D:\beian` 只读探测：

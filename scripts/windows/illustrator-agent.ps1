@@ -14,6 +14,7 @@ $ErrorActionPreference = "Stop"
 $Protocol = "beian.illustrator.v1"
 $MaxRequestBytes = 65536
 $RequestReadTimeoutMs = 15000
+$HeartbeatIntervalMs = 5000
 $CleanupReserveMs = 30000
 $Utf8NoBom = [System.Text.UTF8Encoding]::new($false, $true)
 $AgentProcess = [System.Diagnostics.Process]::GetCurrentProcess()
@@ -761,14 +762,17 @@ function Read-PipeRequestLine([System.IO.Stream]$Stream) {
   $buffer = New-Object byte[] 4096
   $bytes = New-Object System.IO.MemoryStream
   try {
+    Write-Heartbeat "busy"
     while ($true) {
-      $remainingMs = [int][Math]::Floor(($deadline - [DateTime]::UtcNow).TotalMilliseconds)
-      if ($remainingMs -le 0) {
-        Throw-AgentFailure "illustrator_agent_invalid_request" "request body timed out"
-      }
       $readTask = $Stream.ReadAsync($buffer, 0, $buffer.Length)
-      if (-not $readTask.Wait($remainingMs)) {
-        Throw-AgentFailure "illustrator_agent_invalid_request" "request body timed out"
+      while (-not $readTask.IsCompleted) {
+        $remainingMs = [int][Math]::Floor(($deadline - [DateTime]::UtcNow).TotalMilliseconds)
+        if ($remainingMs -le 0) {
+          Throw-AgentFailure "illustrator_agent_invalid_request" "request body timed out"
+        }
+        $sliceMs = [Math]::Min($HeartbeatIntervalMs, $remainingMs)
+        if ($readTask.Wait($sliceMs)) { break }
+        Write-Heartbeat "busy"
       }
       $count = [int]$readTask.Result
       if ($count -le 0) {
@@ -798,6 +802,8 @@ function Read-PipeRequestLine([System.IO.Stream]$Stream) {
 }
 
 function Enter-ExecutionLock([DateTime]$Deadline) {
+  Write-Heartbeat "busy"
+  $nextHeartbeatAt = [DateTime]::UtcNow.AddMilliseconds($HeartbeatIntervalMs)
   while ($true) {
     $remainingMs = Get-RemainingMilliseconds $Deadline 0 "Illustrator execution slot timed out"
     try {
@@ -808,6 +814,10 @@ function Enter-ExecutionLock([DateTime]$Deadline) {
         [System.IO.FileShare]::None
       )
     } catch [System.IO.IOException] {
+      if ([DateTime]::UtcNow -ge $nextHeartbeatAt) {
+        Write-Heartbeat "busy"
+        $nextHeartbeatAt = [DateTime]::UtcNow.AddMilliseconds($HeartbeatIntervalMs)
+      }
       Start-Sleep -Milliseconds ([Math]::Min(250, $remainingMs))
       continue
     }
@@ -870,7 +880,7 @@ try {
     $pipe = New-PipeServer
     $wait = $pipe.BeginWaitForConnection($null, $null)
     while ($true) {
-      $waitSliceMs = 5000
+      $waitSliceMs = $HeartbeatIntervalMs
       if ($ExpiresAtUtc) {
         $expiryRemainingMs = [int][Math]::Ceiling(($AgentExpiresAt - [DateTime]::UtcNow).TotalMilliseconds)
         if ($expiryRemainingMs -le 0) {
