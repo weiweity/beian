@@ -53,12 +53,6 @@ export type StructurePreviewFace = {
   rectangular: boolean;
 };
 
-export type StructureFaceDecision = {
-  id: string;
-  role: "front" | "right" | "back" | "left" | "top" | "bottom";
-  quarter_turns: 0 | 1 | 2 | 3;
-};
-
 export type StructureNetProposal = {
   id: string;
   face_ids: string[];
@@ -74,9 +68,7 @@ export type StructureAnchorDecision = {
   quarter_turns: 0 | 1 | 2 | 3;
 };
 
-export type StructureConfirmationDecision =
-  | { anchor: StructureAnchorDecision }
-  | { faces: StructureFaceDecision[] };
+export type StructureConfirmationDecision = { anchor: StructureAnchorDecision };
 
 const cache = new Map<string, MockupJob>();
 const activeStructureConfirmations = new Set<string>();
@@ -408,19 +400,13 @@ export function prepareStructureConfirmation(
     }
   }
   const root = join(mockupRoot(), job.id);
-  const normalizedDecision: StructureConfirmationDecision = "anchor" in decision
-    ? {
-        anchor: {
-          proposal_id: decision.anchor.proposal_id,
-          front_face_id: decision.anchor.front_face_id,
-          quarter_turns: decision.anchor.quarter_turns,
-        },
-      }
-    : {
-        faces: [...decision.faces].sort((left, right) =>
-          left.role.localeCompare(right.role) || left.id.localeCompare(right.id),
-        ),
-      };
+  const normalizedDecision: StructureConfirmationDecision = {
+    anchor: {
+      proposal_id: decision.anchor.proposal_id,
+      front_face_id: decision.anchor.front_face_id,
+      quarter_turns: decision.anchor.quarter_turns,
+    },
+  };
   const decisionsPayload = JSON.stringify(normalizedDecision, null, 2);
   const decisionId = createHash("sha256").update(decisionsPayload).digest("hex").slice(0, 16);
   const decisions = join(root, `structure_decisions-${decisionId}.json`);

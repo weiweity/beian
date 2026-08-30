@@ -315,6 +315,7 @@ describe("mockup structure confirmation http", () => {
     const admin = issueSessionForTest("魏炜", "admin", "ou_structure_admin");
     const invalidBodies = [
       {},
+      { faces: Array.from({ length: 6 }, (_, index) => ({ id: `face-${index}`, role: "front", quarter_turns: 0 })) },
       { anchor: { proposal_id: "raw-rectangle-10", front_face_id: "proposal-face-0001", quarter_turns: 0 } },
       { anchor: { proposal_id: "box-net-0001", front_face_id: "", quarter_turns: 0 } },
       { anchor: { proposal_id: "box-net-0001", front_face_id: "../escape", quarter_turns: 0 } },
@@ -331,6 +332,102 @@ describe("mockup structure confirmation http", () => {
       assert.equal(res.status, 400);
       const body = (await res.json()) as { detail?: string };
       assert.match(String(body.detail || ""), /完整盒型.*正面|完整盒型、正面或方向/);
+    }
+  });
+
+  it("serializes confirmation at the HTTP boundary and releases the lock after worker failure", async () => {
+    const { setJobsTestHooks, resetJobsTestHooks } = await import("./jobs.js");
+    const {
+      setConfirmPackagingStructureTestHook,
+      resetConfirmPackagingStructureTestHook,
+    } = await import("./workers.js");
+    const id = "facecc000003";
+    const ownerId = "ou_structure_serial";
+    const dir = join(DATA_DIR, "mockups", id);
+    mkdirSync(dir, { recursive: true });
+    const source = join(dir, "source.ai");
+    const resolution = join(dir, "structure_resolution.json");
+    const artwork = join(dir, "artwork.pdf");
+    const manifest = join(dir, "manifest.json");
+    writeFileSync(source, "%PDF-1.4\n");
+    writeFileSync(resolution, "{}");
+    writeFileSync(artwork, "%PDF-1.4\n");
+    writeFileSync(manifest, JSON.stringify({ products: [{}] }));
+    saveMockup({
+      id,
+      status: "review_required",
+      created_at: "2026-08-27T00:00:02Z",
+      files: [],
+      owner: ownerId,
+      job_kind: "mockup",
+      job_status: "waiting_input",
+      structure_engine: "v2",
+      structure_status: "review_required",
+      source_path: source,
+      manifest_path: manifest,
+      structure_resolution_path: resolution,
+      structure_artwork_path: artwork,
+    });
+    const admin = issueSessionForTest("魏炜", "admin", ownerId);
+    const request = () => app.request(`/api/mockups/${id}/structure`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${admin.token}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        anchor: { proposal_id: "box-net-0001", front_face_id: "proposal-face-0001", quarter_turns: 0 },
+      }),
+    });
+    let calls = 0;
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    setJobsTestHooks({
+      runPack: async () => ({ code: 1, stdout: "", stderr: "synthetic stop", timedOut: false }),
+    });
+    setConfirmPackagingStructureTestHook(async (options) => {
+      calls += 1;
+      if (calls === 1) {
+        await firstGate;
+        return {
+          code: 1,
+          stdout: "",
+          stderr: '{"code":"structure_fold_graph_invalid","message":"盒型不能闭合"}',
+          timedOut: false,
+        };
+      }
+      writeFileSync(options.output, "{}");
+      return {
+        code: 0,
+        stdout: `${JSON.stringify({ ok: true, sidecar: options.output })}\n`,
+        stderr: "",
+        timedOut: false,
+      };
+    });
+    try {
+      const firstPending = request();
+      while (calls === 0) await new Promise<void>((resolve) => setImmediate(resolve));
+      const overlapping = await request();
+      assert.equal(overlapping.status, 409);
+      assert.match(String(((await overlapping.json()) as { detail?: string }).detail || ""), /正在确认/);
+      assert.equal(calls, 1);
+
+      releaseFirst();
+      const failed = await firstPending;
+      assert.equal(failed.status, 400);
+      assert.equal(calls, 1);
+
+      const retried = await request();
+      assert.equal(retried.status, 200);
+      assert.equal(calls, 2);
+
+      const responseLostRetry = await request();
+      assert.equal(responseLostRetry.status, 200);
+      assert.equal(calls, 2);
+      assert.equal(((await responseLostRetry.json()) as { structure_status?: string }).structure_status, "ready");
+    } finally {
+      releaseFirst();
+      resetConfirmPackagingStructureTestHook();
+      resetJobsTestHooks();
     }
   });
 });
@@ -503,6 +600,9 @@ describe("mockup post", { concurrency: false }, () => {
       const sess = issueSessionForTest("籽烨", "reviewer", "ou_mockup_noreceipt");
       const res = await startMockup(sess.token, "");
       assert.equal(res.status, 400);
+      const body = (await res.json()) as { code?: string; detail?: string };
+      assert.equal(body.code, "upload_receipt_expired");
+      assert.match(String(body.detail || ""), /上传已过期/);
     } finally {
       if (prevBin !== undefined) process.env.BLENDER_EXECUTABLE = prevBin;
       else delete process.env.BLENDER_EXECUTABLE;
@@ -669,6 +769,21 @@ describe("mockup post", { concurrency: false }, () => {
         enabled: true,
         application: process.execPath,
       });
+
+      // The upload receipt is the idempotency token. Even two near-simultaneous
+      // start requests must converge on one mockup rather than turning the
+      // second click into a misleading "upload expired" failure.
+      const concurrentReceipt = await stageAi(sess.token, "concurrent.ai");
+      const [firstConcurrent, secondConcurrent] = await Promise.all([
+        startMockup(sess.token, concurrentReceipt),
+        startMockup(sess.token, concurrentReceipt),
+      ]);
+      assert.equal(firstConcurrent.status, 200);
+      assert.equal(secondConcurrent.status, 200);
+      const firstConcurrentBody = (await firstConcurrent.json()) as { id?: string };
+      const secondConcurrentBody = (await secondConcurrent.json()) as { id?: string };
+      assert.ok(firstConcurrentBody.id);
+      assert.equal(secondConcurrentBody.id, firstConcurrentBody.id);
 
       // 服务端若已建单但响应丢了，重试同一回执应命中原单；恢复不再依赖此刻的本机工具探测。
       delete process.env.BLENDER_EXECUTABLE;

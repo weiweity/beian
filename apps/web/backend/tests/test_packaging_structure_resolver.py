@@ -12,6 +12,7 @@ if str(PACKAGING) not in sys.path:
     sys.path.insert(0, str(PACKAGING))
 
 from structure_v2 import adapt_structure, resolve_structure, resolve_structure_payload  # noqa: E402
+from structure_v2.dimensions import STRICT_GEOMETRY, STROKE_PROPOSAL_GEOMETRY  # noqa: E402
 from packaging_structure_fixture import semantic_box  # noqa: E402
 
 
@@ -46,6 +47,26 @@ def test_resolver_rejects_disconnected_fold_graph():
     assert result.code == "structure_fold_graph_invalid"
 
 
+def test_resolver_rejects_connected_but_impossible_role_fold_graph():
+    payload = semantic_box(width=20.0, depth=20.0, height=20.0)
+    role_by_face = {
+        "face-back": "front",
+        "face-left": "right",
+        "face-front": "top",
+        "face-right": "back",
+        "face-top": "bottom",
+        "face-bottom": "left",
+    }
+    for face in payload["faces"]:
+        face["role"] = role_by_face[face["id"]]
+    payload["root_face"] = "face-back"
+
+    result = resolve_structure_payload(payload)
+
+    assert result.status == "review_required"
+    assert result.code == "structure_fold_graph_invalid"
+
+
 def test_only_ready_results_enter_atomic_cache(tmp_path: Path):
     payload = semantic_box()
     first = resolve_structure_payload(payload, cache_dir=tmp_path)
@@ -56,13 +77,41 @@ def test_only_ready_results_enter_atomic_cache(tmp_path: Path):
     cache_files = list(tmp_path.glob("*.json"))
     assert len(cache_files) == 1
     cached = json.loads(cache_files[0].read_text(encoding="utf-8"))
-    assert cached["schema"] == "packaging-structure-cache/2"
+    assert cached["schema"] == "packaging-structure-cache/3"
+    assert cached["resolved"]["schema"] == "resolved-packaging-job/2"
 
     bad = semantic_box(source_hash="e" * 64)
     bad["edges"] = bad["edges"][:-1]
     review = resolve_structure_payload(bad, cache_dir=tmp_path)
     assert review.status == "review_required"
     assert len(list(tmp_path.glob("*.json"))) == 1
+
+
+def test_legacy_dimension_cache_is_rebuilt_under_current_contract(tmp_path: Path):
+    payload = semantic_box()
+    primed = resolve_structure_payload(payload, cache_dir=tmp_path)
+    assert primed.status == "ready"
+    cache_file = next(tmp_path.glob("*.json"))
+    cached = json.loads(cache_file.read_text(encoding="utf-8"))
+    cached["schema"] = "packaging-structure-cache/2"
+    cached["resolved"]["schema"] = "resolved-packaging-job/1"
+    cached["resolved"]["dimensions_mm"]["depth"] = 49.4
+    cache_file.write_text(json.dumps(cached), encoding="utf-8")
+
+    rebuilt = resolve_structure_payload(deepcopy(payload), cache_dir=tmp_path)
+
+    assert rebuilt.status == "ready"
+    assert rebuilt.cache_hit is False
+    assert rebuilt.resolved["dimensions_mm"] == {"width": 30.0, "depth": 20.0, "height": 50.0}
+    migrated = json.loads(cache_file.read_text(encoding="utf-8"))
+    assert migrated["schema"] == "packaging-structure-cache/3"
+    assert migrated["resolved"]["schema"] == "resolved-packaging-job/2"
+
+
+def test_geometry_tolerance_is_owned_by_adapter_policy():
+    assert STROKE_PROPOSAL_GEOMETRY.dimensions.close(20.0, 21.2)
+    assert not STROKE_PROPOSAL_GEOMETRY.dimensions.close(20.0, 22.0)
+    assert not STRICT_GEOMETRY.dimensions.close(20.0, 21.2)
 
 
 def test_sidecar_adapter_binds_exact_source_hash(tmp_path: Path):

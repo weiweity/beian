@@ -9,13 +9,17 @@ def semantic_box(
     width: float = 30.0,
     depth: float = 20.0,
     height: float = 50.0,
+    cap_clearance: float = 0.0,
 ) -> dict:
     if cap_body_role not in {"front", "right", "back", "left"}:
         raise ValueError(f"unsupported cap_body_role: {cap_body_role}")
     if net_axis not in {"x", "y"}:
         raise ValueError(f"unsupported net_axis: {net_axis}")
     body_widths = {"back": width, "left": depth, "front": width, "right": depth}
-    cap_depth = depth if body_widths[cap_body_role] == width else width
+    expected_cap_depth = depth if body_widths[cap_body_role] == width else width
+    cap_depth = expected_cap_depth - cap_clearance
+    if cap_depth <= 0:
+        raise ValueError("cap_clearance leaves no cap depth")
     body_top = cap_depth
     rectangles = {}
     cursor = 0.0

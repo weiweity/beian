@@ -328,12 +328,31 @@ export async function preflightPackaging(
   });
 }
 
-export async function confirmPackagingStructure(opts: {
+export type ConfirmPackagingStructureOptions = {
   source: string;
   resolution: string;
   decisions: string;
   output: string;
-}): Promise<RunPythonResult> {
+};
+
+let confirmPackagingStructureTestHook:
+  | ((opts: ConfirmPackagingStructureOptions) => Promise<RunPythonResult>)
+  | undefined;
+
+export function setConfirmPackagingStructureTestHook(
+  hook: (opts: ConfirmPackagingStructureOptions) => Promise<RunPythonResult>,
+): void {
+  if (process.env.VITEST !== "1") throw new Error("结构确认测试钩子只能在 VITEST 使用");
+  confirmPackagingStructureTestHook = hook;
+}
+
+export function resetConfirmPackagingStructureTestHook(): void {
+  if (process.env.VITEST !== "1") throw new Error("结构确认测试钩子只能在 VITEST 使用");
+  confirmPackagingStructureTestHook = undefined;
+}
+
+export async function confirmPackagingStructure(opts: ConfirmPackagingStructureOptions): Promise<RunPythonResult> {
+  if (confirmPackagingStructureTestHook) return confirmPackagingStructureTestHook(opts);
   return runPython({
     args: [
       "-m",

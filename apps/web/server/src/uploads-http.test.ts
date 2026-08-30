@@ -99,6 +99,9 @@ describe("upload then start", () => {
       body: JSON.stringify({ product_name: "喷雾" }),
     });
     assert.equal(res.status, 400);
+    const body = (await res.json()) as { code?: string; detail?: string };
+    assert.equal(body.code, "upload_receipt_expired");
+    assert.match(String(body.detail || ""), /上传已过期/);
   });
 
   it("stages excel+pdf and idempotently returns the same task when start is retried", async () => {

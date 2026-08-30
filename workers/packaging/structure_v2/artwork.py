@@ -67,7 +67,7 @@ def render_face_assets(
     max_raster_pixels: int = MAX_ARTWORK_RASTER_PIXELS,
     bounds_tolerance_mm: float = 0.2,
 ) -> dict[str, list[int]]:
-    if resolved.get("schema") != "resolved-packaging-job/1":
+    if resolved.get("schema") != "resolved-packaging-job/2":
         raise ArtworkMappingError("structure_schema_unsupported", "不是受支持的 ResolvedPackagingJob")
     if isinstance(raster_width_px, bool) or not isinstance(raster_width_px, int) or not 256 <= raster_width_px <= 30_000:
         raise ArtworkMappingError("structure_limit_exceeded", "raster_width_px 必须位于 256–30000")

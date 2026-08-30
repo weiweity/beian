@@ -10,6 +10,7 @@ import tempfile
 from typing import Any, Mapping
 
 from .adapters import AdaptationResult, adapt_structure
+from .dimensions import DimensionPolicy, geometry_policy_for_source, is_stroke_proposal_source
 from .model import StructureContractError, canonicalize_structure, structure_cache_key
 from .topology import (
     TopologyError,
@@ -29,8 +30,8 @@ ROLE_DIMENSIONS = {
     "top": ("width", "depth"),
     "bottom": ("width", "depth"),
 }
-CACHE_SCHEMA = "packaging-structure-cache/2"
-RESOLVED_SCHEMA = "resolved-packaging-job/1"
+CACHE_SCHEMA = "packaging-structure-cache/3"
+RESOLVED_SCHEMA = "resolved-packaging-job/2"
 
 
 @dataclass(frozen=True)
@@ -62,18 +63,13 @@ def _review(code: str, message: str, *, structure: dict[str, Any], topology: dic
     )
 
 
-def _close(left: float, right: float, tolerance: float, relative_tolerance: float = 0.001) -> bool:
-    return abs(left - right) <= max(tolerance, max(abs(left), abs(right)) * relative_tolerance)
-
-
 def _matching_pair(
     left: list[float],
     right: list[float],
-    tolerance: float,
-    relative_tolerance: float = 0.001,
+    dimensions: DimensionPolicy,
 ) -> bool:
     return all(
-        _close(a, b, tolerance, relative_tolerance)
+        dimensions.close(a, b)
         for a, b in zip(sorted(left), sorted(right))
     )
 
@@ -95,19 +91,81 @@ def _box_roles(structure: Mapping[str, Any]) -> tuple[dict[str, dict[str, Any]],
     return roles, sorted(set(errors))
 
 
-def _fold_graph_valid(structure: Mapping[str, Any], role_faces: Mapping[str, Mapping[str, Any]]) -> bool:
-    face_ids = {face["id"] for face in role_faces.values()}
-    boundaries = {face["id"]: set(face["boundary"]) for face in role_faces.values()}
+BODY_ROLES = {"front", "right", "back", "left"}
+BODY_FOLD_PAIRS = {
+    frozenset(("front", "right")),
+    frozenset(("right", "back")),
+    frozenset(("back", "left")),
+    frozenset(("left", "front")),
+}
+FOLD_DIMENSION = {
+    frozenset(("front", "right")): "height",
+    frozenset(("right", "back")): "height",
+    frozenset(("back", "left")): "height",
+    frozenset(("left", "front")): "height",
+    frozenset(("top", "front")): "width",
+    frozenset(("top", "back")): "width",
+    frozenset(("top", "left")): "depth",
+    frozenset(("top", "right")): "depth",
+    frozenset(("bottom", "front")): "width",
+    frozenset(("bottom", "back")): "width",
+    frozenset(("bottom", "left")): "depth",
+    frozenset(("bottom", "right")): "depth",
+}
+
+
+def _fold_graph_valid(
+    structure: Mapping[str, Any],
+    role_faces: Mapping[str, Mapping[str, Any]],
+    dimensions: Mapping[str, float],
+    policy: DimensionPolicy,
+) -> bool:
+    faces_by_id = {str(face["id"]): role for role, face in role_faces.items()}
+    face_ids = set(faces_by_id)
+    boundaries = {str(face["id"]): set(face["boundary"]) for face in role_faces.values()}
+    vertices = {str(item["id"]): (float(item["x"]), float(item["y"])) for item in structure["vertices"]}
+    edges = {str(item["id"]): item for item in structure["edges"]}
     graph = {identity: set() for identity in face_ids}
+    fold_pairs: set[frozenset[str]] = set()
     for fold in structure["folds"]:
-        left, right, edge = fold["left_face"], fold["right_face"], fold["edge"]
+        left, right, edge = str(fold["left_face"]), str(fold["right_face"]), str(fold["edge"])
         if left not in face_ids or right not in face_ids:
             continue
         if edge not in boundaries[left] or edge not in boundaries[right]:
             return False
+        role_pair = frozenset((faces_by_id[left], faces_by_id[right]))
+        expected_dimension = FOLD_DIMENSION.get(role_pair)
+        if expected_dimension is None or role_pair in fold_pairs:
+            return False
+        segment = edges.get(edge)
+        if segment is None:
+            return False
+        start = vertices.get(str(segment["start"]))
+        end = vertices.get(str(segment["end"]))
+        if start is None or end is None:
+            return False
+        length = ((end[0] - start[0]) ** 2 + (end[1] - start[1]) ** 2) ** 0.5
+        if not policy.close(length, float(dimensions[expected_dimension])):
+            return False
+        fold_pairs.add(role_pair)
         graph[left].add(right)
         graph[right].add(left)
-    if not graph:
+    if len(fold_pairs) != len(face_ids) - 1:
+        return False
+    role_graph = {
+        role: {faces_by_id[neighbor] for neighbor in graph[str(role_faces[role]["id"])]}
+        for role in BOX_ROLES
+    }
+    body_degrees = sorted(len(role_graph[role] & BODY_ROLES) for role in BODY_ROLES)
+    if body_degrees != [1, 1, 2, 2]:
+        return False
+    if any(
+        frozenset((role, neighbor)) not in BODY_FOLD_PAIRS
+        for role in BODY_ROLES
+        for neighbor in role_graph[role] & BODY_ROLES
+    ):
+        return False
+    if any(len(role_graph[cap]) != 1 or not role_graph[cap] <= BODY_ROLES for cap in ("top", "bottom")):
         return False
     pending = [next(iter(graph))]
     visited: set[str] = set()
@@ -148,8 +206,7 @@ def _mapped_face_size(
 def _solve_dimensions(
     structure: Mapping[str, Any],
     role_faces: Mapping[str, Mapping[str, Any]],
-    tolerance: float,
-    relative_tolerance: float = 0.001,
+    policy: DimensionPolicy,
 ) -> dict[str, float] | None:
     """Solve dimensions from the human-confirmed artwork orientation.
 
@@ -165,14 +222,18 @@ def _solve_dimensions(
         return None
     sizes = {role: value for role, value in mapped.items() if value is not None}
     groups = {
-        "width": [sizes["front"][0], sizes["back"][0], sizes["top"][0], sizes["bottom"][0]],
-        "depth": [sizes["left"][0], sizes["right"][0], sizes["top"][1], sizes["bottom"][1]],
+        # Closure flaps can intentionally be shorter than the erected box by
+        # a small clearance. The four body panels define the physical box;
+        # top/bottom are validated against that footprint below, never averaged
+        # into width/depth.
+        "width": [sizes["front"][0], sizes["back"][0]],
+        "depth": [sizes["left"][0], sizes["right"][0]],
         "height": [sizes["front"][1], sizes["back"][1], sizes["left"][1], sizes["right"][1]],
     }
     dimensions: dict[str, float] = {}
     for name, values in groups.items():
         anchor = values[0]
-        if not all(_close(anchor, value, tolerance, relative_tolerance) for value in values[1:]):
+        if not all(policy.close(anchor, value) for value in values[1:]):
             return None
         dimensions[name] = round(sum(values) / len(values), 6)
     return dimensions
@@ -182,8 +243,7 @@ def _artwork_orientations_valid(
     structure: Mapping[str, Any],
     role_faces: Mapping[str, Mapping[str, Any]],
     dimensions: Mapping[str, float],
-    tolerance: float,
-    relative_tolerance: float = 0.001,
+    policy: DimensionPolicy,
 ) -> bool:
     for role, face in role_faces.items():
         actual = _mapped_face_size(structure, face)
@@ -192,7 +252,7 @@ def _artwork_orientations_valid(
         keys = ROLE_DIMENSIONS[role]
         expected = [float(dimensions[keys[0]]), float(dimensions[keys[1]])]
         if not all(
-            _close(left, right, tolerance, relative_tolerance)
+            policy.close(left, right)
             for left, right in zip(actual, expected)
         ):
             return False
@@ -251,7 +311,6 @@ def resolve_structure_payload(
     *,
     cache_dir: Path | str | None = None,
     snap_tolerance_mm: float = 0.1,
-    dimension_tolerance_mm: float = 0.1,
 ) -> ResolutionResult:
     try:
         structure = canonicalize_structure(payload)
@@ -260,7 +319,7 @@ def resolve_structure_payload(
         status = "unsupported" if code in {"structure_schema_unsupported", "structure_limit_exceeded"} else "review_required"
         return ResolutionResult(status=status, code=code, message=str(error))
     topology = analyze_topology(structure, snap_tolerance_mm=snap_tolerance_mm)
-    proposal_adapter = structure["source"].get("adapter") == "illustrator-stroke-proposal/1"
+    proposal_adapter = is_stroke_proposal_source(structure.get("source"))
     if proposal_adapter and not structure["faces"]:
         try:
             proposal = derive_rectangular_face_proposal(structure)
@@ -327,38 +386,29 @@ def resolve_structure_payload(
             topology=topology,
         )
     metrics = declared["faces"]
-    # Legacy dielines commonly duplicate cut/crease strokes 0.5–1.5 mm apart.
-    # Human confirmation is authoritative; use the corpus' 3% paired-panel
-    # tolerance without weakening exact semantic adapters.
-    dimension_relative_tolerance = (
-        0.03 if structure["source"].get("adapter") == "illustrator-stroke-proposal/1" else 0.001
-    )
+    dimensions_policy = geometry_policy_for_source(structure.get("source")).dimensions
     if not (
         _matching_pair(
             metrics[role_faces["front"]["id"]]["size_mm"],
             metrics[role_faces["back"]["id"]]["size_mm"],
-            dimension_tolerance_mm,
-            dimension_relative_tolerance,
+            dimensions_policy,
         )
         and _matching_pair(
             metrics[role_faces["left"]["id"]]["size_mm"],
             metrics[role_faces["right"]["id"]]["size_mm"],
-            dimension_tolerance_mm,
-            dimension_relative_tolerance,
+            dimensions_policy,
         )
         and _matching_pair(
             metrics[role_faces["top"]["id"]]["size_mm"],
             metrics[role_faces["bottom"]["id"]]["size_mm"],
-            dimension_tolerance_mm,
-            dimension_relative_tolerance,
+            dimensions_policy,
         )
     ):
         return _review("structure_face_dimensions_mismatch", "相对面的尺寸不一致。", structure=structure, topology=topology)
     dimensions = _solve_dimensions(
         structure,
         role_faces,
-        dimension_tolerance_mm,
-        dimension_relative_tolerance,
+        dimensions_policy,
     )
     if dimensions is None:
         return _review("structure_dimensions_ambiguous", "无法唯一确定 width/depth/height。", structure=structure, topology=topology)
@@ -366,11 +416,10 @@ def resolve_structure_payload(
         structure,
         role_faces,
         dimensions,
-        dimension_tolerance_mm,
-        dimension_relative_tolerance,
+        dimensions_policy,
     ):
         return _review("artwork_transform_invalid", "六面贴图方向与盒面尺寸不一致。", structure=structure, topology=topology)
-    if not _fold_graph_valid(structure, role_faces):
+    if not _fold_graph_valid(structure, role_faces, dimensions, dimensions_policy):
         return _review("structure_fold_graph_invalid", "六面折叠邻接不完整。", structure=structure, topology=topology)
 
     resolved_faces = {

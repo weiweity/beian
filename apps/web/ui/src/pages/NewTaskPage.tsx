@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Alert, App } from "antd";
-import { api, type PendingUploadReceipt } from "../api";
+import { api, isUploadReceiptExpired, type PendingUploadReceipt } from "../api";
 import { UploadProgressSlot } from "../chrome/UploadProgressSlot";
 import { UploadWell } from "../chrome/UploadWell";
 import { rememberReviewHandoff } from "../jobHandoff";
@@ -45,6 +45,7 @@ export function NewTaskPage({ canCreate, receiptId, onCreated, onBack }: Props) 
   const [pack, setPack] = useState(resumeSource === "local" ? upload?.packSurface || "carton" : "carton");
   const [submitting, setSubmitting] = useState(false);
   const mounted = useRef(false);
+  const startLock = useRef(false);
   useUploadReceiptRecovery("compare", upload, canCreate && resumeSource === "local");
 
   useEffect(() => {
@@ -61,9 +62,13 @@ export function NewTaskPage({ canCreate, receiptId, onCreated, onBack }: Props) 
   }, [resumeSource, upload?.clientUploadId, upload?.productName, upload?.packSurface]);
 
   useEffect(() => {
-    if (!canCreate || resumeSource === "local" || !receiptId) {
+    if (!canCreate || !receiptId) {
       setRestoredReceipt(null);
       setResumeError(null);
+      return;
+    }
+    if (resumeSource === "local") {
+      setRestoredReceipt(null);
       return;
     }
     let cancelled = false;
@@ -114,6 +119,7 @@ export function NewTaskPage({ canCreate, receiptId, onCreated, onBack }: Props) 
   }
 
   function takeFile(field: "excel" | "pdf", file: File | null) {
+    if (file) setResumeError(null);
     let name = productName;
     if (file && !name.trim()) {
       name = stemFromFilename(file.name);
@@ -125,6 +131,7 @@ export function NewTaskPage({ canCreate, receiptId, onCreated, onBack }: Props) 
   }
 
   async function submit() {
+    if (startLock.current) return;
     const name = productName.trim();
     if (!name) {
       message.warning("品名必填。");
@@ -134,6 +141,7 @@ export function NewTaskPage({ canCreate, receiptId, onCreated, onBack }: Props) 
       message.warning("请先等文件传完。");
       return;
     }
+    startLock.current = true;
     setSubmitting(true);
     try {
       const task = await api.startTask({
@@ -148,8 +156,18 @@ export function NewTaskPage({ canCreate, receiptId, onCreated, onBack }: Props) 
       message.success("已开始对照。结论还要你来定。");
       onCreated(task.id);
     } catch (err) {
-      if (mounted.current) message.error(err instanceof Error ? err.message : "无法开始对照");
+      if (!mounted.current) return;
+      if (isUploadReceiptExpired(err)) {
+        uploadStore.clear("compare", receipt);
+        setRestoredReceipt(null);
+        setResumeSource("local");
+        setResumeError("这份上传已开工或过期，请重新选择文件上传。");
+        message.warning("上传回执已失效，请重新上传。");
+      } else {
+        message.error(err instanceof Error ? err.message : "无法开始对照");
+      }
     } finally {
+      startLock.current = false;
       if (mounted.current) setSubmitting(false);
     }
   }

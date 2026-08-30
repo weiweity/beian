@@ -524,21 +524,11 @@ html[data-theme="dark"] .side-item.is-on .side-icon {
 
 .sidebar-version {
   display: block;
-  padding: 0 8px 4px;
   color: var(--muted);
   font-size: 11px;
-  line-height: 16px;
+  line-height: 1.2;
   letter-spacing: 0.02em;
   white-space: nowrap;
-}
-
-.sidebar.is-collapsed .sidebar-version {
-  width: 48px;
-  padding-inline: 0;
-  overflow: hidden;
-  font-size: 9px;
-  text-align: center;
-  text-overflow: ellipsis;
 }
 
 .account-row {
@@ -593,7 +583,7 @@ html[data-theme="dark"] .side-item.is-on .side-icon {
 }
 
 .account-name {
-  flex: 1;
+  display: block;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -603,9 +593,15 @@ html[data-theme="dark"] .side-item.is-on .side-icon {
   line-height: 1.3;
 }
 
-.sidebar.is-collapsed .account-name {
+.account-copy {
+  display: grid;
+  flex: 1;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sidebar.is-collapsed .account-copy {
   position: absolute;
-  flex: none;
   width: 0;
   height: 0;
   min-width: 0;
@@ -645,6 +641,12 @@ html[data-theme="dark"] .side-item.is-on .side-icon {
   --accent-mist: #ede7f1;
   background: #ffffff;
   color: #1c1a1f;
+}
+
+.stage:has(.mockup-sheet.is-structure-confirm) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .stage:has(.mockup-sheet) .page-title,
@@ -917,15 +919,18 @@ html[data-theme="dark"] .workspace {
 }
 
 .review-card-summary-state {
-  flex: 0 1 auto;
+  flex: 0 0 min(46%, 112px);
   max-width: 46%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  text-align: right;
+  text-overflow: clip;
+  white-space: normal;
   color: var(--accent);
   font-family: var(--font-mono);
   font-size: 15px;
   font-variant-numeric: tabular-nums;
+  line-height: 1.25;
 }
 
 .review-card.is-compact .review-card-time {
@@ -2418,14 +2423,14 @@ html[data-theme="dark"] .history-bulkbar {
   position: relative;
 }
 
-/* Dock 可越过标题与普通页头按钮；人工结论和签字始终留在它上面。 */
+/* 核对窗是应用内最高浮层；确认类系统弹窗仍由 Ant Design 覆盖。 */
 .review-page > .page-head {
   z-index: auto;
 }
 
 .review-sign-layer {
   position: relative;
-  z-index: 221;
+  z-index: 4;
 }
 
 .review-page.is-fullscreen,
@@ -2505,6 +2510,9 @@ html[data-theme="dark"] .history-bulkbar {
   max-width: 100%;
   max-height: 100%;
   transform-origin: 0 0;
+}
+
+.canvas-view.is-panning .canvas-zoom {
   will-change: transform;
 }
 
@@ -2628,9 +2636,9 @@ html[data-diff="off"] .hit-box {
 .notes.is-float {
   container-type: inline-size;
   position: fixed;
-  z-index: 220;
   top: 8px;
-  right: 8px;
+  left: 8px;
+  right: auto;
   bottom: auto;
   width: 560px;
   height: 520px;
@@ -2641,7 +2649,7 @@ html[data-diff="off"] .hit-box {
   transition:
     width 280ms var(--ease-gentle),
     height 280ms var(--ease-gentle),
-    right 280ms var(--ease-gentle),
+    left 280ms var(--ease-gentle),
     padding 280ms var(--ease-gentle);
   background:
     linear-gradient(
@@ -2940,6 +2948,13 @@ html[data-theme="dark"] .notes.is-float {
   min-height: 0;
 }
 
+.mockup-sheet.is-structure-confirm {
+  flex: 1;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100%;
+  overflow: hidden;
+}
+
 .mockup-sheet-head-actions {
   display: flex;
   flex-wrap: wrap;
@@ -2949,8 +2964,11 @@ html[data-theme="dark"] .notes.is-float {
 
 .structure-confirm {
   display: grid;
-  gap: 16px;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
+  height: 100%;
   min-height: 0;
+  overflow: hidden;
 }
 
 .structure-confirm-layout {
@@ -2970,9 +2988,10 @@ html[data-theme="dark"] .notes.is-float {
 
 .structure-map-shell {
   display: grid;
-  grid-template-rows: minmax(320px, 1fr) auto;
-  padding: 18px;
+  grid-template-rows: minmax(0, 1fr) auto;
+  padding: 14px;
   box-shadow: 0 16px 40px rgba(40, 24, 56, 0.1);
+  overflow: hidden;
 }
 
 .structure-map-shell p {
@@ -2986,7 +3005,7 @@ html[data-theme="dark"] .notes.is-float {
   display: block;
   width: 100%;
   height: 100%;
-  min-height: 320px;
+  min-height: 0;
 }
 
 .structure-map-artwork {
@@ -3049,10 +3068,18 @@ html[data-theme="dark"] .notes.is-float {
 
 .structure-anchor-card {
   display: grid;
-  gap: 22px;
-  align-content: start;
-  padding: 22px;
+  grid-template-rows: minmax(0, 1fr) auto;
   box-shadow: 0 16px 40px rgba(40, 24, 56, 0.06);
+  overflow: hidden;
+}
+
+.structure-anchor-scroll {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px 16px 8px;
 }
 
 .structure-anchor-field,
@@ -3079,11 +3106,11 @@ html[data-theme="dark"] .notes.is-float {
 .structure-front-choices > div {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  gap: 8px;
 }
 
 .structure-front-choices .ant-btn {
-  min-height: 44px;
+  min-height: 40px;
   height: auto;
   padding-block: 8px;
   white-space: normal;
@@ -3092,7 +3119,7 @@ html[data-theme="dark"] .notes.is-float {
 .structure-derived-copy {
   display: grid;
   gap: 5px;
-  padding: 15px 16px;
+  padding: 11px 14px;
   border-radius: 16px;
   background: rgba(128, 88, 152, 0.07);
   color: #6b6572;
@@ -3109,12 +3136,28 @@ html[data-theme="dark"] .notes.is-float {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 16px;
+  gap: 12px;
+  min-width: 0;
+  padding: 12px 16px 16px;
+  border-top: 1px solid rgba(128, 88, 152, 0.12);
+  background: rgba(255, 255, 255, 0.96);
 }
 
 .structure-confirm-actions > span {
+  flex: 1;
+  min-width: 0;
   color: #6b6572;
   font-size: 14px;
+}
+
+.structure-confirm-actions .structure-confirm-error {
+  flex: 1;
+  min-width: 0;
+  padding-block: 7px;
+}
+
+.structure-confirm-actions .ant-btn-primary {
+  flex: none;
 }
 
 .mockup-sheet-photos {
@@ -3327,8 +3370,36 @@ html[data-theme="dark"] .notes.is-float {
 }
 
 @media (max-width: 1024px) {
+  .stage:has(.mockup-sheet.is-structure-confirm) {
+    display: block;
+    overflow: auto;
+  }
+
+  .mockup-sheet.is-structure-confirm,
+  .structure-confirm {
+    height: auto;
+    overflow: visible;
+  }
+
   .structure-confirm-layout {
     grid-template-columns: 1fr;
+  }
+
+  .structure-anchor-card {
+    grid-template-rows: auto auto;
+    overflow: visible;
+  }
+
+  .structure-anchor-scroll {
+    overflow: visible;
+  }
+
+  .structure-map-shell {
+    grid-template-rows: minmax(320px, 1fr) auto;
+  }
+
+  .structure-map {
+    min-height: 320px;
   }
 
   .mockup-sheet-photos {

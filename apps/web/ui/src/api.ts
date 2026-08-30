@@ -9,11 +9,19 @@ function apiHost(): string {
 export class ApiError extends Error {
   status: number;
   brokenApi: boolean;
-  constructor(status: number, message: string, brokenApi = false) {
+  code: string | null;
+  constructor(status: number, message: string, brokenApi = false, code: string | null = null) {
     super(message);
     this.status = status;
     this.brokenApi = brokenApi;
+    this.code = code;
   }
+}
+
+export const UPLOAD_RECEIPT_EXPIRED_CODE = "upload_receipt_expired";
+
+export function isUploadReceiptExpired(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 400 && err.code === UPLOAD_RECEIPT_EXPIRED_CODE;
 }
 
 /** 开机探测：HTML / 空体 / 本机 Vite JSON 502 才点亮拒绝页。不要扫文案里有没有 8787。 */
@@ -96,17 +104,19 @@ async function fetchJson<T>(path: string, opts: RequestOptions): Promise<T> {
   const hint = describeBrokenApi(res.status, ct, apiHost());
   if (!res.ok) {
     let detail = res.statusText;
+    let code: string | null = null;
     try {
       if (ct.includes("application/json")) {
-        const body = (await res.json()) as { detail?: unknown };
+        const body = (await res.json()) as { detail?: unknown; code?: unknown };
         if (typeof body.detail === "string") detail = body.detail;
         else if (body.detail) detail = JSON.stringify(body.detail);
+        if (typeof body.code === "string") code = body.code;
       }
     } catch {
       /* keep statusText */
     }
     const message = hint || detail || (res.status >= 500 ? "审稿服务暂时不可用，请稍后重试。" : "请求失败");
-    throw new ApiError(res.status, message, Boolean(hint) || message === API_DOWN_LOCAL);
+    throw new ApiError(res.status, message, Boolean(hint) || message === API_DOWN_LOCAL, code);
   }
   if (!ct.includes("application/json")) {
     throw new ApiError(res.status || 502, hint || "接口没有返回 JSON", true);
@@ -234,20 +244,22 @@ export function uploadWithProgress<T>(
         return;
       }
       let detail = xhr.statusText;
+      let code: string | null = null;
       try {
         if (ct.includes("application/json") && xhr.responseText) {
-          const body = JSON.parse(xhr.responseText) as T & { detail?: unknown };
+          const body = JSON.parse(xhr.responseText) as T & { detail?: unknown; code?: unknown };
           if (xhr.status >= 200 && xhr.status < 300) {
             succeed(body);
             return;
           }
           if (typeof body.detail === "string") detail = body.detail;
+          if (typeof body.code === "string") code = body.code;
         }
       } catch {
         /* keep statusText */
       }
       const hint = describeBrokenApi(xhr.status, ct, apiHost());
-      fail(new ApiError(xhr.status, hint || detail, Boolean(hint)));
+      fail(new ApiError(xhr.status, hint || detail, Boolean(hint), code));
     };
     xhr.onerror = () => fail(new ApiError(0, "上传中断。请检查网络后重新上传。", true));
     xhr.ontimeout = () => fail(new ApiError(0, "上传超时。请检查网络后重新上传。", false));

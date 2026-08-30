@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, App, Button, Empty, Input, Segmented, Space, Table, Tag } from "antd";
-import { api, ApiError, UPLOAD_TIMEOUT_MS, type PendingUploadReceipt, type TaskSummary } from "../api";
+import { api, ApiError, isUploadReceiptExpired, UPLOAD_TIMEOUT_MS, type PendingUploadReceipt, type TaskSummary } from "../api";
 import { UPLOAD_RECOVERY_INTERVAL_MS, uploadStore, useUploadSnapshot } from "../uploadStore";
 import { rememberReviewHandoff } from "../jobHandoff";
 import { compareBoardProgress, liveJobLine } from "./waitCard";
@@ -78,6 +78,7 @@ export function TasksPage({ canCreate, onCreate, onOpen, onResumeReceipt }: Prop
   const [submitted, setSubmitted] = useState("");
   const [layout, setLayout] = useState<Layout>("board");
   const [reload, setReload] = useState(0);
+  const pendingStarts = useRef(new Set<string>());
 
   useEffect(() => {
     let cancelled = false;
@@ -191,6 +192,8 @@ export function TasksPage({ canCreate, onCreate, onOpen, onResumeReceipt }: Prop
       okText: "开始对照",
       cancelText: "先不开始",
       onOk: async () => {
+        if (pendingStarts.current.has(receipt)) return;
+        pendingStarts.current.add(receipt);
         try {
           const next = await api.startTask({
             receipt,
@@ -204,8 +207,16 @@ export function TasksPage({ canCreate, onCreate, onOpen, onResumeReceipt }: Prop
           rememberReviewHandoff(next);
           onOpen(next.id);
         } catch (err) {
-          message.error(err instanceof Error ? err.message : "无法开始对照");
-          throw err;
+          if (isUploadReceiptExpired(err)) {
+            uploadStore.clear("compare", receipt);
+            setReceipts((current) => current.filter((saved) => saved.id !== receipt));
+            setReload((value) => value + 1);
+            message.warning("这份上传已开工或过期，列表已刷新。");
+          } else {
+            message.error(err instanceof Error ? err.message : "无法开始对照");
+          }
+        } finally {
+          pendingStarts.current.delete(receipt);
         }
       },
     });
