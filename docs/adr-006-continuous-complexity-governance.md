@@ -40,7 +40,7 @@
 
 ### 3. 两速扫描
 
-- `npm run quality`：PR 硬门。Knip 使用完整仓库引用图，让测试入口可证明测试钩子的存在；Playwright 支撑代码、仓库脚本和宿主 JSX 都在项目范围内，真正的动态入口逐个列名，禁止用目录通配符把孤儿文件伪装成入口；Vulture 只收 80% 及以上置信度。当前初始基线为 Knip 66 条、Vulture 2 条。
+- `npm run quality`：PR 硬门。Knip 使用完整仓库引用图，让测试入口可证明测试钩子的存在；Playwright 支撑代码、仓库脚本和宿主 JSX 都在项目范围内，真正的动态入口逐个列名，禁止用目录通配符把孤儿文件伪装成入口；Vulture 只收 80% 及以上置信度。当前基线为 Knip 65 条、Vulture 2 条。
 - `npm run quality:deep`：人工 report-only。Knip 增加 production 视角，Vulture 降到 60% 置信度，用于专门 cleanup PR 取证；不参与日常基线，不自动删除。
 
 直接把 production 视角作为 PR 基线会把大量仅供测试验证的稳定导出误判为死代码，因此不采用。深审仍保留该视角，但与快速门禁分开。
@@ -63,6 +63,8 @@ finding 身份由工具、类型、仓库相对路径和符号组成；行号只
 
 - Knip 精确锁在独立的 `tools/quality/package-lock.json`；该目录不是 npm workspace，不进入根 `package.json` / `package-lock.json`，因此不会改变杭州 release dependency fingerprint。
 - Vulture 精确锁在 `apps/web/backend/requirements-quality.txt`，不得进入生产 `requirements.txt`。
+- 项目 skill 采用正向许可：`.agents/skills` 的实际一级目录、`skills-lock.json` 和质量脚本内审核清单必须完全相等，空锁、额外目录、额外锁项、符号链接或未知 skill 都失败。`antd` skill 是仓库内 vendored 权威源，锁项必须是 `sourceType: "local"` 且指向自身受 Git 管理的目录；上游仓库和标准 skill restore/update 不是本地 hardening 的恢复源，恢复只能来自受信任的 Git 提交并重新核验内容哈希。
+- skill 不获得自动 shell 权限。所有可执行示例必须经过 `scripts/quality/antd-readonly.mjs`；包装器不用 shell，固定 `@ant-design/cli@6.6.1`，强制 `CI=1`、`NO_UPDATE_CHECK=1`，只允许审核过的只读子命令和仓库内路径，并拒绝 setup、升级、外部提交及可写迁移参数。CLI 缺失或版本不符时失败关闭，不得由普通设计任务修改开发机工具链。
 - `.github/workflows/quality.yml` 把职责拆成两个 GitHub-hosted job：`windows-2022` 在原生 Windows PowerShell 5.1 下实跑 `.NET File.Replace` 的无备份原子替换合同；Linux Node 22 job 分别安装产品依赖与 `tools/quality`，再运行 `npm run test:quality`、`npm run quality`、完整 `npm test` 和严格 `npm run typecheck`/UI build。质量工具链要求 Node 20.19+ 或 22.12+，不并入产品 `Node >=20` 的 L0 合同。
 - npm 的跨平台 optional-dependency 缺口会让 macOS 生成的根 lock 漏掉 Rollup Linux 原生包（[npm/cli#4828](https://github.com/npm/cli/issues/4828)）。CI 只在缺包时从已安装 Rollup 读取精确版本，以 `--no-save --package-lock=false` 补齐 Linux 包；不修改产品 manifest/lock，不把质量 CI 需求带入杭州依赖图。
 - 质量 workflow 不使用杭州/self-hosted runner，不调用 `release.ps1`，不持有生产环境或密钥。

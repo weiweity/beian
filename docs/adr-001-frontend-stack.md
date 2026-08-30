@@ -8,7 +8,7 @@
 
 ## 决策
 
-1. **前端改为 TypeScript + React 18 + Vite + Ant Design 6。** 本 ADR 决策时后端仍是 FastAPI；之后已按 ADR-002 改为 Hono 产品层。组件 API 以 `@ant-design/cli` / `antd` skill 为准，不要凭记忆写 props。
+1. **前端改为 TypeScript + React 18 + Vite + Ant Design 6。** 本 ADR 决策时后端仍是 FastAPI；之后已按 ADR-002 改为 Hono 产品层。组件 API 以仓库内已审核的 `antd` skill 为准，只能从仓库根目录经 `node scripts/quality/antd-readonly.mjs` 查询，不要凭记忆写 props，也不要直接运行 CLI。
 2. **设计哲学对齐** `customer-agent-prototype/DESIGN.md` 里的**内部工具纪律**，不复制该仓的产品壳。视觉 token 用 Ant Design，产品结构仍是审稿台。
 3. 原 `apps/web/frontend/`（原生 JS + Geist + OpenSeadragon）曾作为对照实现；React 入口稳定后已直接删除，未保留 archive 副本。
 
