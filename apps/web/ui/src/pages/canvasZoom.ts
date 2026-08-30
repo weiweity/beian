@@ -30,6 +30,7 @@ export function panBy(state: ZoomState, dx: number, dy: number): ZoomState {
 }
 
 export function zoomCss(state: ZoomState): string {
+  if (state.scale === ZOOM_MIN && state.x === 0 && state.y === 0) return "none";
   return `translate(${state.x}px, ${state.y}px) scale(${state.scale})`;
 }
 

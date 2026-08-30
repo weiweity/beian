@@ -60,6 +60,42 @@ test("打样上传拿到回执后，换台再回来仍显示待打样", async ({
   await expect(pending).toContainText("待打样");
 });
 
+test("审稿回执开工时失效，会清空旧状态并允许重新上传", async ({ page, syntheticApi }) => {
+  await page.goto("/reviewup/new");
+  await page.getByLabel("Excel 确认单文件").setInputFiles(excelFile);
+  await page.getByLabel("包装 PDF文件").setInputFiles(pdfFile);
+  await expect(page.getByText("上传成功，可以开始对照")).toBeVisible();
+
+  syntheticApi.expireNextTaskStart = true;
+  await page.getByRole("button", { name: "开始对照" }).click();
+
+  await expect(page.getByText("这份上传已开工或过期，请重新选择文件上传。")).toBeVisible();
+  await expect(page.getByRole("button", { name: "开始对照" })).toBeDisabled();
+
+  await page.getByLabel("Excel 确认单文件").setInputFiles({ ...excelFile, name: "retry-review-e2e.xlsx" });
+  await page.getByLabel("包装 PDF文件").setInputFiles({ ...pdfFile, name: "retry-review-e2e.pdf" });
+  await expect(page.getByText("上传成功，可以开始对照")).toBeVisible();
+  await page.getByRole("button", { name: "开始对照" }).click();
+  await expect(page).toHaveURL(/\/review\/c[0-9a-f]{11}$/);
+});
+
+test("打样回执开工时失效，会清空旧状态并允许重新上传", async ({ page, syntheticApi }) => {
+  await page.goto("/mockup/new");
+  await page.getByLabel("平面稿文件").setInputFiles(aiFile);
+  await expect(page.getByText("上传成功，可以开始打样")).toBeVisible();
+
+  syntheticApi.expireNextMockupStart = true;
+  await page.getByRole("button", { name: "开始打样" }).click();
+
+  await expect(page.getByText("这份上传已开工或过期，请重新选择文件上传。")).toBeVisible();
+  await expect(page.getByRole("button", { name: "开始打样" })).toBeDisabled();
+
+  await page.getByLabel("平面稿文件").setInputFiles({ ...aiFile, name: "retry-mockup-e2e.ai" });
+  await expect(page.getByText("上传成功，可以开始打样")).toBeVisible();
+  await page.getByRole("button", { name: "开始打样" }).click();
+  await expect(page).toHaveURL(/\/mockup\/d[0-9a-f]{11}$/);
+});
+
 test("上传到 100% 后等待服务器回执，确认后才能开始对照", async ({ page, syntheticApi }) => {
   const releaseUpload = await installHeldUploadTransport(page, syntheticApi);
   await page.goto("/reviewup/new");

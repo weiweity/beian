@@ -1,5 +1,6 @@
 import { Button, Input, Select, Tag } from "antd";
 import type { Decision, FieldHit, TaskDetail } from "../api";
+import { REVIEW_DOCK_POPUP_LAYER } from "./reviewDock";
 import {
   issueEvidence,
   partitionReviewHits,
@@ -134,7 +135,7 @@ export function ReviewDockPanel({
               popupMatchSelectWidth={220}
               styles={
                 fullscreen
-                  ? { popup: { root: { position: "fixed", zIndex: 320 } } }
+                  ? { popup: { root: { position: "fixed", zIndex: REVIEW_DOCK_POPUP_LAYER } } }
                   : undefined
               }
               getPopupContainer={(trigger) => {

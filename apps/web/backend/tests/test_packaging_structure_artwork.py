@@ -26,7 +26,7 @@ def resolved_fixture() -> dict:
         "bottom": (80.0, 50.0),
     }
     return {
-        "schema": "resolved-packaging-job/1",
+        "schema": "resolved-packaging-job/2",
         "dimensions_mm": dimensions,
         "faces": {
             role: {
@@ -71,6 +71,17 @@ def test_exact_affine_faces_keep_product_color_and_white_background(tmp_path: Pa
     assert red == pytest.approx((117, 35, 46), abs=2)
     assert red[0] < 130
     assert center_rgb(tmp_path / "assets" / "panel_top.png") == (255, 255, 255)
+
+
+def test_legacy_resolved_contract_is_rejected_for_recomputation(tmp_path: Path):
+    source = artwork_pdf(tmp_path / "artwork.pdf")
+    resolved = resolved_fixture()
+    resolved["schema"] = "resolved-packaging-job/1"
+
+    with pytest.raises(ArtworkMappingError) as error:
+        render_face_assets(source, resolved, tmp_path / "assets", raster_width_px=1200)
+
+    assert error.value.code == "structure_schema_unsupported"
 
 
 def test_mapping_outside_artboard_fails_instead_of_cropping_wrong_panel(tmp_path: Path):

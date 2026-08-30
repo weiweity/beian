@@ -11,6 +11,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from .dimensions import DimensionPolicy, GeometryPolicy, STROKE_PROPOSAL_GEOMETRY
+
 
 MAX_BOX_NET_PROPOSALS = 24
 MAX_BOX_NET_SEARCH_STATES = 4096
@@ -22,10 +24,6 @@ class BoxNetProposalLimitError(RuntimeError):
 
 def _boundary_close(left: float, right: float, tolerance: float) -> bool:
     return abs(left - right) <= tolerance
-
-
-def _dimension_close(left: float, right: float, tolerance: float) -> bool:
-    return abs(left - right) <= max(tolerance, max(abs(left), abs(right)) * 0.03)
 
 
 def _bounds(candidate: Mapping[str, Any]) -> tuple[float, float, float, float]:
@@ -66,6 +64,7 @@ def _body_paths(
     candidates: Sequence[Mapping[str, Any]],
     axis: str,
     tolerance: float,
+    dimensions: DimensionPolicy,
     search_state: list[int],
 ) -> list[list[Mapping[str, Any]]]:
     ordered = sorted(candidates, key=lambda item: (_bounds(item)[0 if axis == "x" else 1], str(item["id"])))
@@ -85,9 +84,9 @@ def _body_paths(
             along = [_along_size(item, axis) for item in path]
             cross = [_cross_size(item, axis) for item in path]
             if (
-                all(_dimension_close(cross[0], value, tolerance) for value in cross[1:])
-                and _dimension_close(along[0], along[2], tolerance)
-                and _dimension_close(along[1], along[3], tolerance)
+                all(dimensions.close(cross[0], value) for value in cross[1:])
+                and dimensions.close(along[0], along[2])
+                and dimensions.close(along[1], along[3])
             ):
                 paths.append(path)
             return
@@ -136,6 +135,7 @@ def _cap_options(
     body_path: Sequence[Mapping[str, Any]],
     axis: str,
     tolerance: float,
+    dimensions: DimensionPolicy,
 ) -> dict[int, list[Mapping[str, Any]]]:
     body_ids = {str(item["id"]) for item in body_path}
     body_along = [_along_size(item, axis) for item in body_path]
@@ -151,8 +151,8 @@ def _cap_options(
             along = _along_size(candidate, axis)
             cross = _cross_size(candidate, axis)
             attached = _along_size(body, axis)
-            expected_cross = second if _dimension_close(attached, first, tolerance) else first
-            if _dimension_close(along, attached, tolerance) and _dimension_close(cross, expected_cross, tolerance):
+            expected_cross = second if dimensions.close(attached, first) else first
+            if dimensions.close(along, attached) and dimensions.close(cross, expected_cross):
                 options[side].append(candidate)
                 break
     for side in options:
@@ -183,15 +183,25 @@ def _deduplicated_candidates(
 def derive_box_net_proposals(
     candidates: Sequence[Mapping[str, Any]],
     *,
-    tolerance_mm: float = 1.5,
+    policy: GeometryPolicy = STROKE_PROPOSAL_GEOMETRY,
 ) -> list[dict[str, Any]]:
     """Return bounded whole-net proposals; never return raw rectangle guesses."""
+    if policy.boundary_mm is None:
+        raise ValueError("box-net proposal policy requires a boundary tolerance")
+    tolerance_mm = policy.boundary_mm
+    dimensions = policy.dimensions
     unique_candidates = _deduplicated_candidates(candidates)
     proposals: dict[tuple[str, ...], dict[str, Any]] = {}
     search_state = [0]
     for axis in ("x", "y"):
-        for body_path in _body_paths(unique_candidates, axis, tolerance_mm, search_state):
-            caps = _cap_options(unique_candidates, body_path, axis, tolerance_mm)
+        for body_path in _body_paths(
+            unique_candidates,
+            axis,
+            tolerance_mm,
+            dimensions,
+            search_state,
+        ):
+            caps = _cap_options(unique_candidates, body_path, axis, tolerance_mm, dimensions)
             for negative in caps[-1]:
                 for positive in caps[1]:
                     face_items = [*body_path, negative, positive]

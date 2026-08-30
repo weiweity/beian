@@ -8,7 +8,9 @@ import {
   UPLOAD_TIMEOUT_MS,
   api,
   brokenApiMessage,
+  isUploadReceiptExpired,
   transientApiFailure,
+  UPLOAD_RECEIPT_EXPIRED_CODE,
   uploadResumable,
   uploadWithProgress,
 } from "./api.js";
@@ -81,6 +83,28 @@ describe("mockup start", () => {
         (err: unknown) => err instanceof ApiError && err.status === 412 && /心跳已停止/.test(err.message),
       );
       assert.deepEqual(calls, [{ path: "/api/mockups/start", method: "POST" }]);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  it("uses the stable upload receipt code instead of matching translated copy", async () => {
+    const original = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      detail: "这段文案可以独立调整",
+      code: UPLOAD_RECEIPT_EXPIRED_CODE,
+    }), {
+      status: 400,
+      headers: { "content-type": "application/json" },
+    })) as typeof fetch;
+    try {
+      await assert.rejects(
+        api.startMockup({ receipt: "112233445566", title: "打样" }),
+        (err: unknown) =>
+          err instanceof ApiError &&
+          err.code === UPLOAD_RECEIPT_EXPIRED_CODE &&
+          isUploadReceiptExpired(err),
+      );
     } finally {
       globalThis.fetch = original;
     }

@@ -99,6 +99,16 @@ describe("prepareReviewMedia", () => {
     assert.deepEqual([media.width, media.height], [4200, 2800]);
   });
 
+  it("rejects a decoded low-resolution raster placeholder despite high-resolution metadata", async () => {
+    await assert.rejects(
+      prepareReviewMedia(
+        { raster_url: "/page.png", width: 5600, height: 3200 },
+        { createProbe: () => probe("ok", { width: 1, height: 1 }) },
+      ),
+      /高清核对图加载失败/,
+    );
+  });
+
   it("arms load handlers before assigning src when decode is unavailable", async () => {
     let srcValue = "";
     let handlerWasReady = false;

@@ -100,7 +100,7 @@ Python `cli.py` **不再** `save_task`。对照/对红 CLI 只把结果 JSON 打
 
 任务文件写入一律 tmp + replace（Windows 上 dest 已存在时 POSIX rename 会失败；对齐 Python `os.replace`）。禁止 `jobs.ts` 和 CLI 同时 replace 同一文件。
 
-`POST /api/uploads` 只落当前用户的待开工回执，不建任务。`POST /api/tasks/start` 或对红路由负责领取文件、**第一次** `saveTask`（`status=comparing`、`job_status=queued`、对红时写 `status_before_job`）、然后 `enqueue`。入队成功之后，这个 tid 只允许 `jobs.ts` 再写。路由层不得在 worker 跑着时再 `saveTask`。
+`POST /api/uploads` 只落当前用户的待开工回执，不建任务。`POST /api/tasks/start` / `/api/mockups/start` 先按 `owner + source_receipt` 串行，再把回执 JSON 原子改名成 `.take` durable claim；文件准备和**第一次**任务落盘完成后才删除 claim 与暂存文件。任务落盘前失败就把 claim 原子退回；Node 在 claim 与任务落盘之间退出时，下一次启动会恢复回执，任务已经按 `source_receipt` 落盘时则完成清理。用户主动放弃时先把 claim 原子改成 `.take.discard` 删除墓碑，进程退出后只会继续删除，不会还原回执。同一回执的并发或响应丢失重试必须收敛到同一任务，不得短暂误报“上传已过期”。过期响应使用稳定 `code=upload_receipt_expired`，前端不得匹配中文文案。结构确认同样以持久化状态为幂等事实：重叠执行仍返回 409，但首次确认已落盘后的响应丢失重试直接返回当前打样单，不重复运行结构 worker。对照任务第一次 `saveTask` 写 `status=comparing`、`job_status=queued`；入队成功之后，这个 tid 只允许 `jobs.ts` 再写。路由层不得在 worker 跑着时再 `saveTask`。
 
 打样持久化：`DATA_DIR/mockups/{id}/job.json`。内存 Map 只作热缓存，开机以磁盘为准。
 
@@ -115,10 +115,10 @@ GET 必须走 `publicTask` / `publicMockup`，剥掉 `job_pid`、磁盘 `path`�
 | POST | `/api/uploads` | 旧页面兼容入口：一次 multipart 暂存 Excel+PDF 或 `.ai`，返回回执；不建任务、不入队。 |
 | POST / PUT / POST | `/api/uploads/sessions` / `/api/uploads/sessions/:id/files/:field` / `/api/uploads/sessions/:id/complete` | 创建或找回上传会话、幂等写入带 SHA-256 的 1 MiB 分片、全部文件落盘后生成回执。 |
 | GET / DELETE | `/api/uploads` / `/api/uploads/:id` | 列出自己的 partial 会话与 ready 回执，或删除会话/回执和暂存文件。 |
-| POST | `/api/tasks/start` | 领取回执、写盘、`task.status=comparing`、`job_status=queued`、入队、立即返回；同一 `source_receipt` 重试返回原任务。 |
+| POST | `/api/tasks/start` | 串行领取 durable claim、写盘、`task.status=comparing`、`job_status=queued`、提交 claim、入队、立即返回；同一 `source_receipt` 的并发或重试返回原任务。 |
 | POST | `/api/tasks/:tid/rework` | kind=`rework`。对红门不变。已有 `job_status` 为 queued/running → 409「对红还在排队或正在跑」。 |
 | GET | `/api/tasks` / `/api/tasks/:tid` | 多返回公开作业字段。`board` 仍只看 `task.status`。 |
-| POST | `/api/mockups/start` | 领取 `.ai` 回执前先确认 Blender、Illustrator 路径，以及 Windows Session 1 Agent 的协议/Session/心跳；缺失或 Agent 离线 → **412 当场失败且不消耗回执**（不入队、不事后飞书）。接单后由 Agent 按需启动并验证同会话可见窗口与文档列表。依赖齐全则入队，忙时仍是 `queued`；同一 `source_receipt` 重试返回原打样单。 |
+| POST | `/api/mockups/start` | 领取 `.ai` 回执前先确认 Blender、Illustrator 路径，以及 Windows Session 1 Agent 的协议/Session/心跳；缺失或 Agent 离线 → **412 当场失败且不消耗回执**（不入队、不事后飞书）。接单后按 durable claim 事务写打样单，Agent 再按需启动并验证同会话可见窗口与文档列表。依赖齐全则入队，忙时仍是 `queued`；同一 `source_receipt` 的并发或重试返回原打样单。 |
 | GET | `/api/mockups` / `/:id` | 读 `job.json`。无 `path`。mockup `status` 仍用现有 `queued\|running\|done\|failed`，不要改成 succeeded。 |
 | GET | `/api/mockups/:id/files/:key` | 只给白底 `front_right`/`back_left`、GLB、PPT、打样单 PDF（`sheet`）。预览 inline，`?download=1` 才附件。`ai-raster`/PPT 质检图或坏 PNG → 415。流式读盘，不一次塞进内存。缺 PPT 或 PDF 时 404，不要假装能下。 |
 | GET | `/api/health` / `/api/status` | 公网 health 只给发版探活所需字段；本机或登录后的 status 才给准确作业槽、Illustrator Agent 摘要和飞书状态。Agent 摘要不得暴露路径或稿名。 |

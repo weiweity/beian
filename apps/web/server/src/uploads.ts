@@ -35,6 +35,52 @@ export type UploadReceipt = {
   files: StagedFile[];
 };
 
+/**
+ * A durable receipt claim. The marker remains on disk until the caller has
+ * persisted the task that owns the receipt, so a process restart can either
+ * restore the receipt or finish the committed cleanup.
+ */
+export type ReceiptClaim = {
+  receipt: UploadReceipt;
+  marker_path: string;
+};
+
+export type ReceiptRecovery = {
+  restored: number;
+  committed: number;
+  discarded: number;
+};
+
+const receiptStartTails = new Map<string, Promise<void>>();
+
+/**
+ * Serialize task creation for one owner-bound receipt. The disk claim prevents
+ * duplicate consumption; this queue also makes an overlapping retry wait until
+ * the first caller has persisted its idempotency fact instead of reporting a
+ * transient "expired" error.
+ */
+export async function serializeReceiptStart<T>(
+  id: string,
+  owner: string,
+  work: () => Promise<T>,
+): Promise<T> {
+  const key = `${owner}\u0000${id}`;
+  const previous = receiptStartTails.get(key) || Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const tail = previous.then(() => current);
+  receiptStartTails.set(key, tail);
+  await previous;
+  try {
+    return await work();
+  } finally {
+    release();
+    if (receiptStartTails.get(key) === tail) receiptStartTails.delete(key);
+  }
+}
+
 export type ListedUploadReceipt = {
   id: string;
   files: { field: string; name: string; bytes: number; received: number; last_modified?: number }[];
@@ -81,6 +127,7 @@ export const MAX_UPLOAD_FILES_BYTES = 100 * 1024 * 1024;
 /** 给 multipart boundary、字段名和文件名留协议开销；文件本身仍严格限 100 MiB。 */
 export const MAX_UPLOAD_BODY_BYTES = MAX_UPLOAD_FILES_BYTES + 1024 * 1024;
 export const UPLOAD_BODY_TOO_LARGE = "上传总量超过 100 MB";
+export const UPLOAD_RECEIPT_EXPIRED_CODE = "upload_receipt_expired";
 export const MAX_PENDING_RECEIPTS_PER_OWNER = 8;
 export const MAX_PENDING_BYTES_PER_OWNER = 400 * 1024 * 1024;
 export const MAX_PENDING_RECEIPTS_GLOBAL = 64;
@@ -252,7 +299,7 @@ export function underReceiptDir(id: string, p: string): boolean {
   return Boolean(rel) && !rel.startsWith("..") && !isAbsolute(rel);
 }
 
-export function purgeReceiptFiles(id: string): void {
+function purgeReceiptFiles(id: string): void {
   if (!isTid(id)) return;
   try {
     rmSync(receiptDir(id), { recursive: true, force: true });
@@ -1096,19 +1143,6 @@ function assertReceiptCapacity(owner: string, incomingBytes: number): void {
   }
 }
 
-/** 只在开工准备失败时恢复刚拿走的回执；源文件必须仍完整留在自己的暂存目录。 */
-export function restoreReceipt(rec: UploadReceipt): boolean {
-  if (!receiptShapeOk(rec.id, rec) || !receiptFresh(rec) || !rec.files.length) return false;
-  if (!rec.files.every((file) => underReceiptDir(rec.id, file.path) && existsSync(file.path))) return false;
-  mkdirSync(receiptsDir(), { recursive: true });
-  try {
-    writeFileSync(receiptPath(rec.id), JSON.stringify(rec), { encoding: "utf8", flag: "wx" });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 export function loadReceipt(id: string, owner: string): UploadReceipt | null {
   if (!isTid(id)) return null;
   const rec = readReceipt(id);
@@ -1210,19 +1244,47 @@ export function listPendingUploads(owner: string): ListedUploadReceipt[] {
   return [...ready, ...partial].sort((a, b) => b.created_at.localeCompare(a.created_at));
 }
 
-/** 原子拿走收据 JSON。稿件目录仍在，开工拷完后调用 purgeReceiptFiles。 */
-export function consumeReceipt(id: string, owner: string): UploadReceipt | null {
+function claimMarkerPath(id: string): string {
+  return `${receiptPath(id)}.${process.pid}.${Date.now()}.take`;
+}
+
+function discardMarkerPath(markerPath: string): string {
+  return `${markerPath}.discard`;
+}
+
+function claimFilesOk(rec: UploadReceipt): boolean {
+  return Boolean(
+    rec.files.length &&
+      rec.files.every((file) => underReceiptDir(rec.id, file.path) && existsSync(file.path)),
+  );
+}
+
+function readClaimMarker(id: string, markerPath: string): UploadReceipt | null {
+  try {
+    const rec = JSON.parse(readFileSync(markerPath, "utf8")) as UploadReceipt;
+    return receiptShapeOk(id, rec) ? rec : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 原子领取回执，但保留 `.take` 磁盘标记。调用者只有在任务事实已经落盘后才能
+ * commit；准备失败必须 rollback。进程在两者之间退出时由 recoverReceiptClaims
+ * 按任务事实恢复，避免把已上传文件误报成“上传已过期”。
+ */
+export function claimReceipt(id: string, owner: string): ReceiptClaim | null {
   if (!isTid(id)) return null;
   const src = receiptPath(id);
-  const taken = `${src}.${process.pid}.${Date.now()}.take`;
+  const taken = claimMarkerPath(id);
   try {
     renameSync(src, taken);
   } catch {
     return null;
   }
   try {
-    const rec = JSON.parse(readFileSync(taken, "utf8")) as UploadReceipt;
-    if (!receiptShapeOk(id, rec) || !receiptFresh(rec)) {
+    const rec = readClaimMarker(id, taken);
+    if (!rec || !receiptFresh(rec) || !claimFilesOk(rec)) {
       unlinkQuietly(taken);
       purgeReceiptFiles(id);
       return null;
@@ -1238,8 +1300,7 @@ export function consumeReceipt(id: string, owner: string): UploadReceipt | null 
     // complete 已发布回执后会删除分片会话；若 Windows 当时短暂占用目录，
     // 领取回执是第二个确定的终结点。否则回执开工后旧会话会重新出现在待上传列表。
     retireUploadSession(id);
-    unlinkQuietly(taken);
-    return rec;
+    return { receipt: rec, marker_path: taken };
   } catch {
     try {
       renameSync(taken, src);
@@ -1250,11 +1311,118 @@ export function consumeReceipt(id: string, owner: string): UploadReceipt | null 
   }
 }
 
-export function discardReceipt(id: string, owner: string): boolean {
-  const rec = consumeReceipt(id, owner);
-  if (!rec) return false;
-  purgeReceiptFiles(rec.id);
+export function commitReceiptClaim(claim: ReceiptClaim): boolean {
+  const { receipt, marker_path: markerPath } = claim;
+  if (!receiptShapeOk(receipt.id, receipt) || !markerPath.endsWith(".take")) return false;
+  try {
+    unlinkSync(markerPath);
+  } catch {
+    return false;
+  }
+  purgeReceiptFiles(receipt.id);
   return true;
+}
+
+export function rollbackReceiptClaim(claim: ReceiptClaim): boolean {
+  const { receipt, marker_path: markerPath } = claim;
+  if (!receiptShapeOk(receipt.id, receipt) || !receiptFresh(receipt) || !claimFilesOk(receipt)) return false;
+  try {
+    renameSync(markerPath, receiptPath(receipt.id));
+    return true;
+  } catch {
+    // 留下 marker，让同一进程的重试保持 fail-closed，并由下次启动恢复。
+    return false;
+  }
+}
+
+/**
+ * 先把领取标记原子改成删除墓碑，再做物理清理。这样即使 Windows 暂时占用
+ * 文件或进程在清理中退出，启动恢复也只会继续删除，不会把用户已放弃的回执
+ * 还原成可开工状态。
+ */
+function discardReceiptClaim(claim: ReceiptClaim): boolean {
+  const { receipt, marker_path: markerPath } = claim;
+  if (!receiptShapeOk(receipt.id, receipt) || !markerPath.endsWith(".take")) return false;
+  const discarded = discardMarkerPath(markerPath);
+  try {
+    renameSync(markerPath, discarded);
+  } catch {
+    return false;
+  }
+  purgeReceiptFiles(receipt.id);
+  unlinkQuietly(discarded);
+  return true;
+}
+
+/**
+ * 启动时恢复崩溃遗留的领取标记。任务已经按 source_receipt 落盘则完成提交；
+ * 否则把回执恢复为可重试状态。回调只查询持久化任务事实，不能依赖内存队列。
+ */
+export function recoverReceiptClaims(
+  isCommitted: (receipt: UploadReceipt) => boolean,
+): ReceiptRecovery {
+  const result: ReceiptRecovery = { restored: 0, committed: 0, discarded: 0 };
+  let names: string[];
+  try {
+    names = readdirSync(receiptsDir());
+  } catch {
+    return result;
+  }
+  for (const name of names) {
+    const match = /^([0-9a-f]{12})\.json\..+\.take(\.discard)?$/.exec(name);
+    if (!match) continue;
+    const id = match[1];
+    const markerPath = join(receiptsDir(), name);
+    if (match[2]) {
+      // 删除墓碑是最终意图；即使异常恢复留下了同 ID 的可用回执，也不能让它复活。
+      unlinkQuietly(receiptPath(id));
+      purgeReceiptFiles(id);
+      unlinkQuietly(markerPath);
+      result.discarded += 1;
+      continue;
+    }
+    const rec = readClaimMarker(id, markerPath);
+    if (!rec || !receiptFresh(rec) || !claimFilesOk(rec)) {
+      unlinkQuietly(markerPath);
+      if (!existsSync(receiptPath(id))) purgeReceiptFiles(id);
+      result.discarded += 1;
+      continue;
+    }
+    let committed = false;
+    try {
+      committed = isCommitted(rec);
+    } catch {
+      // 持久化任务不可读时保留 marker，避免猜测提交或回滚。
+      continue;
+    }
+    if (committed) {
+      unlinkQuietly(markerPath);
+      purgeReceiptFiles(id);
+      result.committed += 1;
+      continue;
+    }
+    if (existsSync(receiptPath(id))) {
+      unlinkQuietly(markerPath);
+      result.discarded += 1;
+      continue;
+    }
+    try {
+      renameSync(markerPath, receiptPath(id));
+      result.restored += 1;
+    } catch {
+      // 下次启动继续恢复；不能用复制制造两个可领取回执。
+    }
+  }
+  return result;
+}
+
+export function discardReceipt(id: string, owner: string): boolean {
+  const claim = claimReceipt(id, owner);
+  if (!claim) return false;
+  if (discardReceiptClaim(claim)) return true;
+  // 删除意图尚未持久化，恢复原回执并明确返回失败，不能先报成功再在重启时复活。
+  rollbackReceiptClaim(claim);
+  return false;
 }
 
 export function discardPendingUpload(id: string, owner: string): boolean {

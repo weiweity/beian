@@ -21,35 +21,6 @@ from structure_v2 import (  # noqa: E402
 )
 
 
-def proposal_files(tmp_path: Path):
-    source = tmp_path / "source.ai"
-    source.write_bytes(b"semantic-confirmation-fixture")
-    payload = semantic_box(source_hash=hashlib.sha256(source.read_bytes()).hexdigest())
-    ready = resolve_structure_payload(payload)
-    expected = {
-        tuple(face["bounds_mm"]): role
-        for role, face in ready.resolved["faces"].items()
-    }
-    payload["faces"] = []
-    payload["folds"] = []
-    payload["root_face"] = None
-    payload["validation"] = {"status": "review_required", "errors": [], "warnings": []}
-    proposed = resolve_structure_payload(payload)
-    resolution = tmp_path / "structure_resolution.json"
-    resolution.write_text(json.dumps(proposed.as_dict()), encoding="utf-8")
-    decisions = {
-        "faces": [
-            {
-                "id": face["id"],
-                "role": expected[tuple(face["bounds_mm"])],
-                "quarter_turns": 0,
-            }
-            for face in proposed.topology["face_proposal"]
-        ]
-    }
-    return source, resolution, decisions
-
-
 def anchor_proposal_files(
     tmp_path: Path,
     *,
@@ -58,6 +29,7 @@ def anchor_proposal_files(
     width: float = 30.0,
     depth: float = 20.0,
     height: float = 50.0,
+    cap_clearance: float = 0.0,
 ):
     source = tmp_path / "source.ai"
     source.write_bytes(b"semantic-anchor-confirmation-fixture")
@@ -68,6 +40,7 @@ def anchor_proposal_files(
         width=width,
         depth=depth,
         height=height,
+        cap_clearance=cap_clearance,
     )
     vertices = {item["id"]: (item["x"], item["y"]) for item in payload["vertices"]}
     edges = {item["id"]: item for item in payload["edges"]}
@@ -132,14 +105,9 @@ def confirm_anchor(
 
 
 def test_confirmation_binds_source_and_writes_an_accepted_sidecar(tmp_path: Path):
-    source, resolution, decisions = proposal_files(tmp_path)
+    source, resolution, _proposed, net, front = anchor_proposal_files(tmp_path)
     output = tmp_path / "approved.structure.json"
-    result = confirm_structure(
-        source=source,
-        resolution_path=resolution,
-        decisions=decisions,
-        output_path=output,
-    )
+    result = confirm_anchor(source, resolution, net["id"], front["id"], 0, output)
     assert result["ok"] is True
     assert result["dimensions_mm"] == {"width": 30.0, "depth": 20.0, "height": 50.0}
     approved = json.loads(output.read_text(encoding="utf-8"))
@@ -354,6 +322,23 @@ def test_anchor_confirmation_uses_the_fold_to_orient_square_caps(tmp_path: Path)
     assert transforms["bottom"] == [0.0, 1.0, -1.0, 0.0]
 
 
+def test_anchor_confirmation_accepts_common_closure_flap_clearance(tmp_path: Path):
+    source, resolution, _proposed, net, front = anchor_proposal_files(
+        tmp_path,
+        cap_clearance=1.2,
+    )
+    output = tmp_path / "clearance.structure.json"
+
+    result = confirm_anchor(source, resolution, net["id"], front["id"], 0, output)
+
+    assert result["ok"] is True
+    # Physical box dimensions come from the four body panels. A deliberately
+    # shorter closure flap must not shrink the erected carton.
+    assert result["dimensions_mm"] == {"width": 30.0, "depth": 20.0, "height": 50.0}
+    approved = json.loads(output.read_text(encoding="utf-8"))
+    assert resolve_structure_payload(approved).status == "ready"
+
+
 def test_anchor_confirmation_rejects_a_tampered_strip_axis(tmp_path: Path):
     source, resolution, proposed, net, front = anchor_proposal_files(tmp_path)
     tampered = deepcopy(proposed)
@@ -421,29 +406,23 @@ def test_anchor_confirmation_rejects_relative_face_dimension_drift(tmp_path: Pat
 
 
 def test_confirmation_rejects_a_changed_source(tmp_path: Path):
-    source, resolution, decisions = proposal_files(tmp_path)
+    source, resolution, _proposed, net, front = anchor_proposal_files(tmp_path)
     source.write_bytes(b"changed")
     with pytest.raises(StructureConfirmationError) as raised:
-        confirm_structure(
-            source=source,
-            resolution_path=resolution,
-            decisions=decisions,
-            output_path=tmp_path / "never.json",
-        )
+        confirm_anchor(source, resolution, net["id"], front["id"], 0, tmp_path / "never.json")
     assert raised.value.code == "structure_source_mismatch"
 
 
-def test_confirmation_requires_each_box_role_once(tmp_path: Path):
-    source, resolution, decisions = proposal_files(tmp_path)
-    decisions["faces"][1]["role"] = decisions["faces"][0]["role"]
+def test_confirmation_rejects_legacy_per_face_mapping(tmp_path: Path):
+    source, resolution, _proposed, _net, _front = anchor_proposal_files(tmp_path)
     with pytest.raises(StructureConfirmationError) as raised:
         confirm_structure(
             source=source,
             resolution_path=resolution,
-            decisions=decisions,
+            decisions={"faces": []},
             output_path=tmp_path / "never.json",
         )
-    assert raised.value.code == "structure_face_mapping_incomplete"
+    assert raised.value.code == "structure_confirmation_stale"
 
 
 def test_confirmation_prunes_unselected_proposal_components_before_approval(tmp_path: Path):
@@ -495,29 +474,15 @@ def test_confirmation_prunes_unselected_proposal_components_before_approval(tmp_
     proposed = resolve_structure_payload(payload)
     resolution = tmp_path / "structure_resolution.json"
     resolution.write_text(json.dumps(proposed.as_dict()), encoding="utf-8")
-    selected = [
+    net = proposed.topology["net_proposals"][0]
+    front = next(
         face
         for face in proposed.topology["face_proposal"]
-        if tuple(face["bounds_mm"]) in expected
-    ]
-    decisions = {
-        "faces": [
-            {
-                "id": face["id"],
-                "role": expected[tuple(face["bounds_mm"])],
-                "quarter_turns": 0,
-            }
-            for face in selected
-        ]
-    }
+        if tuple(face["bounds_mm"]) in expected and expected[tuple(face["bounds_mm"])] == "front"
+    )
     output = tmp_path / "approved.structure.json"
 
-    confirm_structure(
-        source=source,
-        resolution_path=resolution,
-        decisions=decisions,
-        output_path=output,
-    )
+    confirm_anchor(source, resolution, net["id"], front["id"], 0, output)
 
     approved = json.loads(output.read_text(encoding="utf-8"))
     assert len(approved["faces"]) == 6

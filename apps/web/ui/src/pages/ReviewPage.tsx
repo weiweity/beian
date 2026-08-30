@@ -15,18 +15,17 @@ import {
 import {
   clampDockBox,
   clampDockPlace,
-  dockTopAfterHeader,
   dockVisual,
   readBoxesOn,
   readDockBox,
   readStoredDockPlace,
   readPinsOn,
+  REVIEW_DOCK_LAYER,
   resizeDockHandle,
   sidebarDockPlace,
   skipPackSheetField,
   writeBoxesOn,
   writeDockBox,
-  writeDockOpen,
   writeDockPlace,
   writePinsOn,
   type DockBox,
@@ -108,10 +107,14 @@ export function ReviewPage({ taskId, onBack }: Props) {
   const dockPlaceModeRef = useRef<"default" | "user">(
     readStoredDockPlace(browserStore()) ? "user" : "default",
   );
-  const [dockBox, setDockBox] = useState<DockBox>(() => readDockBox(browserStore()));
-  const [dockPlace, setDockPlace] = useState<DockPlace>(() =>
-    sidebarDockPlace(typeof window === "undefined" ? { w: 1200, h: 800 } : { w: window.innerWidth, h: window.innerHeight }, readDockBox(browserStore())),
-  );
+  const [dockFrame, setDockFrame] = useState<{ box: DockBox; place: DockPlace }>(() => {
+    const box = readDockBox(browserStore());
+    const room = typeof window === "undefined"
+      ? { w: 1200, h: 800 }
+      : { w: window.innerWidth, h: window.innerHeight };
+    return { box, place: sidebarDockPlace(room, box) };
+  });
+  const { box: dockBox, place: dockPlace } = dockFrame;
   const panDrag = useRef<{ x: number; y: number } | null>(null);
   const panRaf = useRef<number | null>(null);
   const wheelEnd = useRef<number | null>(null);
@@ -162,15 +165,10 @@ export function ReviewPage({ taskId, onBack }: Props) {
     return { w: window.innerWidth, h: window.innerHeight };
   }
 
-  function dockMinimumTop() {
-    const head = pageRef.current?.querySelector(":scope > .page-head");
-    return dockTopAfterHeader(head instanceof HTMLElement ? head.getBoundingClientRect().bottom : Number.NaN);
-  }
-
-  function defaultDockPlace(room: { w: number; h: number }, box: DockBox, minimumTop: number) {
+  function defaultDockPlace(room: { w: number; h: number }, box: DockBox) {
     const side = document.querySelector(".sidebar");
     const dockLeft = side instanceof HTMLElement ? Math.round(side.getBoundingClientRect().left) : 20;
-    return sidebarDockPlace(room, box, dockLeft, minimumTop);
+    return sidebarDockPlace(room, box, dockLeft);
   }
 
   useEffect(() => {
@@ -186,14 +184,12 @@ export function ReviewPage({ taskId, onBack }: Props) {
     };
   }, []);
 
-  function commitDock(box: DockBox, place?: DockPlace) {
+  function commitDock(box: DockBox, place?: DockPlace, open = dockOpenRef.current) {
     const room = pageRoom();
-    const minimumTop = dockMinimumTop();
-    const nextBox = clampDockBox(box, room, minimumTop);
-    const nextPlace = clampDockPlace(place || dockPlace, room, nextBox, minimumTop);
+    const nextBox = clampDockBox(box, room);
+    const nextPlace = dockVisual(open, nextBox, place || dockPlace, room).place;
     dockPlaceModeRef.current = "user";
-    setDockBox(nextBox);
-    setDockPlace(nextPlace);
+    setDockFrame({ box: nextBox, place: nextPlace });
     writeDockBox(browserStore(), nextBox);
     writeDockPlace(browserStore(), nextPlace);
   }
@@ -213,11 +209,12 @@ export function ReviewPage({ taskId, onBack }: Props) {
   function paintDock(next: { box: DockBox; place: DockPlace }) {
     const el = dockRef.current;
     if (!el) return;
-    const shown = dockVisual(dockOpenRef.current, next.box, next.place, pageRoom(), dockMinimumTop());
+    const shown = dockVisual(dockOpenRef.current, next.box, next.place, pageRoom());
     el.style.width = `${shown.box.w}px`;
     el.style.height = `${shown.box.h}px`;
     el.style.top = `${shown.place.top}px`;
-    el.style.right = `${shown.place.right}px`;
+    el.style.left = `${shown.place.left}px`;
+    el.style.right = "auto";
   }
 
   function markDockBusy(on: boolean) {
@@ -226,27 +223,27 @@ export function ReviewPage({ taskId, onBack }: Props) {
 
   function toggleDock() {
     const next = !dockOpenRef.current;
+    const nextPlace = dockVisual(next, dockBox, dockPlace, pageRoom()).place;
     dockOpenRef.current = next;
     setDockOpen(next);
-    writeDockOpen(browserStore(), next);
+    setDockFrame({ box: dockBox, place: nextPlace });
+    writeDockPlace(browserStore(), nextPlace);
   }
 
   function onDockResizeMove(e: React.PointerEvent) {
     const start = dockResize.current;
     if (!start) return;
     const room = pageRoom();
-    const minimumTop = dockMinimumTop();
     const resized = resizeDockHandle(
       start.box,
       start.place,
       { dx: e.clientX - start.x, dy: e.clientY - start.y },
       room,
       start.corner,
-      minimumTop,
     );
     const next = {
       box: resized.box,
-      place: clampDockPlace(resized.place, room, resized.box, minimumTop),
+      place: clampDockPlace(resized.place, room, resized.box),
     };
     paintDock(next);
   }
@@ -254,14 +251,15 @@ export function ReviewPage({ taskId, onBack }: Props) {
   function onDockMove(e: React.PointerEvent) {
     const start = dockDrag.current;
     if (!start) return;
+    const room = pageRoom();
+    const shown = dockVisual(dockOpenRef.current, dockBox, start.place, room);
     const next = clampDockPlace(
       {
         top: start.place.top + (e.clientY - start.y),
-        right: start.place.right - (e.clientX - start.x),
+        left: start.place.left + (e.clientX - start.x),
       },
-      pageRoom(),
-      dockBox,
-      dockMinimumTop(),
+      room,
+      shown.box,
     );
     paintDock({ box: dockBox, place: next });
   }
@@ -273,10 +271,9 @@ export function ReviewPage({ taskId, onBack }: Props) {
     if (!start) return;
     const el = dockRef.current;
     if (!el) return;
-    const room = pageRoom();
     commitDock(dockBox, {
       top: el.offsetTop,
-      right: Math.max(8, room.w - el.offsetLeft - dockBox.w),
+      left: el.offsetLeft,
     });
   }
 
@@ -291,7 +288,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
         { w: el.offsetWidth, h: el.offsetHeight },
         {
           top: el.offsetTop,
-          right: Math.max(8, pageRoom().w - el.offsetLeft - el.offsetWidth),
+          left: el.offsetLeft,
         },
       );
     } else commitDock(start.box, start.place);
@@ -299,32 +296,26 @@ export function ReviewPage({ taskId, onBack }: Props) {
 
   useLayoutEffect(() => {
     const room = pageRoom();
-    const minimumTop = dockMinimumTop();
-    const box = clampDockBox(readDockBox(browserStore()), room, minimumTop);
+    const box = clampDockBox(readDockBox(browserStore()), room);
     const storedPlace = readStoredDockPlace(browserStore());
     dockPlaceModeRef.current = storedPlace ? "user" : "default";
     const place = storedPlace
-      ? clampDockPlace(storedPlace, room, box, minimumTop)
-      : defaultDockPlace(room, box, minimumTop);
+      ? clampDockPlace(storedPlace, room, box)
+      : defaultDockPlace(room, box);
     dockOpenRef.current = true;
     setDockOpen(true);
-    writeDockOpen(browserStore(), true);
-    setDockBox(box);
-    setDockPlace(place);
+    setDockFrame({ box, place });
   }, []);
 
   useEffect(() => {
     function fit() {
       const room = pageRoom();
-      const minimumTop = dockMinimumTop();
-      setDockBox((cur) => {
-        const nextBox = clampDockBox(cur, room, minimumTop);
-        setDockPlace((p) =>
-          dockPlaceModeRef.current === "default"
-            ? defaultDockPlace(room, nextBox, minimumTop)
-            : clampDockPlace(p, room, nextBox, minimumTop),
-        );
-        return nextBox;
+      setDockFrame((current) => {
+        const box = clampDockBox(current.box, room);
+        const place = dockPlaceModeRef.current === "default"
+          ? defaultDockPlace(room, box)
+          : dockVisual(dockOpenRef.current, box, current.place, room).place;
+        return { box, place };
       });
     }
     window.addEventListener("resize", fit);
@@ -431,37 +422,6 @@ export function ReviewPage({ taskId, onBack }: Props) {
   useEffect(() => {
     setActive(firstIssueIndex);
   }, [task?.id, useV2, hits.length, firstIssueIndex]);
-
-  useLayoutEffect(() => {
-    const head = pageRef.current?.querySelector(":scope > .page-head");
-    if (!(head instanceof HTMLElement)) return;
-    const keepBelowHeader = () => {
-      const room = pageRoom();
-      const minimumTop = dockMinimumTop();
-      setDockBox((currentBox) => {
-        const nextBox = clampDockBox(currentBox, room, minimumTop);
-        setDockPlace((currentPlace) => {
-          const nextPlace =
-            dockPlaceModeRef.current === "default"
-              ? defaultDockPlace(room, nextBox, minimumTop)
-              : clampDockPlace(
-                  { ...currentPlace, top: Math.max(currentPlace.top, minimumTop) },
-                  room,
-                  nextBox,
-                  minimumTop,
-                );
-          const placeChanged = nextPlace.top !== currentPlace.top || nextPlace.right !== currentPlace.right;
-          return placeChanged ? nextPlace : currentPlace;
-        });
-        const boxChanged = nextBox.w !== currentBox.w || nextBox.h !== currentBox.h;
-        return boxChanged ? nextBox : currentBox;
-      });
-    };
-    keepBelowHeader();
-    const observer = new ResizeObserver(keepBelowHeader);
-    observer.observe(head);
-    return () => observer.disconnect();
-  }, [dockBox.w, dockBox.h, task?.status, reviewFullscreen]);
 
   const pageNo = Number(page?.page || pageIdx + 1);
   const metrics = resolvePageMetrics(page, nat);
@@ -1041,12 +1001,13 @@ export function ReviewPage({ taskId, onBack }: Props) {
             data-testid="review-dock"
             className={dockOpen ? "notes glass-pane is-float" : "notes glass-pane is-float is-shut"}
             style={(() => {
-              const shown = dockVisual(dockOpen, dockBox, dockPlace, pageRoom(), dockMinimumTop());
+              const shown = dockVisual(dockOpen, dockBox, dockPlace, pageRoom());
               return {
                 width: shown.box.w,
                 height: shown.box.h,
                 top: shown.place.top,
-                right: shown.place.right,
+                left: shown.place.left,
+                zIndex: REVIEW_DOCK_LAYER,
               };
             })()}
             onPointerDown={(e) => e.stopPropagation()}

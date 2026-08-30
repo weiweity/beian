@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { makeTestTempDir } from "./testTemp.js";
@@ -7,7 +7,8 @@ import { makeTestTempDir } from "./testTemp.js";
 process.env.WB_DATA_DIR = makeTestTempDir("beian-uploads-");
 
 const {
-  consumeReceipt,
+  claimReceipt,
+  commitReceiptClaim,
   createUploadAdmission,
   discardReceipt,
   listReceipts,
@@ -17,9 +18,10 @@ const {
   MAX_PENDING_BYTES_GLOBAL,
   MAX_PENDING_BYTES_PER_OWNER,
   MAX_UPLOAD_FILES_BYTES,
-  purgeReceiptFiles,
+  recoverReceiptClaims,
   receiptOwner,
-  restoreReceipt,
+  rollbackReceiptClaim,
+  serializeReceiptStart,
   UPLOAD_CONCURRENCY,
   stageMultipart,
   stageBuffers,
@@ -39,6 +41,44 @@ async function stageFormData(owner: string, form: FormData) {
 }
 
 describe("uploads staging", () => {
+  it("serializes overlapping starts for one receipt", async () => {
+    const order: string[] = [];
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const first = serializeReceiptStart("face00000001", "ou_serial", async () => {
+      order.push("first:start");
+      await firstGate;
+      order.push("first:end");
+    });
+    const second = serializeReceiptStart("face00000001", "ou_serial", async () => {
+      order.push("second:start");
+    });
+
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(order, ["first:start"]);
+    releaseFirst();
+    await Promise.all([first, second]);
+    assert.deepEqual(order, ["first:start", "first:end", "second:start"]);
+  });
+
+  it("releases the receipt start queue when the first start fails", async () => {
+    const order: string[] = [];
+    const first = serializeReceiptStart("face00000002", "ou_serial", async () => {
+      order.push("first:start");
+      throw new Error("first start failed");
+    });
+    const second = serializeReceiptStart("face00000002", "ou_serial", async () => {
+      order.push("second:start");
+      return "started";
+    });
+
+    await assert.rejects(first, /first start failed/);
+    assert.equal(await second, "started");
+    assert.deepEqual(order, ["first:start", "second:start"]);
+  });
+
   it("rejects a pdf that is not a pdf", () => {
     assert.equal(magicOk("pdf", Buffer.from("not-pdf"), "a.pdf"), "不是有效的 PDF");
     assert.equal(magicOk("excel", Buffer.from("PK\x03\x04xx"), "a.xlsx"), null);
@@ -52,22 +92,25 @@ describe("uploads staging", () => {
     ]);
     assert.ok(rec.id);
     assert.equal(rec.files.length, 2);
-    const first = consumeReceipt(rec.id, "魏炜");
+    const first = claimReceipt(rec.id, "魏炜");
     assert.ok(first);
-    assert.equal(consumeReceipt(rec.id, "魏炜"), null);
+    assert.equal(claimReceipt(rec.id, "魏炜"), null);
+    assert.equal(commitReceiptClaim(first), true);
   });
 
   it("does not hand a receipt to another display name", () => {
     const rec = stageBuffers("魏炜", [{ field: "ai", name: "box.ai", buf: Buffer.from("%PDF") }]);
-    assert.equal(consumeReceipt(rec.id, "刘籽烨"), null);
+    assert.equal(claimReceipt(rec.id, "刘籽烨"), null);
   });
 
   it("binds a receipt to open_id when the session has one", () => {
     assert.equal(receiptOwner({ open_id: "ou_weiwei", display_name: "魏炜" }), "ou_weiwei");
     assert.equal(receiptOwner({ open_id: "", display_name: "天元" }), "天元");
     const rec = stageBuffers("ou_weiwei", [{ field: "ai", name: "box.ai", buf: Buffer.from("%PDF") }]);
-    assert.equal(consumeReceipt(rec.id, "魏炜"), null);
-    assert.ok(consumeReceipt(rec.id, "ou_weiwei"));
+    assert.equal(claimReceipt(rec.id, "魏炜"), null);
+    const claim = claimReceipt(rec.id, "ou_weiwei");
+    assert.ok(claim);
+    assert.equal(commitReceiptClaim(claim), true);
   });
 
   it("tooLarge is false for tiny buffers", () => {
@@ -79,27 +122,34 @@ describe("uploads staging", () => {
 
   it("ignores a receipt id that is not a tid", () => {
     const rec = stageBuffers("ou_weiwei", [{ field: "ai", name: "box.ai", buf: Buffer.from("%PDF") }]);
-    assert.equal(consumeReceipt(`../tasks/${rec.id}`, "ou_weiwei"), null);
-    assert.equal(consumeReceipt("../../settings.json", "ou_weiwei"), null);
+    assert.equal(claimReceipt(`../tasks/${rec.id}`, "ou_weiwei"), null);
+    assert.equal(claimReceipt("../../settings.json", "ou_weiwei"), null);
     assert.ok(loadReceipt(rec.id, "ou_weiwei"));
   });
 
   it("does not hand an empty-owner receipt to anyone", () => {
     const id = "cafebabeface";
     const dir = join(process.env.WB_DATA_DIR!, "uploads", "receipts");
+    const stagedDir = join(dir, id);
+    const stagedPath = join(stagedDir, "ai-box.ai");
     mkdirSync(dir, { recursive: true });
+    mkdirSync(stagedDir, { recursive: true });
+    writeFileSync(stagedPath, "%PDF");
     writeFileSync(
       join(dir, `${id}.json`),
       JSON.stringify({
         id,
         owner: "",
         created_at: new Date().toISOString(),
-        files: [{ field: "ai", name: "box.ai", path: join(dir, id, "ai-box.ai"), bytes: 4 }],
+        files: [{ field: "ai", name: "box.ai", path: stagedPath, bytes: 4 }],
       }),
     );
     assert.equal(loadReceipt(id, "ou_anyone"), null);
-    assert.equal(consumeReceipt(id, "ou_anyone"), null);
+    assert.equal(claimReceipt(id, "ou_anyone"), null);
     assert.equal(existsSync(join(dir, `${id}.json`)), true);
+    assert.equal(existsSync(stagedPath), true);
+    rmSync(join(dir, `${id}.json`), { force: true });
+    rmSync(stagedDir, { recursive: true, force: true });
   });
 
   it("treats an expired receipt as missing", () => {
@@ -114,7 +164,7 @@ describe("uploads staging", () => {
     assert.equal(loadReceipt(rec.id, "ou_ttl"), null);
     assert.equal(existsSync(path), false);
     assert.equal(existsSync(dir), false);
-    assert.equal(consumeReceipt(rec.id, "ou_ttl"), null);
+    assert.equal(claimReceipt(rec.id, "ou_ttl"), null);
   });
 
   it("lists only fresh receipts owned by this open_id with public file metadata", () => {
@@ -137,8 +187,9 @@ describe("uploads staging", () => {
     assert.equal(listed.find((row) => row.id === mockup.id)?.kind, "mockup");
 
     for (const [rec, owner] of [[compare, "ou_list"], [mockup, "ou_list"], [other, "ou_other"]] as const) {
-      assert.ok(consumeReceipt(rec.id, owner));
-      purgeReceiptFiles(rec.id);
+      const claim = claimReceipt(rec.id, owner);
+      assert.ok(claim);
+      assert.equal(commitReceiptClaim(claim), true);
     }
   });
 
@@ -152,8 +203,9 @@ describe("uploads staging", () => {
     assert.equal(existsSync(second.files[0]?.path || ""), true);
     assert.deepEqual(new Set(listReceipts("ou_repeat").map((row) => row.id)), new Set([first.id, second.id]));
     for (const rec of [first, second]) {
-      assert.ok(consumeReceipt(rec.id, "ou_repeat"));
-      purgeReceiptFiles(rec.id);
+      const claim = claimReceipt(rec.id, "ou_repeat");
+      assert.ok(claim);
+      assert.equal(commitReceiptClaim(claim), true);
     }
   });
 
@@ -291,27 +343,61 @@ describe("uploads staging", () => {
     assert.deepEqual(readdirSync(root).sort(), before);
   });
 
-  it("purges the staging directory after consume", () => {
+  it("keeps staged files while claimed and purges them only after commit", () => {
     const rec = stageBuffers("ou_purge", [
       { field: "excel", name: "a.xlsx", buf: Buffer.from("PK\x03\x04hello") },
       { field: "pdf", name: "a.pdf", buf: Buffer.from("%PDF-1.4\n%") },
     ]);
     const staged = rec.files[0]?.path || "";
     assert.ok(existsSync(staged));
-    assert.ok(consumeReceipt(rec.id, "ou_purge"));
+    const claim = claimReceipt(rec.id, "ou_purge");
+    assert.ok(claim);
     assert.ok(existsSync(staged));
-    purgeReceiptFiles(rec.id);
+    assert.equal(commitReceiptClaim(claim), true);
     assert.equal(existsSync(join(process.env.WB_DATA_DIR!, "uploads", "receipts", rec.id)), false);
   });
 
-  it("restores a consumed receipt when task preparation fails before enqueue", () => {
+  it("rolls back a claimed receipt when task preparation fails before persistence", () => {
     const rec = stageBuffers("ou_restore", [{ field: "ai", name: "box.ai", buf: Buffer.from("%PDF") }]);
-    const taken = consumeReceipt(rec.id, "ou_restore");
-    assert.ok(taken);
+    const claim = claimReceipt(rec.id, "ou_restore");
+    assert.ok(claim);
     assert.equal(loadReceipt(rec.id, "ou_restore"), null);
-    assert.equal(restoreReceipt(taken!), true);
+    assert.equal(rollbackReceiptClaim(claim), true);
     assert.ok(loadReceipt(rec.id, "ou_restore"));
     assert.equal(discardReceipt(rec.id, "ou_restore"), true);
+    assert.equal(existsSync(rec.files[0]?.path || ""), false);
+  });
+
+  it("recovers an uncommitted crash marker and finalizes a committed one on restart", () => {
+    const rec = stageBuffers("ou_recover", [{ field: "ai", name: "box.ai", buf: Buffer.from("%PDF") }]);
+    const first = claimReceipt(rec.id, "ou_recover");
+    assert.ok(first);
+    assert.equal(existsSync(first.marker_path), true);
+    assert.deepEqual(recoverReceiptClaims(() => false), { restored: 1, committed: 0, discarded: 0 });
+    assert.ok(loadReceipt(rec.id, "ou_recover"));
+
+    const second = claimReceipt(rec.id, "ou_recover");
+    assert.ok(second);
+    assert.deepEqual(
+      recoverReceiptClaims((receipt) => receipt.id === rec.id && receipt.owner === "ou_recover"),
+      { restored: 0, committed: 1, discarded: 0 },
+    );
+    assert.equal(existsSync(second.marker_path), false);
+    assert.equal(existsSync(rec.files[0]?.path || ""), false);
+  });
+
+  it("finishes a durable discard marker on restart instead of restoring the receipt", () => {
+    const rec = stageBuffers("ou_discard_recover", [{ field: "ai", name: "box.ai", buf: Buffer.from("%PDF") }]);
+    const claim = claimReceipt(rec.id, "ou_discard_recover");
+    assert.ok(claim);
+    const discardMarker = `${claim.marker_path}.discard`;
+    renameSync(claim.marker_path, discardMarker);
+    const root = join(process.env.WB_DATA_DIR!, "uploads", "receipts");
+    writeFileSync(join(root, `${rec.id}.json`), JSON.stringify(rec));
+
+    assert.deepEqual(recoverReceiptClaims(() => false), { restored: 0, committed: 0, discarded: 1 });
+    assert.equal(existsSync(discardMarker), false);
+    assert.equal(loadReceipt(rec.id, "ou_discard_recover"), null);
     assert.equal(existsSync(rec.files[0]?.path || ""), false);
   });
 

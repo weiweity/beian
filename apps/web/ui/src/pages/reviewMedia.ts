@@ -107,8 +107,20 @@ async function prepareCandidates(
       await guardedDecode(probe, candidate.url, options.signal, options.timeoutMs);
       const pageWidth = Number(page.width);
       const pageHeight = Number(page.height);
-      const width = pageWidth > 1 ? pageWidth : probe.naturalWidth;
-      const height = pageHeight > 1 ? pageHeight : probe.naturalHeight;
+      const naturalWidth = Number(probe.naturalWidth);
+      const naturalHeight = Number(probe.naturalHeight);
+      if (!(naturalWidth > 1) || !(naturalHeight > 1)) continue;
+      if (
+        candidate.source === "raster" &&
+        ((pageWidth > 1 && naturalWidth < pageWidth * 0.9) ||
+          (pageHeight > 1 && naturalHeight < pageHeight * 0.9))
+      ) {
+        // 元数据是 OCR/框坐标的真实像素面。低清占位图即使能 decode，也不能
+        // 冒充高清核对面，否则全屏后重新加载才会“突然变清晰”。
+        continue;
+      }
+      const width = candidate.source === "svg" && pageWidth > 1 ? pageWidth : naturalWidth;
+      const height = candidate.source === "svg" && pageHeight > 1 ? pageHeight : naturalHeight;
       if (width > 1 && height > 1) return { ...candidate, width, height };
     } catch (error) {
       if (options.signal?.aborted) throw error;
