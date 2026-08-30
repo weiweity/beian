@@ -122,6 +122,17 @@ def test_tolerance_accepts_small_export_gaps_but_not_large_ones():
     assert derive_box_net_proposals(too_far) == []
 
 
+def test_boundary_tolerance_does_not_grow_with_the_artboard_origin():
+    connected = horizontal_net("translated", origin_x=1000.0)
+    disconnected = horizontal_net("offset-gap", origin_x=1000.0)
+    for face in disconnected[1:4]:
+        left, top, right, bottom = face["local_bounds"]
+        face["local_bounds"] = (left + 20.0, top, right + 20.0, bottom)
+
+    assert len(derive_box_net_proposals(connected)) == 1
+    assert derive_box_net_proposals(disconnected) == []
+
+
 def test_ranks_larger_complete_nets_first_with_stable_public_ids():
     small = horizontal_net("small", origin_x=1000.0, width=20.0, depth=10.0, height=30.0)
     large = horizontal_net("large", width=40.0, depth=25.0, height=60.0)

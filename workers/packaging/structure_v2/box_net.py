@@ -20,7 +20,11 @@ class BoxNetProposalLimitError(RuntimeError):
     pass
 
 
-def _close(left: float, right: float, tolerance: float) -> bool:
+def _boundary_close(left: float, right: float, tolerance: float) -> bool:
+    return abs(left - right) <= tolerance
+
+
+def _dimension_close(left: float, right: float, tolerance: float) -> bool:
     return abs(left - right) <= max(tolerance, max(abs(left), abs(right)) * 0.03)
 
 
@@ -43,14 +47,18 @@ def _same_cross_span(left: Mapping[str, Any], right: Mapping[str, Any], axis: st
     a = _bounds(left)
     b = _bounds(right)
     if axis == "x":
-        return _close(a[1], b[1], tolerance) and _close(a[3], b[3], tolerance)
-    return _close(a[0], b[0], tolerance) and _close(a[2], b[2], tolerance)
+        return _boundary_close(a[1], b[1], tolerance) and _boundary_close(a[3], b[3], tolerance)
+    return _boundary_close(a[0], b[0], tolerance) and _boundary_close(a[2], b[2], tolerance)
 
 
 def _follows(left: Mapping[str, Any], right: Mapping[str, Any], axis: str, tolerance: float) -> bool:
     a = _bounds(left)
     b = _bounds(right)
-    boundary_matches = _close(a[2], b[0], tolerance) if axis == "x" else _close(a[3], b[1], tolerance)
+    boundary_matches = (
+        _boundary_close(a[2], b[0], tolerance)
+        if axis == "x"
+        else _boundary_close(a[3], b[1], tolerance)
+    )
     return boundary_matches and _same_cross_span(left, right, axis, tolerance)
 
 
@@ -77,9 +85,9 @@ def _body_paths(
             along = [_along_size(item, axis) for item in path]
             cross = [_cross_size(item, axis) for item in path]
             if (
-                all(_close(cross[0], value, tolerance) for value in cross[1:])
-                and _close(along[0], along[2], tolerance)
-                and _close(along[1], along[3], tolerance)
+                all(_dimension_close(cross[0], value, tolerance) for value in cross[1:])
+                and _dimension_close(along[0], along[2], tolerance)
+                and _dimension_close(along[1], along[3], tolerance)
             ):
                 paths.append(path)
             return
@@ -101,18 +109,24 @@ def _cap_side(
     cap_bounds = _bounds(cap)
     body_bounds = _bounds(body)
     if axis == "x":
-        if not (_close(cap_bounds[0], body_bounds[0], tolerance) and _close(cap_bounds[2], body_bounds[2], tolerance)):
+        if not (
+            _boundary_close(cap_bounds[0], body_bounds[0], tolerance)
+            and _boundary_close(cap_bounds[2], body_bounds[2], tolerance)
+        ):
             return None
-        if _close(cap_bounds[3], body_bounds[1], tolerance):
+        if _boundary_close(cap_bounds[3], body_bounds[1], tolerance):
             return -1
-        if _close(cap_bounds[1], body_bounds[3], tolerance):
+        if _boundary_close(cap_bounds[1], body_bounds[3], tolerance):
             return 1
         return None
-    if not (_close(cap_bounds[1], body_bounds[1], tolerance) and _close(cap_bounds[3], body_bounds[3], tolerance)):
+    if not (
+        _boundary_close(cap_bounds[1], body_bounds[1], tolerance)
+        and _boundary_close(cap_bounds[3], body_bounds[3], tolerance)
+    ):
         return None
-    if _close(cap_bounds[2], body_bounds[0], tolerance):
+    if _boundary_close(cap_bounds[2], body_bounds[0], tolerance):
         return -1
-    if _close(cap_bounds[0], body_bounds[2], tolerance):
+    if _boundary_close(cap_bounds[0], body_bounds[2], tolerance):
         return 1
     return None
 
@@ -137,8 +151,8 @@ def _cap_options(
             along = _along_size(candidate, axis)
             cross = _cross_size(candidate, axis)
             attached = _along_size(body, axis)
-            expected_cross = second if _close(attached, first, tolerance) else first
-            if _close(along, attached, tolerance) and _close(cross, expected_cross, tolerance):
+            expected_cross = second if _dimension_close(attached, first, tolerance) else first
+            if _dimension_close(along, attached, tolerance) and _dimension_close(cross, expected_cross, tolerance):
                 options[side].append(candidate)
                 break
     for side in options:
