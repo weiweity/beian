@@ -38,6 +38,8 @@ test("打样台与审稿台共用一行品名状态和底部日期", async ({ pa
     const card = column.locator(".review-card").filter({ hasText: product });
     await expect(card.locator(".review-card-name")).toHaveAttribute("title", product);
     await expect(card.locator(".review-card-summary-state")).toHaveText(state);
+    await expect(card.locator(".review-card-summary-state")).toHaveCSS("white-space", "normal");
+    await expect(card.locator(".review-card-summary-state")).toHaveCSS("overflow-wrap", "anywhere");
     await expect(card.locator(".review-card-time")).toContainText("2026-08-27");
     await expect(card.locator(".review-card-top")).toHaveCount(0);
   }

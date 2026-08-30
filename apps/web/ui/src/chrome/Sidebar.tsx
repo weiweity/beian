@@ -97,12 +97,6 @@ export function Sidebar({
 
       <div className="side-spacer" />
 
-      {versionLabel ? (
-        <span className="sidebar-version" title={`当前版本 ${versionLabel}`}>
-          {versionLabel}
-        </span>
-      ) : null}
-
       <Dropdown
         trigger={["click"]}
         placement="topLeft"
@@ -119,7 +113,14 @@ export function Sidebar({
           ) : (
             <span className="account-fallback">{initial(displayName)}</span>
           )}
-          <span className="account-name">{displayName}</span>
+          <span className="account-copy">
+            <span className="account-name">{displayName}</span>
+            {versionLabel ? (
+              <span className="sidebar-version" title={`当前版本 ${versionLabel}`}>
+                {versionLabel}
+              </span>
+            ) : null}
+          </span>
         </button>
       </Dropdown>
     </aside>

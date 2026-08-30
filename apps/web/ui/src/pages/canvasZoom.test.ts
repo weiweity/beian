@@ -23,7 +23,8 @@ describe("zoomAt", () => {
 });
 
 describe("zoomCss", () => {
-  it("writes a CSS transform from pan and scale", () => {
+  it("keeps the initial page out of a compositor transform and writes one after interaction", () => {
+    assert.equal(zoomCss(resetZoom()), "none");
     assert.equal(zoomCss({ scale: 2, x: -12, y: 8 }), "translate(-12px, 8px) scale(2)");
   });
 });
