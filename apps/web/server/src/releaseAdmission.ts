@@ -1,4 +1,5 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
+import type { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
@@ -8,9 +9,22 @@ export const RELEASE_DRAIN_LEASE_MS = 120_000;
 /** 仅供 VITEST 进程验证 HTTP 合同；生产进程始终生成随机 token。 */
 export const RELEASE_CONTROL_TEST_TOKEN = "beian-release-control-test-token-v1";
 
+export type ReleaseRequestSnapshot = {
+  id: string;
+  method: string;
+  route_class: string;
+  started_at: string;
+  age_ms: number;
+  handler_done: boolean;
+  transport_done: boolean;
+  handler_result?: "fulfilled" | "rejected";
+  terminal_reason?: "finish" | "close" | "error";
+};
+
 export type ReleaseAdmissionSnapshot = {
   state: "open" | "draining";
   active: number;
+  requests?: ReleaseRequestSnapshot[];
   entered_at?: string;
   lease_id?: string;
   mode?: "lease" | "transaction";
@@ -50,54 +64,6 @@ export function releaseReadiness(input: ReleaseReadinessInput): ReleaseReadiness
 }
 
 /**
- * Hono middleware completes before Node has necessarily drained a Response body.
- * Keep the admission token until the protected stream closes, errors, or is
- * cancelled so Stop-Service cannot truncate a GLB/PPT/PNG already in flight.
- */
-export function holdReleaseUntilResponseSettles(response: Response, release: () => void): Response {
-  const body = response.body;
-  if (!body) {
-    release();
-    return response;
-  }
-  const reader = body.getReader();
-  let settled = false;
-  const settle = (): void => {
-    if (settled) return;
-    settled = true;
-    release();
-  };
-  const guarded = new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      try {
-        const chunk = await reader.read();
-        if (chunk.done) {
-          settle();
-          controller.close();
-          return;
-        }
-        controller.enqueue(chunk.value);
-      } catch (err) {
-        settle();
-        controller.error(err);
-      }
-    },
-    async cancel(reason) {
-      try {
-        await reader.cancel(reason);
-      } finally {
-        settle();
-      }
-    },
-  });
-  return new Response(guarded, {
-    status: response.status,
-    statusText: response.statusText,
-    headers: response.headers,
-  });
-}
-
-/**
  * 发版排空默认覆盖所有动态页面和业务 API，包括会写 session/OAuth 状态的 GET。
  * 仅不可变静态资源、健康探针和受 token 保护的 release control 不入闸；这样
  * 新路由默认安全，且不要求 release.ps1 理解产品内部副作用。
@@ -121,12 +87,44 @@ function tokenMatches(expected: string, candidate: string): boolean {
   return left.length === right.length && timingSafeEqual(left, right);
 }
 
+type ReleaseTransport = Pick<EventEmitter, "once" | "off"> & {
+  readonly writableFinished?: boolean;
+  readonly destroyed?: boolean;
+};
+
+type ReleaseBindings = {
+  outgoing: ReleaseTransport;
+};
+
+type ActiveRequest = {
+  id: string;
+  method: string;
+  routeClass: string;
+  startedAtMs: number;
+  handlerDone: boolean;
+  transportDone: boolean;
+  handlerResult?: "fulfilled" | "rejected";
+  terminalReason?: "finish" | "close" | "error";
+};
+
+function releaseRouteClass(path: string): string {
+  if (!path.startsWith("/api/")) return "page";
+  const area = path.split("/")[2] || "api";
+  if (["auth", "mockups", "settings", "tasks", "uploads"].includes(area)) return area;
+  return "api";
+}
+
+function drainResponse(): Response {
+  return Response.json({ detail: RELEASE_DRAIN_MESSAGE }, { status: 503 });
+}
+
 /**
- * admission gate：enter 与 acquire 在 Node 事件循环里同步完成，避免“检查为空后又
- * 接进一单”。排空先用短租约，恢复日志落盘后提升为不自动过期的事务 fence；新 Node
- * 代际继承同一 fence，直到同一事务显式放行。
+ * 发布协调器把“业务处理完成”和“Node 传输完成”分成两个闩锁。只有 handler promise
+ * 与 ServerResponse finish/close/error 都结束，记录才从 Map 删除。这样既不会在大文件
+ * 仍传输时提前停服，也不会因压缩响应在 destroyed writable 上未消费 body 而留下幽灵计数。
+ * enter 与请求注册同步完成，排空期间不会再漏入一单。
  */
-export function createReleaseAdmission(
+export function createReleaseCoordinator(
   token = randomBytes(32).toString("base64url"),
   options: { leaseMs?: number; now?: () => number; fencePath?: string; instanceId?: string } = {},
 ) {
@@ -139,12 +137,12 @@ export function createReleaseAdmission(
   if (!Number.isFinite(leaseMs) || leaseMs < 1_000) throw new Error("release drain lease is too short");
   const now = options.now ?? Date.now;
   let draining = false;
-  let active = 0;
   let enteredAt = "";
   let leaseId = "";
   let drainMode: "lease" | "transaction" = "lease";
   let expiresAtMs = 0;
   const fencePath = options.fencePath;
+  const activeRequests = new Map<string, ActiveRequest>();
 
   const removeFence = (): void => {
     if (fencePath) rmSync(fencePath, { force: true });
@@ -228,9 +226,23 @@ export function createReleaseAdmission(
 
   const snapshot = (): ReleaseAdmissionSnapshot => {
     expireLease();
+    const requests = [...activeRequests.values()]
+      .sort((left, right) => left.startedAtMs - right.startedAtMs || left.id.localeCompare(right.id))
+      .map((request): ReleaseRequestSnapshot => ({
+        id: request.id,
+        method: request.method,
+        route_class: request.routeClass,
+        started_at: new Date(request.startedAtMs).toISOString(),
+        age_ms: Math.max(0, now() - request.startedAtMs),
+        handler_done: request.handlerDone,
+        transport_done: request.transportDone,
+        ...(request.handlerResult ? { handler_result: request.handlerResult } : {}),
+        ...(request.terminalReason ? { terminal_reason: request.terminalReason } : {}),
+      }));
     return {
       state: draining ? "draining" : "open",
-      active,
+      active: activeRequests.size,
+      ...(requests.length > 0 ? { requests } : {}),
       ...(enteredAt ? { entered_at: enteredAt } : {}),
       ...(leaseId ? {
         lease_id: leaseId,
@@ -246,18 +258,77 @@ export function createReleaseAdmission(
     }
   };
 
+  const register = (request: Request, outgoing: ReleaseTransport) => {
+    expireLease();
+    if (draining) return null;
+
+    const path = new URL(request.url).pathname;
+    const record: ActiveRequest = {
+      id: randomBytes(12).toString("base64url"),
+      method: request.method.toUpperCase(),
+      routeClass: releaseRouteClass(path),
+      startedAtMs: now(),
+      handlerDone: false,
+      transportDone: false,
+    };
+    activeRequests.set(record.id, record);
+
+    const removeTransportListeners = (): void => {
+      outgoing.off("finish", onFinish);
+      outgoing.off("close", onClose);
+      outgoing.off("error", onError);
+    };
+    const settle = (): void => {
+      if (!record.handlerDone || !record.transportDone) return;
+      removeTransportListeners();
+      activeRequests.delete(record.id);
+    };
+    const settleTransport = (reason: "finish" | "close" | "error"): void => {
+      if (record.transportDone) return;
+      record.transportDone = true;
+      record.terminalReason = reason;
+      removeTransportListeners();
+      settle();
+    };
+    const onFinish = (): void => settleTransport("finish");
+    const onClose = (): void => settleTransport("close");
+    const onError = (): void => settleTransport("error");
+
+    outgoing.once("finish", onFinish);
+    outgoing.once("close", onClose);
+    outgoing.once("error", onError);
+    if (outgoing.writableFinished) settleTransport("finish");
+    else if (outgoing.destroyed) settleTransport("close");
+
+    return {
+      settleHandler(result: "fulfilled" | "rejected"): void {
+        if (record.handlerDone) return;
+        record.handlerDone = true;
+        record.handlerResult = result;
+        settle();
+      },
+    };
+  };
+
   return {
     instanceId,
-    acquire(): (() => void) | null {
-      expireLease();
-      if (draining) return null;
-      active += 1;
-      let released = false;
-      return () => {
-        if (released) return;
-        released = true;
-        active = Math.max(0, active - 1);
-      };
+    async handle<Bindings extends ReleaseBindings>(
+      request: Request,
+      bindings: Bindings,
+      next: (request: Request, bindings: Bindings) => Response | Promise<Response>,
+    ): Promise<Response> {
+      const path = new URL(request.url).pathname;
+      if (!isReleaseProtectedRequest(request.method, path)) return await next(request, bindings);
+      const lifecycle = register(request, bindings.outgoing);
+      if (!lifecycle) return drainResponse();
+      try {
+        const response = await next(request, bindings);
+        lifecycle.settleHandler("fulfilled");
+        return response;
+      } catch (err) {
+        lifecycle.settleHandler("rejected");
+        throw err;
+      }
     },
     enter(candidate: string, requestedLeaseId: string): ReleaseAdmissionSnapshot {
       authorize(candidate);
