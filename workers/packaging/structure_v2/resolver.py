@@ -273,9 +273,10 @@ def resolve_structure_payload(
                 "diagnostics": topology.get("diagnostics") or {},
             }
             proposal_topology["face_proposal"] = proposal["faces"]
+            proposal_topology["net_proposals"] = proposal["net_proposals"]
             return _review(
                 "structure_face_mapping_incomplete",
-                "检测到多个成品盒面候选，请对照原稿选择六个盒面和方向。",
+                "已识别完整盒型，请对照原稿选择正面和朝向。",
                 structure=proposal["structure"],
                 topology=proposal_topology,
             )
@@ -295,7 +296,7 @@ def resolve_structure_payload(
         proposal_topology["face_proposal"] = proposal["faces"]
         return _review(
             "structure_face_mapping_incomplete",
-            "结构线已形成闭合面，请确认六个盒面和方向。",
+            "结构线已闭合，但还不能形成可确认的完整盒型；请补齐面语义后重新识别。",
             structure=proposal["structure"],
             topology=proposal_topology,
         )

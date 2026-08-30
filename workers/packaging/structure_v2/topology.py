@@ -18,6 +18,7 @@ except ImportError as error:  # pragma: no cover - exercised by deployment probe
     raise RuntimeError("packaging_dependency_missing: 缺少 Shapely/GEOS") from error
 
 from .model import canonicalize_structure
+from .box_net import BoxNetProposalLimitError, derive_box_net_proposals
 
 
 LINEWORK_ASSIGNMENTS = ("cut", "crease", "perforation")
@@ -376,9 +377,9 @@ def derive_rectangular_face_proposal(
 
     This is deliberately a proposal adapter, not an automatic dieline parser.
     It rectifies the *finished panel area* (including non-rectangular closing
-    flaps), keeps unrelated reference drawings as visible alternatives, and
-    requires a human to choose the connected six-face net.  No result from this
-    function can be accepted without ``confirm_structure``.
+    flaps), groups only complete dimensionally coherent six-face nets, and
+    drops nested or unrelated rectangles before presenting the result.  No
+    result from this function can be accepted without ``confirm_structure``.
     """
     structure = canonicalize_structure(payload)
     vertices = {item["id"]: (float(item["x"]), float(item["y"])) for item in structure["vertices"]}
@@ -504,6 +505,27 @@ def derive_rectangular_face_proposal(
             "盒面候选过多，不能安全交给人工确认",
             details={"count": len(candidates), "limit": 200},
         )
+    for index, candidate in enumerate(candidates, start=1):
+        candidate["id"] = f"rect-face-{index:04d}"
+    try:
+        net_proposals = derive_box_net_proposals(candidates, tolerance_mm=tolerance)
+    except BoxNetProposalLimitError as error:
+        raise TopologyError(
+            "structure_limit_exceeded",
+            "完整盒型方案过多，不能安全交给人工确认",
+            details={"cause": str(error)},
+        ) from error
+    if not net_proposals:
+        raise TopologyError(
+            "structure_box_net_missing",
+            "候选线没有形成尺寸自洽的完整六面盒型",
+        )
+    exposed_ids = {
+        face_id
+        for proposal in net_proposals
+        for face_id in proposal["face_ids"]
+    }
+    candidates = [candidate for candidate in candidates if candidate["id"] in exposed_ids]
 
     point_keys = sorted(
         {
@@ -525,8 +547,8 @@ def derive_rectangular_face_proposal(
     face_payload: list[dict[str, Any]] = []
     preview: list[dict[str, Any]] = []
     edge_faces: dict[str, list[str]] = defaultdict(list)
-    for index, candidate in enumerate(candidates, start=1):
-        identity = f"rect-face-{index:04d}"
+    for candidate in candidates:
+        identity = str(candidate["id"])
         points = candidate["points"]
         boundary = [
             edge_ids[_segment_key(tuple(points[item]), tuple(points[(item + 1) % 4]))]
@@ -593,7 +615,11 @@ def derive_rectangular_face_proposal(
             "warnings": ["legacy_stroke_proposal_requires_human_confirmation"],
         },
     }
-    return {"structure": canonicalize_structure(proposal), "faces": preview}
+    return {
+        "structure": canonicalize_structure(proposal),
+        "faces": preview,
+        "net_proposals": net_proposals,
+    }
 
 
 def derive_face_proposal(
@@ -602,13 +628,13 @@ def derive_face_proposal(
     snap_tolerance_mm: float = 0.1,
     allow_partial: bool = False,
 ) -> dict[str, Any]:
-    """Derive planar faces without assigning box roles.
+    """Derive planar faces for diagnostics without assigning box roles.
 
-    Explicit semantic input remains strict.  A stroke-only migration proposal
-    may contain unrelated annotation components and open flap contours; in
-    that mode closed polygons are surfaced for human selection, but never
-    accepted automatically.  Confirmation later prunes everything the human
-    did not select before the strict resolver runs again.
+    This is the compatibility path for explicit semantic input that lacks face
+    declarations.  Its raw polygons are never a product-level confirmation
+    contract: the UI may only offer proposals that also contain a validated
+    complete box net.  Legacy callers can still submit six explicit roles, and
+    the strict resolver remains the final acceptance gate.
     """
     structure = canonicalize_structure(payload)
     topology = analyze_topology(structure, snap_tolerance_mm=snap_tolerance_mm)

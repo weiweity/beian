@@ -1,16 +1,38 @@
 from __future__ import annotations
 
 
-def semantic_box(*, source_hash: str = "d" * 64) -> dict:
-    width, depth, height = 30.0, 20.0, 50.0
-    rectangles = {
-        "back": (0.0, depth, width, depth + height),
-        "left": (width, depth, width + depth, depth + height),
-        "front": (width + depth, depth, 2 * width + depth, depth + height),
-        "right": (2 * width + depth, depth, 2 * width + 2 * depth, depth + height),
-        "top": (width + depth, depth + height, 2 * width + depth, 2 * depth + height),
-        "bottom": (width + depth, 0.0, 2 * width + depth, depth),
-    }
+def semantic_box(
+    *,
+    source_hash: str = "d" * 64,
+    cap_body_role: str = "front",
+    net_axis: str = "x",
+    width: float = 30.0,
+    depth: float = 20.0,
+    height: float = 50.0,
+) -> dict:
+    if cap_body_role not in {"front", "right", "back", "left"}:
+        raise ValueError(f"unsupported cap_body_role: {cap_body_role}")
+    if net_axis not in {"x", "y"}:
+        raise ValueError(f"unsupported net_axis: {net_axis}")
+    body_widths = {"back": width, "left": depth, "front": width, "right": depth}
+    cap_depth = depth if body_widths[cap_body_role] == width else width
+    body_top = cap_depth
+    rectangles = {}
+    cursor = 0.0
+    for role in ("back", "left", "front", "right"):
+        panel_width = body_widths[role]
+        rectangles[role] = (cursor, body_top, cursor + panel_width, body_top + height)
+        cursor += panel_width
+    cap_left, _body_y0, cap_right, body_bottom = rectangles[cap_body_role]
+    rectangles.update({
+        "top": (cap_left, body_bottom, cap_right, body_bottom + cap_depth),
+        "bottom": (cap_left, 0.0, cap_right, cap_depth),
+    })
+    if net_axis == "y":
+        rectangles = {
+            role: (y0, x0, y1, x1)
+            for role, (x0, y0, x1, y1) in rectangles.items()
+        }
     vertex_ids: dict[tuple[float, float], str] = {}
     segment_faces: dict[tuple[tuple[float, float], tuple[float, float]], list[str]] = {}
     face_segments: dict[str, list[tuple[tuple[float, float], tuple[float, float]]]] = {}
@@ -51,7 +73,11 @@ def semantic_box(*, source_hash: str = "d" * 64) -> dict:
             "adapter": "structural-sidecar/1",
             "adapter_version": "1.0.0",
             "coordinate_space": "artboard-top-left",
-            "page_size": [120, 90],
+            "page_size": (
+                [120, height + 2 * cap_depth]
+                if net_axis == "x"
+                else [height + 2 * cap_depth, 120]
+            ),
         },
         "vertices": [
             {"id": identity, "x": point[0], "y": point[1]}

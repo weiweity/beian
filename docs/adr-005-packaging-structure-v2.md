@@ -22,7 +22,15 @@
 3. 使用 Shapely/GEOS 做吸附、线合并、polygonize 和 dangle/cut/invalid-ring 诊断。
 4. 只有验证为 `accepted` 的 IR 才能生成 `ResolvedPackagingJob` 并调用现有 Blender；歧义结构进入人工确认，不再自动猜。
 5. 旧 `dieline.py` 冻结，只保留给命令行诊断；Hono 对所有网页新任务写 `structure_engine=v2`，不再暴露运行时旧引擎开关。V2 不能解析时返回人工确认或不支持，绝不静默回退。
-6. 对没有对象级语义的历史 AI，服务端先识别刀线层，Illustrator 只提取该层内“描边且无填充”的路径作为不可信候选。矩形网络会生成六面提案并叠加真实 artwork，必须由管理员逐面选择和确认旋转；确认后删除未选候选，再进入与显式语义相同的严格解析和六面贴图验证。
+6. 对没有对象级语义的历史 AI，服务端先识别刀线层，Illustrator 只提取该层内“描边且无填充”的路径作为不可信线稿。结构模块先枚举四个连续盒身面和两个相对封口面组成的完整六面盒型，过滤内嵌尺寸框、参考图和不完整矩形；页面不得把零散矩形直接交给用户猜。若有多个完整盒型，管理员先选择整套盒型，再只选择产品正面和 0/90/180/270° 阅读方向。其余 front/right/back/left/top/bottom 角色由连通顺序推导，并再次经过相对面尺寸、折叠图和六面贴图验证；无法形成完整盒型时失败关闭。
+
+### 人工确认合同
+
+- 人只提供一个最小语义锚点：`proposal_id + front_face_id + quarter_turns`，不再逐面填写六个角色。
+- `proposal_id` 只引用后端生成且与当前源稿哈希绑定的完整盒型；原始矩形候选、路径编号和本机路径不进入公共 API。
+- 四个盒身面按展开图连通顺序形成环。正面确定后，右侧、反面、左侧可唯一推导；两个位于盒身横带相对侧的封口面映射为顶部和底部。
+- 锚点只能减少“哪一面是产品正面”这种业务歧义，不能覆盖结构歧义。完整网不唯一、相对面尺寸不一致、折叠图不连通或贴图方向不成立时仍停在待确认/不支持状态。
+- 旧任务若只有零散 `face_proposal` 而没有完整 `net_proposals`，前端拒绝沿用旧逐面表单，要求补齐结构语义并重新识别。
 
 ## 依据
 
@@ -31,11 +39,13 @@
 - Adobe Illustrator scripting 能读取路径属性，但不能凭 PathItem 本身证明包装领域语义。
 - Shapely/GEOS 已提供 `snap`、`line_merge` 和 `polygonize_full` 及拓扑错误输出。
 - FOLD 图模型证明 vertices/edges/faces/assignment/fold-angle 的抽象可复用；因规范仍是 rough draft，本项目不直接采用 `.fold` 作为生产合同。
+- Esko Studio Toolkit 与 ArtiosCAD 都先检查完整刀线/压痕形成的面，再让操作者选一个 base panel，其他面围绕该面折叠；若面不完整或不能选中目标面，应回头修结构，而不是逐个手填面角色。
+- EngView 3D Presenter 把包装表示为面及其折叠序列，并提供 Set Base Panel；这独立验证了“完整结构图 + 单一基准面”比“把所有矩形暴露给用户”更接近成熟包装 CAD 的交互边界。
 - Microsoft 明确说明 Windows 服务运行在 Session 0，带 GUI 的程序应拆成登录用户侧进程，并通过命名管道等 IPC 与服务通信；命名管道默认 ACL 还会给 Everyone 与匿名账户读权限，因此本项目显式只授权 LocalSystem 与当前登录管理员。
 - Windows Task Scheduler 的 `InteractiveToken` 只在用户已登录的现成交互会话运行，符合“注销即不可打样、绝不静默降级到 Session 0”的失败语义。
 - Adobe 官方说明 Illustrator 支持 Visual Basic、AppleScript 与 JavaScript/ExtendScript。本项目据此保留一份 JSX，把 Windows VBS 和 macOS AppleScript 限定为平台启动桥，而不是两套结构识别实现。
 
-交叉验证来源：[Microsoft Interactive Services](https://learn.microsoft.com/en-us/windows/win32/services/interactive-services)、[Microsoft Named Pipe Security](https://learn.microsoft.com/en-us/windows/win32/ipc/named-pipe-security-and-access-rights)、[Microsoft InteractiveToken](https://learn.microsoft.com/en-us/windows/win32/taskschd/taskfolder-registertaskdefinition)、[Adobe Illustrator scripts](https://helpx.adobe.com/illustrator/desktop/automate-visualize-data/automate-actions/install-and-run-scripts.html)。
+交叉验证来源：[Esko：Select the Base Panel](https://docs.esko.com/docs/en-us/studiotoolkitforboxes/12.1/userguide/en-us/common/stb/task/ta_select_the_base_panel.html)、[Esko ArtiosCAD：Creating a new 3D workspace](https://docs.esko.com/docs/en-us/artioscad/14.1/userguide/en-us/common/ac/topic/UG5_Artios-3D_id873265U3D24.html)、[EngView：3D environment](https://downloads.engview.com/online_help/7.3/package_designer/en/ang/3D/td-work-env.htm)、[Microsoft Interactive Services](https://learn.microsoft.com/en-us/windows/win32/services/interactive-services)、[Microsoft Named Pipe Security](https://learn.microsoft.com/en-us/windows/win32/ipc/named-pipe-security-and-access-rights)、[Microsoft InteractiveToken](https://learn.microsoft.com/en-us/windows/win32/taskschd/taskfolder-registertaskdefinition)、[Adobe Illustrator scripts](https://helpx.adobe.com/illustrator/desktop/automate-visualize-data/automate-actions/install-and-run-scripts.html)。
 
 ## Windows 交互会话边界
 

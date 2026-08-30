@@ -842,7 +842,7 @@ describe("jobs dispatcher", () => {
             kind: "structure_resolution",
             structure_status: "review_required",
             code: "structure_face_mapping_incomplete",
-            message: "请确认六个盒面。",
+            message: "请选择完整盒型的正面和朝向。",
             resolution_path: resolutionPath,
             details: {
               artwork_pdf: artworkPath,
@@ -880,7 +880,7 @@ describe("jobs dispatcher", () => {
     assert.equal(job?.job_status, "waiting_input");
     assert.equal(job?.structure_status, "review_required");
     assert.equal(job?.structure_code, "structure_face_mapping_incomplete");
-    assert.equal(job?.structure_message, "请确认六个盒面。");
+    assert.equal(job?.structure_message, "请选择完整盒型的正面和朝向。");
     assert.equal(job?.job_finished_at, undefined);
     assert.equal(blenderCalls, 0);
     assert.equal(notifyCalls, 0);
