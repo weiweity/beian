@@ -16,6 +16,7 @@ AGENT_CLIENT = PACKAGING / "illustrator" / "illustrator_agent.py"
 AGENT_SCRIPT = PACKAGING.parents[1] / "scripts" / "windows" / "illustrator-agent.ps1"
 AGENT_INSTALLER = PACKAGING.parents[1] / "scripts" / "windows" / "install-illustrator-agent.ps1"
 AGENT_SMOKE = PACKAGING.parents[1] / "scripts" / "windows" / "illustrator-jsx-smoke.ps1"
+SERVER_AGENT = PACKAGING.parents[1] / "apps" / "web" / "server" / "src" / "illustratorAgent.ts"
 
 
 def load_worker():
@@ -415,6 +416,12 @@ def test_session_one_agent_is_acl_bounded_timeout_safe_and_fixed_exporter_only()
     second_deadline = enter_lock.index("Get-RemainingMilliseconds", acquire)
     assert first_deadline < acquire < second_deadline
     assert "$lock.Dispose()" in enter_lock
+    read_request = source[source.index("function Read-PipeRequestLine") : source.index("function Enter-ExecutionLock")]
+    assert read_request.count(".ReadAsync(") == 1
+    assert '$sliceMs = [Math]::Min($HeartbeatIntervalMs, $remainingMs)' in read_request
+    assert 'Write-Heartbeat "busy"' in read_request
+    assert '$nextHeartbeatAt = [DateTime]::UtcNow.AddMilliseconds($HeartbeatIntervalMs)' in enter_lock
+    assert 'Write-Heartbeat "busy"' in enter_lock
     assert '"export_structure.jsx"' in source
     assert '"export_ai.jsx"' in source
     assert "DoJavaScriptFile" not in source
@@ -428,6 +435,8 @@ def test_agent_task_is_interactive_token_single_instance_and_passwordless():
     assert "InteractiveToken" in source
     assert 'MultipleInstances = "IgnoreNew"' in source
     assert "ExecutionTimeLimit = [TimeSpan]::Zero" in source
+    assert "RestartCount = 60" in source
+    assert "$settingsArguments.RestartCount = 3" in source
     assert "-Password" not in source
     assert "New-Service" not in source
     assert source.index("Stop-ScheduledTask") < source.index("Register-ScheduledTask")
@@ -503,6 +512,67 @@ def test_agent_client_binds_pipe_to_current_heartbeat_identity(
     monkeypatch.setattr(client.time, "time", lambda: 4070908800.0)
 
     assert client._expected_agent_pid(heartbeat_name, "test-pipe") == 4321
+
+
+def test_agent_heartbeat_timing_contract_is_consistent_across_all_three_layers():
+    client = load_agent_client()
+    server = SERVER_AGENT.read_text(encoding="utf-8")
+    powershell = AGENT_SCRIPT.read_text(encoding="utf-8")
+
+    assert client.HEARTBEAT_STALE_SECONDS == 30
+    assert client.HEARTBEAT_FUTURE_SKEW_SECONDS == 5
+    assert "ILLUSTRATOR_AGENT_HEARTBEAT_INTERVAL_MS = 5_000" in server
+    assert "ILLUSTRATOR_AGENT_STALE_MS = 30_000" in server
+    assert "ILLUSTRATOR_AGENT_FUTURE_SKEW_MS = 5_000" in server
+    assert "$HeartbeatIntervalMs = 5000" in powershell
+
+
+@pytest.mark.parametrize(
+    ("heartbeat_age_seconds", "accepted"),
+    [
+        (20.001, True),
+        (30.001, False),
+        (-5.0, True),
+        (-5.001, False),
+    ],
+)
+def test_agent_client_applies_bounded_stale_and_future_heartbeat_windows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    heartbeat_age_seconds: float,
+    accepted: bool,
+):
+    client = load_agent_client()
+    agent_script = tmp_path / "illustrator-agent.ps1"
+    version_file = tmp_path / "VERSION"
+    agent_script.write_text("agent-v1", encoding="utf-8")
+    version_file.write_text("0.20.0.0\n", encoding="utf-8")
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    heartbeat_name = "illustrator-agent-test.json"
+    heartbeat_epoch = 4_070_908_800.0
+    heartbeat = {
+        "protocol": client.PROTOCOL,
+        "pipe": "test-pipe",
+        "pid": 4321,
+        "session_id": 1,
+        "state": "idle",
+        "updated_at": "2099-01-01T00:00:00+00:00",
+        "script_sha256": client._file_sha256(agent_script),
+        "release_version": "0.20.0.0",
+    }
+    runtime.joinpath(heartbeat_name).write_text(json.dumps(heartbeat), encoding="utf-8")
+    monkeypatch.setenv("WB_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(client, "AGENT_SCRIPT", agent_script)
+    monkeypatch.setattr(client, "VERSION_FILE", version_file)
+    monkeypatch.setattr(client.time, "time", lambda: heartbeat_epoch + heartbeat_age_seconds)
+
+    if accepted:
+        assert client._expected_agent_pid(heartbeat_name, "test-pipe") == 4321
+    else:
+        with pytest.raises(client.IllustratorAgentError) as caught:
+            client._expected_agent_pid(heartbeat_name, "test-pipe")
+        assert caught.value.code == "illustrator_agent_protocol_error"
 
 
 def test_agent_client_rejects_faulted_heartbeat(

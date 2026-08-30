@@ -5,7 +5,11 @@ import { DATA_DIR, REPO_ROOT } from "./config.js";
 
 export const ILLUSTRATOR_AGENT_PROTOCOL = "beian.illustrator.v1";
 export const ILLUSTRATOR_AGENT_PIPE = "beian-illustrator-v1";
-export const ILLUSTRATOR_AGENT_STALE_MS = 15_000;
+// Protocol timing is mirrored by the Python pipe client and the PowerShell
+// heartbeat pump. Tests lock the freshness boundaries together.
+export const ILLUSTRATOR_AGENT_HEARTBEAT_INTERVAL_MS = 5_000;
+export const ILLUSTRATOR_AGENT_STALE_MS = 30_000;
+export const ILLUSTRATOR_AGENT_FUTURE_SKEW_MS = 5_000;
 export const ILLUSTRATOR_AGENT_HEARTBEAT = join(DATA_DIR, "runtime", "illustrator-agent.json");
 export const ILLUSTRATOR_AGENT_SCRIPT = join(REPO_ROOT, "scripts", "windows", "illustrator-agent.ps1");
 export const ILLUSTRATOR_AGENT_SCRIPT_SHA256 = createHash("sha256")
@@ -110,8 +114,40 @@ export function readIllustratorAgentStatus(options: {
   const updatedAt = String(heartbeat.updated_at || "");
   const updatedMs = Date.parse(updatedAt);
   const ageMs = (options.nowMs ?? Date.now()) - updatedMs;
-  if (!Number.isFinite(updatedMs) || ageMs < -5_000 || ageMs > ILLUSTRATOR_AGENT_STALE_MS) {
-    return offline("stale", "Illustrator 桌面代理已离线。请让管理员登录杭州电脑后重新打样。");
+  const identity = {
+    session_id: sessionId,
+    pid,
+    user: String(heartbeat.user || "") || undefined,
+    user_sid: userSid,
+    pipe,
+    updated_at: updatedAt || undefined,
+    last_code: String(heartbeat.last_code || "") || undefined,
+    script_sha256: scriptSha256,
+    release_version: releaseVersion,
+    build_identity: String(heartbeat.build_identity || "") || undefined,
+  };
+  if (!Number.isFinite(updatedMs)) {
+    return {
+      ...offline("stale", "Illustrator 桌面代理心跳时间无效。请让管理员重新登录杭州电脑。"),
+      ...identity,
+    };
+  }
+  if (ageMs < -ILLUSTRATOR_AGENT_FUTURE_SKEW_MS) {
+    return {
+      ...offline("stale", "Illustrator 桌面代理与服务时钟不同步。请管理员校准杭州电脑时间后重试。"),
+      ...identity,
+      age_ms: ageMs,
+    };
+  }
+  if (ageMs > ILLUSTRATOR_AGENT_STALE_MS) {
+    return {
+      ...offline(
+        "stale",
+        "Illustrator 桌面代理心跳已停止。杭州 Windows 可能已注销或代理异常退出，请管理员登录确认后重新打样。",
+      ),
+      ...identity,
+      age_ms: ageMs,
+    };
   }
   if (state === "faulted") {
     return {
@@ -120,17 +156,8 @@ export function readIllustratorAgentStatus(options: {
       mode: "desktop_agent",
       state,
       message: "Illustrator 桌面代理清理失败。请让管理员确认桌面稿件后重启代理。",
-      session_id: sessionId,
-      pid,
-      user: String(heartbeat.user || "") || undefined,
-      user_sid: userSid,
-      pipe,
-      updated_at: updatedAt,
+      ...identity,
       age_ms: Math.max(0, ageMs),
-      last_code: String(heartbeat.last_code || "") || undefined,
-      script_sha256: scriptSha256,
-      release_version: releaseVersion,
-      build_identity: String(heartbeat.build_identity || "") || undefined,
     };
   }
   return {
@@ -139,17 +166,8 @@ export function readIllustratorAgentStatus(options: {
     mode: "desktop_agent",
     state,
     message: "Illustrator 桌面代理在线；打样会在交互桌面按需启动 Illustrator。",
-    session_id: sessionId,
-    pid,
-    user: String(heartbeat.user || "") || undefined,
-    user_sid: userSid,
-    pipe,
-    updated_at: updatedAt,
+    ...identity,
     age_ms: Math.max(0, ageMs),
-    last_code: String(heartbeat.last_code || "") || undefined,
-    script_sha256: scriptSha256,
-    release_version: releaseVersion,
-    build_identity: String(heartbeat.build_identity || "") || undefined,
   };
 }
 

@@ -253,7 +253,10 @@ $settingsArguments = @{
   StartWhenAvailable = $true
   ExecutionTimeLimit = [TimeSpan]::Zero
   MultipleInstances = "IgnoreNew"
-  RestartCount = 3
+  # A persistent interactive Agent may run for days. Keep retrying unexpected
+  # process exits without changing its InteractiveToken principal; a logout
+  # still stops the Agent and cannot be repaired from Session 0.
+  RestartCount = 60
   RestartInterval = (New-TimeSpan -Minutes 1)
 }
 if ($ExpiresAt -ne [DateTime]::MinValue) {
@@ -264,6 +267,7 @@ if ($ExpiresAt -ne [DateTime]::MinValue) {
   if ($temporaryLimit -lt (New-TimeSpan -Minutes 1)) {
     $temporaryLimit = New-TimeSpan -Minutes 1
   }
+  $settingsArguments.RestartCount = 3
   $settingsArguments.ExecutionTimeLimit = $temporaryLimit
   $settingsArguments.DeleteExpiredTaskAfter = New-TimeSpan -Minutes 10
 }

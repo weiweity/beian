@@ -59,6 +59,34 @@ describe("authenticated live status API", () => {
   });
 });
 
+describe("mockup start", () => {
+  it("surfaces a 412 with exactly one POST and does not retry the write", async () => {
+    const original = globalThis.fetch;
+    const calls: Array<{ path: string; method: string }> = [];
+    globalThis.fetch = (async (input, init) => {
+      calls.push({
+        path: String(input),
+        method: String(init?.method || "GET").toUpperCase(),
+      });
+      return new Response(JSON.stringify({
+        detail: "Illustrator 桌面代理心跳已停止。杭州 Windows 可能已注销或代理异常退出，请管理员登录确认后重新打样。",
+      }), {
+        status: 412,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    try {
+      await assert.rejects(
+        api.startMockup({ receipt: "112233445566", title: "打样" }),
+        (err: unknown) => err instanceof ApiError && err.status === 412 && /心跳已停止/.test(err.message),
+      );
+      assert.deepEqual(calls, [{ path: "/api/mockups/start", method: "POST" }]);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+});
+
 describe("resumable upload", () => {
   it("creates a session, sends one verified chunk, then waits for the ready receipt", async () => {
     const original = globalThis.fetch;
