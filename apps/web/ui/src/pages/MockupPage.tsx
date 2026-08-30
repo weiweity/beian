@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Alert, App, Button, ConfigProvider, Empty, Input, Segmented, Space, Table, Tag, theme as antdTheme } from "antd";
-import { ApiError, api, UPLOAD_TIMEOUT_MS, type MockupJob, type PendingUploadReceipt } from "../api";
+import { api, ApiError, isUploadReceiptExpired, UPLOAD_TIMEOUT_MS, type MockupJob, type PendingUploadReceipt } from "../api";
 import {
   forgetMockupHandoff,
   mockupHandoffFor,
@@ -164,6 +164,7 @@ export function MockupPage({
   const [layout, setLayout] = useState<Layout>("board");
   const [reload, setReload] = useState(0);
   const listGen = useRef(0);
+  const pendingStarts = useRef(new Set<string>());
 
   function refreshList() {
     const gen = ++listGen.current;
@@ -290,6 +291,8 @@ export function MockupPage({
       okText: "开始打样",
       cancelText: "先不开始",
       onOk: async () => {
+        if (pendingStarts.current.has(receipt)) return;
+        pendingStarts.current.add(receipt);
         try {
           const next = await api.startMockup({ receipt, title: productName, product_name: productName });
           uploadStore.clear("mockup", receipt);
@@ -298,8 +301,16 @@ export function MockupPage({
           rememberMockupHandoff(next);
           onOpenJob(next.id);
         } catch (err) {
-          message.error(err instanceof Error ? err.message : "无法开始打样");
-          throw err;
+          if (isUploadReceiptExpired(err)) {
+            uploadStore.clear("mockup", receipt);
+            setReceipts((current) => current.filter((saved) => saved.id !== receipt));
+            void refreshList();
+            message.warning("这份上传已开工或过期，列表已刷新。");
+          } else {
+            message.error(err instanceof Error ? err.message : "无法开始打样");
+          }
+        } finally {
+          pendingStarts.current.delete(receipt);
         }
       },
     });
@@ -471,6 +482,7 @@ export function MockupNewPage({
   const [productName, setProductName] = useState(resumeSource === "local" ? upload?.productName || "" : "");
   const [submitting, setSubmitting] = useState(false);
   const mounted = useRef(false);
+  const startLock = useRef(false);
   useUploadReceiptRecovery("mockup", upload, canCreate && resumeSource === "local");
 
   useEffect(() => {
@@ -486,9 +498,13 @@ export function MockupNewPage({
   }, [resumeSource, upload?.clientUploadId, upload?.productName]);
 
   useEffect(() => {
-    if (!canCreate || resumeSource === "local" || !receiptId) {
+    if (!canCreate || !receiptId) {
       setRestoredReceipt(null);
       setResumeError(null);
+      return;
+    }
+    if (resumeSource === "local") {
+      setRestoredReceipt(null);
       return;
     }
     let cancelled = false;
@@ -531,6 +547,7 @@ export function MockupNewPage({
   }
 
   function takeFile(next: File | null) {
+    if (next) setResumeError(null);
     let name = productName;
     if (next && !name.trim()) {
       name = stemFromFilename(next.name);
@@ -542,6 +559,7 @@ export function MockupNewPage({
   }
 
   async function run() {
+    if (startLock.current) return;
     const name = productName.trim();
     if (!name) {
       message.warning("品名必填。");
@@ -551,6 +569,7 @@ export function MockupNewPage({
       message.warning("请先等文件传完。");
       return;
     }
+    startLock.current = true;
     setSubmitting(true);
     try {
       const next = await api.startMockup({
@@ -563,8 +582,18 @@ export function MockupNewPage({
       if (!mounted.current) return;
       onCreated(next.id);
     } catch (err) {
-      if (mounted.current) message.error(err instanceof Error ? err.message : "打样失败");
+      if (!mounted.current) return;
+      if (isUploadReceiptExpired(err)) {
+        uploadStore.clear("mockup", receipt);
+        setRestoredReceipt(null);
+        setResumeSource("local");
+        setResumeError("这份上传已开工或过期，请重新选择文件上传。");
+        message.warning("上传回执已失效，请重新上传。");
+      } else {
+        message.error(err instanceof Error ? err.message : "打样失败");
+      }
     } finally {
+      startLock.current = false;
       if (mounted.current) setSubmitting(false);
     }
   }
@@ -827,7 +856,7 @@ export function MockupJobPage({ jobId, canAdmin, onBack }: JobProps & { canAdmin
 
   if (job.structure_status === "review_required" || job.structure_status === "unsupported") {
     return (
-      <section className="mockup-sheet">
+      <section className="mockup-sheet is-structure-confirm">
         <header className="page-head">
           <div>
             <h1 className="page-title">{mockTitle(job)}</h1>

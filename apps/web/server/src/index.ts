@@ -88,7 +88,6 @@ import {
   finishStructureConfirmation,
   type StructureAnchorDecision,
   type StructureConfirmationDecision,
-  type StructureFaceDecision,
 } from "./mockup.js";
 import { assertIllustratorReady } from "./aiRaster.js";
 import {
@@ -100,8 +99,9 @@ import { confirmPackagingStructure } from "./workers.js";
 import { skipPackSheetField } from "./sheetSkip.js";
 import {
   appendUploadChunk,
+  claimReceipt,
+  commitReceiptClaim,
   completeUploadSession,
-  consumeReceipt,
   createUploadAdmission,
   createUploadCoordinator,
   discardPendingUpload,
@@ -109,15 +109,17 @@ import {
   listPendingUploads,
   loadReceipt,
   MAX_UPLOAD_BODY_BYTES,
-  purgeReceiptFiles,
+  recoverReceiptClaims,
   receiptOwner,
-  restoreReceipt,
+  rollbackReceiptClaim,
+  serializeReceiptStart,
   stageMultipart,
   tooLarge,
   underReceiptDir,
   UPLOAD_CHUNK_BYTES,
   UPLOAD_SESSION_METADATA_BYTES,
   UPLOAD_BODY_TOO_LARGE,
+  UPLOAD_RECEIPT_EXPIRED_CODE,
   oversizeMessage,
   uploadTotalTooLarge,
 } from "./uploads.js";
@@ -144,6 +146,20 @@ type Env = { Bindings: NodeBindings; Variables: { session: Session } };
 
 const app = new Hono<Env>();
 const VERSION = "0.20.5.0";
+
+class ApiProblem extends Error {
+  constructor(
+    readonly status: 400 | 409,
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+function expiredUpload(): ApiProblem {
+  return new ApiProblem(400, UPLOAD_RECEIPT_EXPIRED_CODE, "上传已过期，请重新传文件");
+}
 /** 浏览器给 100 MB 慢速上传 15 分钟；服务端多留 1 分钟完成落盘和回执。 */
 export const SERVER_HTTP_OPTIONS = {
   headersTimeout: 60_000,
@@ -242,6 +258,9 @@ function pngMagicAt(path: string): boolean {
 }
 
 app.onError((err, c) => {
+  if (err instanceof ApiProblem) {
+    return c.json({ detail: err.message, code: err.code }, err.status);
+  }
   if (err instanceof HTTPException) {
     return c.json({ detail: err.message }, err.status);
   }
@@ -633,68 +652,76 @@ app.post("/api/tasks/start", async (c) => {
   if (!product) throw new HTTPException(400, { message: "品名必填" });
   const owner = receiptOwner(s);
   const receiptId = String(body.receipt || "");
-  const existing = findTaskBySourceReceipt(receiptId, owner);
-  if (existing) {
-    discardReceipt(receiptId, owner);
-    purgeReceiptFiles(receiptId);
-    return c.json(publicTask(existing, viewerFromSession(s)));
-  }
-  const peeked = loadReceipt(receiptId, owner);
-  if (!peeked) throw new HTTPException(400, { message: "上传已过期，请重新传文件" });
-  if (!peeked.files.some((f) => f.field === "excel") || !peeked.files.some((f) => f.field === "pdf")) {
-    throw new HTTPException(400, { message: "需要 excel + 包装 PDF" });
-  }
-  const rec = consumeReceipt(receiptId, owner);
-  if (!rec) {
-    const recovered = findTaskBySourceReceipt(receiptId, owner);
-    if (recovered) return c.json(publicTask(recovered, viewerFromSession(s)));
-    throw new HTTPException(400, { message: "上传已过期，请重新传文件" });
-  }
-  const excel = rec.files.find((f) => f.field === "excel");
-  const pdf = rec.files.find((f) => f.field === "pdf");
-  if (!excel || !pdf || !underReceiptDir(rec.id, excel.path) || !underReceiptDir(rec.id, pdf.path)) {
-    purgeReceiptFiles(rec.id);
-    throw new HTTPException(400, { message: "上传已过期，请重新传文件" });
-  }
-  const tid = newTid();
-  const dir = join(DATA_DIR, "uploads", tid);
-  try {
-    mkdirSync(dir, { recursive: true });
-    copyFileSync(excel.path, join(dir, "source.xlsx"));
-    copyFileSync(pdf.path, join(dir, "artwork.pdf"));
-    saveTask({
-      id: tid,
-      title: String(body.title || product).slice(0, 80),
-      product_name: product,
-      type: "excel_pdf",
-      status: "comparing",
-      created_at: nowIso(),
-      owner: viewerFromSession(s).id,
-      created_by: s.display_name,
-      pack_surface: String(body.pack_surface || "carton"),
-      job_kind: "compare",
-      job_status: "queued",
-      source_receipt: receiptId,
-    });
-  } catch (err) {
-    rmSync(dir, { recursive: true, force: true });
-    const restored = restoreReceipt(rec);
-    console.error("create compare task failed", {
-      problem: "上传回执已领取，但审核单文件没有准备完成",
-      cause: err instanceof Error ? err.message : String(err),
-      fix: restored ? "回执已恢复，可重新开始对照" : "回执未能恢复，需要重新上传",
-    });
-    throw new HTTPException(500, {
-      message: restored ? "创建审核单失败，请再点一次开始对照" : "创建审核单失败，请重新上传",
-    });
-  }
-  purgeReceiptFiles(rec.id);
-  try {
-    enqueue({ kind: "compare", id: tid });
-  } catch (err) {
-    console.warn("enqueue compare failed:", err instanceof Error ? err.message : err);
-  }
-  return c.json(publicTask(loadTask(tid), viewerFromSession(s)));
+  return serializeReceiptStart(receiptId, owner, async () => {
+    const existing = findTaskBySourceReceipt(receiptId, owner);
+    if (existing) {
+      discardReceipt(receiptId, owner);
+      return c.json(publicTask(existing, viewerFromSession(s)));
+    }
+    const peeked = loadReceipt(receiptId, owner);
+    if (!peeked) throw expiredUpload();
+    if (!peeked.files.some((f) => f.field === "excel") || !peeked.files.some((f) => f.field === "pdf")) {
+      throw new HTTPException(400, { message: "需要 excel + 包装 PDF" });
+    }
+    const claim = claimReceipt(receiptId, owner);
+    if (!claim) {
+      const recovered = findTaskBySourceReceipt(receiptId, owner);
+      if (recovered) return c.json(publicTask(recovered, viewerFromSession(s)));
+      throw expiredUpload();
+    }
+    const rec = claim.receipt;
+    const excel = rec.files.find((f) => f.field === "excel");
+    const pdf = rec.files.find((f) => f.field === "pdf");
+    if (!excel || !pdf || !underReceiptDir(rec.id, excel.path) || !underReceiptDir(rec.id, pdf.path)) {
+      commitReceiptClaim(claim);
+      throw expiredUpload();
+    }
+    const tid = newTid();
+    const dir = join(DATA_DIR, "uploads", tid);
+    try {
+      mkdirSync(dir, { recursive: true });
+      copyFileSync(excel.path, join(dir, "source.xlsx"));
+      copyFileSync(pdf.path, join(dir, "artwork.pdf"));
+      saveTask({
+        id: tid,
+        title: String(body.title || product).slice(0, 80),
+        product_name: product,
+        type: "excel_pdf",
+        status: "comparing",
+        created_at: nowIso(),
+        owner: viewerFromSession(s).id,
+        created_by: s.display_name,
+        pack_surface: String(body.pack_surface || "carton"),
+        job_kind: "compare",
+        job_status: "queued",
+        source_receipt: receiptId,
+      });
+    } catch (err) {
+      rmSync(dir, { recursive: true, force: true });
+      const restored = rollbackReceiptClaim(claim);
+      console.error("create compare task failed", {
+        problem: "上传回执已领取，但审核单文件没有准备完成",
+        cause: err instanceof Error ? err.message : String(err),
+        fix: restored ? "回执已恢复，可重新开始对照" : "领取标记仍在，服务下次启动会恢复回执",
+      });
+      throw new HTTPException(500, {
+        message: restored ? "创建审核单失败，请再点一次开始对照" : "创建审核单失败，上传暂存仍保留，请联系管理员恢复后重试",
+      });
+    }
+    if (!commitReceiptClaim(claim)) {
+      console.warn("commit compare receipt claim deferred", {
+        problem: "审核单已落盘，但上传回执领取标记暂未清理",
+        cause: receiptId,
+        fix: "服务下次启动会按 source_receipt 完成清理",
+      });
+    }
+    try {
+      enqueue({ kind: "compare", id: tid });
+    } catch (err) {
+      console.warn("enqueue compare failed:", err instanceof Error ? err.message : err);
+    }
+    return c.json(publicTask(loadTask(tid), viewerFromSession(s)));
+  });
 });
 
 app.post("/api/mockups/start", async (c) => {
@@ -702,70 +729,78 @@ app.post("/api/mockups/start", async (c) => {
   const body = (await c.req.json()) as { receipt?: string; title?: string; product_name?: string };
   const owner = receiptOwner(s);
   const receiptId = String(body.receipt || "");
-  const existing = findMockupBySourceReceipt(receiptId, owner);
-  if (existing) {
-    discardReceipt(receiptId, owner);
-    purgeReceiptFiles(receiptId);
-    return c.json(decorateQueueAhead([publicMockup(existing)])[0]);
-  }
-  let illustratorExecutable: string;
-  try {
-    assertBlenderReady();
-    illustratorExecutable = assertIllustratorReady();
-    assertIllustratorAgentReady();
-  } catch (e) {
-    boom(e);
-  }
-  const peeked = loadReceipt(receiptId, owner);
-  if (!peeked) throw new HTTPException(400, { message: "上传已过期，请重新传文件" });
-  if (!peeked.files.some((f) => f.field === "ai")) throw new HTTPException(400, { message: "需要 .ai 稿件" });
-  const rec = consumeReceipt(receiptId, owner);
-  if (!rec) {
-    const recovered = findMockupBySourceReceipt(receiptId, owner);
-    if (recovered) return c.json(decorateQueueAhead([publicMockup(recovered)])[0]);
-    throw new HTTPException(400, { message: "上传已过期，请重新传文件" });
-  }
-  const ai = rec.files.find((f) => f.field === "ai");
-  if (!ai || !underReceiptDir(rec.id, ai.path)) {
-    purgeReceiptFiles(rec.id);
-    throw new HTTPException(400, { message: "需要 .ai 稿件" });
-  }
-  const id = newTid();
-  const dir = join(DATA_DIR, "mockups", id);
-  let job: ReturnType<typeof queueMockup>;
-  try {
-    mkdirSync(dir, { recursive: true });
-    const src = join(dir, ai.name.replace(/[^a-zA-Z0-9._-]/g, "_") || "art.ai");
-    copyFileSync(ai.path, src);
-    const title = String(body.title || body.product_name || "").trim().slice(0, 80);
-    job = queueMockup({
-      id,
-      sourcePath: src,
-      sourceReceipt: receiptId,
-      ownerId: viewerFromSession(s).id,
-      displayName: s.display_name,
-      illustratorExecutable,
-      title,
-    });
-  } catch (err) {
-    rmSync(dir, { recursive: true, force: true });
-    const restored = restoreReceipt(rec);
-    console.error("create mockup task failed", {
-      problem: "上传回执已领取，但打样单文件没有准备完成",
-      cause: err instanceof Error ? err.message : String(err),
-      fix: restored ? "回执已恢复，可重新开始打样" : "回执未能恢复，需要重新上传",
-    });
-    throw new HTTPException(500, {
-      message: restored ? "创建打样单失败，请再点一次开始打样" : "创建打样单失败，请重新上传",
-    });
-  }
-  purgeReceiptFiles(rec.id);
-  try {
-    enqueue({ kind: "mockup", id });
-  } catch (err) {
-    console.warn("enqueue mockup failed:", err instanceof Error ? err.message : err);
-  }
-  return c.json(decorateQueueAhead([publicMockup(getJob(id) || job)])[0]);
+  return serializeReceiptStart(receiptId, owner, async () => {
+    const existing = findMockupBySourceReceipt(receiptId, owner);
+    if (existing) {
+      discardReceipt(receiptId, owner);
+      return c.json(decorateQueueAhead([publicMockup(existing)])[0]);
+    }
+    let illustratorExecutable: string;
+    try {
+      assertBlenderReady();
+      illustratorExecutable = assertIllustratorReady();
+      assertIllustratorAgentReady();
+    } catch (e) {
+      boom(e);
+    }
+    const peeked = loadReceipt(receiptId, owner);
+    if (!peeked) throw expiredUpload();
+    if (!peeked.files.some((f) => f.field === "ai")) throw new HTTPException(400, { message: "需要 .ai 稿件" });
+    const claim = claimReceipt(receiptId, owner);
+    if (!claim) {
+      const recovered = findMockupBySourceReceipt(receiptId, owner);
+      if (recovered) return c.json(decorateQueueAhead([publicMockup(recovered)])[0]);
+      throw expiredUpload();
+    }
+    const rec = claim.receipt;
+    const ai = rec.files.find((f) => f.field === "ai");
+    if (!ai || !underReceiptDir(rec.id, ai.path)) {
+      commitReceiptClaim(claim);
+      throw new HTTPException(400, { message: "需要 .ai 稿件" });
+    }
+    const id = newTid();
+    const dir = join(DATA_DIR, "mockups", id);
+    let job: ReturnType<typeof queueMockup>;
+    try {
+      mkdirSync(dir, { recursive: true });
+      const src = join(dir, ai.name.replace(/[^a-zA-Z0-9._-]/g, "_") || "art.ai");
+      copyFileSync(ai.path, src);
+      const title = String(body.title || body.product_name || "").trim().slice(0, 80);
+      job = queueMockup({
+        id,
+        sourcePath: src,
+        sourceReceipt: receiptId,
+        ownerId: viewerFromSession(s).id,
+        displayName: s.display_name,
+        illustratorExecutable,
+        title,
+      });
+    } catch (err) {
+      rmSync(dir, { recursive: true, force: true });
+      const restored = rollbackReceiptClaim(claim);
+      console.error("create mockup task failed", {
+        problem: "上传回执已领取，但打样单文件没有准备完成",
+        cause: err instanceof Error ? err.message : String(err),
+        fix: restored ? "回执已恢复，可重新开始打样" : "领取标记仍在，服务下次启动会恢复回执",
+      });
+      throw new HTTPException(500, {
+        message: restored ? "创建打样单失败，请再点一次开始打样" : "创建打样单失败，上传暂存仍保留，请联系管理员恢复后重试",
+      });
+    }
+    if (!commitReceiptClaim(claim)) {
+      console.warn("commit mockup receipt claim deferred", {
+        problem: "打样单已落盘，但上传回执领取标记暂未清理",
+        cause: receiptId,
+        fix: "服务下次启动会按 source_receipt 完成清理",
+      });
+    }
+    try {
+      enqueue({ kind: "mockup", id });
+    } catch (err) {
+      console.warn("enqueue mockup failed:", err instanceof Error ? err.message : err);
+    }
+    return c.json(decorateQueueAhead([publicMockup(getJob(id) || job)])[0]);
+  });
 });
 
 app.post("/api/mockups/:id/structure", async (c) => {
@@ -777,54 +812,39 @@ app.post("/api/mockups/:id/structure", async (c) => {
   const job = getJob(id);
   if (!job) throw new HTTPException(404, { message: "没有这单打样" });
   assertCanAccessMockup(job, viewerFromSession(session));
+  if (job.structure_status === "ready") {
+    // 首次确认可能已经落盘，只是响应在 Tunnel / 浏览器链路丢失。重复提交应
+    // 收敛到同一打样单，不能让用户误以为确认失败或再次执行结构 worker。
+    return c.json(decorateQueueAhead([publicMockup(job)])[0]);
+  }
   if (job.structure_status !== "review_required" || job.job_status !== "waiting_input") {
     throw new HTTPException(409, { message: "这单当前没有待确认的包装结构" });
   }
-  const body = (await c.req.json().catch(() => ({}))) as { anchor?: unknown; faces?: unknown };
-  let decision: StructureConfirmationDecision;
-  if (body.anchor && typeof body.anchor === "object" && !Array.isArray(body.anchor)) {
-    const value = body.anchor as Record<string, unknown>;
-    const proposalId = String(value.proposal_id || "");
-    const frontFaceId = String(value.front_face_id || "");
-    const turns = value.quarter_turns ?? 0;
-    if (
-      !/^box-net-\d{4}$/.test(proposalId) ||
-      !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(frontFaceId) ||
-      typeof turns !== "number" ||
-      !Number.isInteger(turns) ||
-      turns < 0 ||
-      turns > 3
-    ) {
-      throw new HTTPException(400, { message: "完整盒型、正面或方向不对" });
-    }
-    decision = {
-      anchor: {
-        proposal_id: proposalId,
-        front_face_id: frontFaceId,
-        quarter_turns: turns as StructureAnchorDecision["quarter_turns"],
-      },
-    };
-  } else {
-    if (!Array.isArray(body.faces) || body.faces.length !== 6) {
-      throw new HTTPException(400, { message: "请选择完整盒型和正面" });
-    }
-    const roles = new Set(["front", "right", "back", "left", "top", "bottom"]);
-    const faces: StructureFaceDecision[] = body.faces.map((raw) => {
-      if (!raw || typeof raw !== "object") throw new HTTPException(400, { message: "盒面确认格式不对" });
-      const value = raw as Record<string, unknown>;
-      const role = String(value.role || "");
-      const turns = value.quarter_turns ?? 0;
-      if (typeof turns !== "number" || !roles.has(role) || !Number.isInteger(turns) || turns < 0 || turns > 3) {
-        throw new HTTPException(400, { message: "盒面角色或方向不对" });
-      }
-      return {
-        id: String(value.id || ""),
-        role: role as StructureFaceDecision["role"],
-        quarter_turns: turns as StructureFaceDecision["quarter_turns"],
-      };
-    });
-    decision = { faces };
+  const body = (await c.req.json().catch(() => ({}))) as { anchor?: unknown };
+  if (!body.anchor || typeof body.anchor !== "object" || Array.isArray(body.anchor)) {
+    throw new HTTPException(400, { message: "请选择完整盒型和正面" });
   }
+  const value = body.anchor as Record<string, unknown>;
+  const proposalId = String(value.proposal_id || "");
+  const frontFaceId = String(value.front_face_id || "");
+  const turns = value.quarter_turns ?? 0;
+  if (
+    !/^box-net-\d{4}$/.test(proposalId) ||
+    !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(frontFaceId) ||
+    typeof turns !== "number" ||
+    !Number.isInteger(turns) ||
+    turns < 0 ||
+    turns > 3
+  ) {
+    throw new HTTPException(400, { message: "完整盒型、正面或方向不对" });
+  }
+  const decision: StructureConfirmationDecision = {
+    anchor: {
+      proposal_id: proposalId,
+      front_face_id: frontFaceId,
+      quarter_turns: turns as StructureAnchorDecision["quarter_turns"],
+    },
+  };
   beginStructureConfirmation(job);
   try {
     const files = prepareStructureConfirmation(job, decision);
@@ -1310,6 +1330,15 @@ if (process.env.VITEST !== "1") {
   }
   mkdirSync(join(DATA_DIR, "tasks"), { recursive: true });
   releaseCoordinator.controlFile(releaseControlPath, VERSION);
+  const recoveredReceipts = recoverReceiptClaims((receipt) =>
+    Boolean(
+      findTaskBySourceReceipt(receipt.id, receipt.owner) ||
+        findMockupBySourceReceipt(receipt.id, receipt.owner),
+    ),
+  );
+  if (Object.values(recoveredReceipts).some((count) => count > 0)) {
+    console.info("recovered upload receipt claims", recoveredReceipts);
+  }
   reclaimOnBoot();
   serve({ fetch: releaseFetch, hostname: HOST, port: PORT, serverOptions: SERVER_HTTP_OPTIONS }, (info) => {
     console.log(`beian-server ${VERSION} http://${info.address}:${info.port}`);

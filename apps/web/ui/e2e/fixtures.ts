@@ -118,6 +118,8 @@ export type SyntheticApi = {
   failDeletes: Set<string>;
   loseNextUploadResponse: boolean;
   holdNextUploadComplete: boolean;
+  expireNextTaskStart: boolean;
+  expireNextMockupStart: boolean;
   releaseHeldUpload?: () => void;
   unhandled: string[];
 };
@@ -393,6 +395,14 @@ async function installSyntheticApi(page: Page, state: SyntheticApi) {
       if (method === "POST" && path === "/api/tasks/start") {
         const data = (body || {}) as Record<string, unknown>;
         const receiptId = String(data.receipt || "");
+        if (state.expireNextTaskStart) {
+          state.expireNextTaskStart = false;
+          state.receipts = state.receipts.filter((item) => item.id !== receiptId);
+          return json(route, {
+            detail: "上传已过期，请重新传文件",
+            code: "upload_receipt_expired",
+          }, 400);
+        }
         const receipt = state.receipts.find((item) => item.id === receiptId);
         if (!receipt || receipt.kind !== "compare") {
           return json(route, { detail: "合成审稿回执不存在" }, 409);
@@ -418,6 +428,14 @@ async function installSyntheticApi(page: Page, state: SyntheticApi) {
       if (method === "POST" && path === "/api/mockups/start") {
         const data = (body || {}) as Record<string, unknown>;
         const receiptId = String(data.receipt || "");
+        if (state.expireNextMockupStart) {
+          state.expireNextMockupStart = false;
+          state.receipts = state.receipts.filter((item) => item.id !== receiptId);
+          return json(route, {
+            detail: "上传已过期，请重新传文件",
+            code: "upload_receipt_expired",
+          }, 400);
+        }
         const receipt = state.receipts.find((item) => item.id === receiptId);
         if (!receipt || receipt.kind !== "mockup") {
           return json(route, { detail: "合成打样回执不存在" }, 409);
@@ -542,6 +560,8 @@ export const test = base.extend<{ syntheticApi: SyntheticApi }>({
       failDeletes: new Set(),
       loseNextUploadResponse: false,
       holdNextUploadComplete: false,
+      expireNextTaskStart: false,
+      expireNextMockupStart: false,
       unhandled: [],
     };
     await installSyntheticApi(page, state);
