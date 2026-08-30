@@ -145,7 +145,7 @@ type NodeBindings = HttpBindings | Http2Bindings;
 type Env = { Bindings: NodeBindings; Variables: { session: Session } };
 
 const app = new Hono<Env>();
-const VERSION = "0.20.5.0";
+const VERSION = "0.20.6.0";
 
 class ApiProblem extends Error {
   constructor(

@@ -8,7 +8,7 @@
 - Illustrator 中对象的备注、对象名或图层名精确写成 `packaging:cut`、`packaging:crease`、`packaging:perforation`、`packaging:glue` 或 `packaging:ignore`，由语义导出器同时生成结构 JSON 和隐藏这些对象后的 artwork PDF。
 - macOS 用 AppleScript；Windows worker 通过 UTF-8 命名管道请求登录桌面的 PowerShell Agent，Agent 再调用现有 VBScript/COM。两端都执行 `export_structure.jsx`，不维护第二套 Windows 识别算法。Windows 清单必须传开工板扫描到的 `Illustrator.exe`；LocalSystem 服务和 runner 禁止自己拉起 Illustrator。
 
-为迁移旧稿，导出器还可在服务端已识别出的刀线层中提取“仅描边、无填充”的矩形网络，形成 `illustrator-stroke-proposal/1` 候选。候选不是结构事实：解析器先组合四个连续盒身面和两个相对封口面组成的完整六面盒型，过滤内嵌尺寸框、参考图与不完整矩形。管理员叠着真实 artwork 只确认整套盒型（仅多方案时）、产品正面和阅读方向；其余五面由连通关系推导后再进入同一严格解析器。它不会自动接受，也不会回退旧方盒算法。
+为迁移旧稿，导出器还可在服务端已识别出的刀线层中提取“仅描边、无填充”的矩形网络，形成 `illustrator-stroke-proposal/1` 候选。候选不是结构事实：解析器先组合四个连续盒身面和两个相对封口面组成的完整六面盒型，过滤内嵌尺寸框、参考图与不完整矩形。管理员叠着真实 artwork 只确认整套盒型（仅多方案时）、产品正面和阅读方向；其余五面由连通关系推导后再进入同一严格解析器。提案、确认和最终解析共用该适配器的尺寸策略：四个盒身面决定成盒尺寸，封口让位只做闭合校验；盒盖贴图方向从唯一共享折线中点指向盒盖质心，不从 bbox 或相邻面中心距猜。它不会自动接受，也不会回退旧方盒算法。
 
 颜色、普通图层名和文件名不自动升级成语义。CF2/DXF、ISO 19593 等格式必须各自有已验证样本和专用适配器后才能接入，不能伪装成已支持。目标是在显式结构语义可追踪时完成：
 
@@ -47,7 +47,7 @@ V2 任务在产品项中写 `"structure_engine": "v2"`。显式 sidecar 可写 `
 - 原生 AI 或非 PDF 兼容 AI 自动通过 Illustrator 导出完整稿和印刷层 PDF，再进入相同建模流程。Windows 上管理员必须保持登录，`beian-illustrator-agent` 的 Session 和心跳必须正常；Agent 接单后按需启动并验证同会话可见窗口与文档列表。生产任务与可信 `main` 发版内的 L1 请求共用同一个执行锁及持久故障围栏，执行中断或清理未确认后不能由另一请求接手；只能按 `scripts/windows/README.md` 的交互管理员流程确认并清除。用户注销、Agent 离线或 faulted 时开始接口返回 412，不消耗待开工回执，也不退回 Session 0。
 - Illustrator 冷启动和复杂转曲稿解析可能较慢，建议保持应用常驻并批量处理异常稿；兜底 Worker 默认 7 分钟硬超时。
 - 相同结构只需新增任务记录即可并行处理；缓存键包含源稿、结构 sidecar、清理后的 artwork 和流程版本。
-- `structure_v2` 用 Shapely/GEOS 做单位归一、吸附、noding、polygonize 和拓扑诊断。结构可闭合但产品正面/阅读方向有歧义时返回 `review_required`；管理员只提供一个正面锚点，系统从完整盒型推导其余五面。完整网不唯一、缺语义、曲线路径需专用适配器或超过安全上限时返回可执行的 `review_required` / `unsupported`，不会进入 Blender。
+- `structure_v2` 用 Shapely/GEOS 做单位归一、吸附、noding、polygonize 和拓扑诊断。结构可闭合但产品正面/阅读方向有歧义时返回 `review_required`；管理员只提供一个正面锚点，系统从完整盒型推导其余五面。尺寸不匹配与贴图方向不唯一使用不同错误码，不能用方向文案掩盖尺寸失败。完整网不唯一、缺语义、曲线路径需专用适配器或超过安全上限时返回可执行的 `review_required` / `unsupported`，不会进入 Blender。
 - 只有 `validation.status=accepted`、源稿 SHA-256 匹配、六面角色唯一且拓扑闭合的结构才能形成 `ResolvedPackagingJob`。人工确认结果写成新的批准 sidecar，再进入现有建模、渲染、PPT 和 GLB 合同。GLB 导出后还要逐面核对已确认 artwork 绑定；底面缺图、方向错误或镜像错误都判失败。
 - Blender MCP 只保留给交互调试。稳定生产通过独立 Blender 后台进程并行执行，避免界面串行和上下文开销。
 
