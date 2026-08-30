@@ -10,7 +10,7 @@ process.env.WB_HOST = "127.0.0.1";
 process.env.WB_PORT = "0";
 
 const { app } = await import("./index.js");
-const { issueSession } = await import("./auth.js");
+const { issueSessionForTest } = await import("./auth.js");
 const { loadTask, saveTask } = await import("./tasks.js");
 const { resetJobsTestHooks, setJobsTestHooks } = await import("./jobs.js");
 const { saveSettings } = await import("./settings.js");
@@ -39,7 +39,7 @@ type SeedTask = {
 };
 
 function authHeader() {
-  const sess = issueSession("刘籽烨", "reviewer", "ou_review_http", "feishu");
+  const sess = issueSessionForTest("刘籽烨", "reviewer", "ou_review_http");
   return { authorization: `Bearer ${sess.token}` };
 }
 
@@ -501,7 +501,7 @@ describe("review http", () => {
       owner: "刘籽烨",
       hits: [{ id: "h1", field: "净含量", status: "疑点", decision: "pending" }],
     });
-    const other = issueSession("路人", "reviewer", "ou_other_decision", "feishu");
+    const other = issueSessionForTest("路人", "reviewer", "ou_other_decision");
     const res = await app.request("/api/tasks/151515151515/decision", {
       method: "POST",
       headers: { authorization: `Bearer ${other.token}`, "content-type": "application/json" },
@@ -519,7 +519,7 @@ describe("review http", () => {
       status: "pending_review",
       owner: "刘籽烨",
     });
-    const other = issueSession("路人", "reviewer", "ou_other_pages", "feishu");
+    const other = issueSessionForTest("路人", "reviewer", "ou_other_pages");
     const res = await app.request("/api/tasks/161616161616/pages/page_01.png", {
       headers: { authorization: `Bearer ${other.token}` },
     });
@@ -576,7 +576,7 @@ describe("review http", () => {
       owner: "刘籽烨",
       hits: [{ id: "h1", field: "净含量", status: "疑点", decision: "issue" }],
     });
-    const other = issueSession("路人", "reviewer", "ou_other_rework", "feishu");
+    const other = issueSessionForTest("路人", "reviewer", "ou_other_rework");
     const fd = new FormData();
     fd.set("pdf", new File([Buffer.from("%PDF-1.4\n")], "v2.pdf", { type: "application/pdf" }));
     const res = await app.request("/api/tasks/171717171717/rework", {
@@ -597,7 +597,7 @@ describe("review http", () => {
       owner: "刘籽烨",
       hits: [{ id: "h1", field: "净含量", status: "一致", decision: "confirm" }],
     });
-    const other = issueSession("路人", "reviewer", "ou_other_complete", "feishu");
+    const other = issueSessionForTest("路人", "reviewer", "ou_other_complete");
     const res = await app.request("/api/tasks/141414141414/complete", {
       method: "POST",
       headers: { ...{ authorization: `Bearer ${other.token}` }, "content-type": "application/json" },
@@ -615,7 +615,7 @@ describe("review http", () => {
       status: "pending_review",
       owner: "刘籽烨",
     });
-    const other = issueSession("路人", "reviewer", "ou_other_owner", "feishu");
+    const other = issueSessionForTest("路人", "reviewer", "ou_other_owner");
     const res = await app.request("/api/tasks/131313131313", {
       headers: { authorization: `Bearer ${other.token}` },
     });
@@ -630,12 +630,12 @@ describe("review http", () => {
       type: "excel_pdf",
       status: "pending_review",
     });
-    const reviewer = issueSession("刘籽烨", "reviewer", "ou_ownerless_reviewer", "feishu");
+    const reviewer = issueSessionForTest("刘籽烨", "reviewer", "ou_ownerless_reviewer");
     const denied = await app.request("/api/tasks/232323232323", {
       headers: { authorization: `Bearer ${reviewer.token}` },
     });
     assert.equal(denied.status, 403);
-    const admin = issueSession("管理员", "admin", "ou_ownerless_admin", "feishu");
+    const admin = issueSessionForTest("管理员", "admin", "ou_ownerless_admin");
     const allowed = await app.request("/api/tasks/232323232323", {
       headers: { authorization: `Bearer ${admin.token}` },
     });
@@ -651,7 +651,7 @@ describe("review http", () => {
       status: "pending_review",
       owner: "魏炜",
     });
-    const owner = issueSession("魏炜", "reviewer", "ou_legacy_owner", "feishu");
+    const owner = issueSessionForTest("魏炜", "reviewer", "ou_legacy_owner");
     const res = await app.request("/api/tasks/242424242424", {
       headers: { authorization: `Bearer ${owner.token}` },
     });
@@ -669,13 +669,13 @@ describe("review http", () => {
       job_status: "failed",
       job_error: "对照中断",
     });
-    const other = issueSession("路人", "reviewer", "ou_del_stranger", "feishu");
+    const other = issueSessionForTest("路人", "reviewer", "ou_del_stranger");
     const denied = await app.request("/api/tasks/191919191919", {
       method: "DELETE",
       headers: { authorization: `Bearer ${other.token}` },
     });
     assert.equal(denied.status, 403);
-    const owner = issueSession("魏炜", "admin", "ou_del_owner", "feishu");
+    const owner = issueSessionForTest("魏炜", "admin", "ou_del_owner");
     const ok = await app.request("/api/tasks/191919191919", {
       method: "DELETE",
       headers: { authorization: `Bearer ${owner.token}` },
@@ -703,7 +703,7 @@ describe("review http", () => {
       owner: "魏炜",
       job_status: "running",
     });
-    const owner = issueSession("魏炜", "admin", "ou_del_running", "feishu");
+    const owner = issueSessionForTest("魏炜", "admin", "ou_del_running");
     const res = await app.request("/api/tasks/202020202020", {
       method: "DELETE",
       headers: { authorization: `Bearer ${owner.token}` },
@@ -1067,7 +1067,7 @@ describe("review http", () => {
       conclusion: "待设计改稿",
       hits: [hit({ decision: "issue" })],
     });
-    const other = issueSession("路人", "reviewer", "ou_rework_body_other", "feishu");
+    const other = issueSessionForTest("路人", "reviewer", "ou_rework_body_other");
     const res = await app.request(`/api/tasks/${tid}/rework`, {
       method: "POST",
       headers: {

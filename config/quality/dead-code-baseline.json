@@ -7,7 +7,6 @@
     {"tool":"knip","kind":"dependencies","path":"apps/web/ui/package.json","symbol":"@ant-design/icons","line":17,"confidence":100},
     {"tool":"knip","kind":"exports","path":"apps/web/server/src/aiRaster.ts","symbol":"writePlaceholderPng","line":77,"confidence":100},
     {"tool":"knip","kind":"exports","path":"apps/web/server/src/auth.ts","symbol":"allowedTenantKey","line":215,"confidence":100},
-    {"tool":"knip","kind":"exports","path":"apps/web/server/src/auth.ts","symbol":"loadSessions","line":64,"confidence":100},
     {"tool":"knip","kind":"exports","path":"apps/web/server/src/auth.ts","symbol":"pkcePair","line":338,"confidence":100},
     {"tool":"knip","kind":"exports","path":"apps/web/server/src/auth.ts","symbol":"rememberTenantKey","line":224,"confidence":100},
     {"tool":"knip","kind":"exports","path":"apps/web/server/src/auth.ts","symbol":"resolveAllowedTenantKey","line":512,"confidence":100},

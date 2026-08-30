@@ -25,6 +25,10 @@
 - [ ] **公司仓 / 第二管理员**  
   `weiweity/beian` 是个人账号私仓。确认组织仓或第二管理员 + 离职移交。
 
+- [ ] **生产主分支强制保护**
+  `main` 的 push 会触发杭州生产 self-hosted runner，但当前个人私仓套餐拒绝 branch protection / ruleset API，无法强制「只能 PR、必过 quality、禁止 force push/删除」。不要用仓库内脚本伪装成不可绕过的保护；升级到支持私仓规则的 GitHub 套餐或迁入组织仓后，启用保护并再次用 API 取证。
+  **Blocked externally:** GitHub plan（2026-08-30）。
+
 ## P1 — 作业模块审查留下的洞（本周不改）
 
 - [x] **无主任务 / 打样默认拒绝**  

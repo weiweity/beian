@@ -10,7 +10,7 @@ process.env.WB_HOST = "127.0.0.1";
 process.env.WB_PORT = "0";
 
 const { app } = await import("./index.js");
-const { issueSession } = await import("./auth.js");
+const { issueSessionForTest } = await import("./auth.js");
 const { DATA_DIR } = await import("./config.js");
 const { publicMockup, saveMockup } = await import("./mockup.js");
 const {
@@ -70,7 +70,7 @@ describe("mockup http", () => {
   });
 
   it("returns an empty list for a logged-in reviewer", async () => {
-    const sess = issueSession("审稿", "reviewer", "ou_mockup_list_xx", "feishu");
+    const sess = issueSessionForTest("审稿", "reviewer", "ou_mockup_list_xx");
     const res = await app.request("/api/mockups", {
       headers: { authorization: `Bearer ${sess.token}` },
     });
@@ -91,12 +91,12 @@ describe("mockup get", () => {
       job_kind: "mockup",
       job_status: "succeeded",
     });
-    const reviewer = issueSession("路人", "reviewer", "ou_mockup_ownerless", "feishu");
+    const reviewer = issueSessionForTest("路人", "reviewer", "ou_mockup_ownerless");
     const denied = await app.request("/api/mockups/121212121212", {
       headers: { authorization: `Bearer ${reviewer.token}` },
     });
     assert.equal(denied.status, 403);
-    const admin = issueSession("管理员", "admin", "ou_mockup_ownerless_admin", "feishu");
+    const admin = issueSessionForTest("管理员", "admin", "ou_mockup_ownerless_admin");
     const allowed = await app.request("/api/mockups/121212121212", {
       headers: { authorization: `Bearer ${admin.token}` },
     });
@@ -113,7 +113,7 @@ describe("mockup get", () => {
       job_kind: "mockup",
       job_status: "succeeded",
     });
-    const sess = issueSession("路人", "reviewer", "ou_mockup_acl_xx", "feishu");
+    const sess = issueSessionForTest("路人", "reviewer", "ou_mockup_acl_xx");
     const res = await app.request("/api/mockups/aaaaaaaaaaaa", {
       headers: { authorization: `Bearer ${sess.token}` },
     });
@@ -136,7 +136,7 @@ describe("mockup get", () => {
       job_kind: "mockup",
       job_status: "succeeded",
     });
-    const sess = issueSession("路人", "reviewer", "ou_mockup_file_acl", "feishu");
+    const sess = issueSessionForTest("路人", "reviewer", "ou_mockup_file_acl");
     const res = await app.request("/api/mockups/bbbbbbbbbbbb/files/glb", {
       headers: { authorization: `Bearer ${sess.token}` },
     });
@@ -144,7 +144,7 @@ describe("mockup get", () => {
   });
 
   it("GET mockup id that is not a tid is 400", async () => {
-    const sess = issueSession("审稿", "reviewer", "ou_mockup_bad_id", "feishu");
+    const sess = issueSessionForTest("审稿", "reviewer", "ou_mockup_bad_id");
     const res = await app.request("/api/mockups/..%2fsecret", {
       headers: { authorization: `Bearer ${sess.token}` },
     });
@@ -152,7 +152,7 @@ describe("mockup get", () => {
   });
 
   it("GET missing mockup is 404", async () => {
-    const sess = issueSession("审稿", "reviewer", "ou_mockup_get_xx", "feishu");
+    const sess = issueSessionForTest("审稿", "reviewer", "ou_mockup_get_xx");
     const res = await app.request("/api/mockups/ffffffffffff", {
       headers: { authorization: `Bearer ${sess.token}` },
     });
@@ -170,13 +170,13 @@ describe("mockup get", () => {
       job_kind: "mockup",
       job_status: "failed",
     });
-    const stranger = issueSession("路人", "reviewer", "ou_mockup_del_no", "feishu");
+    const stranger = issueSessionForTest("路人", "reviewer", "ou_mockup_del_no");
     const denied = await app.request("/api/mockups/dddddddddddd", {
       method: "DELETE",
       headers: { authorization: `Bearer ${stranger.token}` },
     });
     assert.equal(denied.status, 403);
-    const owner = issueSession("魏炜", "admin", "ou_mockup_del_ok", "feishu");
+    const owner = issueSessionForTest("魏炜", "admin", "ou_mockup_del_ok");
     const ok = await app.request("/api/mockups/dddddddddddd", {
       method: "DELETE",
       headers: { authorization: `Bearer ${owner.token}` },
@@ -205,7 +205,7 @@ describe("mockup get", () => {
       job_kind: "mockup",
       job_status: "running",
     });
-    const owner = issueSession("魏炜", "admin", "ou_mockup_del_run", "feishu");
+    const owner = issueSessionForTest("魏炜", "admin", "ou_mockup_del_run");
     const res = await app.request("/api/mockups/eeeeeeeeeeee", {
       method: "DELETE",
       headers: { authorization: `Bearer ${owner.token}` },
@@ -233,7 +233,7 @@ describe("mockup structure artwork preview", () => {
       structure_status: "review_required",
       structure_artwork_preview_path: preview,
     });
-    const owner = issueSession("管理员", "admin", "ou_preview_owner", "feishu");
+    const owner = issueSessionForTest("管理员", "admin", "ou_preview_owner");
     const own = await app.request(`/api/mockups/${id}/structure-preview`, {
       headers: { authorization: `Bearer ${owner.token}` },
     });
@@ -241,7 +241,7 @@ describe("mockup structure artwork preview", () => {
     assert.equal(own.headers.get("content-type"), "image/png");
     assert.deepEqual(Buffer.from(await own.arrayBuffer()), PNG_MAGIC);
 
-    const stranger = issueSession("其他审核员", "reviewer", "ou_preview_other", "feishu");
+    const stranger = issueSessionForTest("其他审核员", "reviewer", "ou_preview_other");
     const denied = await app.request(`/api/mockups/${id}/structure-preview`, {
       headers: { authorization: `Bearer ${stranger.token}` },
     });
@@ -286,7 +286,7 @@ describe("mockup structure confirmation http", () => {
       structure_engine: "v2",
       structure_status: "review_required",
     });
-    const reviewer = issueSession("审稿", "reviewer", "ou_structure_owner", "feishu");
+    const reviewer = issueSessionForTest("审稿", "reviewer", "ou_structure_owner");
     const res = await app.request(`/api/mockups/${id}/structure`, {
       method: "POST",
       headers: { authorization: `Bearer ${reviewer.token}`, "content-type": "application/json" },
@@ -312,7 +312,7 @@ describe("mockup structure confirmation http", () => {
       structure_engine: "v2",
       structure_status: "review_required",
     });
-    const admin = issueSession("魏炜", "admin", "ou_structure_admin", "feishu");
+    const admin = issueSessionForTest("魏炜", "admin", "ou_structure_admin");
     const invalidBodies = [
       {},
       { anchor: { proposal_id: "raw-rectangle-10", front_face_id: "proposal-face-0001", quarter_turns: 0 } },
@@ -351,7 +351,7 @@ describe("mockup post", { concurrency: false }, () => {
       }),
     });
     try {
-      const sess = issueSession("籽烨", "reviewer", "ou_mockup_v2_only", "feishu");
+      const sess = issueSessionForTest("籽烨", "reviewer", "ou_mockup_v2_only");
       const receipt = await stageAi(sess.token);
       const res = await startMockup(sess.token, receipt);
       assert.equal(res.status, 200);
@@ -384,7 +384,7 @@ describe("mockup post", { concurrency: false }, () => {
     delete process.env.BLENDER_EXECUTABLE;
     process.env.PATH = "/tmp/beian-no-blender-bin";
     try {
-      const sess = issueSession("籽烨", "reviewer", "ou_mockup_post_412", "feishu");
+      const sess = issueSessionForTest("籽烨", "reviewer", "ou_mockup_post_412");
       const receipt = await stageAi(sess.token);
       const res = await startMockup(sess.token, receipt);
       assert.equal(res.status, 412);
@@ -403,7 +403,7 @@ describe("mockup post", { concurrency: false }, () => {
     process.env.BLENDER_EXECUTABLE = process.execPath;
     delete process.env.ILLUSTRATOR_EXECUTABLE;
     try {
-      const sess = issueSession("籽烨", "reviewer", "ou_mockup_post_ai412", "feishu");
+      const sess = issueSessionForTest("籽烨", "reviewer", "ou_mockup_post_ai412");
       const receipt = await stageAi(sess.token);
       const res = await startMockup(sess.token, receipt);
       assert.equal(res.status, 412);
@@ -424,7 +424,7 @@ describe("mockup post", { concurrency: false }, () => {
     process.env.BLENDER_EXECUTABLE = process.execPath;
     process.env.ILLUSTRATOR_EXECUTABLE = process.execPath;
     try {
-      const sess = issueSession("籽烨", "reviewer", "ou_mockup_agent_offline", "feishu");
+      const sess = issueSessionForTest("籽烨", "reviewer", "ou_mockup_agent_offline");
       const receipt = await stageAi(sess.token);
       Object.defineProperty(process, "platform", { ...platformDescriptor, value: "win32" });
 
@@ -469,7 +469,7 @@ describe("mockup post", { concurrency: false }, () => {
       release_version: ILLUSTRATOR_AGENT_RELEASE_VERSION,
     }));
     try {
-      const sess = issueSession("籽烨", "reviewer", "ou_mockup_agent_stale", "feishu");
+      const sess = issueSessionForTest("籽烨", "reviewer", "ou_mockup_agent_stale");
       const receipt = await stageAi(sess.token, "stale-agent.ai");
       Object.defineProperty(process, "platform", { ...platformDescriptor, value: "win32" });
 
@@ -500,7 +500,7 @@ describe("mockup post", { concurrency: false }, () => {
     process.env.BLENDER_EXECUTABLE = process.execPath;
     process.env.ILLUSTRATOR_EXECUTABLE = process.execPath;
     try {
-      const sess = issueSession("籽烨", "reviewer", "ou_mockup_noreceipt", "feishu");
+      const sess = issueSessionForTest("籽烨", "reviewer", "ou_mockup_noreceipt");
       const res = await startMockup(sess.token, "");
       assert.equal(res.status, 400);
     } finally {
@@ -517,7 +517,7 @@ describe("mockup post", { concurrency: false }, () => {
     process.env.BLENDER_EXECUTABLE = process.execPath;
     process.env.ILLUSTRATOR_EXECUTABLE = process.execPath;
     try {
-      const sess = issueSession("籽烨", "reviewer", "ou_mockup_wrongkind", "feishu");
+      const sess = issueSessionForTest("籽烨", "reviewer", "ou_mockup_wrongkind");
       const fd = new FormData();
       fd.append("excel", new File([Buffer.from("PK\x03\x04xxxx")], "a.xlsx"));
       fd.append("pdf", new File([Buffer.from("%PDF-1.4\n%")], "a.pdf"));
@@ -554,12 +554,12 @@ describe("mockup post", { concurrency: false }, () => {
         }),
     });
     try {
-      const owner = issueSession("同名", "reviewer", "ou_mock_same_a", "feishu");
+      const owner = issueSessionForTest("同名", "reviewer", "ou_mock_same_a");
       const receipt = await stageAi(owner.token);
       const start = await startMockup(owner.token, receipt);
       assert.equal(start.status, 200);
       const job = (await start.json()) as { id?: string };
-      const other = issueSession("同名", "reviewer", "ou_mock_same_b", "feishu");
+      const other = issueSessionForTest("同名", "reviewer", "ou_mock_same_b");
       const denied = await app.request(`/api/mockups/${job.id}`, {
         headers: { authorization: `Bearer ${other.token}` },
       });
@@ -584,7 +584,7 @@ describe("mockup post", { concurrency: false }, () => {
     process.env.BLENDER_EXECUTABLE = process.execPath;
     process.env.ILLUSTRATOR_EXECUTABLE = process.execPath;
     try {
-      const sess = issueSession("籽烨", "reviewer", "ou_mockup_post_nofile", "feishu");
+      const sess = issueSessionForTest("籽烨", "reviewer", "ou_mockup_post_nofile");
       const fd = new FormData();
       fd.set("note", "no-file");
       const res = await app.request("/api/uploads", {
@@ -609,7 +609,7 @@ describe("mockup post", { concurrency: false }, () => {
     process.env.BLENDER_EXECUTABLE = process.execPath;
     process.env.ILLUSTRATOR_EXECUTABLE = process.execPath;
     try {
-      const sess = issueSession("籽烨", "reviewer", "ou_mockup_post_pdf", "feishu");
+      const sess = issueSessionForTest("籽烨", "reviewer", "ou_mockup_post_pdf");
       const fd = new FormData();
       fd.set("file", new File([Buffer.from("%PDF-1.4\n")], "art.pdf", { type: "application/pdf" }));
       const res = await app.request("/api/uploads", {
@@ -645,7 +645,7 @@ describe("mockup post", { concurrency: false }, () => {
         }),
     });
     try {
-      const sess = issueSession("籽烨", "reviewer", "ou_mockup_post_ok", "feishu");
+      const sess = issueSessionForTest("籽烨", "reviewer", "ou_mockup_post_ok");
       const receipt = await stageAi(sess.token);
       const started = Date.now();
       const res = await startMockup(sess.token, receipt);
@@ -692,7 +692,7 @@ describe("mockup file bytes", () => {
   it("rejects a white png that is not a PNG", async () => {
     seedOwnedFile("aa11aa11aa11", "white_a", "front_right_white.png", Buffer.from("not-png!!"));
     seedOwnedFile("aa11aa11aa12", "white_a", "short.png", Buffer.from("short"));
-    const sess = issueSession("籽烨", "reviewer", "ou_mockup_png_bad", "feishu");
+    const sess = issueSessionForTest("籽烨", "reviewer", "ou_mockup_png_bad");
     const bad = await app.request("/api/mockups/aa11aa11aa11/files/white_a", {
       headers: { authorization: `Bearer ${sess.token}` },
     });
@@ -707,7 +707,7 @@ describe("mockup file bytes", () => {
 
   it("serves a real white png inline with UTF-8 filename", async () => {
     seedOwnedFile("bb22bb22bb22", "white_a", "白底正面_front_right.png", PNG_MAGIC);
-    const sess = issueSession("籽烨", "reviewer", "ou_mockup_png_ok", "feishu");
+    const sess = issueSessionForTest("籽烨", "reviewer", "ou_mockup_png_ok");
     const res = await app.request("/api/mockups/bb22bb22bb22/files/white_a", {
       headers: { authorization: `Bearer ${sess.token}` },
     });
@@ -727,7 +727,7 @@ describe("mockup file bytes", () => {
   it("serves glb inline and ppt as attachment", async () => {
     seedOwnedFile("cc33cc33cc33", "glb", 'box"side.glb', Buffer.from("glTF"));
     seedOwnedFile("dd44dd44dd44", "ppt", "deck.pptx", Buffer.from("PK"));
-    const sess = issueSession("籽烨", "reviewer", "ou_mockup_disp", "feishu");
+    const sess = issueSessionForTest("籽烨", "reviewer", "ou_mockup_disp");
     const glb = await app.request("/api/mockups/cc33cc33cc33/files/glb", {
       headers: { authorization: `Bearer ${sess.token}` },
     });
@@ -745,7 +745,7 @@ describe("mockup file bytes", () => {
 
   it("serves the sheet pdf as application/pdf", async () => {
     seedOwnedFile("aa77aa77aa77", "sheet", "26F23A_white_sheet.pdf", Buffer.from("%PDF-1.4"));
-    const sess = issueSession("籽烨", "reviewer", "ou_mockup_pdf", "feishu");
+    const sess = issueSessionForTest("籽烨", "reviewer", "ou_mockup_pdf");
     const res = await app.request("/api/mockups/aa77aa77aa77/files/sheet?download=1", {
       headers: { authorization: `Bearer ${sess.token}` },
     });
@@ -756,7 +756,7 @@ describe("mockup file bytes", () => {
 
   it("refuses leftover ai-raster labeled as white_a even if it is a PNG", async () => {
     seedOwnedFile("ff66ff66ff66", "white_a", "ai-raster.png", PNG_MAGIC);
-    const sess = issueSession("籽烨", "reviewer", "ou_mockup_old_white", "feishu");
+    const sess = issueSessionForTest("籽烨", "reviewer", "ou_mockup_old_white");
     const res = await app.request("/api/mockups/ff66ff66ff66/files/white_a", {
       headers: { authorization: `Bearer ${sess.token}` },
     });
@@ -765,7 +765,7 @@ describe("mockup file bytes", () => {
 
   it("forces attachment when download=1 so preview URLs stay inline", async () => {
     seedOwnedFile("ee55ee55ee55", "white_a", "front_right_white.png", PNG_MAGIC);
-    const sess = issueSession("籽烨", "reviewer", "ou_mockup_dl", "feishu");
+    const sess = issueSessionForTest("籽烨", "reviewer", "ou_mockup_dl");
     const preview = await app.request("/api/mockups/ee55ee55ee55/files/white_a", {
       headers: { authorization: `Bearer ${sess.token}` },
     });

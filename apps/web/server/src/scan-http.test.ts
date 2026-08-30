@@ -8,7 +8,7 @@ process.env.WB_HOST = "127.0.0.1";
 process.env.WB_PORT = "0";
 
 const { app } = await import("./index.js");
-const { issueSession } = await import("./auth.js");
+const { issueSessionForTest } = await import("./auth.js");
 
 describe("scan http", () => {
   it("rejects unauthenticated scan", async () => {
@@ -17,7 +17,7 @@ describe("scan http", () => {
   });
 
   it("rejects reviewer scan with 403", async () => {
-    const sess = issueSession("审稿", "reviewer", "ou_scan_http", "feishu");
+    const sess = issueSessionForTest("审稿", "reviewer", "ou_scan_http");
     const res = await app.request("/api/settings/scan", {
       method: "POST",
       headers: { authorization: `Bearer ${sess.token}` },
@@ -28,7 +28,7 @@ describe("scan http", () => {
   });
 
   it("admin scan returns hits array and does not spawn", async () => {
-    const sess = issueSession("管理员", "admin", "", "display");
+    const sess = issueSessionForTest("管理员", "admin", "");
     const res = await app.request("/api/settings/scan", {
       method: "POST",
       headers: { authorization: `Bearer ${sess.token}` },

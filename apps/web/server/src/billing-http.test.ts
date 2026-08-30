@@ -8,7 +8,7 @@ process.env.WB_HOST = "127.0.0.1";
 process.env.WB_PORT = "0";
 
 const { app } = await import("./index.js");
-const { issueSession } = await import("./auth.js");
+const { issueSessionForTest } = await import("./auth.js");
 const { resetBillingCache, resetBillingHooksForTest, setBillingHooksForTest } = await import("./billing.js");
 
 describe("billing http", () => {
@@ -25,7 +25,7 @@ describe("billing http", () => {
   });
 
   it("hydrates snapshot for a logged-in reviewer without hitting live vendors", async () => {
-    const sess = issueSession("审稿", "reviewer", "ou_bill_http_xx", "feishu");
+    const sess = issueSessionForTest("审稿", "reviewer", "ou_bill_http_xx");
     setBillingHooksForTest({
       bceJson: async () => ({ ok: false, status: 0, data: null, error: "test-skip" }),
       fetch: async () => new Response("skip", { status: 500 }),

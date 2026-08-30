@@ -50,6 +50,7 @@ import {
 } from "./settings.js";
 import { scanLocalApps } from "./scanLocal.js";
 import {
+  AuthBoundaryError,
   authorizeUrl,
   beginOAuth,
   consumeOAuth,
@@ -58,6 +59,7 @@ import {
   exchangeCode,
   getSession,
   isLoopbackHost,
+  loginFailureCode,
   logout as dropSession,
   hasPerm,
   permissionsFor,
@@ -141,7 +143,7 @@ type NodeBindings = HttpBindings | Http2Bindings;
 type Env = { Bindings: NodeBindings; Variables: { session: Session } };
 
 const app = new Hono<Env>();
-const VERSION = "0.20.4.0";
+const VERSION = "0.20.5.0";
 /** 浏览器给 100 MB 慢速上传 15 分钟；服务端多留 1 分钟完成落盘和回执。 */
 export const SERVER_HTTP_OPTIONS = {
   headersTimeout: 60_000,
@@ -164,7 +166,7 @@ app.use("*", async (c, next) => {
     // 过期清理和角色落盘也完整处于排空生命周期内。
     const cookie = getCookie(c, COOKIE);
     const tok = c.req.header("authorization") || (cookie ? `Bearer ${cookie}` : "");
-    const sess = getSession(tok);
+    const sess = getSession(tok, c.req.header("host") || "");
     if (sess) c.set("session", sess);
   }
   await next();
@@ -207,6 +209,9 @@ function finalJsonObject(text: string): Record<string, unknown> | null {
 function boom(err: unknown): never {
   const status = typeof err === "object" && err && "status" in err ? Number((err as { status: number }).status) : 500;
   const message = err instanceof Error ? err.message : String(err);
+  if (err instanceof AuthBoundaryError) {
+    throw new HTTPException(err.status as 403, { message: err.message });
+  }
   if (status >= 400 && status < 500) throw new HTTPException(status as 400, { message });
   console.error(`request failed: problem=业务请求异常 cause=${safeLogCause(err)} fix=查看服务端日志定位`);
   throw new HTTPException(500, { message: "服务器错误" });
@@ -469,8 +474,7 @@ app.get("/api/auth/feishu/callback", async (c) => {
     return c.redirect(`${publicBase()}${oauth.next || "/reviewup"}`, 302);
   } catch (e) {
     const msg = e instanceof Error ? e.message : "登录失败";
-    const code = /白名单/.test(msg) ? "forbidden" : "failed";
-    return failLogin(c, code, msg);
+    return failLogin(c, loginFailureCode(e), msg);
   }
 });
 
@@ -1250,7 +1254,7 @@ function spaHtml(c: Context) {
   const host = c.req.header("host") || "";
   const action = spaIndexAction({
     feishuError: c.req.query("feishu_error") || "",
-    hasSession: Boolean(getSession(getCookie(c, COOKIE))),
+    hasSession: Boolean(getSession(getCookie(c, COOKIE), host)),
     displayLogin: displayLoginAllowed(host),
     oauthReady: oauthReady(),
   });
