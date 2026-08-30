@@ -159,7 +159,7 @@ def test_role_mapping_without_approval_never_reaches_blender_contract():
     assert result.resolved is None
 
 
-def test_stroke_proposal_surfaces_closed_faces_amid_unrelated_linework_without_auto_accepting():
+def test_stroke_proposal_excludes_unrelated_components_without_auto_accepting():
     payload = semantic_box()
     payload["source"]["adapter"] = "illustrator-stroke-proposal/1"
     payload["faces"] = []
@@ -207,11 +207,72 @@ def test_stroke_proposal_surfaces_closed_faces_amid_unrelated_linework_without_a
     assert proposed.status == "review_required"
     assert proposed.code == "structure_face_mapping_incomplete"
     assert proposed.resolved is None
-    assert len(proposed.topology["face_proposal"]) == 7
+    assert len(proposed.topology["face_proposal"]) == 6
+    assert len(proposed.topology["net_proposals"]) == 1
     assert proposed.topology["proposal_diagnostics"]["errors"] == [
         "structure_open_boundary",
         "structure_multiple_components",
     ]
+
+
+def test_stroke_proposal_groups_only_complete_box_nets_for_human_review():
+    payload = semantic_box()
+    payload["source"]["adapter"] = "illustrator-stroke-proposal/1"
+    payload["faces"] = []
+    payload["folds"] = []
+    payload["root_face"] = None
+    payload["validation"] = {
+        "status": "review_required",
+        "errors": ["structure_proposal_requires_confirmation"],
+        "warnings": [],
+    }
+    payload["vertices"].extend(
+        [
+            {"id": "nested-a", "x": 4.0, "y": 30.0},
+            {"id": "nested-b", "x": 14.0, "y": 30.0},
+            {"id": "nested-c", "x": 14.0, "y": 45.0},
+            {"id": "nested-d", "x": 4.0, "y": 45.0},
+            {"id": "partial-a", "x": 0.0, "y": 20.0},
+            {"id": "partial-b", "x": 20.0, "y": 20.0},
+            {"id": "partial-c", "x": 20.0, "y": 55.0},
+            {"id": "partial-d", "x": 0.0, "y": 55.0},
+        ]
+    )
+    payload["edges"].extend(
+        {
+            "id": f"noise-{index}",
+            "start": start,
+            "end": end,
+            "assignment": "crease",
+            "source_refs": [f"proposal:noise-{index}"],
+        }
+        for index, (start, end) in enumerate(
+            [
+                ("nested-a", "nested-b"),
+                ("nested-b", "nested-c"),
+                ("nested-c", "nested-d"),
+                ("nested-d", "nested-a"),
+                ("partial-a", "partial-b"),
+                ("partial-b", "partial-c"),
+                ("partial-c", "partial-d"),
+                ("partial-d", "partial-a"),
+            ],
+            start=1,
+        )
+    )
+
+    proposed = resolve_structure_payload(payload)
+
+    nets = proposed.topology["net_proposals"]
+    assert len(nets) == 1
+    assert len(nets[0]["face_ids"]) == 6
+    assert len(nets[0]["body_face_ids"]) == 4
+    assert len(nets[0]["cap_face_ids"]) == 2
+    exposed_ids = {face["id"] for face in proposed.topology["face_proposal"]}
+    assert exposed_ids == set(nets[0]["face_ids"])
+    exposed_sizes = [tuple(face["size_mm"]) for face in proposed.topology["face_proposal"]]
+    assert (10.0, 15.0) not in exposed_sizes
+    assert (20.0, 35.0) not in exposed_sizes
 
 
 def test_stroke_proposal_keeps_finished_panels_with_duplicate_strokes_and_a_sloped_flap():

@@ -86,6 +86,8 @@ import {
   prepareStructureConfirmation,
   queueMockup,
   finishStructureConfirmation,
+  type StructureAnchorDecision,
+  type StructureConfirmationDecision,
   type StructureFaceDecision,
 } from "./mockup.js";
 import { assertIllustratorReady } from "./aiRaster.js";
@@ -140,7 +142,7 @@ import {
 type Env = { Variables: { session: Session } };
 
 const app = new Hono<Env>();
-const VERSION = "0.20.2.0";
+const VERSION = "0.20.2.1";
 /** 浏览器给 100 MB 慢速上传 15 分钟；服务端多留 1 分钟完成落盘和回执。 */
 export const SERVER_HTTP_OPTIONS = {
   headersTimeout: 60_000,
@@ -793,28 +795,54 @@ app.post("/api/mockups/:id/structure", async (c) => {
   if (job.structure_status !== "review_required" || job.job_status !== "waiting_input") {
     throw new HTTPException(409, { message: "这单当前没有待确认的包装结构" });
   }
-  const body = (await c.req.json().catch(() => ({}))) as { faces?: unknown };
-  if (!Array.isArray(body.faces) || body.faces.length !== 6) {
-    throw new HTTPException(400, { message: "请确认六个盒面" });
-  }
-  const roles = new Set(["front", "right", "back", "left", "top", "bottom"]);
-  const faces: StructureFaceDecision[] = body.faces.map((raw) => {
-    if (!raw || typeof raw !== "object") throw new HTTPException(400, { message: "盒面确认格式不对" });
-    const value = raw as Record<string, unknown>;
-    const role = String(value.role || "");
-    const turns = Number(value.quarter_turns ?? 0);
-    if (!roles.has(role) || !Number.isInteger(turns) || turns < 0 || turns > 3) {
-      throw new HTTPException(400, { message: "盒面角色或方向不对" });
+  const body = (await c.req.json().catch(() => ({}))) as { anchor?: unknown; faces?: unknown };
+  let decision: StructureConfirmationDecision;
+  if (body.anchor && typeof body.anchor === "object" && !Array.isArray(body.anchor)) {
+    const value = body.anchor as Record<string, unknown>;
+    const proposalId = String(value.proposal_id || "");
+    const frontFaceId = String(value.front_face_id || "");
+    const turns = value.quarter_turns ?? 0;
+    if (
+      !/^box-net-\d{4}$/.test(proposalId) ||
+      !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(frontFaceId) ||
+      typeof turns !== "number" ||
+      !Number.isInteger(turns) ||
+      turns < 0 ||
+      turns > 3
+    ) {
+      throw new HTTPException(400, { message: "完整盒型、正面或方向不对" });
     }
-    return {
-      id: String(value.id || ""),
-      role: role as StructureFaceDecision["role"],
-      quarter_turns: turns as StructureFaceDecision["quarter_turns"],
+    decision = {
+      anchor: {
+        proposal_id: proposalId,
+        front_face_id: frontFaceId,
+        quarter_turns: turns as StructureAnchorDecision["quarter_turns"],
+      },
     };
-  });
+  } else {
+    if (!Array.isArray(body.faces) || body.faces.length !== 6) {
+      throw new HTTPException(400, { message: "请选择完整盒型和正面" });
+    }
+    const roles = new Set(["front", "right", "back", "left", "top", "bottom"]);
+    const faces: StructureFaceDecision[] = body.faces.map((raw) => {
+      if (!raw || typeof raw !== "object") throw new HTTPException(400, { message: "盒面确认格式不对" });
+      const value = raw as Record<string, unknown>;
+      const role = String(value.role || "");
+      const turns = value.quarter_turns ?? 0;
+      if (typeof turns !== "number" || !roles.has(role) || !Number.isInteger(turns) || turns < 0 || turns > 3) {
+        throw new HTTPException(400, { message: "盒面角色或方向不对" });
+      }
+      return {
+        id: String(value.id || ""),
+        role: role as StructureFaceDecision["role"],
+        quarter_turns: turns as StructureFaceDecision["quarter_turns"],
+      };
+    });
+    decision = { faces };
+  }
   beginStructureConfirmation(job);
   try {
-    const files = prepareStructureConfirmation(job, faces);
+    const files = prepareStructureConfirmation(job, decision);
     const result = await confirmPackagingStructure(files);
     if (result.timedOut) throw new HTTPException(504, { message: "结构确认超时，请再试一次" });
     const output = finalJsonObject(result.stdout);
@@ -822,9 +850,9 @@ app.post("/api/mockups/:id/structure", async (c) => {
       const failure = finalJsonObject(result.stderr);
       const message = typeof failure?.message === "string" ? failure.message.slice(0, 120) : "结构确认不能形成闭合盒";
       console.warn("confirm packaging structure failed", {
-        problem: "管理员提交了六面确认，但 V2 resolver 没有接受",
+        problem: "管理员提交了完整盒型锚点，但 V2 resolver 没有接受",
         cause: typeof failure?.code === "string" ? failure.code : `worker_exit_${result.code}`,
-        fix: "保留待确认状态，调整盒面角色或方向后重试",
+        fix: "保留待确认状态，调整盒型、正面或方向后重试",
       });
       throw new HTTPException(400, { message });
     }

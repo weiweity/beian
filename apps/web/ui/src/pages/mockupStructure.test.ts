@@ -1,22 +1,19 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
-  BOX_FACE_ROLES,
-  selectedFaceDecisions,
+  selectedStructureAnchor,
   structureIssueCopy,
   structurePolygonPoints,
   structureStatusLabel,
   structureViewBox,
-  type FaceChoice,
 } from "./mockupStructure.js";
 
-const faces = BOX_FACE_ROLES.map((role, index) => ({
+const faces = ["front", "right", "back", "left", "top", "bottom"].map((_role, index) => ({
   id: `f${index}`,
   bounds_mm: [index * 10, 0, index * 10 + 10, 20] as [number, number, number, number],
   centroid_mm: [index * 10 + 5, 10] as [number, number],
   size_mm: [10, 20] as [number, number],
   rectangular: true,
-  role,
 }));
 
 describe("mockup V2 structure UX", () => {
@@ -29,15 +26,22 @@ describe("mockup V2 structure UX", () => {
     );
   });
 
-  it("requires six unique rectangular roles", () => {
-    const choices = Object.fromEntries(
-      faces.map((face) => [face.id, { role: face.role, quarterTurns: 0 } satisfies FaceChoice]),
-    );
-    const decisions = selectedFaceDecisions(faces, choices);
-    assert.equal(decisions?.length, 6);
-    assert.deepEqual(decisions?.map((item) => item.role), BOX_FACE_ROLES);
-    choices.f1 = { role: "front", quarterTurns: 0 };
-    assert.equal(selectedFaceDecisions(faces, choices), null);
+  it("accepts one front anchor only when it belongs to the chosen complete net", () => {
+    const proposal = {
+      id: "box-net-0001",
+      face_ids: faces.map((face) => face.id),
+      body_face_ids: [faces[0].id, faces[1].id, faces[2].id, faces[3].id] as [string, string, string, string],
+      cap_face_ids: [faces[4].id, faces[5].id] as [string, string],
+      strip_axis: "x" as const,
+    };
+    assert.deepEqual(selectedStructureAnchor(proposal, faces[1].id, 2), {
+      proposal_id: proposal.id,
+      front_face_id: faces[1].id,
+      quarter_turns: 2,
+    });
+    assert.equal(selectedStructureAnchor(proposal, faces[5].id, 0), null);
+    assert.equal(selectedStructureAnchor(proposal, "missing", 0), null);
+    assert.equal(selectedStructureAnchor(undefined, faces[0].id, 0), null);
   });
 
   it("builds a padded SVG viewBox around all proposed faces", () => {
@@ -45,6 +49,7 @@ describe("mockup V2 structure UX", () => {
     assert.ok(viewBox[0] < 0);
     assert.ok(viewBox[2] > 60);
     assert.ok(viewBox[3] > 20);
+    assert.deepEqual(structureViewBox([]), [0, 0, 1, 1]);
   });
 
   it("keeps the real outline available for rotated or non-axis-aligned faces", () => {

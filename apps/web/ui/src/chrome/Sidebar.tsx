@@ -1,5 +1,5 @@
 import { Dropdown } from "antd";
-import { SIDE_NAV, type NavKey } from "./nav";
+import { formatVersionLabel, SIDE_NAV, type NavKey } from "./nav";
 
 export type { NavKey };
 
@@ -12,6 +12,7 @@ type Props = {
   onToggle: () => void;
   onLogout: () => void;
   livePulse?: { review?: boolean; mockup?: boolean };
+  version?: string | null;
 };
 
 function initial(name: string) {
@@ -28,7 +29,9 @@ export function Sidebar({
   onToggle,
   onLogout,
   livePulse,
+  version,
 }: Props) {
+  const versionLabel = formatVersionLabel(version);
   return (
     <aside
       className={collapsed ? "sidebar is-collapsed" : "sidebar"}
@@ -93,6 +96,12 @@ export function Sidebar({
       </nav>
 
       <div className="side-spacer" />
+
+      {versionLabel ? (
+        <span className="sidebar-version" title={`当前版本 ${versionLabel}`}>
+          {versionLabel}
+        </span>
+      ) : null}
 
       <Dropdown
         trigger={["click"]}

@@ -58,6 +58,26 @@ export type SyntheticMockup = {
   structure_status?: "analyzing" | "review_required" | "unsupported" | "ready";
   structure_code?: string;
   structure_message?: string;
+  structure_preview?: {
+    page_size_mm?: [number, number];
+    image_url?: string;
+    net_proposals: Array<{
+      id: string;
+      face_ids: string[];
+      body_face_ids: [string, string, string, string];
+      cap_face_ids: [string, string];
+      strip_axis: "x" | "y";
+      bounds_mm?: [number, number, number, number];
+    }>;
+    faces: Array<{
+      id: string;
+      bounds_mm: [number, number, number, number];
+      centroid_mm: [number, number];
+      size_mm?: [number, number];
+      points_mm?: Array<[number, number]>;
+      rectangular: boolean;
+    }>;
+  };
   files: Array<{ key: string; name: string }>;
 };
 
@@ -253,7 +273,7 @@ async function installSyntheticApi(page: Page, state: SyntheticApi) {
         });
       }
       if (method === "GET" && (path === "/api/status" || path === "/api/health")) {
-        return json(route, { ok: true, version: "e2e", jobs: {} });
+        return json(route, { ok: true, version: "0.0.0.0", jobs: {} });
       }
       if (method === "POST" && path === "/api/auth/logout") return json(route, { ok: true });
 
@@ -464,6 +484,30 @@ async function installSyntheticApi(page: Page, state: SyntheticApi) {
       }
 
       const mockupPath = path.match(/^\/api\/mockups\/([0-9a-f]{12})$/);
+      const structurePath = path.match(/^\/api\/mockups\/([0-9a-f]{12})\/structure$/);
+      if (structurePath && method === "POST") {
+        const mockup = state.mockups.find((item) => item.id === structurePath[1]);
+        if (!mockup) return json(route, { detail: "合成打样不存在" }, 404);
+        const data = (body || {}) as { anchor?: Record<string, unknown> };
+        const proposalId = typeof data.anchor?.proposal_id === "string" ? data.anchor.proposal_id : "";
+        const frontFaceId = typeof data.anchor?.front_face_id === "string" ? data.anchor.front_face_id : "";
+        const quarterTurns = data.anchor?.quarter_turns;
+        const proposal = mockup.structure_preview?.net_proposals.find((item) => item.id === proposalId);
+        if (
+          !proposal
+          || !proposal.body_face_ids.includes(frontFaceId)
+          || !Number.isInteger(quarterTurns)
+          || Number(quarterTurns) < 0
+          || Number(quarterTurns) > 3
+        ) {
+          return json(route, { detail: "合成结构锚点不完整" }, 400);
+        }
+        mockup.status = "queued";
+        mockup.job_status = "queued";
+        mockup.structure_status = "ready";
+        mockup.structure_preview = undefined;
+        return json(route, mockup);
+      }
       if (mockupPath && method === "DELETE") {
         const key = `mockup:${mockupPath[1]}`;
         if (state.failDeletes.has(key)) return json(route, { detail: "合成删除失败" }, 500);

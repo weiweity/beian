@@ -1,13 +1,19 @@
 import assert from "node:assert/strict";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
+import { fileURLToPath } from "node:url";
 import { makeTestTempDir } from "./testTemp.js";
 
 process.env.VITEST = "1";
 process.env.WB_DATA_DIR = makeTestTempDir("beian-release-http-");
 process.env.WB_HOST = "127.0.0.1";
 process.env.WB_PORT = "0";
+
+const REPO_VERSION = readFileSync(
+  join(dirname(fileURLToPath(import.meta.url)), "../../../../VERSION"),
+  "utf8",
+).trim();
 
 const { app } = await import("./index.js");
 const { issueSession } = await import("./auth.js");
@@ -147,7 +153,7 @@ describe("release drain http", () => {
     assert.equal(enteredBody.ok, true);
     assert.equal(enteredBody.protocol, RELEASE_CONTROL_PROTOCOL);
     assert.match(String(enteredBody.instance_id), /^[A-Za-z0-9_-]{32,128}$/);
-    assert.equal(enteredBody.version, "0.20.2.0");
+    assert.equal(enteredBody.version, REPO_VERSION);
     assert.equal(enteredBody.state, "draining");
     assert.equal(enteredBody.active, 0);
     assert.equal(enteredBody.ready, true);

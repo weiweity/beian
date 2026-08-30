@@ -127,6 +127,7 @@ export function App() {
   const [receiptId, setReceiptId] = useState<string | null>(boot.receipt);
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const [livePulse, setLivePulse] = useState({ review: false, mockup: false });
+  const [version, setVersion] = useState<string | null>(null);
 
   const refreshMe = useCallback(async () => {
     try {
@@ -187,6 +188,7 @@ export function App() {
         .then((h) => {
           if (cancelled) return;
           const next = liveNavPulse(h);
+          setVersion(h.version || null);
           setLivePulse((cur) => (cur.review === next.review && cur.mockup === next.mockup ? cur : next));
         })
         .catch(() => undefined);
@@ -370,6 +372,7 @@ export function App() {
           onToggle={toggleSidebar}
           onLogout={() => void logout()}
           livePulse={livePulse}
+          version={version}
         />
         <main className={view === "settings" ? "stage stage-flush" : "stage"}>
         {view === "settings" ? (

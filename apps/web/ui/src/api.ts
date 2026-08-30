@@ -614,15 +614,15 @@ export const api = {
     request<MockupJob>("/api/mockups/start", { method: "POST", body: JSON.stringify(body) }),
   confirmMockupStructure: (
     id: string,
-    faces: Array<{
-      id: string;
-      role: "front" | "right" | "back" | "left" | "top" | "bottom";
+    anchor: {
+      proposal_id: string;
+      front_face_id: string;
       quarter_turns: 0 | 1 | 2 | 3;
-    }>,
+    },
   ) =>
     request<MockupJob>(`/api/mockups/${id}/structure`, {
       method: "POST",
-      body: JSON.stringify({ faces }),
+      body: JSON.stringify({ anchor }),
     }),
   decide: (id: string, body: { hit_id: string; decision: Decision; note?: string }) =>
     request<TaskDetail>(`/api/tasks/${id}/decision`, {
@@ -758,6 +758,14 @@ export type MockupJob = {
   structure_preview?: {
     page_size_mm?: [number, number];
     image_url?: string;
+    net_proposals: Array<{
+      id: string;
+      face_ids: string[];
+      body_face_ids: [string, string, string, string];
+      cap_face_ids: [string, string];
+      strip_axis: "x" | "y";
+      bounds_mm?: [number, number, number, number];
+    }>;
     faces: Array<{
       id: string;
       bounds_mm: [number, number, number, number];

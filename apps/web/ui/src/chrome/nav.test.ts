@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { SIDE_NAV } from "./nav.js";
+import { formatVersionLabel, SIDE_NAV } from "./nav.js";
 
 describe("SIDE_NAV", () => {
   it("locks 审稿台 → 打样台 → 历史记录 → 设置", () => {
@@ -13,5 +13,12 @@ describe("SIDE_NAV", () => {
       ["审稿台", "打样台", "历史记录", "设置"],
     );
     assert.equal(SIDE_NAV.at(-1)?.key, "settings");
+  });
+
+  it("shows only a server-provided four-part release version", () => {
+    assert.equal(formatVersionLabel("0.20.2.0"), "v0.20.2.0");
+    assert.equal(formatVersionLabel(" 0.20.2.0 "), "v0.20.2.0");
+    assert.equal(formatVersionLabel("0.20.2"), null);
+    assert.equal(formatVersionLabel(undefined), null);
   });
 });
