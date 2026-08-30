@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.20.3.0] - 2026-08-30
+
+### Changed
+
+- 发布排空从 Hono 中间件里的标量计数与 `Response.body` 包装器，重构为 Node `fetch` 最外层的 `ReleaseCoordinator`：每个业务请求都有独立 Map 记录，并分别等待 handler promise 与 `ServerResponse finish/close/error` 两个生命周期闩锁。
+- 受令牌保护的 release control 新增脱敏请求诊断，只返回请求编号、方法、路由类别、年龄与闩锁状态；发布脚本继续只消费稳定的 `active/ready/blocker_codes`，不需要理解 URL 或业务内部结构。
+
+### Fixed
+
+- 修复客户端中断压缩请求后，`@hono/node-server` 因 writable 已销毁而不再读取或取消响应 Web Stream，导致 admission token 永久不释放、杭州发版持续被幽灵 `requests_active` 阻塞的问题；真实下载仍会保持 active，直到传输和 handler 都结束。
+
+### For contributors
+
+- L0 新增真实 TCP 回归：8 MiB 下载在客户端未读完时必须阻止排空；gzip 请求在 handler 返回前断开 socket 后，先记录传输终止、再等 handler 收尾并精确归零。服务端、界面、Python worker、类型、构建与 Knip/Vulture 门禁均在 Mac 验证；杭州 Windows 发版事务和公网版本仍须合入后的 L1/canary 证明。
+
 ## [0.20.2.1] - 2026-08-30
 
 ### Added
