@@ -1,9 +1,15 @@
 import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { request as httpRequest, type IncomingMessage, type Server } from "node:http";
 import { dirname, join } from "node:path";
-import { describe, it } from "node:test";
+import { after, before, describe, it } from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { serve } from "@hono/node-server";
+import { Hono } from "hono";
+import { compress } from "hono/compress";
 import { makeTestTempDir } from "./testTemp.js";
+import { createReleaseCoordinator } from "./releaseAdmission.js";
 
 process.env.VITEST = "1";
 process.env.WB_DATA_DIR = makeTestTempDir("beian-release-http-");
@@ -15,16 +21,63 @@ const REPO_VERSION = readFileSync(
   "utf8",
 ).trim();
 
-const { app } = await import("./index.js");
+const { releaseFetch, SERVER_HTTP_OPTIONS } = await import("./index.js");
 const { issueSession } = await import("./auth.js");
 const { DATA_DIR } = await import("./config.js");
 const { saveMockup } = await import("./mockup.js");
-const { saveTask } = await import("./tasks.js");
 const {
   RELEASE_CONTROL_PROTOCOL,
   RELEASE_CONTROL_TEST_TOKEN,
   RELEASE_DRAIN_MESSAGE,
 } = await import("./releaseAdmission.js");
+
+let server: Server | undefined;
+let baseUrl = "";
+
+before(async () => {
+  await new Promise<void>((resolve, reject) => {
+    server = serve({
+      fetch: releaseFetch,
+      hostname: "127.0.0.1",
+      port: 0,
+      serverOptions: SERVER_HTTP_OPTIONS,
+    }, (info) => {
+      baseUrl = `http://127.0.0.1:${info.port}`;
+      resolve();
+    }) as Server;
+    server.once("error", reject);
+  });
+});
+
+after(async () => {
+  if (!server) return;
+  server.closeAllConnections();
+  await new Promise<void>((resolve, reject) => {
+    server?.close((err) => err ? reject(err) : resolve());
+  });
+});
+
+const app = {
+  request(path: string, init?: RequestInit): Promise<Response> {
+    return fetch(`${baseUrl}${path}`, init);
+  },
+};
+
+function rawGet(path: string, headers: Record<string, string>): Promise<IncomingMessage> {
+  return new Promise((resolve, reject) => {
+    const request = httpRequest(`${baseUrl}${path}`, { headers }, resolve);
+    request.once("error", reject);
+    request.end();
+  });
+}
+
+async function waitFor(check: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!check()) {
+    if (Date.now() >= deadline) throw new Error("timed out waiting for release lifecycle");
+    await delay(10);
+  }
+}
 
 function authHeader() {
   const sess = issueSession("刘籽烨", "reviewer", "ou_release_http", "feishu");
@@ -44,7 +97,8 @@ describe("release drain http", () => {
     const dir = join(DATA_DIR, "mockups", id);
     const path = join(dir, "box.glb");
     mkdirSync(dir, { recursive: true });
-    writeFileSync(path, Buffer.alloc(128 * 1024, 7));
+    const fileBytes = 8 * 1024 * 1024;
+    writeFileSync(path, Buffer.alloc(fileBytes, 7));
     saveMockup({
       id,
       status: "done",
@@ -54,10 +108,9 @@ describe("release drain http", () => {
       job_kind: "mockup",
       job_status: "succeeded",
     });
-    const download = await app.request(`/api/mockups/${id}/files/glb`, {
-      headers: authHeader(),
-    });
-    assert.equal(download.status, 200);
+    const download = await rawGet(`/api/mockups/${id}/files/glb`, authHeader());
+    download.pause();
+    assert.equal(download.statusCode, 200);
 
     const entered = await app.request("/api/internal/release/drain", {
       method: "POST",
@@ -67,7 +120,17 @@ describe("release drain http", () => {
     assert.equal(enteredBody.active, 1);
     assert.equal(enteredBody.ready, false);
     assert.ok(enteredBody.blocker_codes.includes("requests_active"));
-    assert.equal((await download.arrayBuffer()).byteLength, 128 * 1024);
+    let received = 0;
+    const completed = new Promise<void>((resolve, reject) => {
+      download.on("data", (chunk: Buffer) => {
+        received += chunk.byteLength;
+      });
+      download.once("end", resolve);
+      download.once("error", reject);
+    });
+    download.resume();
+    await completed;
+    assert.equal(received, fileBytes);
 
     const inspected = await app.request("/api/internal/release/drain", { headers: controlHeaders() });
     const inspectedBody = (await inspected.json()) as { active: number; ready: boolean };
@@ -77,44 +140,63 @@ describe("release drain http", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("keeps a protected gzip response active until the client cancels the final stream", async () => {
-    const ids = Array.from({ length: 24 }, (_, index) => (0xabc000 + index).toString(16).padStart(12, "0"));
-    for (const id of ids) {
-      saveTask({
-        id,
-        title: `压缩响应-${id}-${"长内容".repeat(2_048)}`,
-        product_name: `压缩响应-${id}`,
-        type: "excel_pdf",
-        status: "completed",
-        owner: "ou_release_http",
-        job_kind: "compare",
-        job_status: "succeeded",
+  it("does not leak an aborted gzip request when the socket closes before Hono consumes the body", async () => {
+    const coordinator = createReleaseCoordinator("z".repeat(32));
+    const delayedApp = new Hono();
+    delayedApp.use(compress());
+    let signalRouteStarted!: () => void;
+    let releaseRoute!: () => void;
+    const routeStarted = new Promise<void>((resolve) => {
+      signalRouteStarted = resolve;
+    });
+    const routeGate = new Promise<void>((resolve) => {
+      releaseRoute = resolve;
+    });
+    delayedApp.get("/api/tasks", async (c) => {
+      signalRouteStarted();
+      await routeGate;
+      return c.text("压缩响应".repeat(64 * 1024));
+    });
+
+    let abortServer!: Server;
+    let abortUrl = "";
+    await new Promise<void>((resolve, reject) => {
+      abortServer = serve({
+        hostname: "127.0.0.1",
+        port: 0,
+        fetch: (request, bindings) => coordinator.handle(
+          request,
+          bindings,
+          (nextRequest) => delayedApp.fetch(nextRequest),
+        ),
+      }, (info) => {
+        abortUrl = `http://127.0.0.1:${info.port}`;
+        resolve();
+      }) as Server;
+      abortServer.once("error", reject);
+    });
+
+    const client = httpRequest(`${abortUrl}/api/tasks`, { headers: { "accept-encoding": "gzip" } });
+    client.on("error", () => { /* expected after deliberate disconnect */ });
+    client.end();
+    try {
+      await routeStarted;
+      client.destroy();
+      await waitFor(() => coordinator.snapshot().requests?.[0]?.transport_done === true);
+      assert.equal(coordinator.snapshot().active, 1);
+      assert.equal(coordinator.snapshot().requests?.[0]?.handler_done, false);
+      assert.equal(coordinator.snapshot().requests?.[0]?.terminal_reason, "close");
+
+      releaseRoute();
+      await waitFor(() => coordinator.snapshot().active === 0);
+      assert.deepEqual(coordinator.snapshot(), { state: "open", active: 0 });
+    } finally {
+      releaseRoute();
+      abortServer.closeAllConnections();
+      await new Promise<void>((resolve, reject) => {
+        abortServer.close((err) => err ? reject(err) : resolve());
       });
     }
-    const response = await app.request("/api/tasks", {
-      headers: { ...authHeader(), "accept-encoding": "gzip" },
-    });
-    assert.equal(response.status, 200);
-    assert.equal(response.headers.get("content-encoding"), "gzip");
-    const reader = response.body?.getReader();
-    assert.ok(reader);
-    const first = await reader.read();
-    assert.equal(first.done, false);
-
-    const entered = await app.request("/api/internal/release/drain", {
-      method: "POST",
-      headers: controlHeaders(),
-    });
-    const enteredBody = (await entered.json()) as { active: number; ready: boolean; blocker_codes: string[] };
-    assert.equal(enteredBody.active, 1);
-    assert.equal(enteredBody.ready, false);
-    assert.ok(enteredBody.blocker_codes.includes("requests_active"));
-
-    await reader.cancel("test client cancellation");
-    const inspected = await app.request("/api/internal/release/drain", { headers: controlHeaders() });
-    assert.equal(((await inspected.json()) as { active: number }).active, 0);
-    await app.request("/api/internal/release/drain", { method: "DELETE", headers: controlHeaders() });
-    for (const id of ids) rmSync(join(DATA_DIR, "tasks", `${id}.json`), { force: true });
   });
 
   it("blocks release when a persisted job record is unreadable", async () => {

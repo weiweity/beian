@@ -1,15 +1,48 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import {
-  createReleaseAdmission,
-  holdReleaseUntilResponseSettles,
+  createReleaseCoordinator,
   isReleaseProtectedRequest,
   releaseReadiness,
   RELEASE_CONTROL_PROTOCOL,
+  RELEASE_DRAIN_MESSAGE,
 } from "./releaseAdmission.js";
+
+class FakeOutgoing extends EventEmitter {
+  writableFinished = false;
+  destroyed = false;
+
+  finish(): void {
+    this.writableFinished = true;
+    this.emit("finish");
+  }
+
+  close(): void {
+    this.destroyed = true;
+    this.emit("close");
+  }
+
+  fail(): void {
+    this.destroyed = true;
+    this.emit("error", new Error("socket failed"));
+  }
+}
+
+function businessRequest(path = "/api/tasks"): Request {
+  return new Request(`http://127.0.0.1:8787${path}`);
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
 
 test("release drain blocks every business API request except health and its control endpoint", () => {
   for (const [method, path] of [
@@ -46,52 +79,80 @@ test("release drain blocks every business API request except health and its cont
   assert.equal(isReleaseProtectedRequest("POST", "/assets/index.js"), true);
 });
 
-test("enter is atomic with active admissions and leave reopens the gate", () => {
+test("enter is atomic with request registration and leave reopens the gate", async () => {
   const token = "a".repeat(32);
   const lease = "lease".repeat(8);
   let now = Date.parse("2026-08-28T00:00:00.000Z");
-  const admission = createReleaseAdmission(token, { leaseMs: 5_000, now: () => now });
-  const release = admission.acquire();
-  assert.ok(release);
-  assert.deepEqual(admission.enter(token, lease), {
-    state: "draining",
-    active: 1,
-    entered_at: "2026-08-28T00:00:00.000Z",
-    lease_id: lease,
-    mode: "lease",
-    expires_at: "2026-08-28T00:00:05.000Z",
+  const coordinator = createReleaseCoordinator(token, { leaseMs: 5_000, now: () => now });
+  const outgoing = new FakeOutgoing();
+  const handler = deferred<Response>();
+  let handlerStarted = false;
+  const activeResponse = coordinator.handle(businessRequest(), { outgoing }, async () => {
+    handlerStarted = true;
+    return await handler.promise;
   });
-  assert.equal(admission.acquire(), null);
-  release();
-  release();
+  assert.equal(handlerStarted, true);
+
+  const entered = coordinator.enter(token, lease);
+  assert.equal(entered.state, "draining");
+  assert.equal(entered.active, 1);
+  assert.equal(entered.entered_at, "2026-08-28T00:00:00.000Z");
+  assert.equal(entered.lease_id, lease);
+  assert.equal(entered.mode, "lease");
+  assert.equal(entered.expires_at, "2026-08-28T00:00:05.000Z");
+  assert.equal(entered.requests?.[0]?.route_class, "tasks");
+  assert.equal(entered.requests?.[0]?.handler_done, false);
+  assert.equal(entered.requests?.[0]?.transport_done, false);
+
+  let blockedHandlerCalled = false;
+  const blocked = await coordinator.handle(businessRequest("/api/mockups"), { outgoing: new FakeOutgoing() }, () => {
+    blockedHandlerCalled = true;
+    return new Response("should not run");
+  });
+  assert.equal(blocked.status, 503);
+  assert.deepEqual(await blocked.json(), { detail: RELEASE_DRAIN_MESSAGE });
+  assert.equal(blockedHandlerCalled, false);
+
+  outgoing.finish();
+  assert.equal(coordinator.snapshot().requests?.[0]?.transport_done, true);
+  assert.equal(coordinator.snapshot().active, 1);
+  handler.resolve(new Response("ok"));
+  await activeResponse;
   now += 1_000;
-  assert.equal(admission.inspect(token, lease).active, 0);
-  assert.equal(admission.snapshot().expires_at, "2026-08-28T00:00:06.000Z");
-  assert.throws(() => admission.inspect(token, "other".repeat(6)), /not current/);
-  assert.deepEqual(admission.leave(token, lease), { state: "open", active: 0 });
-  assert.ok(admission.acquire());
+  assert.equal(coordinator.inspect(token, lease).active, 0);
+  assert.equal(coordinator.snapshot().expires_at, "2026-08-28T00:00:06.000Z");
+  assert.throws(() => coordinator.inspect(token, "other".repeat(6)), /not current/);
+  assert.deepEqual(coordinator.leave(token, lease), { state: "open", active: 0 });
+
+  const reopenedOutgoing = new FakeOutgoing();
+  await coordinator.handle(businessRequest(), { outgoing: reopenedOutgoing }, () => new Response("open"));
+  assert.equal(coordinator.snapshot().active, 1);
+  reopenedOutgoing.finish();
+  assert.equal(coordinator.snapshot().active, 0);
 });
 
-test("an abandoned drain lease expires and automatically reopens writes", () => {
+test("an abandoned drain lease expires and automatically reopens writes", async () => {
   const token = "d".repeat(32);
   const lease = "lease".repeat(8);
   let now = 1_000;
-  const admission = createReleaseAdmission(token, { leaseMs: 1_000, now: () => now });
-  admission.enter(token, lease);
-  assert.equal(admission.acquire(), null);
+  const coordinator = createReleaseCoordinator(token, { leaseMs: 1_000, now: () => now });
+  coordinator.enter(token, lease);
+  const blocked = await coordinator.handle(businessRequest(), { outgoing: new FakeOutgoing() }, () => new Response("no"));
+  assert.equal(blocked.status, 503);
   now = 2_000;
-  assert.deepEqual(admission.snapshot(), { state: "open", active: 0 });
-  const release = admission.acquire();
-  assert.ok(release);
-  release?.();
+  assert.deepEqual(coordinator.snapshot(), { state: "open", active: 0 });
+  const outgoing = new FakeOutgoing();
+  await coordinator.handle(businessRequest(), { outgoing }, () => new Response("yes"));
+  outgoing.finish();
+  assert.equal(coordinator.snapshot().active, 0);
 });
 
-test("a fresh process inherits the persisted drain fence until its lease expires", () => {
+test("a fresh process inherits the persisted drain fence until its lease expires", async () => {
   const dir = mkdtempSync(join(tmpdir(), "beian-release-fence-"));
   const fencePath = join(dir, "runtime", "release-drain.json");
   const lease = "lease".repeat(8);
   let now = Date.parse("2026-08-28T00:00:00.000Z");
-  const first = createReleaseAdmission("e".repeat(32), {
+  const first = createReleaseCoordinator("e".repeat(32), {
     leaseMs: 5_000,
     now: () => now,
     fencePath,
@@ -99,13 +160,17 @@ test("a fresh process inherits the persisted drain fence until its lease expires
   first.enter("e".repeat(32), lease);
   assert.equal(existsSync(fencePath), true);
 
-  const restarted = createReleaseAdmission("f".repeat(32), {
+  const restarted = createReleaseCoordinator("f".repeat(32), {
     leaseMs: 5_000,
     now: () => now,
     fencePath,
   });
   assert.equal(restarted.snapshot().state, "draining");
-  assert.equal(restarted.acquire(), null);
+  assert.equal((await restarted.handle(
+    businessRequest(),
+    { outgoing: new FakeOutgoing() },
+    () => new Response("no"),
+  )).status, 503);
   now += 5_000;
   assert.deepEqual(restarted.snapshot(), { state: "open", active: 0 });
   assert.equal(existsSync(fencePath), false);
@@ -115,21 +180,21 @@ test("a fresh process can atomically reopen the inherited lease with its new tok
   const dir = mkdtempSync(join(tmpdir(), "beian-release-handoff-"));
   const fencePath = join(dir, "runtime", "release-drain.json");
   const lease = "handoff".repeat(5);
-  const first = createReleaseAdmission("g".repeat(32), { fencePath });
+  const first = createReleaseCoordinator("g".repeat(32), { fencePath });
   first.enter("g".repeat(32), lease);
 
-  const restarted = createReleaseAdmission("h".repeat(32), { fencePath });
+  const restarted = createReleaseCoordinator("h".repeat(32), { fencePath });
   assert.equal(restarted.snapshot().state, "draining");
   assert.deepEqual(restarted.leave("h".repeat(32), lease), { state: "open", active: 0 });
   assert.equal(existsSync(fencePath), false);
 });
 
-test("a promoted transaction fence survives time and process restart until explicitly reopened", () => {
+test("a promoted transaction fence survives time and process restart until explicitly reopened", async () => {
   const dir = mkdtempSync(join(tmpdir(), "beian-release-transaction-"));
   const fencePath = join(dir, "runtime", "release-drain.json");
   const lease = "transaction".repeat(3);
   let now = Date.parse("2026-08-28T00:00:00.000Z");
-  const first = createReleaseAdmission("i".repeat(32), {
+  const first = createReleaseCoordinator("i".repeat(32), {
     leaseMs: 1_000,
     now: () => now,
     fencePath,
@@ -147,8 +212,12 @@ test("a promoted transaction fence survives time and process restart until expli
   assert.equal("expires_at" in persisted, false);
 
   now += 86_400_000;
-  assert.equal(first.acquire(), null);
-  const restarted = createReleaseAdmission("j".repeat(32), {
+  assert.equal((await first.handle(
+    businessRequest(),
+    { outgoing: new FakeOutgoing() },
+    () => new Response("no"),
+  )).status, 503);
+  const restarted = createReleaseCoordinator("j".repeat(32), {
     leaseMs: 1_000,
     now: () => now,
     fencePath,
@@ -160,7 +229,11 @@ test("a promoted transaction fence survives time and process restart until expli
     lease_id: lease,
     mode: "transaction",
   });
-  assert.equal(restarted.acquire(), null);
+  assert.equal((await restarted.handle(
+    businessRequest(),
+    { outgoing: new FakeOutgoing() },
+    () => new Response("no"),
+  )).status, 503);
   assert.deepEqual(restarted.leave("j".repeat(32), lease), { state: "open", active: 0 });
   assert.equal(existsSync(fencePath), false);
 });
@@ -193,57 +266,54 @@ test("release readiness hides queue and agent details behind stable blocker code
   }), { ready: true, blocker_codes: [] });
 });
 
-test("a protected response holds admission until its stream closes or is cancelled", async () => {
-  const token = "s".repeat(32);
-  const lease = "stream".repeat(6);
-  const admission = createReleaseAdmission(token);
-  let sourceController: ReadableStreamDefaultController<Uint8Array> | undefined;
-  const source = new ReadableStream<Uint8Array>({
-    start(controller) {
-      sourceController = controller;
-    },
-  });
-  const release = admission.acquire();
-  assert.ok(release);
-  const response = holdReleaseUntilResponseSettles(new Response(source), release);
-  assert.equal(admission.enter(token, lease).active, 1);
-  const reader = response.body?.getReader();
-  assert.ok(reader);
-  sourceController?.enqueue(new Uint8Array([1, 2, 3]));
-  assert.deepEqual(await reader.read(), { done: false, value: new Uint8Array([1, 2, 3]) });
-  assert.equal(admission.inspect(token, lease).active, 1);
-  sourceController?.close();
-  assert.equal((await reader.read()).done, true);
-  assert.equal(admission.inspect(token, lease).active, 0);
-  admission.leave(token, lease);
+test("request records require both handler and transport to settle", async () => {
+  const coordinator = createReleaseCoordinator("s".repeat(32));
 
-  const cancelAdmission = createReleaseAdmission("t".repeat(32));
-  const cancelRelease = cancelAdmission.acquire();
-  assert.ok(cancelRelease);
-  const cancelled = holdReleaseUntilResponseSettles(
-    new Response(new ReadableStream<Uint8Array>({ start() { /* wait for cancel */ } })),
-    cancelRelease,
+  const handlerFirst = new FakeOutgoing();
+  await coordinator.handle(businessRequest(), { outgoing: handlerFirst }, () => new Response("ok"));
+  assert.equal(coordinator.snapshot().active, 1);
+  assert.equal(coordinator.snapshot().requests?.[0]?.handler_result, "fulfilled");
+  assert.equal(coordinator.snapshot().requests?.[0]?.transport_done, false);
+  handlerFirst.finish();
+  handlerFirst.close();
+  assert.equal(coordinator.snapshot().active, 0);
+
+  const transportFirst = new FakeOutgoing();
+  const pending = deferred<Response>();
+  const response = coordinator.handle(businessRequest("/api/uploads"), { outgoing: transportFirst }, () => pending.promise);
+  transportFirst.close();
+  assert.equal(coordinator.snapshot().active, 1);
+  assert.equal(coordinator.snapshot().requests?.[0]?.handler_done, false);
+  assert.equal(coordinator.snapshot().requests?.[0]?.terminal_reason, "close");
+  pending.resolve(new Response("done"));
+  await response;
+  assert.equal(coordinator.snapshot().active, 0);
+
+  const failed = new FakeOutgoing();
+  await assert.rejects(
+    coordinator.handle(businessRequest(), { outgoing: failed }, () => {
+      throw new Error("handler failed");
+    }),
+    /handler failed/,
   );
-  const cancelLease = "cancel".repeat(6);
-  assert.equal(cancelAdmission.enter("t".repeat(32), cancelLease).active, 1);
-  await cancelled.body?.cancel("client disconnected");
-  assert.equal(cancelAdmission.inspect("t".repeat(32), cancelLease).active, 0);
-  cancelAdmission.leave("t".repeat(32), cancelLease);
+  assert.equal(coordinator.snapshot().requests?.[0]?.handler_result, "rejected");
+  failed.fail();
+  assert.equal(coordinator.snapshot().active, 0);
 });
 
 test("release control rejects a wrong token and writes a private runtime contract", () => {
   const token = "b".repeat(32);
-  const admission = createReleaseAdmission(token);
-  assert.throws(() => admission.enter("c".repeat(32), "lease".repeat(8)), /denied/);
+  const coordinator = createReleaseCoordinator(token);
+  assert.throws(() => coordinator.enter("c".repeat(32), "lease".repeat(8)), /denied/);
   const dir = mkdtempSync(join(tmpdir(), "beian-release-control-"));
   const path = join(dir, "runtime", "release-control.json");
-  admission.controlFile(path, "0.20.0.0", 4321);
+  coordinator.controlFile(path, "0.20.0.0", 4321);
   const payload = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
   assert.equal(payload.protocol, RELEASE_CONTROL_PROTOCOL);
   assert.equal(payload.token, token);
-  assert.equal(payload.instance_id, admission.instanceId);
+  assert.equal(payload.instance_id, coordinator.instanceId);
   assert.equal(payload.version, "0.20.0.0");
   assert.equal(payload.pid, 4321);
-  assert.equal(admission.identity(token), admission.instanceId);
-  assert.throws(() => admission.identity("c".repeat(32)), /denied/);
+  assert.equal(coordinator.identity(token), coordinator.instanceId);
+  assert.throws(() => coordinator.identity("c".repeat(32)), /denied/);
 });

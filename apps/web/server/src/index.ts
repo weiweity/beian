@@ -12,7 +12,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { Readable } from "node:stream";
-import { serve } from "@hono/node-server";
+import { serve, type Http2Bindings, type HttpBindings } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono, type Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
@@ -21,13 +21,11 @@ import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import { HTTPException } from "hono/http-exception";
 import { cacheHeaderFor, REDIRECT_CACHE } from "./cacheHeaders.js";
 import {
-  createReleaseAdmission,
-  holdReleaseUntilResponseSettles,
+  createReleaseCoordinator,
   isReleaseProtectedRequest,
   releaseReadiness,
   RELEASE_CONTROL_PROTOCOL,
   RELEASE_CONTROL_TEST_TOKEN,
-  RELEASE_DRAIN_MESSAGE,
 } from "./releaseAdmission.js";
 import { isSpaPath, legacyDeskRedirect, spaIndexAction } from "./spaIndex.js";
 import { COOKIE, DATA_DIR, HOST, PORT, REPO_ROOT, UI_DIST, UI_PUBLIC, cookieSecure } from "./config.js";
@@ -139,10 +137,11 @@ import {
 } from "./tasks.js";
 
 
-type Env = { Variables: { session: Session } };
+type NodeBindings = HttpBindings | Http2Bindings;
+type Env = { Bindings: NodeBindings; Variables: { session: Session } };
 
 const app = new Hono<Env>();
-const VERSION = "0.20.2.1";
+const VERSION = "0.20.3.0";
 /** 浏览器给 100 MB 慢速上传 15 分钟；服务端多留 1 分钟完成落盘和回执。 */
 export const SERVER_HTTP_OPTIONS = {
   headersTimeout: 60_000,
@@ -153,43 +152,25 @@ const uploadCoordinator = createUploadCoordinator();
 const reworkUploadAdmission = createUploadAdmission(1);
 const releaseControlPath = join(DATA_DIR, "runtime", "release-control.json");
 const releaseDrainFencePath = join(DATA_DIR, "runtime", "release-drain.json");
-const releaseAdmission = createReleaseAdmission(
+const releaseCoordinator = createReleaseCoordinator(
   process.env.VITEST === "1" ? RELEASE_CONTROL_TEST_TOKEN : undefined,
   { fencePath: releaseDrainFencePath },
 );
 
 app.use("*", async (c, next) => {
   const protectedRequest = isReleaseProtectedRequest(c.req.method, c.req.path);
-  let release = protectedRequest ? releaseAdmission.acquire() : undefined;
-  if (protectedRequest && !release) throw new HTTPException(503, { message: RELEASE_DRAIN_MESSAGE });
-  const settle = (): void => {
-    release?.();
-    release = undefined;
-  };
-  try {
-    if (c.req.path.startsWith("/api/") && protectedRequest) {
-      // Acquire before session lookup: getSession can prune expired sessions or
-      // persist role reconciliation, and those writes must be in the drain count.
-      const cookie = getCookie(c, COOKIE);
-      const tok = c.req.header("authorization") || (cookie ? `Bearer ${cookie}` : "");
-      const sess = getSession(tok);
-      if (sess) c.set("session", sess);
-    }
-    await next();
-    if (release && c.req.method.toUpperCase() !== "HEAD" && c.res.body) {
-      c.res = holdReleaseUntilResponseSettles(c.res, settle);
-    } else {
-      settle();
-    }
-  } catch (err) {
-    settle();
-    throw err;
+  if (c.req.path.startsWith("/api/") && protectedRequest) {
+    // ReleaseCoordinator 在 app.fetch 外层先登记请求，因此 getSession 的
+    // 过期清理和角色落盘也完整处于排空生命周期内。
+    const cookie = getCookie(c, COOKIE);
+    const tok = c.req.header("authorization") || (cookie ? `Bearer ${cookie}` : "");
+    const sess = getSession(tok);
+    if (sess) c.set("session", sess);
   }
+  await next();
 });
 
-// Admission must wrap compression as well as the route handler. Otherwise the
-// inner lease can settle after compress() has consumed the source stream but
-// before the final gzip body has reached the client.
+// 压缩属于应用内部实现；发布生命周期由外层 Node ServerResponse 决定。
 app.use(compress());
 
 function need(c: { get: (k: "session") => Session | undefined }, perm: string): Session {
@@ -303,7 +284,7 @@ function releaseControlLease(c: Context): string {
   return c.req.header("x-beian-release-lease") || "";
 }
 
-function releaseControlPayload(admission: ReturnType<typeof releaseAdmission.snapshot>) {
+function releaseControlPayload(admission: ReturnType<typeof releaseCoordinator.snapshot>) {
   const jobs = queueSnapshot();
   const primaryUploads = uploadCoordinator.snapshot();
   const reworkUploads = reworkUploadAdmission.snapshot();
@@ -321,7 +302,7 @@ function releaseControlPayload(admission: ReturnType<typeof releaseAdmission.sna
   return {
     ok: true,
     protocol: RELEASE_CONTROL_PROTOCOL,
-    instance_id: releaseAdmission.instanceId,
+    instance_id: releaseCoordinator.instanceId,
     version: VERSION,
     pid: process.pid,
     ...admission,
@@ -331,7 +312,7 @@ function releaseControlPayload(admission: ReturnType<typeof releaseAdmission.sna
 
 app.get("/api/internal/release/identity", (c) => {
   try {
-    const instanceId = releaseAdmission.identity(releaseControlToken(c));
+    const instanceId = releaseCoordinator.identity(releaseControlToken(c));
     return c.json({
       ok: true,
       protocol: RELEASE_CONTROL_PROTOCOL,
@@ -347,7 +328,7 @@ app.get("/api/internal/release/identity", (c) => {
 app.post("/api/internal/release/drain", (c) => {
   try {
     return c.json(releaseControlPayload(
-      releaseAdmission.enter(releaseControlToken(c), releaseControlLease(c)),
+      releaseCoordinator.enter(releaseControlToken(c), releaseControlLease(c)),
     ));
   } catch (err) {
     boom(err);
@@ -357,7 +338,7 @@ app.post("/api/internal/release/drain", (c) => {
 app.put("/api/internal/release/drain", (c) => {
   try {
     return c.json(releaseControlPayload(
-      releaseAdmission.promote(releaseControlToken(c), releaseControlLease(c)),
+      releaseCoordinator.promote(releaseControlToken(c), releaseControlLease(c)),
     ));
   } catch (err) {
     boom(err);
@@ -367,7 +348,7 @@ app.put("/api/internal/release/drain", (c) => {
 app.get("/api/internal/release/drain", (c) => {
   try {
     return c.json(releaseControlPayload(
-      releaseAdmission.inspect(releaseControlToken(c), releaseControlLease(c)),
+      releaseCoordinator.inspect(releaseControlToken(c), releaseControlLease(c)),
     ));
   } catch (err) {
     boom(err);
@@ -377,7 +358,7 @@ app.get("/api/internal/release/drain", (c) => {
 app.delete("/api/internal/release/drain", (c) => {
   try {
     return c.json(releaseControlPayload(
-      releaseAdmission.leave(releaseControlToken(c), releaseControlLease(c)),
+      releaseCoordinator.leave(releaseControlToken(c), releaseControlLease(c)),
     ));
   } catch (err) {
     boom(err);
@@ -1310,15 +1291,23 @@ app.get("/mockup/:id", spaHtml);
 
 export { app };
 
+export function releaseFetch(request: Request, bindings: NodeBindings): Promise<Response> {
+  return releaseCoordinator.handle(
+    request,
+    bindings,
+    (nextRequest, nextBindings) => app.fetch(nextRequest, nextBindings),
+  );
+}
+
 if (process.env.VITEST !== "1") {
   const pub = /^(1|true|yes)$/i.test(process.env.WB_PUBLIC || "");
   if (pub && DATA_DIR.startsWith(REPO_ROOT)) {
     throw new Error("公网模式必须把 WB_DATA_DIR 设到仓库外");
   }
   mkdirSync(join(DATA_DIR, "tasks"), { recursive: true });
-  releaseAdmission.controlFile(releaseControlPath, VERSION);
+  releaseCoordinator.controlFile(releaseControlPath, VERSION);
   reclaimOnBoot();
-  serve({ fetch: app.fetch, hostname: HOST, port: PORT, serverOptions: SERVER_HTTP_OPTIONS }, (info) => {
+  serve({ fetch: releaseFetch, hostname: HOST, port: PORT, serverOptions: SERVER_HTTP_OPTIONS }, (info) => {
     console.log(`beian-server ${VERSION} http://${info.address}:${info.port}`);
   });
 }
