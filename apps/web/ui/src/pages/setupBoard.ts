@@ -70,7 +70,7 @@ export const WIZARD: Record<string, WizardGuide> = {
 };
 
 export const HOST_INTRO =
-  "这是杭州 Windows 上的 exe，不是云账号。只有管理员魏炜能扫、能采用。扫到路径要点采用才写入。找不到就人话列出搜过的目录和 PATH。";
+  "这是杭州 Windows 上的 exe，不是云账号。只有显式授权的管理员能扫、能采用。扫到路径要点采用才写入。找不到就人话列出搜过的目录和 PATH。";
 
 export const PUSH_INTRO =
   "点发一条测试即可。不必装 lark-cli，不必手填开关、open_id、bot。开工板绿不等于籽烨已收到；她作为审稿接收人可在本页再测一次。";
@@ -192,7 +192,7 @@ export function progressSpoken(probes: Record<string, ProbeResult | { pending: t
 
 export function idleRowMessage(id: string, kind: (typeof BOARD_ROWS)[number]["kind"]): string {
   if (id === "minimax") return "模型列表 GET /v1/models，不是对话";
-  if (kind === "scan") return "路径还没确认。管理员魏炜点扫描，再点采用。";
+  if (kind === "scan") return "路径还没确认。请由管理员点扫描，再点采用。";
   if (kind === "push") return "点发一条测试。没有飞书身份会先带你去授权，不必手填 open_id。";
   return "点全部检测或这一行";
 }

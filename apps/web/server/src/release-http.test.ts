@@ -22,7 +22,7 @@ const REPO_VERSION = readFileSync(
 ).trim();
 
 const { releaseFetch, SERVER_HTTP_OPTIONS } = await import("./index.js");
-const { issueSession } = await import("./auth.js");
+const { issueSessionForTest } = await import("./auth.js");
 const { DATA_DIR } = await import("./config.js");
 const { saveMockup } = await import("./mockup.js");
 const {
@@ -80,7 +80,7 @@ async function waitFor(check: () => boolean, timeoutMs = 2_000): Promise<void> {
 }
 
 function authHeader() {
-  const sess = issueSession("刘籽烨", "reviewer", "ou_release_http", "feishu");
+  const sess = issueSessionForTest("刘籽烨", "reviewer", "ou_release_http");
   return { authorization: `Bearer ${sess.token}` };
 }
 

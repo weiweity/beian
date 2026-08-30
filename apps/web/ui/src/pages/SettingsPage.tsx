@@ -249,7 +249,7 @@ export function SettingsPage({
 
   async function scanPc() {
     if (!canAdmin) {
-      message.error("扫描这台电脑需要管理员魏炜。刷新页面后再试。");
+      message.error("扫描这台电脑需要管理员权限。刷新页面后再试。");
       return;
     }
     setScanBusy(true);

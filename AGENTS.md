@@ -73,7 +73,7 @@ When the user's request matches an available skill, invoke it via the Skill tool
 
 升 VERSION 时：`VERSION` 文件和 `apps/web/server/src/index.ts` 里的 `VERSION` 常量必须同号。`package.json` 只写三位（npm 不认第四位）：MICRO（`0.12.8.0` → `0.12.8.1`）三位不动；PATCH/MINOR/MAJOR 才改三位。4 位号，本线现为 `0.20.x.0`。用户点名大版本才跳 MINOR。开放 PR 的 VERSION 若落后于 `main`，不合；先 `/ship` 重占号。
 
-魏炜飞书真名或花名「魏炜」才是杭州机箱管理员，能扫 Blender / Illustrator（含 PATH）。不要凭显示名「管理员」提权。升版后旧 cookie 仍是审核员，要重新走飞书登录。伸美其他人默认审稿员：能进审稿台，不能扫本机 exe。2026-08-24 当周不做品牌登录闪屏、申请权限工单（office-hours D1=A）。
+杭州机箱管理员必须在生产数据目录 `users.json` 中用真实飞书 `open_id` 显式绑定 `role: "admin"`，才能扫描 Blender / Illustrator（含 PATH）。姓名、花名和显示名只展示，绝不参与提权；同企业首次登录一律是 `reviewer`。删除账号、设 `disabled: true` 或调整角色后，已有飞书会话在下一次请求立即撤销或同步，不要求重新登录；公网模式还必须撤销并落盘清除旧显示名会话。退出直接删 token，不得因账号目录暂时不可读而保留。伸美其他人默认审稿员：能进审稿台，不能扫本机 exe。2026-08-24 当周不做品牌登录闪屏、申请权限工单（office-hours D1=A）。
 
 飞书推送不必装 lark-cli。点「发一条测试」用已填的飞书应用发给**当前登录**；成功才打开 `FEISHU_ENABLED` 并在空时写入 `FEISHU_OPEN_ID`。`lark_send` 需要 `create` 权限（只读访客 403）。开工板绿 ≠ 籽烨已收到；她当审稿接收人要在「飞书推送」页自己再测。不要把开关 / open_id / bot 当主路径让人手填。探测 id `lark_send` 的 pending/结果必须画在行 `lark`，否则按钮看起来没反应。
 
@@ -109,7 +109,7 @@ MiniMax 未开语义复核是「未用」，不是「可用」；探测是 `GET 
 - L2 金标（人核定后）：`apps/web/backend/scripts/run_eval.py`。未核定的 `data/gold` 不进默认 `npm test`
 - 类型：`npm run typecheck -w beian-server` 与 `npm run build -w beian-ui`
 - 浏览器交互（Mac）：`npm run test:e2e`（Vite + 合成 API，只验证页面行为，不替代真实 Hono / Windows L1）
-- 复杂度门禁（Mac / GitHub-hosted PR）：`npm run quality`；基线只读、只能经评审缩小，新增发现、过期条目或相对 base 扩张都失败。本地自动解析 `origin/HEAD`（再回退 `origin/main` / `main`），找不到目标分支就失败关闭；CI 使用 PR base 精确 SHA。同文件同名诊断按重数比较，行号移动不改变身份，但新增第二处不能被折叠。`npm run quality:deep` 只生成手工清理报告，不自动删除。
+- 复杂度门禁（Mac / GitHub-hosted PR）：`npm run quality`；基线只读、只能经评审缩小，新增发现、过期条目或相对 base 扩张都失败。本地自动解析 `origin/HEAD`（再回退 `origin/main` / `main`），找不到目标分支就失败关闭；CI 使用 PR base 精确 SHA。同文件同名诊断按重数比较，行号移动不改变身份，但新增第二处不能被折叠。`npm run quality:deep` 只生成手工清理报告，不自动删除。`npm run test:quality` 还要求 `.agents/skills` 实际目录、审核清单与 `skills-lock.json` 完全一致；项目 skill 不自动授予 shell。`antd` 是仓库 vendored 源，只能经 `scripts/quality/antd-readonly.mjs` 调固定 6.6.1；禁止用上游 restore/update 覆盖本地 hardening，恢复走受信任 Git 提交并重验哈希。
 - `.github/workflows/quality.yml` 的 Linux Node 22 质量 job 与 `windows-2022` PowerShell 5.1 `.NET File.Replace` 合同 job 都使用 GitHub-hosted runner；禁止使用杭州/self-hosted runner。Windows job 只验证无备份原子替换，不调用 `release.ps1`、不替代杭州 L1。Knip 只锁在 `tools/quality`，Vulture 只放 `requirements-quality.txt`，两者不得进入杭州生产依赖图。
 - 新逻辑要有行为测试（含失败路径）。不要把密钥写进测试。
 

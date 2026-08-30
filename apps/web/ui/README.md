@@ -13,9 +13,9 @@ npm run dev
 浏览器：http://127.0.0.1:5173/（Vite 听本机网卡，端口占用即失败）  
 `/api` 代理到 TypeScript 服务 `127.0.0.1:8787`（`apps/web/server`，不是 FastAPI）。5173 登录闪或 `/api` 返回 HTML / 空 Content-Type：打开 http://127.0.0.1:8787/。飞书授权失败再走飞书，不要把远程验收人指到本机。JSON 404 不是代理挂了。
 
-组件查询（本机已装）：
+组件查询只从仓库根目录走已审核的只读包装器；不要直接运行 `antd` CLI：
 
 ```bash
-antd info Button --lang zh --format json
-antd demo Upload drag --format json
+node scripts/quality/antd-readonly.mjs info Button --lang zh --format json
+node scripts/quality/antd-readonly.mjs demo Upload drag --format json
 ```

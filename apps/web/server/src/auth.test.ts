@@ -15,10 +15,10 @@ describe("feishu authorize", () => {
   it("prunes expired sessions from memory and disk when issuing a new session", (t) => {
     let at = Date.now();
     t.mock.method(Date, "now", () => at);
-    const expired = auth.issueSession("旧会话", "reviewer", "ou_expired_session", "feishu");
+    const expired = auth.issueSessionForTest("旧会话", "reviewer", "ou_expired_session");
 
     at += 7 * 24 * 3600 * 1000;
-    const fresh = auth.issueSession("新会话", "reviewer", "ou_fresh_session", "feishu");
+    const fresh = auth.issueSessionForTest("新会话", "reviewer", "ou_fresh_session");
     const persisted = JSON.parse(
       readFileSync(join(process.env.WB_DATA_DIR as string, "sessions.json"), "utf8"),
     ) as Record<string, unknown>;
@@ -32,7 +32,7 @@ describe("feishu authorize", () => {
   it("getSession directly removes an expired session from memory and disk", (t) => {
     let at = Date.now();
     t.mock.method(Date, "now", () => at);
-    const expired = auth.issueSession("直接过期", "reviewer", "ou_direct_expiry", "feishu");
+    const expired = auth.issueSessionForTest("直接过期", "reviewer", "ou_direct_expiry");
 
     at = expired.expires_at * 1000;
     assert.equal(auth.getSession(expired.token), null);
@@ -129,6 +129,8 @@ describe("feishu authorize", () => {
   it("display login stays on loopback only", () => {
     assert.equal(auth.displayLoginAllowed("www.jianghua.site"), false);
     assert.equal(auth.displayLoginAllowed("localhost:8787"), true);
+    assert.equal(auth.displayLoginAllowed("[::1]:8787"), true);
+    assert.equal(auth.displayLoginAllowed("[::1]not-a-port"), false);
   });
 
   it("rejects other Feishu tenants when 伸美 tenant_key is set", () => {
@@ -152,14 +154,14 @@ describe("feishu authorize", () => {
     assert.match(auth.describeOutboundError(err), /直连/);
   });
 
-  it("whitelist miss throws 403 without needing live feishu", () => {
+  it("missing account throws 403 without needing live feishu", () => {
     try {
       auth.sessionFromFeishu("ou_stranger_xxxx", "路人");
       assert.fail("should throw");
     } catch (e) {
       const err = e as Error & { status?: number };
       assert.equal(err.status, 403);
-      assert.match(err.message, /白名单/);
+      assert.match(err.message, /账号目录/);
     }
   });
 
@@ -190,7 +192,7 @@ describe("feishu authorize", () => {
     assert.equal(auth.formatAccountLabel("", ""), "飞书用户");
   });
 
-  it("uses Feishu nickname in session display and keeps avatar", () => {
+  it("uses Feishu nickname in session display, keeps avatar, and never promotes by name", () => {
     const sess = auth.sessionFromFeishu(
       "ou_tianyuan_xxxx",
       "魏炜",
@@ -200,62 +202,355 @@ describe("feishu authorize", () => {
     );
     assert.equal(sess.display_name, "天元（魏炜）");
     assert.equal(sess.avatar_url, "https://img.example/a.png");
-    assert.equal(sess.role, "admin");
+    assert.equal(sess.role, "reviewer");
   });
 
-  it("promotes 魏炜 to admin even if users.json still says reviewer", () => {
+  it("takes admin only from the exact open_id account binding", () => {
     const dir = process.env.WB_DATA_DIR as string;
     mkdirSync(dir, { recursive: true });
     writeFileSync(
       join(dir, "users.json"),
       JSON.stringify({
-        users: [{ name: "魏炜", role: "reviewer", open_id: "ou_weiwei_old" }],
+        users: [
+          { name: "魏炜", role: "admin", open_id: "ou_weiwei_explicit" },
+          { name: "魏炜", role: "reviewer", open_id: "ou_same_name_reviewer" },
+        ],
       }) + "\n",
     );
-    const sess = auth.sessionFromFeishu("ou_weiwei_old", "魏炜", "tenant_shenmei", "tenant_shenmei");
-    assert.equal(sess.role, "admin");
-    const again = auth.getSession(sess.token);
-    assert.equal(again?.role, "admin");
+    const admin = auth.sessionFromFeishu(
+      "ou_weiwei_explicit",
+      "任意飞书姓名",
+      "tenant_shenmei",
+      "tenant_shenmei",
+    );
+    const reviewer = auth.sessionFromFeishu(
+      "ou_same_name_reviewer",
+      "魏炜",
+      "tenant_shenmei",
+      "tenant_shenmei",
+    );
+    assert.equal(admin.role, "admin");
+    assert.equal(reviewer.role, "reviewer");
   });
 
-  it("syncs 魏炜 admin onto an already-issued reviewer session", () => {
-    const issued = auth.issueSession("天元（魏炜）", "reviewer", "ou_weiwei_sync", "feishu");
+  it("syncs an account role change onto an already-issued Feishu session", () => {
     const dir = process.env.WB_DATA_DIR as string;
     mkdirSync(dir, { recursive: true });
     writeFileSync(
       join(dir, "users.json"),
       JSON.stringify({
-        users: [{ name: "魏炜", role: "reviewer", open_id: "ou_weiwei_sync" }],
+        users: [{ name: "审核员", role: "reviewer", open_id: "ou_role_sync" }],
+      }) + "\n",
+    );
+    const issued = auth.sessionFromFeishu("ou_role_sync", "审核员", "tenant_shenmei", "tenant_shenmei");
+    writeFileSync(
+      join(dir, "users.json"),
+      JSON.stringify({
+        users: [{ name: "审核员", role: "viewer", open_id: "ou_role_sync" }],
       }) + "\n",
     );
     const sess = auth.getSession(issued.token);
-    assert.equal(sess?.role, "admin");
+    assert.equal(sess?.role, "viewer");
   });
 
-  it("does not grant admin by Feishu display name", () => {
+  it("revokes a Feishu session immediately when its account is removed", () => {
     const dir = process.env.WB_DATA_DIR as string;
     mkdirSync(dir, { recursive: true });
     writeFileSync(
       join(dir, "users.json"),
       JSON.stringify({
-        users: [{ name: "管理员", role: "admin", open_id: "", note: "可备份/管理" }],
+        users: [{ name: "待移除", role: "reviewer", open_id: "ou_removed_now" }],
       }) + "\n",
     );
-    const sess = auth.sessionFromFeishu(
-      "ou_named_admin_xx",
-      "管理员",
+    const issued = auth.sessionFromFeishu(
+      "ou_removed_now",
+      "待移除",
       "tenant_shenmei",
       "tenant_shenmei",
-      { provision: true },
     );
-    assert.equal(sess.role, "reviewer");
-    assert.equal(sess.open_id, "ou_named_admin_xx");
+    writeFileSync(join(dir, "users.json"), JSON.stringify({ users: [] }) + "\n");
+
+    assert.equal(auth.getSession(issued.token), null);
+    const persisted = JSON.parse(readFileSync(join(dir, "sessions.json"), "utf8")) as Record<string, unknown>;
+    assert.equal(issued.token in persisted, false);
   });
 
-  it("isWeiWei matches legal or nickname 魏炜 only", () => {
-    assert.equal(auth.isWeiWei("魏炜", "天元"), true);
-    assert.equal(auth.isWeiWei("刘籽烨", "天元"), false);
-    assert.equal(auth.isWeiWei("管理员", ""), false);
-    assert.equal(auth.isWeiWei("伸美品牌", "魏炜"), true);
+  it("revokes a Feishu session when the account is disabled", () => {
+    const dir = process.env.WB_DATA_DIR as string;
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "users.json"),
+      JSON.stringify({
+        users: [{ name: "停用账号", role: "reviewer", open_id: "ou_disabled_now" }],
+      }) + "\n",
+    );
+    const issued = auth.sessionFromFeishu(
+      "ou_disabled_now",
+      "停用账号",
+      "tenant_shenmei",
+      "tenant_shenmei",
+    );
+    writeFileSync(
+      join(dir, "users.json"),
+      JSON.stringify({
+        users: [{ name: "停用账号", role: "reviewer", open_id: "ou_disabled_now", disabled: true }],
+      }) + "\n",
+    );
+    assert.equal(auth.getSession(issued.token), null);
+  });
+
+  it("fails closed when an open_id is duplicated", () => {
+    const dir = process.env.WB_DATA_DIR as string;
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "users.json"),
+      JSON.stringify({
+        users: [
+          { name: "配置甲", role: "admin", open_id: "ou_duplicate" },
+          { name: "配置乙", role: "reviewer", open_id: "ou_duplicate" },
+        ],
+      }) + "\n",
+    );
+    assert.throws(
+      () => auth.sessionFromFeishu("ou_duplicate", "配置甲", "tenant_shenmei", "tenant_shenmei"),
+      /重复 open_id/,
+    );
+  });
+
+  it("rejects inherited object-property names as account roles", () => {
+    const dir = process.env.WB_DATA_DIR as string;
+    const usersPath = join(dir, "users.json");
+    for (const [index, role] of ["toString", "constructor", "__proto__"].entries()) {
+      const openId = `ou_invalid_role_${index}`;
+      writeFileSync(
+        usersPath,
+        JSON.stringify({ users: [{ name: `非法角色${index}`, role, open_id: openId }] }) + "\n",
+      );
+      assert.throws(
+        () => auth.sessionFromFeishu(openId, `非法角色${index}`, "tenant_shenmei", "tenant_shenmei"),
+        (error: unknown) => {
+          assert.ok(error instanceof auth.AuthBoundaryError);
+          assert.equal(error.status, 503);
+          assert.match(error.message, /角色配置无效/);
+          return true;
+        },
+      );
+    }
+  });
+
+  it("drops an inherited object-property role from persisted sessions", () => {
+    const dir = process.env.WB_DATA_DIR as string;
+    const token = "persisted-invalid-role";
+    writeFileSync(
+      join(dir, "sessions.json"),
+      JSON.stringify({
+        [token]: {
+          token,
+          display_name: "非法持久会话",
+          role: "constructor",
+          open_id: "ou_invalid_persisted_role",
+          source: "feishu",
+          avatar_url: "",
+          created_at: Date.now() / 1000,
+          expires_at: Date.now() / 1000 + 3600,
+        },
+      }),
+    );
+    auth.loadSessions();
+    assert.equal(auth.getSession(token), null);
+    assert.deepEqual(JSON.parse(readFileSync(join(dir, "sessions.json"), "utf8")), {});
+  });
+
+  it("drops every malformed persisted session identity field", () => {
+    const dir = process.env.WB_DATA_DIR as string;
+    const sessionsPath = join(dir, "sessions.json");
+    const now = Date.now() / 1000;
+    const valid = {
+      token: "persisted-shape",
+      display_name: "持久会话",
+      role: "reviewer",
+      open_id: "ou_persisted_shape",
+      source: "feishu",
+      avatar_url: "",
+      created_at: now,
+      expires_at: now + 3600,
+    };
+    const malformed: Array<[string, Record<string, unknown>]> = [
+      ["token 与键不一致", { token: "different-token" }],
+      ["来源非法", { source: "test" }],
+      ["显示名不是字符串", { display_name: 42 }],
+      ["open_id 不是字符串", { open_id: null }],
+      ["头像不是字符串", { avatar_url: 42 }],
+      ["创建时间不是数字", { created_at: String(now) }],
+      ["过期时间不是数字", { expires_at: String(now + 3600) }],
+    ];
+
+    for (const [label, patch] of malformed) {
+      writeFileSync(sessionsPath, JSON.stringify({ [valid.token]: { ...valid, ...patch } }));
+      auth.loadSessions();
+      assert.equal(auth.getSession(valid.token), null, label);
+      assert.deepEqual(JSON.parse(readFileSync(sessionsPath, "utf8")), {}, label);
+    }
+  });
+
+  it("maps only safe authorization failures to the Feishu forbidden result", () => {
+    assert.equal(auth.loginFailureCode(new auth.AuthBoundaryError("账号已停用", 403)), "forbidden");
+    assert.equal(auth.loginFailureCode(new auth.AuthBoundaryError("目录损坏", 503)), "failed");
+    assert.equal(auth.loginFailureCode(new Error("上游超时")), "failed");
+  });
+
+  it("fails closed on an unreadable directory without erasing a recoverable session", () => {
+    const dir = process.env.WB_DATA_DIR as string;
+    const usersPath = join(dir, "users.json");
+    const row = { name: "可恢复账号", role: "reviewer", open_id: "ou_directory_repair" };
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(usersPath, JSON.stringify({ users: [row] }) + "\n");
+    const issued = auth.sessionFromFeishu(
+      "ou_directory_repair",
+      "可恢复账号",
+      "tenant_shenmei",
+      "tenant_shenmei",
+    );
+
+    writeFileSync(usersPath, "{broken");
+    assert.equal(auth.getSession(issued.token), null);
+    const persisted = JSON.parse(readFileSync(join(dir, "sessions.json"), "utf8")) as Record<string, unknown>;
+    assert.equal(issued.token in persisted, true);
+
+    writeFileSync(usersPath, JSON.stringify({ users: [row] }) + "\n");
+    assert.equal(auth.getSession(issued.token)?.role, "reviewer");
+  });
+
+  it("logout revokes a token even while the account directory is unreadable", () => {
+    const dir = process.env.WB_DATA_DIR as string;
+    const usersPath = join(dir, "users.json");
+    const row = { name: "退出账号", role: "reviewer", open_id: "ou_logout_broken_directory" };
+    writeFileSync(usersPath, JSON.stringify({ users: [row] }) + "\n");
+    const issued = auth.sessionFromFeishu(
+      row.open_id,
+      row.name,
+      "tenant_shenmei",
+      "tenant_shenmei",
+    );
+
+    writeFileSync(usersPath, "{broken");
+    auth.logout(`Bearer ${issued.token}`);
+    writeFileSync(usersPath, JSON.stringify({ users: [row] }) + "\n");
+
+    assert.equal(auth.getSession(issued.token), null);
+    const persisted = JSON.parse(readFileSync(join(dir, "sessions.json"), "utf8")) as Record<string, unknown>;
+    assert.equal(issued.token in persisted, false);
+  });
+
+  it("removes persisted display sessions when public mode is enabled", () => {
+    const dir = process.env.WB_DATA_DIR as string;
+    const usersPath = join(dir, "users.json");
+    const previousPublic = process.env.WB_PUBLIC;
+    process.env.WB_PUBLIC = "0";
+    writeFileSync(
+      usersPath,
+      JSON.stringify({ users: [{ name: "旧本机会话", role: "admin" }] }) + "\n",
+    );
+    const issued = auth.createDisplaySession("旧本机会话", "127.0.0.1:8787");
+    process.env.WB_PUBLIC = "1";
+    try {
+      auth.loadSessions();
+      assert.equal(auth.getSession(issued.token, "127.0.0.1:8787"), null);
+      const persisted = JSON.parse(readFileSync(join(dir, "sessions.json"), "utf8")) as Record<string, unknown>;
+      assert.equal(issued.token in persisted, false);
+    } finally {
+      if (previousPublic === undefined) delete process.env.WB_PUBLIC;
+      else process.env.WB_PUBLIC = previousPublic;
+    }
+  });
+
+  it("removes persisted display sessions when display login is disabled", () => {
+    const dir = process.env.WB_DATA_DIR as string;
+    const usersPath = join(dir, "users.json");
+    const previousPublic = process.env.WB_PUBLIC;
+    const previousDisplay = process.env.WB_DEV_DISPLAY_LOGIN;
+    process.env.WB_PUBLIC = "0";
+    process.env.WB_DEV_DISPLAY_LOGIN = "1";
+    writeFileSync(
+      usersPath,
+      JSON.stringify({ users: [{ name: "关闭显示名", role: "reviewer" }] }) + "\n",
+    );
+    const issued = auth.createDisplaySession("关闭显示名", "127.0.0.1:8787");
+    process.env.WB_DEV_DISPLAY_LOGIN = "0";
+    try {
+      auth.loadSessions();
+      assert.equal(auth.getSession(issued.token, "127.0.0.1:8787"), null);
+      const persisted = JSON.parse(readFileSync(join(dir, "sessions.json"), "utf8")) as Record<string, unknown>;
+      assert.equal(issued.token in persisted, false);
+    } finally {
+      if (previousPublic === undefined) delete process.env.WB_PUBLIC;
+      else process.env.WB_PUBLIC = previousPublic;
+      if (previousDisplay === undefined) delete process.env.WB_DEV_DISPLAY_LOGIN;
+      else process.env.WB_DEV_DISPLAY_LOGIN = previousDisplay;
+    }
+  });
+
+  it("revokes a display session when it is presented on a non-loopback host", () => {
+    const dir = process.env.WB_DATA_DIR as string;
+    const usersPath = join(dir, "users.json");
+    const previousPublic = process.env.WB_PUBLIC;
+    process.env.WB_PUBLIC = "0";
+    try {
+      writeFileSync(
+        usersPath,
+        JSON.stringify({ users: [{ name: "仅限本机", role: "reviewer" }] }) + "\n",
+      );
+      const issued = auth.createDisplaySession("仅限本机", "127.0.0.1:8787");
+      assert.equal(auth.getSession(issued.token, "www.jianghua.site"), null);
+    } finally {
+      if (previousPublic === undefined) delete process.env.WB_PUBLIC;
+      else process.env.WB_PUBLIC = previousPublic;
+    }
+  });
+
+  it("revokes a loopback display session when its local account is disabled", () => {
+    const dir = process.env.WB_DATA_DIR as string;
+    const usersPath = join(dir, "users.json");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      usersPath,
+      JSON.stringify({ users: [{ name: "本机账号", role: "admin" }] }) + "\n",
+    );
+    const issued = auth.createDisplaySession("本机账号", "127.0.0.1:8787");
+    writeFileSync(
+      usersPath,
+      JSON.stringify({ users: [{ name: "本机账号", role: "admin", disabled: true }] }) + "\n",
+    );
+    assert.equal(auth.getSession(issued.token), null);
+  });
+
+  it("uses display-name-specific account errors", () => {
+    const dir = process.env.WB_DATA_DIR as string;
+    const usersPath = join(dir, "users.json");
+    writeFileSync(
+      usersPath,
+      JSON.stringify({
+        users: [
+          { name: "重名", role: "admin" },
+          { name: "重名", role: "reviewer" },
+        ],
+      }) + "\n",
+    );
+    assert.throws(
+      () => auth.createDisplaySession("重名", "127.0.0.1:8787"),
+      (error: unknown) => {
+        assert.ok(error instanceof auth.AuthBoundaryError);
+        assert.equal(error.status, 503);
+        assert.match(error.message, /重复显示名/);
+        assert.doesNotMatch(error.message, /open_id/);
+        return true;
+      },
+    );
+  });
+
+  it("never restores test fixture sessions from disk", () => {
+    const issued = auth.issueSessionForTest("测试账号", "admin", "ou_test_fixture");
+    auth.loadSessions();
+    assert.equal(auth.getSession(issued.token), null);
   });
 });
