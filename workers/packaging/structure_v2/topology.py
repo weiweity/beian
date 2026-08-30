@@ -19,6 +19,7 @@ except ImportError as error:  # pragma: no cover - exercised by deployment probe
 
 from .model import canonicalize_structure
 from .box_net import BoxNetProposalLimitError, derive_box_net_proposals
+from .dimensions import STROKE_PROPOSAL_GEOMETRY
 
 
 LINEWORK_ASSIGNMENTS = ("cut", "crease", "perforation")
@@ -370,8 +371,6 @@ def _cluster_axis_coordinates(
 
 def derive_rectangular_face_proposal(
     payload: Mapping[str, Any],
-    *,
-    boundary_tolerance_mm: float = 1.5,
 ) -> dict[str, Any]:
     """Build human-selectable finished-face rectangles from legacy strokes.
 
@@ -392,9 +391,9 @@ def derive_rectangular_face_proposal(
     if not source_lines:
         raise TopologyError("structure_semantics_missing", "结构线没有形成可确认的盒面候选")
 
-    tolerance = float(boundary_tolerance_mm)
-    if not math.isfinite(tolerance) or tolerance <= 0 or tolerance > 2.0:
-        raise TopologyError("structure_contract_invalid", "候选边界容差必须位于 0–2 mm")
+    tolerance = STROKE_PROPOSAL_GEOMETRY.boundary_mm
+    if tolerance is None:
+        raise TopologyError("structure_contract_invalid", "旧刀线候选缺少边界容差策略")
     basis_angle = _dominant_orthogonal_angle(source_lines)
     local_lines = [
         LineString([_rotate_coordinate(tuple(point), -basis_angle) for point in line.coords])
@@ -508,7 +507,7 @@ def derive_rectangular_face_proposal(
     for index, candidate in enumerate(candidates, start=1):
         candidate["id"] = f"rect-face-{index:04d}"
     try:
-        net_proposals = derive_box_net_proposals(candidates, tolerance_mm=tolerance)
+        net_proposals = derive_box_net_proposals(candidates, policy=STROKE_PROPOSAL_GEOMETRY)
     except BoxNetProposalLimitError as error:
         raise TopologyError(
             "structure_limit_exceeded",

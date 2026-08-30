@@ -10,6 +10,7 @@ import tempfile
 from typing import Any, Mapping
 
 from .adapters import sha256_file
+from .dimensions import DimensionPolicy, geometry_policy_for_source
 from .model import canonicalize_structure
 from .resolver import BOX_ROLES, resolve_structure_payload
 
@@ -122,10 +123,6 @@ def _turned_size(structure: Mapping[str, Any], face: Mapping[str, Any], turns: i
     return (height, width) if turns % 2 else (width, height)
 
 
-def _dimension_close(left: float, right: float) -> bool:
-    return abs(left - right) <= max(0.1, max(abs(left), abs(right)) * 0.03)
-
-
 def _turn_distance(left: int, right: int) -> int:
     delta = abs((left % 4) - (right % 4))
     return min(delta, 4 - delta)
@@ -136,12 +133,13 @@ def _turn_for_size(
     face: Mapping[str, Any],
     expected: tuple[float, float],
     preferred: int,
+    dimensions: DimensionPolicy,
 ) -> int:
     matches = [
         turns
         for turns in range(4)
         if all(
-            _dimension_close(actual, target)
+            dimensions.close(actual, target)
             for actual, target in zip(_turned_size(structure, face, turns), expected)
         )
     ]
@@ -189,6 +187,35 @@ def _cap_body_neighbor(
     return next(iter(body_neighbors))
 
 
+def _shared_fold_midpoint(
+    structure: Mapping[str, Any],
+    cap_face: Mapping[str, Any],
+    body_face: Mapping[str, Any],
+) -> tuple[float, float]:
+    cap_id = str(cap_face["id"])
+    body_id = str(body_face["id"])
+    shared = [
+        str(fold["edge"])
+        for fold in structure["folds"]
+        if {str(fold["left_face"]), str(fold["right_face"])} == {cap_id, body_id}
+    ]
+    if len(shared) != 1:
+        raise StructureConfirmationError("structure_fold_graph_invalid", "盒盖与盒身必须只共享一条折线。")
+    edges = {str(edge["id"]): edge for edge in structure["edges"]}
+    vertices = {
+        str(vertex["id"]): (float(vertex["x"]), float(vertex["y"]))
+        for vertex in structure["vertices"]
+    }
+    edge = edges.get(shared[0])
+    if edge is None:
+        raise StructureConfirmationError("structure_fold_graph_invalid", "盒盖折线不存在。")
+    start = vertices.get(str(edge["start"]))
+    end = vertices.get(str(edge["end"]))
+    if start is None or end is None:
+        raise StructureConfirmationError("structure_fold_graph_invalid", "盒盖折线端点不存在。")
+    return ((start[0] + end[0]) / 2, (start[1] + end[1]) / 2)
+
+
 def _direction_matches(actual: tuple[float, float], expected: tuple[int, int]) -> bool:
     if expected[0]:
         primary, secondary = actual[0] * expected[0], actual[1]
@@ -205,22 +232,31 @@ def _turn_for_cap(
     role: str,
     attached_role: str,
     expected_size: tuple[float, float],
+    dimensions: DimensionPolicy,
 ) -> int:
     # The Blender role contract fixes each panel's texture axes.  Dimensions
     # alone cannot distinguish 90° from 270° (especially on square caps), so
     # use the actual fold attachment to map the flat net into that contract.
     expected_direction = CAP_OUTWARD_DIRECTIONS[role][attached_role]
     cap_center = _face_centroid(structure, cap_face)
-    body_center = _face_centroid(structure, attached_body)
-    source_outward = (cap_center[0] - body_center[0], cap_center[1] - body_center[1])
+    fold_center = _shared_fold_midpoint(structure, cap_face, attached_body)
+    source_outward = (cap_center[0] - fold_center[0], cap_center[1] - fold_center[1])
     width, height = _mapped_size(structure, cap_face)
-    matches = []
-    for candidate in range(4):
-        if not all(
-            _dimension_close(actual, target)
+    size_matches = [
+        candidate
+        for candidate in range(4)
+        if all(
+            dimensions.close(actual, target)
             for actual, target in zip(_turned_size(structure, cap_face, candidate), expected_size)
-        ):
-            continue
+        )
+    ]
+    if not size_matches:
+        raise StructureConfirmationError(
+            "structure_face_dimensions_mismatch",
+            "盒盖尺寸与盒身宽深不一致，不能形成闭合盒。",
+        )
+    matches = []
+    for candidate in size_matches:
         transform = _rotated_transform(
             list(cap_face["artwork_transform"]),
             width,
@@ -239,6 +275,7 @@ def _anchor_decisions(
     structure: Mapping[str, Any],
     anchor: Mapping[str, Any],
 ) -> list[tuple[str, str, int]]:
+    dimensions = geometry_policy_for_source(structure.get("source")).dimensions
     proposal_id = str(anchor.get("proposal_id") or "")
     front_id = str(anchor.get("front_face_id") or "")
     turns = anchor.get("quarter_turns", 0)
@@ -323,7 +360,7 @@ def _anchor_decisions(
         (
             candidate
             for candidate in range(4)
-            if _dimension_close(_turned_size(structure, right_face, candidate)[1], height)
+            if dimensions.close(_turned_size(structure, right_face, candidate)[1], height)
         ),
         key=lambda candidate: (_turn_distance(candidate, turns), candidate),
         default=-1,
@@ -351,6 +388,7 @@ def _anchor_decisions(
             faces_by_id[role_ids[role]],
             expected_sizes[role],
             turns,
+            dimensions,
         )
     for role in ("top", "bottom"):
         cap_id = role_ids[role]
@@ -362,41 +400,12 @@ def _anchor_decisions(
             role=role,
             attached_role=body_roles[attached_id],
             expected_size=expected_sizes[role],
+            dimensions=dimensions,
         )
     normalized = []
     for role in ("front", "right", "back", "left", "top", "bottom"):
         face_id = role_ids[role]
         normalized.append((face_id, role, face_turns[role]))
-    return normalized
-
-
-def _manual_decisions(
-    structure: Mapping[str, Any],
-    raw_faces: Any,
-) -> list[tuple[str, str, int]]:
-    if not isinstance(raw_faces, list) or len(raw_faces) != 6:
-        raise StructureConfirmationError("structure_face_mapping_incomplete", "旧版兼容确认必须包含且只包含六个盒面。")
-    faces_by_id = {face["id"]: face for face in structure["faces"]}
-    chosen_ids: set[str] = set()
-    chosen_roles: set[str] = set()
-    normalized: list[tuple[str, str, int]] = []
-    for raw in raw_faces:
-        if not isinstance(raw, Mapping):
-            raise StructureConfirmationError("structure_confirmation_invalid", "盒面确认项必须是对象。")
-        face_id = str(raw.get("id") or "")
-        role = str(raw.get("role") or "")
-        turns = raw.get("quarter_turns", 0)
-        if face_id not in faces_by_id or face_id in chosen_ids:
-            raise StructureConfirmationError("structure_face_mapping_incomplete", "盒面不存在或被重复选择。")
-        if role not in BOX_ROLES or role in chosen_roles:
-            raise StructureConfirmationError("structure_face_mapping_incomplete", "六个盒面角色必须各出现一次。")
-        if isinstance(turns, bool) or not isinstance(turns, int) or turns not in {0, 1, 2, 3}:
-            raise StructureConfirmationError("artwork_transform_invalid", "盒面方向只能旋转 0/90/180/270 度。")
-        chosen_ids.add(face_id)
-        chosen_roles.add(role)
-        normalized.append((face_id, role, turns))
-    if chosen_roles != set(BOX_ROLES):
-        raise StructureConfirmationError("structure_face_mapping_incomplete", "六个盒面角色不完整。")
     return normalized
 
 
@@ -418,11 +427,12 @@ def confirm_structure(
     if structure["source"]["sha256"] != sha256_file(source_path):
         raise StructureConfirmationError("structure_source_mismatch", "源稿已变化，请重新识别结构。")
     faces_by_id = {face["id"]: face for face in structure["faces"]}
-    if isinstance(decisions, Mapping) and isinstance(decisions.get("anchor"), Mapping):
-        normalized = _anchor_decisions(resolution, structure, decisions["anchor"])
-    else:
-        raw_faces = decisions.get("faces") if isinstance(decisions, Mapping) else decisions
-        normalized = _manual_decisions(structure, raw_faces)
+    if not isinstance(decisions, Mapping) or not isinstance(decisions.get("anchor"), Mapping):
+        raise StructureConfirmationError(
+            "structure_confirmation_stale",
+            "这单还是旧版逐面确认，请重新识别完整盒型。",
+        )
+    normalized = _anchor_decisions(resolution, structure, decisions["anchor"])
 
     structure.pop("structure_hash", None)
     for face in structure["faces"]:
