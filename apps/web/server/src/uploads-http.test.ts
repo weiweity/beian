@@ -11,7 +11,7 @@ process.env.WB_HOST = "127.0.0.1";
 process.env.WB_PORT = "0";
 
 const { app, SERVER_HTTP_OPTIONS } = await import("./index.js");
-const { issueSession } = await import("./auth.js");
+const { issueSessionForTest } = await import("./auth.js");
 const { setJobsTestHooks, resetJobsTestHooks } = await import("./jobs.js");
 const {
   discardReceipt,
@@ -23,7 +23,7 @@ const {
 } = await import("./uploads.js");
 
 function authHeader(openId = "ou_upload_http", name = "魏炜", role: "admin" | "reviewer" = "admin") {
-  const sess = issueSession(name, role, openId, "feishu");
+  const sess = issueSessionForTest(name, role, openId);
   return { authorization: `Bearer ${sess.token}` };
 }
 

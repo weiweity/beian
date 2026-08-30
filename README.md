@@ -63,6 +63,8 @@
 
 测服务端、界面和对照 CLI：仓库根目录 `npm test`（Mac；不打外网）。复杂度治理使用隔离的质量工具链：Mac 首次运行先在 Node 20.19+ 或 22.12+ 下执行 `npm ci --prefix tools/quality`，再把 Vulture 装进现有 worker 虚拟环境：`apps/web/backend/.venv/bin/python -m pip install -r apps/web/backend/requirements-quality.txt`；随后运行 `npm run test:quality` 和 `npm run quality`。PR 的 GitHub-hosted Linux Node 22 job 依次执行质量合同、单调基线、完整 L0 与独立类型检查；另一个 GitHub-hosted `windows-2022` job 只在 Windows PowerShell 5.1 下实跑 `.NET File.Replace` 的无备份原子替换合同。两者都不使用杭州 self-hosted 生产 runner，也不调用 `release.ps1`；`/ship` 同样要求这些门禁都绿。`npm run quality` 检查 Knip 与高置信 Vulture，并要求 `config/quality/dead-code-baseline.json` 只减不增；TypeScript 则由 `npm run typecheck` 独立检查。本地会自动从 `origin/HEAD`（回退 `origin/main` / `main`）读取目标分支基线，找不到就失败并要求显式传 `--base-ref`，PR CI 则使用精确 base SHA。同文件同名诊断按出现次数核对，不会因行号移动误报，也不会把新增的第二处折叠掉。编排器只读基线，不会自动删代码。人工清理前可跑 `npm run quality:deep` 查看 production/低置信候选。Knip 锁在 `tools/quality/package-lock.json`，Vulture 锁在 `apps/web/backend/requirements-quality.txt`；两者都不进入产品 Node 合同或杭州生产依赖图。浏览器交互回归另跑 `npm run test:e2e`；它使用 Vite + 合成 API，验证页面行为，不替代真实 Hono `:8787` 或杭州 Windows L1。杭州生产不跑单测；可信 `main` release transaction 会检查 health/version/listener/logo，并通过生产 Session 1 Agent 完成管道 → VBS → 唯一 JSX 的身份冒烟。真实稿结构、六面贴图和 Blender 仍属于人工 L2。只要服务端：`npm run test -w beian-server`。只要界面：`npm run test -w beian-ui`。
 
+`npm run test:quality` 同时校验 `.agents/skills` 实际目录、审核清单与 `skills-lock.json` 完全一致；空锁、额外 skill、远程来源、符号链接、自动 shell 权限或绕过包装器的命令都会失败。仓库内 `antd` skill 是 vendored 权威源，不能用标准 skill restore/update 从上游覆盖；需要恢复时从受信任的 Git 提交还原并重新核验哈希。知识查询只走 `node scripts/quality/antd-readonly.mjs`：它固定已审核的 `@ant-design/cli@6.6.1`、关闭更新检查、不经 shell、只读仓库内路径，并拒绝 setup、升级、外部提交和可写迁移参数。CLI 缺失或版本不符时失败关闭，由独立、显式批准的工具维护任务处理。
+
 ## Docker（当前未交付）
 
 当前仓库没有 `Dockerfile`、`compose.yaml` 或 `.env.container.example`，所以下面的旧容器化计划**不能执行，也不代表已验收**。当前可执行入口仍是 `./scripts/dev-start.sh` → Hono `:8787`；若以后恢复容器化，必须连同这三个文件和跨架构验证一起交付。
@@ -97,7 +99,7 @@ docker buildx build --platform linux/amd64 -t beian:review-amd64 --load .
 - 「测一下」只在服务端连外部 API
 - 也可以继续用 `apps/web/backend/.env.baidu` / `.env.secrets` 打底，设置页覆盖它们
 
-白名单用户写同一数据目录下的 `users.json`（`name` / `open_id` / `role`）。
+账号目录写在同一数据目录下的 `users.json`（`name` / `open_id` / `role`，可选 `disabled`）。飞书 `open_id` 是唯一授权键；姓名和花名只用于显示，不能授予管理员权限。管理员必须显式写成同一条记录里的 `open_id` + `role: "admin"`。删除记录或设置 `disabled: true` 后，该账号已有会话会在下一次请求立即失效；角色调整也会立即同步。重复 `open_id`、未知角色或不可读目录都会失败关闭：本机显示名登录 API 保留 503，飞书 OAuth 回调则进入“系统故障”错误页，二者都不会伪装成普通无权限或泛化 500。显式退出直接撤销 token，即使目录暂时损坏也不会在修复后恢复登录。
 
 ## 飞书
 
@@ -107,9 +109,9 @@ docker buildx build --platform linux/amd64 -t beian:review-amd64 --load .
 
 （或你在设置页写的「对外网址」+ `/api/auth/feishu/callback`）
 
-只放行伸美企业的飞书号。同一企业第一次进来会写入本机 `users.json`。其他公司主体直接拒绝，加白名单也进不来。
+只放行伸美企业的飞书号。同一企业第一次进来会以 `reviewer` 写入本机 `users.json`；以后每次请求都重新以该目录中的 `open_id` 绑定校验角色。其他公司主体直接拒绝，加白名单也进不来。
 
-公网 / Tunnel 前打开设置里的「公网模式」，关闭显示名登录。
+公网 / Tunnel 前打开设置里的「公网模式」。服务端会同时拒绝并从持久化会话中清除旧显示名 token；显示名会话即使在非公网模式下也只能用于 loopback 主机。
 
 ## 不要提交
 

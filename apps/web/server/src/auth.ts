@@ -7,6 +7,22 @@ import { getSetting, saveSettings } from "./settings.js";
 
 export type Role = "admin" | "reviewer" | "viewer";
 
+type SessionSource = "feishu" | "display" | "test";
+
+export class AuthBoundaryError extends Error {
+  constructor(
+    message: string,
+    readonly status: 403 | 503,
+  ) {
+    super(message);
+    this.name = "AuthBoundaryError";
+  }
+}
+
+export function loginFailureCode(error: unknown): "forbidden" | "failed" {
+  return error instanceof AuthBoundaryError && error.status === 403 ? "forbidden" : "failed";
+}
+
 const PERMS: Record<Role, string[]> = {
   admin: ["read", "create", "decide", "complete", "delete", "export", "backup", "archive", "ai_review", "manage_users"],
   reviewer: ["read", "create", "decide", "complete", "delete", "export", "archive", "ai_review"],
@@ -18,7 +34,7 @@ export type Session = {
   display_name: string;
   role: Role;
   open_id: string;
-  source: string;
+  source: SessionSource;
   avatar_url: string;
   created_at: number;
   expires_at: number;
@@ -66,13 +82,47 @@ export function loadSessions(): void {
   const p = sessionsPath();
   if (!existsSync(p)) return;
   try {
-    const raw = JSON.parse(readFileSync(p, "utf8")) as Record<string, Session>;
+    const parsed = JSON.parse(readFileSync(p, "utf8")) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return;
+    const raw = parsed as Record<string, unknown>;
     const now = Date.now() / 1000;
-    for (const [tok, s] of Object.entries(raw || {})) {
-      if (Number(s.expires_at) > now) {
-        sessions.set(tok, { ...s, avatar_url: s.avatar_url || "" });
+    let changed = false;
+    for (const [tok, value] of Object.entries(raw || {})) {
+      const s = value && typeof value === "object" && !Array.isArray(value)
+        ? (value as Partial<Session>)
+        : null;
+      const role = roleOf(s?.role);
+      if (
+        s &&
+        typeof s.token === "string" &&
+        s.token === tok &&
+        (s.source === "feishu" || s.source === "display") &&
+        Boolean(role) &&
+        (s.source !== "display" || displayLoginAllowed()) &&
+        typeof s.display_name === "string" &&
+        typeof s.open_id === "string" &&
+        (s.avatar_url === undefined || typeof s.avatar_url === "string") &&
+        typeof s.created_at === "number" &&
+        Number.isFinite(s.created_at) &&
+        typeof s.expires_at === "number" &&
+        Number.isFinite(s.expires_at) &&
+        s.expires_at > now
+      ) {
+        sessions.set(tok, {
+          token: s.token,
+          display_name: s.display_name,
+          role: role as Role,
+          open_id: s.open_id,
+          source: s.source,
+          avatar_url: s.avatar_url || "",
+          created_at: s.created_at,
+          expires_at: s.expires_at,
+        });
+      } else {
+        changed = true;
       }
     }
+    if (changed) saveSessions();
   } catch {
     /* ignore corrupt */
   }
@@ -96,7 +146,24 @@ function pruneExpiredSessions(atSeconds: number): boolean {
   return changed;
 }
 
-type User = { name?: string; role?: string; open_id?: string; note?: string };
+type User = {
+  name?: string;
+  role?: string;
+  open_id?: string;
+  note?: string;
+  disabled?: boolean;
+};
+
+type AccountLookup =
+  | { state: "active"; user: User; role: Role }
+  | { state: "missing" | "disabled" | "duplicate" | "invalid_role" };
+
+class UserDirectoryError extends AuthBoundaryError {
+  constructor(message: string) {
+    super(message, 503);
+    this.name = "UserDirectoryError";
+  }
+}
 
 function ensureUsersFile(): void {
   const p = usersPath();
@@ -124,13 +191,82 @@ function ensureUsersFile(): void {
 function users(): User[] {
   ensureUsersFile();
   const p = usersPath();
-  if (!existsSync(p)) return [];
   try {
-    const raw = JSON.parse(readFileSync(p, "utf8")) as { users?: User[] } | User[];
-    return Array.isArray(raw) ? raw : raw.users || [];
-  } catch {
-    return [];
+    const raw = JSON.parse(readFileSync(p, "utf8")) as { users?: unknown } | unknown[];
+    const list = Array.isArray(raw) ? raw : raw.users;
+    if (!Array.isArray(list)) throw new Error("users 不是数组");
+    const valid = list.every((row) => {
+      if (!row || typeof row !== "object" || Array.isArray(row)) return false;
+      const user = row as User;
+      return (
+        (user.name === undefined || typeof user.name === "string") &&
+        (user.role === undefined || typeof user.role === "string") &&
+        (user.open_id === undefined || typeof user.open_id === "string") &&
+        (user.note === undefined || typeof user.note === "string") &&
+        (user.disabled === undefined || typeof user.disabled === "boolean")
+      );
+    });
+    if (!valid) throw new Error("users 含无效账号记录");
+    return list as User[];
+  } catch (err) {
+    const cause = err instanceof Error ? err.message : String(err);
+    throw new UserDirectoryError(`账号目录不可读：${cause}`);
   }
+}
+
+function roleOf(value: unknown): Role | null {
+  return typeof value === "string" && Object.prototype.hasOwnProperty.call(PERMS, value)
+    ? (value as Role)
+    : null;
+}
+
+function accountByOpenId(openId: string): AccountLookup {
+  const matches = users().filter((user) => (user.open_id || "").trim() === openId);
+  if (matches.length === 0) return { state: "missing" };
+  if (matches.length > 1) return { state: "duplicate" };
+  const user = matches[0];
+  if (user.disabled === true) return { state: "disabled" };
+  const role = roleOf(user.role);
+  if (!role) return { state: "invalid_role" };
+  return { state: "active", user, role };
+}
+
+function accountByDisplayName(name: string): AccountLookup {
+  const matches = users().filter((user) => (user.name || "").trim() === name);
+  if (matches.length === 0) return { state: "missing" };
+  if (matches.length > 1) return { state: "duplicate" };
+  const user = matches[0];
+  if (user.disabled === true) return { state: "disabled" };
+  const role = roleOf(user.role);
+  if (!role) return { state: "invalid_role" };
+  return { state: "active", user, role };
+}
+
+type AccountSubject = "open_id" | "display_name";
+
+function accountProblem(
+  state: Exclude<AccountLookup["state"], "active">,
+  subject: AccountSubject,
+): string {
+  if (state === "disabled") return "账号已停用，请联系管理员。";
+  if (state === "duplicate") {
+    return subject === "open_id"
+      ? "账号目录中有重复 open_id，请联系管理员。"
+      : "账号目录中有重复显示名，请联系管理员。";
+  }
+  if (state === "invalid_role") return "账号角色配置无效，请联系管理员。";
+  return subject === "open_id" ? "这个飞书号不在账号目录。" : "这个显示名不在账号目录。";
+}
+
+function accountProblemStatus(state: Exclude<AccountLookup["state"], "active">): 403 | 503 {
+  return state === "missing" || state === "disabled" ? 403 : 503;
+}
+
+function accountFailure(
+  state: Exclude<AccountLookup["state"], "active">,
+  subject: AccountSubject,
+): AuthBoundaryError {
+  return new AuthBoundaryError(accountProblem(state, subject), accountProblemStatus(state));
 }
 
 function writeUsers(list: User[]): void {
@@ -151,26 +287,6 @@ function provisionUser(name: string, openId: string): User {
   return row;
 }
 
-/** 杭州机箱管理员是魏炜。不要凭飞书显示名「管理员」提权。 */
-export function isWeiWei(legal: string, nickname = ""): boolean {
-  return legal.trim() === "魏炜" || nickname.trim() === "魏炜";
-}
-
-function persistAdmin(openId: string, legal: string): User | undefined {
-  const list = users();
-  const i = list.findIndex((u) => (u.open_id || "").trim() === openId);
-  if (i < 0) return undefined;
-  list[i] = {
-    ...list[i],
-    role: "admin",
-    open_id: openId,
-    name: (list[i].name || legal || "魏炜").slice(0, 40),
-    note: list[i].note || "杭州机箱管理员",
-  };
-  writeUsers(list);
-  return list[i];
-}
-
 function allowOpenIds(): Set<string> {
   return new Set(
     (getSetting("FEISHU_ALLOW_OPEN_IDS") || "")
@@ -188,11 +304,11 @@ function appSecret(): string {
   return getSetting("FEISHU_APP_SECRET").trim();
 }
 
-export function issueSession(
+function issueSession(
   name: string,
   role: Role,
-  openId = "",
-  source = "feishu",
+  openId: string,
+  source: SessionSource,
   ident: { avatar_url?: string } = {},
 ): Session {
   const now = Date.now() / 1000;
@@ -210,6 +326,11 @@ export function issueSession(
   sessions.set(sess.token, sess);
   saveSessions();
   return sess;
+}
+
+/** Test fixture only. Product login paths must use the account directory above. */
+export function issueSessionForTest(name: string, role: Role, openId = ""): Session {
+  return issueSession(name, role, openId, "test");
 }
 
 export function allowedTenantKey(): string {
@@ -246,33 +367,32 @@ export function sessionFromFeishu(
 ): Session {
   const expected = expectedTenant || allowedTenantKey();
   if (expected && tenantKey && tenantKey !== expected) {
-    throw Object.assign(new Error("只允许伸美公司的飞书号进入。"), { status: 403 });
+    throw new AuthBoundaryError("只允许伸美公司的飞书号进入。", 403);
   }
-  if (!openId.startsWith("ou_")) throw Object.assign(new Error("飞书身份无效"), { status: 403 });
-  let user = users().find((u) => (u.open_id || "").trim() === openId);
-  const listed = Boolean(user) || allowOpenIds().has(openId);
+  if (!openId.startsWith("ou_")) throw new AuthBoundaryError("飞书身份无效", 403);
+  let account = accountByOpenId(openId);
+  const allowListed = allowOpenIds().has(openId);
   const tenantOk = !expected || !tenantKey || tenantKey === expected;
-  if (!user && !listed && opts.provision && tenantOk) {
-    user = provisionUser((feishuName || "").trim(), openId);
+  if (account.state === "missing" && tenantOk && (allowListed || opts.provision)) {
+    provisionUser((feishuName || "").trim(), openId);
+    account = accountByOpenId(openId);
   }
-  if (!user && !listed) {
-    throw Object.assign(
-      new Error(`这个飞书号不在白名单（open_id=${openId}）。`),
-      { status: 403 },
-    );
+  if (account.state !== "active") {
+    throw accountFailure(account.state, "open_id");
   }
-  const legal = (feishuName || String(user?.name || "")).trim();
+  const legal = (feishuName || String(account.user.name || "")).trim();
   const label = formatAccountLabel(legal, opts.nickname || "");
-  if (user && isWeiWei(legal, opts.nickname || "") && user.role !== "admin") {
-    user = persistAdmin(openId, legal) || user;
-  }
-  const role = ((user?.role || "reviewer") as Role) in PERMS ? ((user?.role || "reviewer") as Role) : "reviewer";
-  return issueSession(label, role, openId, "feishu", { avatar_url: opts.avatar_url || "" });
+  return issueSession(label, account.role, openId, "feishu", { avatar_url: opts.avatar_url || "" });
 }
 
-export function getSession(token: string | undefined | null): Session | null {
-  if (!token) return null;
-  const t = token.toLowerCase().startsWith("bearer ") ? token.slice(7).trim() : token.trim();
+function normalizeToken(token: string | undefined | null): string {
+  if (!token) return "";
+  return token.toLowerCase().startsWith("bearer ") ? token.slice(7).trim() : token.trim();
+}
+
+export function getSession(token: string | undefined | null, hostHeader = ""): Session | null {
+  const t = normalizeToken(token);
+  if (!t) return null;
   const s = sessions.get(t);
   if (!s) return null;
   if (s.expires_at <= Date.now() / 1000) {
@@ -280,16 +400,30 @@ export function getSession(token: string | undefined | null): Session | null {
     saveSessions();
     return null;
   }
-  if (s.open_id) {
-    const row = users().find((u) => (u.open_id || "").trim() === s.open_id);
-    if (row && isWeiWei(row.name || "") && row.role !== "admin") {
-      persistAdmin(s.open_id, row.name || "魏炜");
-      if (s.role !== "admin") {
-        s.role = "admin";
-        saveSessions();
-      }
-    } else if (row && (row.role as Role) in PERMS && row.role !== s.role) {
-      s.role = row.role as Role;
+  if (s.source === "display" && !displayLoginAllowed(hostHeader)) {
+    sessions.delete(t);
+    saveSessions();
+    return null;
+  }
+  if (s.source === "feishu" || s.source === "display") {
+    let account: AccountLookup;
+    try {
+      account = s.source === "feishu"
+        ? s.open_id
+          ? accountByOpenId(s.open_id)
+          : { state: "missing" }
+        : accountByDisplayName(s.display_name);
+    } catch (err) {
+      if (err instanceof UserDirectoryError) return null;
+      throw err;
+    }
+    if (account.state !== "active") {
+      sessions.delete(t);
+      saveSessions();
+      return null;
+    }
+    if (account.role !== s.role) {
+      s.role = account.role;
       saveSessions();
     }
   }
@@ -297,11 +431,9 @@ export function getSession(token: string | undefined | null): Session | null {
 }
 
 export function logout(token: string | undefined | null): void {
-  const s = getSession(token);
-  if (s) {
-    sessions.delete(s.token);
-    saveSessions();
-  }
+  const t = normalizeToken(token);
+  if (!t || !sessions.delete(t)) return;
+  saveSessions();
 }
 
 export function hasPerm(role: Role, perm: string): boolean {
@@ -313,8 +445,12 @@ export function permissionsFor(role: Role): string[] {
 }
 
 export function isLoopbackHost(hostHeader: string): boolean {
-  const host = (hostHeader || "").split(":")[0].replace(/^\[|\]$/g, "");
-  return host === "localhost" || host === "127.0.0.1" || host === "::1";
+  const value = (hostHeader || "").trim().toLowerCase();
+  if (value === "::1") return true;
+  const bracketed = /^\[([^\]]+)\](?::\d+)?$/u.exec(value);
+  if (bracketed) return bracketed[1] === "::1";
+  const hostname = /^([^:]+)(?::\d+)?$/u.exec(value)?.[1] || "";
+  return hostname === "localhost" || hostname === "127.0.0.1";
 }
 
 export function displayLoginAllowed(hostHeader = ""): boolean {
@@ -329,10 +465,11 @@ export function createDisplaySession(name: string, hostHeader = ""): Session {
   }
   const n = name.trim();
   if (!n || n.length > 40) throw Object.assign(new Error("显示名 1–40 字"), { status: 400 });
-  const user = users().find((u) => (u.name || "").trim() === n);
-  if (!user) throw Object.assign(new Error("未知用户"), { status: 403 });
-  const role = ((user.role || "reviewer") as Role) in PERMS ? ((user.role || "reviewer") as Role) : "reviewer";
-  return issueSession(n, role, "", "display");
+  const account = accountByDisplayName(n);
+  if (account.state !== "active") {
+    throw accountFailure(account.state, "display_name");
+  }
+  return issueSession(n, account.role, "", "display");
 }
 
 export function pkcePair(): { verifier: string; challenge: string } {

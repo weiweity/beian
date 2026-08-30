@@ -8,11 +8,11 @@ process.env.WB_HOST = "127.0.0.1";
 process.env.WB_PORT = "0";
 
 const { app } = await import("./index.js");
-const { issueSession } = await import("./auth.js");
+const { issueSessionForTest } = await import("./auth.js");
 
 describe("settings http", () => {
   it("reviewer cannot change ordinary system settings", async () => {
-    const sess = issueSession("审稿", "reviewer", "ou_set_ordinary", "feishu");
+    const sess = issueSessionForTest("审稿", "reviewer", "ou_set_ordinary");
     const res = await app.request("/api/settings", {
       method: "POST",
       headers: { authorization: `Bearer ${sess.token}`, "content-type": "application/json" },
@@ -24,7 +24,7 @@ describe("settings http", () => {
   });
 
   it("reviewer cannot write blender path", async () => {
-    const sess = issueSession("审稿", "reviewer", "ou_set_http", "feishu");
+    const sess = issueSessionForTest("审稿", "reviewer", "ou_set_http");
     const res = await app.request("/api/settings", {
       method: "POST",
       headers: { authorization: `Bearer ${sess.token}`, "content-type": "application/json" },
@@ -36,7 +36,7 @@ describe("settings http", () => {
   });
 
   it("admin can save system settings", async () => {
-    const sess = issueSession("魏炜", "admin", "ou_set_admin", "feishu");
+    const sess = issueSessionForTest("魏炜", "admin", "ou_set_admin");
     const res = await app.request("/api/settings", {
       method: "POST",
       headers: { authorization: `Bearer ${sess.token}`, "content-type": "application/json" },
@@ -49,7 +49,7 @@ describe("settings http", () => {
   });
 
   it("viewer cannot send lark test", async () => {
-    const sess = issueSession("只看", "viewer", "ou_viewer_lark", "feishu");
+    const sess = issueSessionForTest("只看", "viewer", "ou_viewer_lark");
     const res = await app.request("/api/settings/probe", {
       method: "POST",
       headers: { authorization: `Bearer ${sess.token}`, "content-type": "application/json" },
@@ -59,7 +59,7 @@ describe("settings http", () => {
   });
 
   it("reviewer keeps the independent lark test action without open_id", async () => {
-    const sess = issueSession("审稿", "reviewer", "", "display");
+    const sess = issueSessionForTest("审稿", "reviewer", "");
     const res = await app.request("/api/settings/probe", {
       method: "POST",
       headers: { authorization: `Bearer ${sess.token}`, "content-type": "application/json" },
