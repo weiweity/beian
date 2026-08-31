@@ -15,6 +15,7 @@ from typing import Any
 
 STROKE_PROPOSAL_ADAPTER = "illustrator-stroke-proposal/1"
 MEASUREMENT_DECIMALS = 3
+MIN_ASSEMBLED_CLOSURE_RATIO = 0.60
 
 
 def normalized_mm(value: float) -> float:
@@ -43,6 +44,18 @@ class GeometryPolicy:
     dimensions: DimensionPolicy
 
 
+@dataclass(frozen=True)
+class ClosureDimensionFit:
+    """Describe how one source closure covers the erected top/bottom face."""
+
+    kind: str
+    coverage_ratio: float
+
+    @property
+    def padded(self) -> bool:
+        return self.kind != "full"
+
+
 STRICT_GEOMETRY = GeometryPolicy(
     boundary_mm=None,
     dimensions=DimensionPolicy(absolute_mm=0.1, relative=0.001),
@@ -62,6 +75,64 @@ def is_stroke_proposal_source(source: Mapping[str, Any] | None) -> bool:
 
 def geometry_policy_for_source(source: Mapping[str, Any] | None) -> GeometryPolicy:
     return STROKE_PROPOSAL_GEOMETRY if is_stroke_proposal_source(source) else STRICT_GEOMETRY
+
+
+def fit_closure_dimensions(
+    actual: Sequence[float],
+    expected: Sequence[float],
+    policy: DimensionPolicy,
+    *,
+    allow_assembled: bool = False,
+) -> ClosureDimensionFit | None:
+    """Classify a main closure without stretching it into a full box face.
+
+    Exact and normal-clearance panels remain the default. A shorter main flap
+    is accepted only when its fold dimension matches, its perpendicular reach
+    covers at least 60% of the erected face, and the caller has independently
+    proved that other flaps form the same closure assembly.
+    """
+    if len(actual) != 2 or len(expected) != 2:
+        return None
+    actual_values = [float(value) for value in actual]
+    expected_values = [float(value) for value in expected]
+    if any(value <= 0 for value in (*actual_values, *expected_values)):
+        return None
+
+    close = [
+        policy.close(actual_value, expected_value)
+        for actual_value, expected_value in zip(actual_values, expected_values)
+    ]
+    ratios = [
+        actual_value / expected_value
+        for actual_value, expected_value in zip(actual_values, expected_values)
+    ]
+    if all(close):
+        exact = all(
+            normalized_mm(actual_value) == normalized_mm(expected_value)
+            for actual_value, expected_value in zip(actual_values, expected_values)
+        )
+        return ClosureDimensionFit(
+            kind="full" if exact else "clearance",
+            coverage_ratio=round(min(1.0, min(ratios)), 6),
+        )
+    if not allow_assembled or sum(close) != 1:
+        return None
+
+    partial_index = 0 if not close[0] else 1
+    actual_partial = actual_values[partial_index]
+    expected_partial = expected_values[partial_index]
+    ratio = actual_partial / expected_partial
+    if actual_partial >= expected_partial or ratio < MIN_ASSEMBLED_CLOSURE_RATIO:
+        return None
+    # A dimensional tolerance may describe a small overshoot on the fold axis,
+    # but a real closure assembly cannot extend materially past its footprint.
+    matched_index = 1 - partial_index
+    if (
+        actual_values[matched_index] > expected_values[matched_index]
+        and not policy.close(actual_values[matched_index], expected_values[matched_index])
+    ):
+        return None
+    return ClosureDimensionFit(kind="assembly", coverage_ratio=round(ratio, 6))
 
 
 def solve_body_dimensions(

@@ -4,11 +4,11 @@
 
 ## 状态
 
-已决定；`0.14.0.0` 引入 V2 能力，后续版本完成真实稿迁移验证后，网页新任务固定进入 V2。运行时旧引擎开关已删除：无法证明结构或尚未人工确认时必须停住，不能回落到旧算法生成看似成功但六面错误的产物。杭州 Windows L1/L2 仍是合并部署门，失败时保留上一生产版本。
+已决定；`0.14.0.0` 引入 V2 能力，后续版本完成真实稿迁移验证后，网页新任务固定进入 V2。运行时旧引擎开关已删除：无法证明结构或尚未人工确认时必须停住，不能回落到旧算法生成看似成功但六面错误的产物。合入后的杭州 L1 身份冒烟仍是发布门，失败时保留上一生产版本；真实稿 Illustrator → Blender、六面贴图和人工金标属于独立 L2 业务验收，不把 Mac L0 或身份冒烟写成真实生产验收。
 
 `0.15.0.0` 在不改变闸门的前提下，把 GLB 验证从轴向和毫米尺寸扩展到六个已确认面的贴图来源、方向与镜像；底面缺图或任一面绑定不一致都不得作为成功产物。
 
-V2.1 把旧稿迁移从“六个完整矩形 + 全局阈值”的案例模型升级为有预算的确定性结构求解：Illustrator 曲线先适配为可审计折线；所有几何进入同一毫米坐标系；按连通分量隔离结构与标注；候选由四面盒身环和上下封口组件组成；公共 API 只发布经过最终确认引擎预演成功的锚点。它不按纸色、印刷色、普通图层名或文件名猜外盒，也不增加第二套 3D 流水线。
+V2.1 把旧稿迁移从“六个完整矩形 + 全局阈值”的案例模型升级为有预算的确定性结构求解：Illustrator 曲线先适配为可审计折线；所有几何进入同一毫米坐标系；按连通分量隔离结构与标注；候选由四面盒身环和上下封口组件组成；公共 API 只发布经过最终确认引擎预演成功的锚点。后续的组合封口合同继续沿用同一内核：盒身必须四边闭合，盒盖可由主插舌与相邻防尘翼共同证明，但不能把单个短折片冒充整面。它不按纸色、印刷色、普通图层名或文件名猜外盒，也不增加第二套 3D 流水线。
 
 ## 背景
 
@@ -19,15 +19,15 @@ V2.1 把旧稿迁移从“六个完整矩形 + 全局阈值”的案例模型升
 新增独立的 `workers/packaging/structure_v2` 深模块，以版本化 `PackagingStructure v1` 作为唯一结构事实源：
 
 1. 输入适配器只把可验证的显式语义翻译为 IR。当前实现是结构 sidecar 与 Illustrator 语义导出；ISO 19593、CF2、DXF 等必须取得真实样本并完成独立适配器验证后再接入。
-   Illustrator 语义导出只有一份 `export_structure.jsx`：macOS 由 AppleScript 调用；Windows 的 LocalSystem worker 通过 UTF-8 命名管道请求登录桌面的 PowerShell Agent，Agent 再调用现有 `cscript` / `run_export.vbs`，由 VBS `GetObject` 连接同一交互会话中的 Illustrator 并执行 JSX。平台桥只负责会话、生命周期、超时与错误合同，不复制结构算法。
+   Illustrator 语义导出只有一份 `export_structure.jsx`：macOS 由 AppleScript 调用；Windows 的 LocalSystem worker 通过 UTF-8 命名管道请求登录桌面的 PowerShell Agent，Agent 再调用现有 `cscript` / `run_export.vbs`，由 VBS `GetObject` 连接同一交互会话中的 Illustrator 并执行 JSX。平台桥只负责会话、生命周期、超时与错误合同，不复制结构算法。导出贴图时，唯一 JSX 只在未保存的工作副本中临时解锁目标对象及其父组/图层，隐藏结构语义路径后输出 artwork；无论成功或异常都按原状态恢复可见性与锁定，关闭文档时不保存，任何无法恢复的路径都失败关闭。
 2. IR 显式记录顶点、`cut/crease/perforation/glue/ignore` 边、面、折角、六面角色、artwork 变换和来源对象。
 3. 使用 Shapely/GEOS 做吸附、线合并、polygonize 和 dangle/cut/invalid-ring 诊断。
 4. 只有验证为 `accepted` 的 IR 才能生成 `ResolvedPackagingJob` 并调用现有 Blender；歧义结构进入人工确认，不再自动猜。
 5. 旧 `dieline.py` 冻结，只保留给命令行诊断；Hono 对所有网页新任务写 `structure_engine=v2`，不再暴露运行时旧引擎开关。V2 不能解析时返回人工确认或不支持，绝不静默回退。
 6. 对没有对象级语义的历史 AI，服务端先识别刀线层，Illustrator 只提取该层内“描边且无填充”的路径作为不可信线稿。直线保持原端点；三次贝塞尔曲线由唯一的 ES3 helper 自适应细分，并把容差、原路径引用、段数和 `bezier_flatten` repair 写入 `source.geometry`。Mac AppleScript 与 Windows Agent 都在执行前把这份固定 helper 内联到运行 JSX，避免相对 include、当前目录和系统代码页产生平台分叉。超过单段、单路径或全稿预算时失败关闭。
-7. 输入适配器只输出一个 `artboard-top-left` 毫米坐标系；吸附、提案、人工确认、贴图变换和最终尺寸都消费同一 basis。毫米结果按统一精度归一，避免整体旋转、Illustrator 浮点噪声或重复描边让“识别时可选、提交时失效”。候选身份由源稿哈希、basis 和候选几何生成的稳定 `proposal_id`，再与当前 `structure_hash` 双重绑定，不再使用可被重排复用的序号。
+7. 输入适配器只输出一个 `artboard-top-left` 毫米坐标系；吸附、提案、人工确认、贴图变换和最终尺寸都消费同一 basis。毫米结果按统一精度归一，避免整体旋转、Illustrator 浮点噪声或重复描边让“识别时可选、提交时失效”。候选身份由提案合同版本、源稿哈希、basis 和候选几何生成的稳定 `proposal_id`，再与当前 `structure_hash` 双重绑定，不再使用可被重排复用的序号；合同升级后旧页面提交会明确失效，而不是套用新语义。
 8. 拓扑先用 Shapely `STRtree` 按容差把原始描边分成空间连通分量，再只在各分量内部吸附、节点化和寻找候选；不能先对整张稿 `unary_union` / `polygonize`。大量尺寸标注、签字框、表格和内衬因此不会先耗尽全稿拓扑上限。硬上限、候选分量上限与全局工作预算仍然保留，任何预算耗尽都以 `structure_limit_exceeded` 失败关闭。它是资源安全边界，不是用“放大连通分量数量”掩盖结构问题。
-9. 候选模型是“四个连续盒身面 + 两个主封口面”。主封口面允许来源适配器尺寸策略内的正常制造让位，但宽深都必须接近成盒 footprint；短防尘翼、插舌和其他局部折片不能冒充顶部或底部。确认后保持源稿仿射比例，以共享折线对齐真实主盖片，并只把未覆盖的窄让位区补白，不得把折片拉伸到整面。成盒 `width/depth/height` 只由四个盒身面求解。若同稿同时存在外盒与白色内衬，只有各自结构完整时才分别成为候选并按成盒体积排序，管理员选择整套盒型，系统仍不读取颜色作判断。
+9. 候选模型是“四个连续盒身面 + 上下两个封口组件”。盒身候选必须四边都有来源线，内部尺寸线、标注线或正文描边不会把物理盒面切成两个；缺一条外边的三边框只能作为封口候选，不能进入盒身环。完整闭合且尺寸接近 footprint 的主盖片始终优先。若主插舌存在曲线或缺口导致自由边不能形成矩形，它只有在共享折边长度匹配、垂直覆盖不少于 footprint 的 60%，并且同侧至少另有一个连接到不同盒身面的有效折片时，才以 `assembly` 进入人工确认；该 60% 是本项目的失败关闭阈值，不冒充行业标准。单个短防尘翼、插舌或由交叉标注线构造的开放盒身仍会被拒。确认后保持源稿仿射比例，以共享折线对齐真实主盖片，并把未覆盖区补白，不得把折片拉伸到整面。成盒 `width/depth/height` 只由四个盒身面求解。若同稿同时存在外盒与白色内衬，只有各自结构完整时才分别成为候选并按成盒体积排序，管理员选择整套盒型，系统仍不读取颜色作判断。
 10. 每个候选在返回页面前，使用与最终确认完全相同的决策引擎枚举四个盒身面和 0/90/180/270° 阅读方向。只有能唯一推导 front/right/back/left/top/bottom、折叠关系和六面 artwork transform 的锚点才进入 `valid_anchors`；页面禁用其余组合。确认时再次校验当前源稿、structure hash、basis 与锚点，防止旧页面提交已失效序号。
 11. HTTP 合同把语义失败与网络失败分开：格式错误仍是 400；源稿或候选版本过期是 409；当前结构在形式上有效但不能成盒是 422。页面捕获确认失败并在原位显示可执行说明，不再留下未处理 Promise，也不把 400/409/422 说成网络中断。重复提交沿用同一确认锁和幂等恢复合同。
 
@@ -35,11 +35,11 @@ V2.1 把旧稿迁移从“六个完整矩形 + 全局阈值”的案例模型升
 
 - 人只提供一个最小语义锚点：`proposal_id + front_face_id + quarter_turns`，不再逐面填写六个角色。
 - 公共锚点只引用后端生成的完整盒型：稳定 `proposal_id` 绑定当前源稿、坐标 basis 和候选几何，独立 `structure_hash` 再绑定当前结构版本；原始矩形候选、路径编号和本机路径不进入公共 API。
-- 四个盒身面按展开图连通顺序形成环。正面确定后，右侧、反面、左侧可唯一推导；位于盒身横带相对侧、尺寸接近完整 footprint 且各自只连接一个盒身面的主封口面映射为顶部和底部。局部防尘翼不会通过人工选择升级成完整盒面。
+- 四个盒身面按展开图连通顺序形成环。正面确定后，右侧、反面、左侧可唯一推导；位于盒身横带相对侧、各自只连接一个盒身面的封口组件映射为顶部和底部。普通主盖片仍须尺寸接近完整 footprint；组合封口还须携带 `box-net-proposal/2` 的独立多折片证据。局部防尘翼不会仅靠人工点击升级成完整盒面。
 - 同一来源适配器的尺寸策略贯穿完整盒型提案、锚点确认和最终解析；用户选择正面不会切换精度规则，也不会把封口让位改写成成盒尺寸。
 - 锚点只能减少“哪一面是产品正面”这种业务歧义，不能覆盖结构歧义。完整网不唯一、相对面尺寸不一致、折叠图不连通或贴图方向不成立时仍停在待确认/不支持状态。
 - 旧任务若只有零散 `face_proposal` 而没有完整 `net_proposals`，前端拒绝沿用旧逐面表单，要求补齐结构语义并重新识别。
-- 最终解析合同仍为 `resolved-packaging-job/2`，其中每面携带真实 `artwork_coverage_bounds_mm`；V2.1 将缓存合同升为 `packaging-structure-cache/4`。旧合同不继续进入贴图阶段，必须按当前候选、尺寸、覆盖范围与折叠规则重算，避免旧缓存绕过新验证。
+- 最终解析合同仍为 `resolved-packaging-job/2`，其中每面携带真实 `artwork_coverage_bounds_mm`；组合封口把候选合同升为 `box-net-proposal/2`、缓存合同升为 `packaging-structure-cache/5`。新缓存必须按当前候选、尺寸、覆盖范围与折叠规则重算；已有待确认单仅可按旧版完整封口/让位合同继续，不能获得 `assembly` 语义或绕过新版验证。
 
 ## 依据
 
@@ -51,12 +51,13 @@ V2.1 把旧稿迁移从“六个完整矩形 + 全局阈值”的案例模型升
 - Shapely 的 `shared_paths` / 拓扑关系以真实共享边表达几何邻接；盒盖方向因此从共享折线派生，而不是从相邻多边形 bbox 或中心距猜测。
 - FOLD 图模型证明 vertices/edges/faces/assignment/fold-angle 的抽象可复用；因规范仍是 rough draft，本项目不直接采用 `.fold` 作为生产合同。
 - Esko Studio Toolkit 与 ArtiosCAD 都先检查完整刀线/压痕形成的面，再让操作者选一个 base panel，其他面围绕该面折叠；若面不完整或不能选中目标面，应回头修结构，而不是逐个手填面角色。
+- Esko 的官方折盒教程要求先把线明确赋为 Cut 或 Crease，再检查双线等刀模错误、选择一个 Base Panel 并按每条 crease 的折角成盒；ArtiosCAD 官方样式目录也把主插舌、侧翼/防尘翼和折线作为同一封口结构展示。它们共同支持“语义边 + 面邻接 + 封口组件”的模型，并不支持用屏幕颜色直接决定刀线语义。
 - EngView 3D Presenter 把包装表示为面及其折叠序列，并提供 Set Base Panel；这独立验证了“完整结构图 + 单一基准面”比“把所有矩形暴露给用户”更接近成熟包装 CAD 的交互边界。
 - Microsoft 明确说明 Windows 服务运行在 Session 0，带 GUI 的程序应拆成登录用户侧进程，并通过命名管道等 IPC 与服务通信；命名管道默认 ACL 还会给 Everyone 与匿名账户读权限，因此本项目显式只授权 LocalSystem 与当前登录管理员。
 - Windows Task Scheduler 的 `InteractiveToken` 只在用户已登录的现成交互会话运行，符合“注销即不可打样、绝不静默降级到 Session 0”的失败语义。
 - Adobe 官方说明 Illustrator 支持 Visual Basic、AppleScript 与 JavaScript/ExtendScript。本项目据此保留一份 JSX，把 Windows VBS 和 macOS AppleScript 限定为平台启动桥，而不是两套结构识别实现。
 
-交叉验证来源：[Adobe PathPoint scripting](https://ai-scripting.docsforadobe.dev/jsobjref/PathPoint/)、[Adobe Paths and shapes](https://helpx.adobe.com/illustrator/using/artwork-essentials/paths-and-shapes.html)、[Shapely polygonize_full](https://shapely.readthedocs.io/en/2.0.6/reference/shapely.polygonize_full.html)、[Shapely snap](https://shapely.readthedocs.io/en/stable/reference/shapely.snap.html)、[Shapely STRtree](https://shapely.readthedocs.io/en/latest/strtree.html)、[Esko：Select the Base Panel](https://docs.esko.com/docs/en-us/studiotoolkitforboxes/12.1/userguide/en-us/common/stb/task/ta_select_the_base_panel.html)、[Esko：Folding a box](https://docs.esko.com/docs/en-us/studioessentials/22.03/userguide/en-us/common/ste/task/ta_ste_tutorialARD.html)、[Esko ArtiosCAD：Creating a new 3D workspace](https://docs.esko.com/docs/en-us/artioscad/14.1/userguide/en-us/common/ac/topic/UG5_Artios-3D_id873265U3D24.html)、[EngView：3D environment](https://downloads.engview.com/online_help/7.3/package_designer/en/ang/3D/td-work-env.htm)、[Khronos glTF 2.0](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html)、[Khronos glTF Validator](https://github.com/KhronosGroup/glTF-Validator)、[Microsoft Interactive Services](https://learn.microsoft.com/en-us/windows/win32/services/interactive-services)、[Microsoft Named Pipe Security](https://learn.microsoft.com/en-us/windows/win32/ipc/named-pipe-security-and-access-rights)、[Microsoft InteractiveToken](https://learn.microsoft.com/en-us/windows/win32/taskschd/taskfolder-registertaskdefinition)、[Adobe Illustrator scripts](https://helpx.adobe.com/illustrator/desktop/automate-visualize-data/automate-actions/install-and-run-scripts.html)。
+交叉验证来源：[ISO 19593-1 processing steps](https://www.iso.org/obp/ui?_escaped_fragment_=iso%3Astd%3Aiso%3A19593%3A-1%3Adis%3Aed-2%3Av1%3Aen)、[Adobe PathPoint scripting](https://ai-scripting.docsforadobe.dev/jsobjref/PathPoint/)、[Adobe Paths and shapes](https://helpx.adobe.com/illustrator/using/artwork-essentials/paths-and-shapes.html)、[Shapely polygonize_full](https://shapely.readthedocs.io/en/2.0.6/reference/shapely.polygonize_full.html)、[Shapely snap](https://shapely.readthedocs.io/en/stable/reference/shapely.snap.html)、[Shapely STRtree](https://shapely.readthedocs.io/en/latest/strtree.html)、[Esko：Select the Base Panel](https://docs.esko.com/docs/en-us/studiotoolkitforboxes/12.1/userguide/en-us/common/stb/task/ta_select_the_base_panel.html)、[Esko：Folding a box](https://docs.esko.com/docs/en-us/studioadvanced/22.07/userguide/en-us/common/ste/task/ta_ste_tutorialARD.html)、[Esko ArtiosCAD Style Catalog](https://docs.esko.com/docs/en-us/artioscad/23.11/adminguide/pdf/StyleCatalogReference.pdf)、[Esko ArtiosCAD：Creating a new 3D workspace](https://docs.esko.com/docs/en-us/artioscad/14.1/userguide/en-us/common/ac/topic/UG5_Artios-3D_id873265U3D24.html)、[EngView：3D environment](https://downloads.engview.com/online_help/7.3/package_designer/en/ang/3D/td-work-env.htm)、[Khronos glTF 2.0](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html)、[Khronos glTF Validator](https://github.com/KhronosGroup/glTF-Validator)、[Microsoft Interactive Services](https://learn.microsoft.com/en-us/windows/win32/services/interactive-services)、[Microsoft Named Pipe Security](https://learn.microsoft.com/en-us/windows/win32/ipc/named-pipe-security-and-access-rights)、[Microsoft InteractiveToken](https://learn.microsoft.com/en-us/windows/win32/taskschd/taskfolder-registertaskdefinition)、[Adobe Illustrator scripts](https://helpx.adobe.com/illustrator/desktop/automate-visualize-data/automate-actions/install-and-run-scripts.html)。
 
 ## Windows 交互会话边界
 

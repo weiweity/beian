@@ -17,8 +17,16 @@ from structure_v2.box_net import (  # noqa: E402
 )
 
 
-def rectangle(identity: str, bounds: tuple[float, float, float, float]) -> dict:
-    return {"id": identity, "local_bounds": bounds}
+def rectangle(
+    identity: str,
+    bounds: tuple[float, float, float, float],
+    *,
+    open_sides: list[int] | None = None,
+) -> dict:
+    candidate = {"id": identity, "local_bounds": bounds}
+    if open_sides is not None:
+        candidate["open_sides"] = open_sides
+    return candidate
 
 
 def horizontal_net(
@@ -172,11 +180,101 @@ def test_accepts_normal_main_panel_clearance_but_rejects_a_short_flap():
     assert len(proposals) == 1
     closures = proposals[0]["closure_assemblies"]
     assert [closure["extent"] for closure in closures] == ["partial", "full"]
+    assert [closure["closure_kind"] for closure in closures] == ["clearance", "full"]
     assert closures[0]["coverage_ratio"] == 0.94
 
     short = horizontal_net("short-flap")
     short[4]["local_bounds"] = (0.0, 12.0, 30.0, 20.0)
     assert derive_box_net_proposals(short) == []
+
+
+def test_three_sided_frames_can_only_be_closure_faces_never_body_panels():
+    candidates = horizontal_net("open-body")
+    candidates[0]["open_sides"] = [3]
+
+    assert derive_box_net_proposals(candidates) == []
+
+
+def test_accepts_a_substantial_main_flap_only_with_multi_panel_closure_evidence():
+    isolated = horizontal_net("isolated-assembly")
+    isolated[4] = rectangle(
+        "isolated-assembly-cap-top",
+        (0.0, 6.0, 30.0, 20.0),
+        open_sides=[0],
+    )
+    assert derive_box_net_proposals(isolated) == []
+
+    assembled = horizontal_net("assembled")
+    assembled[4] = rectangle(
+        "assembled-cap-top",
+        (0.0, 6.0, 30.0, 20.0),
+        open_sides=[0],
+    )
+    assembled.append(
+        rectangle(
+            "assembled-support-flap",
+            (30.0, 14.0, 50.0, 20.0),
+            open_sides=[0],
+        )
+    )
+
+    proposals = derive_box_net_proposals(assembled)
+
+    assert len(proposals) == 1
+    assert proposals[0]["schema"] == "box-net-proposal/2"
+    top = next(item for item in proposals[0]["closure_assemblies"] if item["side"] == -1)
+    assert top == {
+        "face_id": "assembled-cap-top",
+        "attached_body_face_id": "assembled-body-1",
+        "side": -1,
+        "extent": "partial",
+        "closure_kind": "assembly",
+        "coverage_ratio": 0.7,
+    }
+
+
+def test_oversized_annotation_frame_cannot_supply_closure_evidence():
+    candidates = horizontal_net("annotation-frame")
+    candidates[4] = rectangle(
+        "annotation-frame-cap-top",
+        (0.0, 6.0, 30.0, 20.0),
+        open_sides=[0],
+    )
+    candidates.append(
+        rectangle(
+            "annotation-frame-oversized",
+            (30.0, -80.0, 50.0, 20.0),
+            open_sides=[0],
+        )
+    )
+
+    assert derive_box_net_proposals(candidates) == []
+
+
+def test_prefers_a_closed_main_cap_over_an_open_annotation_frame():
+    candidates = horizontal_net("closed-wins")
+    candidates.extend(
+        [
+            rectangle(
+                "closed-wins-open-top",
+                (0.0, -4.0, 30.0, 20.0),
+                open_sides=[0],
+            ),
+            rectangle(
+                "closed-wins-support",
+                (30.0, 14.0, 50.0, 20.0),
+                open_sides=[0],
+            ),
+        ]
+    )
+
+    proposal = derive_box_net_proposals(candidates)[0]
+
+    assert proposal["cap_face_ids"][0] == "closed-wins-cap-top"
+    assert all(
+        closure["face_id"] != "closed-wins-open-top"
+        for closure in proposal["closure_assemblies"]
+    )
 
 
 def test_proposal_dimensions_use_the_same_opposite_panel_averages_as_final_resolution():

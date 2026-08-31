@@ -138,7 +138,7 @@ def test_only_ready_results_enter_atomic_cache(tmp_path: Path):
     cache_files = list(tmp_path.glob("*.json"))
     assert len(cache_files) == 1
     cached = json.loads(cache_files[0].read_text(encoding="utf-8"))
-    assert cached["schema"] == "packaging-structure-cache/4"
+    assert cached["schema"] == "packaging-structure-cache/5"
     assert cached["resolved"]["schema"] == "resolved-packaging-job/2"
 
     bad = semantic_box(source_hash="e" * 64)
@@ -165,7 +165,7 @@ def test_legacy_dimension_cache_is_rebuilt_under_current_contract(tmp_path: Path
     assert rebuilt.cache_hit is False
     assert rebuilt.resolved["dimensions_mm"] == {"width": 30.0, "depth": 20.0, "height": 50.0}
     migrated = json.loads(cache_file.read_text(encoding="utf-8"))
-    assert migrated["schema"] == "packaging-structure-cache/4"
+    assert migrated["schema"] == "packaging-structure-cache/5"
     assert migrated["resolved"]["schema"] == "resolved-packaging-job/2"
 
 
@@ -383,6 +383,36 @@ def test_stroke_proposal_groups_only_complete_box_nets_for_human_review():
     exposed_sizes = [tuple(face["size_mm"]) for face in proposed.topology["face_proposal"]]
     assert (10.0, 15.0) not in exposed_sizes
     assert (20.0, 35.0) not in exposed_sizes
+
+
+def test_internal_annotation_stroke_does_not_split_a_finished_body_panel():
+    payload = stroke_payload()
+    payload["vertices"].extend(
+        [
+            {"id": "black-annotation-top", "x": 90.0, "y": 20.0},
+            {"id": "black-annotation-bottom", "x": 90.0, "y": 70.0},
+        ]
+    )
+    payload["edges"].append(
+        {
+            "id": "black-annotation-line",
+            "start": "black-annotation-top",
+            "end": "black-annotation-bottom",
+            "assignment": "crease",
+            "source_refs": ["synthetic:black-dimension-line"],
+        }
+    )
+
+    proposed = resolve_structure_payload(payload)
+
+    assert proposed.status == "review_required"
+    nets = proposed.topology["net_proposals"]
+    assert len(nets) == 1
+    assert nets[0]["dimensions_mm"] == {"width": 30.0, "depth": 20.0, "height": 50.0}
+    assert [80.0, 20.0, 100.0, 70.0] in [
+        face["bounds_mm"]
+        for face in proposed.topology["face_proposal"]
+    ]
 
 
 def test_stroke_proposal_keeps_finished_panels_with_duplicate_strokes_and_a_sloped_flap():

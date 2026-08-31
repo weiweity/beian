@@ -286,29 +286,81 @@ function exportSemanticPath(item, pathIndex, assignment, structure, errors, artb
     return localEdges.length;
 }
 
+function findLockState(states, target) {
+    for (var index = 0; index < states.length; index += 1) {
+        if (states[index].target === target) {
+            return index;
+        }
+    }
+    return -1;
+}
+
+function unlockSemanticAncestors(item, lockStates) {
+    var chain = [];
+    var current = item;
+    while (current !== null && current !== undefined && current.typename !== "Document") {
+        chain.push(current);
+        current = current.parent;
+    }
+    for (var index = chain.length - 1; index >= 0; index -= 1) {
+        var target = chain[index];
+        if (findLockState(lockStates, target) >= 0) {
+            continue;
+        }
+        try {
+            var locked = target.locked;
+            lockStates.push({target: target, locked: locked});
+            if (locked) {
+                target.locked = false;
+            }
+        } catch (error) {
+            // Some Illustrator collection parents do not expose a lock state.
+        }
+    }
+}
+
 function hideSemanticItems(items) {
-    var states = [];
+    var state = {items: [], locks: []};
     for (var index = 0; index < items.length; index += 1) {
         var item = items[index];
-        states.push({item: item, hidden: item.hidden, locked: item.locked});
         try {
-            item.locked = false;
+            state.items.push({item: item, hidden: item.hidden});
+            unlockSemanticAncestors(item, state.locks);
             item.hidden = true;
         } catch (error) {
+            restoreSemanticItems(state);
             throw new Error("Cannot hide semantic object path:" + index + " " + error.message);
         }
     }
-    return states;
+    return state;
 }
 
-function restoreSemanticItems(states) {
-    for (var index = states.length - 1; index >= 0; index -= 1) {
+function restoreSemanticItems(state) {
+    if (state === null || state === undefined) {
+        return;
+    }
+    for (var itemIndex = state.items.length - 1; itemIndex >= 0; itemIndex -= 1) {
         try {
-            states[index].item.hidden = states[index].hidden;
-            states[index].item.locked = states[index].locked;
-        } catch (error) {
+            state.items[itemIndex].item.hidden = state.items[itemIndex].hidden;
+        } catch (itemError) {
             // The document is closed without saving; restoration is best effort.
         }
+    }
+    for (var lockIndex = state.locks.length - 1; lockIndex >= 0; lockIndex -= 1) {
+        try {
+            state.locks[lockIndex].target.locked = state.locks[lockIndex].locked;
+        } catch (lockError) {
+            // The document is closed without saving; restoration is best effort.
+        }
+    }
+}
+
+function withHiddenSemanticItems(items, callback) {
+    var state = hideSemanticItems(items);
+    try {
+        callback();
+    } finally {
+        restoreSemanticItems(state);
     }
 }
 
@@ -317,7 +369,6 @@ var config = eval("(" + readUtf8(configPath) + ")");
 var debugPath = config.debug_log;
 var previousInteractionLevel = app.userInteractionLevel;
 var documentRef = null;
-var semanticStates = [];
 var result = {
     success: false,
     source_ai: config.source_ai,
@@ -434,11 +485,10 @@ try {
 
     appendUtf8(debugPath, "v2 02 saving full pdf");
     savePdf(documentRef, config.full_pdf);
-    semanticStates = hideSemanticItems(semanticItems);
-    appendUtf8(debugPath, "v2 03 saving object-clean artwork pdf");
-    savePdf(documentRef, config.print_pdf);
-    restoreSemanticItems(semanticStates);
-    semanticStates = [];
+    withHiddenSemanticItems(semanticItems, function () {
+        appendUtf8(debugPath, "v2 03 saving object-clean artwork pdf");
+        savePdf(documentRef, config.print_pdf);
+    });
     writeUtf8(config.structure_json, jsonStringify(structure));
     result.semantic_errors = structure.validation.errors;
     result.success = true;
@@ -447,7 +497,6 @@ try {
     result.error = error.message;
     result.error_line = error.line || null;
 } finally {
-    restoreSemanticItems(semanticStates);
     if (documentRef !== null) {
         try {
             documentRef.close(SaveOptions.DONOTSAVECHANGES);

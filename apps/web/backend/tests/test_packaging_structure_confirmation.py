@@ -36,6 +36,7 @@ def anchor_proposal_files(
     bottom_cap_depth: float | None = None,
     rotation_degrees: float = 0.0,
     body_width_overrides: dict[str, float] | None = None,
+    top_support_depth: float | None = None,
 ):
     source = tmp_path / "source.ai"
     source.write_bytes(b"semantic-anchor-confirmation-fixture")
@@ -51,6 +52,49 @@ def anchor_proposal_files(
         bottom_cap_depth=bottom_cap_depth,
         body_width_overrides=body_width_overrides,
     )
+    if top_support_depth is not None:
+        if net_axis != "x" or top_support_depth <= 0:
+            raise ValueError("top support fixture requires a positive horizontal depth")
+        vertices_by_id = {
+            item["id"]: (float(item["x"]), float(item["y"]))
+            for item in payload["vertices"]
+        }
+        edges_by_id = {item["id"]: item for item in payload["edges"]}
+        support_body = next(face for face in payload["faces"] if face["role"] == "left")
+        support_points = {
+            vertices_by_id[vertex_id]
+            for edge_id in support_body["boundary"]
+            for vertex_id in (
+                edges_by_id[edge_id]["start"],
+                edges_by_id[edge_id]["end"],
+            )
+        }
+        x0 = min(point[0] for point in support_points)
+        x1 = max(point[0] for point in support_points)
+        y0 = max(point[1] for point in support_points)
+        support_vertices = [
+            ("support-a", x0, y0),
+            ("support-b", x1, y0),
+            ("support-c", x1, y0 + top_support_depth),
+            ("support-d", x0, y0 + top_support_depth),
+        ]
+        payload["vertices"].extend(
+            {"id": identity, "x": x, "y": y}
+            for identity, x, y in support_vertices
+        )
+        payload["edges"].extend(
+            {
+                "id": f"support-e-{index}",
+                "start": start[0],
+                "end": end[0],
+                "assignment": "cut",
+                "source_refs": [f"fixture:support-e-{index}"],
+            }
+            for index, (start, end) in enumerate(
+                zip(support_vertices, support_vertices[1:] + support_vertices[:1]),
+                start=1,
+            )
+        )
     if rotation_degrees:
         angle = math.radians(rotation_degrees)
         cosine = math.cos(angle)
@@ -482,6 +526,140 @@ def test_anchor_confirmation_accepts_common_closure_flap_clearance(tmp_path: Pat
         assert coverage[1] == 0.0 or coverage[3] == 20.0
 
 
+def test_anchor_confirmation_accepts_a_verified_multi_flap_closure_without_stretching(tmp_path: Path):
+    source, resolution, _proposed, net, front = anchor_proposal_files(
+        tmp_path,
+        top_cap_depth=14.0,
+        top_support_depth=6.0,
+    )
+    output = tmp_path / "assembled-closure.structure.json"
+
+    result = confirm_anchor(source, resolution, net["id"], front["id"], 0, output)
+
+    assert result["ok"] is True
+    assert result["dimensions_mm"] == {"width": 30.0, "depth": 20.0, "height": 50.0}
+    approved = json.loads(output.read_text(encoding="utf-8"))
+    assert approved["validation"]["warnings"] == ["closure_assembly_partial"]
+    resolved = resolve_structure_payload(approved)
+    assert resolved.status == "ready"
+    cap_areas = {
+        role: round(
+            (bounds[2] - bounds[0]) * (bounds[3] - bounds[1]),
+            3,
+        )
+        for role in ("top", "bottom")
+        for bounds in [resolved.resolved["faces"][role]["artwork_coverage_bounds_mm"]]
+    }
+    assert sorted(cap_areas.values()) == [420.0, 600.0]
+
+
+def test_anchor_confirmation_accepts_the_exact_multi_flap_coverage_boundary(tmp_path: Path):
+    source, resolution, proposed, net, front = anchor_proposal_files(
+        tmp_path,
+        top_cap_depth=12.0,
+        top_support_depth=8.0,
+    )
+    assembly = next(
+        closure
+        for closure in proposed["topology"]["net_proposals"][0]["closure_assemblies"]
+        if closure["closure_kind"] == "assembly"
+    )
+
+    assert assembly["coverage_ratio"] == 0.6
+    result = confirm_anchor(
+        source,
+        resolution,
+        net["id"],
+        front["id"],
+        0,
+        tmp_path / "assembled-boundary.structure.json",
+    )
+
+    assert result["ok"] is True
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "missing_closures",
+        "duplicate_cap",
+        "malformed_closure",
+        "invalid_kind",
+        "assembly_missing_schema",
+        "assembly_wrong_extent",
+        "assembly_below_threshold",
+        "attached_body_mismatch",
+    ],
+)
+def test_anchor_confirmation_rejects_tampered_closure_contracts(tmp_path: Path, case: str):
+    fixture = {
+        "top_cap_depth": 14.0,
+        "top_support_depth": 6.0,
+    } if case.startswith("assembly_") else {}
+    source, resolution, proposed, net, front = anchor_proposal_files(tmp_path, **fixture)
+    tampered = deepcopy(proposed)
+    proposal = tampered["topology"]["net_proposals"][0]
+    closures = proposal["closure_assemblies"]
+
+    if case == "missing_closures":
+        proposal.pop("closure_assemblies")
+    elif case == "duplicate_cap":
+        closures[1]["face_id"] = closures[0]["face_id"]
+    elif case == "malformed_closure":
+        closures[0] = "not-a-closure"
+    elif case == "invalid_kind":
+        closures[0]["closure_kind"] = "guessed"
+    elif case == "assembly_missing_schema":
+        proposal.pop("schema")
+    elif case == "assembly_wrong_extent":
+        next(item for item in closures if item["closure_kind"] == "assembly")["extent"] = "full"
+    elif case == "assembly_below_threshold":
+        next(item for item in closures if item["closure_kind"] == "assembly")["coverage_ratio"] = 0.599
+    elif case == "attached_body_mismatch":
+        closure = closures[0]
+        closure["attached_body_face_id"] = next(
+            face_id
+            for face_id in proposal["body_face_ids"]
+            if face_id != closure["attached_body_face_id"]
+        )
+    else:  # pragma: no cover - parametrization is exhaustive
+        raise AssertionError(case)
+
+    write_resolution(resolution, tampered)
+    with pytest.raises(StructureConfirmationError) as raised:
+        confirm_anchor(source, resolution, net["id"], front["id"], 0, tmp_path / "never.json")
+
+    assert raised.value.code == "structure_confirmation_invalid"
+
+
+@pytest.mark.parametrize("cap_clearance", [0.0, 1.2])
+def test_anchor_confirmation_keeps_legacy_closure_kind_compatibility(
+    tmp_path: Path,
+    cap_clearance: float,
+):
+    source, resolution, proposed, net, front = anchor_proposal_files(
+        tmp_path,
+        cap_clearance=cap_clearance,
+    )
+    legacy = deepcopy(proposed)
+    legacy_proposal = legacy["topology"]["net_proposals"][0]
+    legacy_proposal.pop("schema")
+    for closure in legacy_proposal["closure_assemblies"]:
+        closure.pop("closure_kind")
+    write_resolution(resolution, legacy)
+
+    result = confirm_anchor(
+        source,
+        resolution,
+        net["id"],
+        front["id"],
+        0,
+        tmp_path / "legacy-closure.structure.json",
+    )
+
+    assert result["ok"] is True
+
+
 def test_short_flap_cannot_be_promoted_to_a_top_face_or_swap_width_and_depth():
     payload = semantic_box(cap_body_role="right", top_cap_depth=8.0)
     payload["source"]["adapter"] = "illustrator-stroke-proposal/1"
@@ -544,6 +722,9 @@ def test_anchor_confirmation_rejects_caps_on_the_same_side_of_the_body(tmp_path:
         duplicate_cap["id"] if face_id == second_cap_id else face_id
         for face_id in same_side_net["face_ids"]
     ]
+    for closure in same_side_net["closure_assemblies"]:
+        if closure["face_id"] == second_cap_id:
+            closure["face_id"] = duplicate_cap["id"]
     write_resolution(resolution, same_side)
 
     with pytest.raises(StructureConfirmationError) as raised:

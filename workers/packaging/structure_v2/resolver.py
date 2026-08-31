@@ -12,6 +12,7 @@ from typing import Any, Mapping
 from .adapters import AdaptationResult, adapt_structure
 from .dimensions import (
     DimensionPolicy,
+    fit_closure_dimensions,
     geometry_policy_for_source,
     is_stroke_proposal_source,
     normalized_mm,
@@ -36,7 +37,7 @@ ROLE_DIMENSIONS = {
     "top": ("width", "depth"),
     "bottom": ("width", "depth"),
 }
-CACHE_SCHEMA = "packaging-structure-cache/4"
+CACHE_SCHEMA = "packaging-structure-cache/5"
 RESOLVED_SCHEMA = "resolved-packaging-job/2"
 PROPOSAL_EXPECTED_VALIDATION_ERRORS = {
     "structure_face_mapping_incomplete",
@@ -292,16 +293,25 @@ def _artwork_orientations_valid(
     dimensions: Mapping[str, float],
     policy: DimensionPolicy,
 ) -> bool:
+    allow_assembled_closure = bool(
+        is_stroke_proposal_source(structure.get("source"))
+        and "closure_assembly_partial" in structure.get("validation", {}).get("warnings", [])
+    )
     for role, face in role_faces.items():
         actual = _mapped_face_size(structure, face)
         if actual is None:
             return False
         keys = ROLE_DIMENSIONS[role]
         expected = [float(dimensions[keys[0]]), float(dimensions[keys[1]])]
-        if not all(
-            policy.close(left, right)
-            for left, right in zip(actual, expected)
-        ):
+        if role in {"top", "bottom"}:
+            if fit_closure_dimensions(
+                actual,
+                expected,
+                policy,
+                allow_assembled=allow_assembled_closure,
+            ) is None:
+                return False
+        elif not all(policy.close(left, right) for left, right in zip(actual, expected)):
             return False
         if _artwork_coverage_bounds(structure, face, expected, policy) is None:
             return False

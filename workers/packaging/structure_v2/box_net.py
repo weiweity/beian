@@ -17,13 +17,15 @@ from .dimensions import (
     DimensionPolicy,
     GeometryPolicy,
     STROKE_PROPOSAL_GEOMETRY,
-    normalized_mm,
+    fit_closure_dimensions,
     solve_body_dimensions,
 )
 
 
 MAX_BOX_NET_PROPOSALS = 24
 MAX_BOX_NET_SEARCH_STATES = 4096
+MIN_CLOSURE_EVIDENCE_MM = 2.0
+BOX_NET_PROPOSAL_SCHEMA = "box-net-proposal/2"
 
 
 class BoxNetProposalLimitError(RuntimeError):
@@ -37,6 +39,27 @@ def _boundary_close(left: float, right: float, tolerance: float) -> bool:
 def _bounds(candidate: Mapping[str, Any]) -> tuple[float, float, float, float]:
     raw = candidate["local_bounds"]
     return tuple(float(value) for value in raw)  # type: ignore[return-value]
+
+
+def _open_sides(candidate: Mapping[str, Any]) -> tuple[int, ...]:
+    raw = candidate.get("open_sides", [])
+    if not isinstance(raw, list):
+        return ()
+    values = sorted(
+        {
+            int(value)
+            for value in raw
+            if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 3
+        }
+    )
+    return tuple(values)
+
+
+def _outer_side_index(axis: str, side: int) -> int:
+    # Candidate side order is top, right, bottom, left.
+    if axis == "x":
+        return 0 if side < 0 else 2
+    return 3 if side < 0 else 1
 
 
 def _along_size(candidate: Mapping[str, Any], axis: str) -> float:
@@ -75,7 +98,13 @@ def _body_paths(
     dimensions: DimensionPolicy,
     search_state: list[int],
 ) -> list[list[Mapping[str, Any]]]:
-    ordered = sorted(candidates, key=lambda item: (_bounds(item)[0 if axis == "x" else 1], str(item["id"])))
+    # Three-sided rectification is reserved for closure flaps.  Letting one of
+    # those candidates into the body strip would manufacture a side wall that
+    # is not bounded by source linework.
+    ordered = sorted(
+        (candidate for candidate in candidates if not _open_sides(candidate)),
+        key=lambda item: (_bounds(item)[0 if axis == "x" else 1], str(item["id"])),
+    )
     followers = {
         str(candidate["id"]): [other for other in ordered if _follows(candidate, other, axis, tolerance)]
         for candidate in ordered
@@ -148,7 +177,7 @@ def _closure_options(
     body_ids = {str(item["id"]) for item in body_path}
     body_along = [_along_size(item, axis) for item in body_path]
     first, second = body_along[0], body_along[1]
-    options: dict[int, list[dict[str, Any]]] = {-1: [], 1: []}
+    attached_candidates: dict[int, list[dict[str, Any]]] = {-1: [], 1: []}
     for candidate in candidates:
         if str(candidate["id"]) in body_ids:
             continue
@@ -160,26 +189,82 @@ def _closure_options(
             cross = _cross_size(candidate, axis)
             attached = _along_size(body, axis)
             expected_cross = second if dimensions.close(attached, first) else first
+            open_sides = _open_sides(candidate)
             if (
-                dimensions.close(along, attached)
-                and dimensions.close(cross, expected_cross)
+                not dimensions.close(along, attached)
+                or expected_cross <= 0
+                or (open_sides and open_sides != (_outer_side_index(axis, side),))
             ):
-                clearance = abs(normalized_mm(cross) - normalized_mm(expected_cross))
-                options[side].append(
-                    {
-                        "face": candidate,
-                        "attached_body_face_id": str(body["id"]),
-                        "coverage_ratio": round(min(1.0, cross / expected_cross), 6),
-                        # A top/bottom texture may only come from the main
-                        # closure panel.  Short dust/tuck flaps are not a
-                        # substitute for the erected footprint.  The stroke
-                        # adapter still permits normal manufacturing clearance
-                        # through its single dimensional policy.
-                        "extent": "full" if clearance == 0 else "partial",
-                    }
-                )
-                break
+                continue
+            attached_candidates[side].append(
+                {
+                    "face": candidate,
+                    "attached_body_face_id": str(body["id"]),
+                    "attached_along": attached,
+                    "cross": cross,
+                    "expected_cross": expected_cross,
+                }
+            )
+            break
+
+    options: dict[int, list[dict[str, Any]]] = {-1: [], 1: []}
     for side in options:
+        records = attached_candidates[side]
+        evidence_body_ids = {
+            str(item["attached_body_face_id"])
+            for item in records
+            if (
+                float(item["cross"])
+                >= max(
+                    MIN_CLOSURE_EVIDENCE_MM,
+                    min(5.0, float(item["expected_cross"]) * 0.2),
+                )
+                and (
+                    float(item["cross"]) <= float(item["expected_cross"])
+                    or dimensions.close(
+                        float(item["cross"]),
+                        float(item["expected_cross"]),
+                    )
+                )
+            )
+        }
+        for item in records:
+            cross = float(item["cross"])
+            expected_cross = float(item["expected_cross"])
+            fit = fit_closure_dimensions(
+                (_along_size(item["face"], axis), cross),
+                (float(item["attached_along"]), expected_cross),
+                dimensions,
+                allow_assembled=len(evidence_body_ids) >= 2,
+            )
+            if fit is None:
+                continue
+            options[side].append(
+                {
+                    "face": item["face"],
+                    "attached_body_face_id": str(item["attached_body_face_id"]),
+                    "coverage_ratio": fit.coverage_ratio,
+                    "extent": "full" if not fit.padded else "partial",
+                    "closure_kind": fit.kind,
+                }
+            )
+
+        # If source linework contains a fully bounded main cap, do not expose
+        # a larger three-sided frame built from crossing annotation lines.  The
+        # open-frame path exists only for real multi-flap closure assemblies.
+        closed_full = [
+            option
+            for option in options[side]
+            if not _open_sides(option["face"])
+            and dimensions.close(
+                _cross_size(option["face"], axis),
+                second
+                if dimensions.close(_along_size(option["face"], axis), first)
+                else first,
+            )
+        ]
+        if closed_full:
+            options[side] = closed_full
         options[side].sort(
             key=lambda item: (
                 -float(item["coverage_ratio"]),
@@ -219,6 +304,7 @@ def _stable_proposal_id(
     basis_transform: Sequence[float],
 ) -> str:
     material = {
+        "proposal_schema": BOX_NET_PROPOSAL_SCHEMA,
         "binding_seed": binding_seed,
         "axis": axis,
         "basis_transform": [round(float(value), 9) for value in basis_transform],
@@ -279,6 +365,7 @@ def derive_box_net_proposals(
                     if solved_dimensions is None:
                         continue
                     candidate = {
+                        "schema": BOX_NET_PROPOSAL_SCHEMA,
                         "id": _stable_proposal_id(
                             binding_seed=binding_seed,
                             axis=axis,
@@ -295,6 +382,7 @@ def derive_box_net_proposals(
                                 "attached_body_face_id": str(option["attached_body_face_id"]),
                                 "side": side,
                                 "extent": str(option["extent"]),
+                                "closure_kind": str(option["closure_kind"]),
                                 "coverage_ratio": float(option["coverage_ratio"]),
                             }
                             for side, option in ((-1, negative), (1, positive))

@@ -10,8 +10,11 @@ import tempfile
 from typing import Any, Mapping
 
 from .adapters import sha256_file
+from .box_net import BOX_NET_PROPOSAL_SCHEMA
 from .dimensions import (
     DimensionPolicy,
+    MIN_ASSEMBLED_CLOSURE_RATIO,
+    fit_closure_dimensions,
     geometry_policy_for_source,
     normalized_mm,
     solve_body_dimensions,
@@ -263,6 +266,7 @@ def _turn_for_cap(
     attached_role: str,
     expected_size: tuple[float, float],
     dimensions: DimensionPolicy,
+    allow_assembled: bool,
 ) -> int:
     # The Blender role contract fixes each panel's texture axes.  Dimensions
     # alone cannot distinguish 90° from 270° (especially on square caps), so
@@ -275,7 +279,12 @@ def _turn_for_cap(
     size_matches = []
     for candidate in range(4):
         actual = _turned_size(structure, cap_face, candidate)
-        if all(dimensions.close(value, expected) for value, expected in zip(actual, expected_size)):
+        if fit_closure_dimensions(
+            actual,
+            expected_size,
+            dimensions,
+            allow_assembled=allow_assembled,
+        ) is not None:
             size_matches.append(candidate)
     if not size_matches:
         raise StructureConfirmationError(
@@ -306,11 +315,11 @@ def _align_closure_transform(
 ) -> list[float]:
     """Align a main closure panel without scaling its printed artwork.
 
-    A normal manufacturing clearance leaves a narrow uncovered strip on the
-    erected footprint.  Keep the fold edge fixed, center the perpendicular
-    allowance, and let the renderer pad only the uncovered area with white.
-    Short dust/tuck flaps never reach this function because proposal and
-    confirmation use the same dimensional policy.
+    A normal clearance or verified multi-flap closure leaves an uncovered strip
+    on the erected footprint. Keep the fold edge fixed, center the perpendicular
+    allowance, and let the renderer pad only that uncovered area with white.
+    An isolated short dust flap never reaches this function because proposal,
+    confirmation, and final resolution use the same dimensional policy.
     """
     minimum_x, minimum_y, maximum_x, maximum_y = _mapped_bounds(structure, face, transform)
     actual_width = maximum_x - minimum_x
@@ -340,7 +349,7 @@ def _anchor_decisions(
     resolution: Mapping[str, Any],
     structure: Mapping[str, Any],
     anchor: Mapping[str, Any],
-) -> list[tuple[str, str, int, tuple[float, float]]]:
+) -> list[tuple[str, str, int, tuple[float, float], bool]]:
     dimensions = geometry_policy_for_source(structure.get("source")).dimensions
     proposal_id = str(anchor.get("proposal_id") or "")
     front_id = str(anchor.get("front_face_id") or "")
@@ -369,6 +378,45 @@ def _anchor_decisions(
     face_ids = [str(value) for value in net.get("face_ids", [])]
     if len(body_ids) != 4 or len(cap_ids) != 2 or len(set(face_ids)) != 6 or set(face_ids) != set(body_ids + cap_ids):
         raise StructureConfirmationError("structure_confirmation_invalid", "完整盒型提案格式不对。")
+    raw_closures = net.get("closure_assemblies")
+    if not isinstance(raw_closures, list) or len(raw_closures) != 2:
+        raise StructureConfirmationError("structure_confirmation_invalid", "完整盒型封口提案格式不对。")
+    closure_contracts: dict[str, dict[str, Any]] = {}
+    for raw_closure in raw_closures:
+        if not isinstance(raw_closure, Mapping):
+            raise StructureConfirmationError("structure_confirmation_invalid", "完整盒型封口提案格式不对。")
+        cap_id = str(raw_closure.get("face_id") or "")
+        attached_id = str(raw_closure.get("attached_body_face_id") or "")
+        coverage_ratio = raw_closure.get("coverage_ratio")
+        closure_kind = str(raw_closure.get("closure_kind") or "")
+        side = raw_closure.get("side")
+        if (
+            cap_id not in cap_ids
+            or cap_id in closure_contracts
+            or attached_id not in body_ids
+            or isinstance(coverage_ratio, bool)
+            or not isinstance(coverage_ratio, (int, float))
+            or not 0 < float(coverage_ratio) <= 1.0
+            or isinstance(side, bool)
+            or side not in {-1, 1}
+            or raw_closure.get("extent") not in {"full", "partial"}
+        ):
+            raise StructureConfirmationError("structure_confirmation_invalid", "完整盒型封口提案格式不对。")
+        allow_assembled = closure_kind == "assembly"
+        if allow_assembled and (
+            net.get("schema") != BOX_NET_PROPOSAL_SCHEMA
+            or raw_closure.get("extent") != "partial"
+            or float(coverage_ratio) < MIN_ASSEMBLED_CLOSURE_RATIO
+        ):
+            raise StructureConfirmationError("structure_confirmation_invalid", "组合封口提案已经失效。")
+        if closure_kind not in {"", "full", "clearance", "assembly"}:
+            raise StructureConfirmationError("structure_confirmation_invalid", "完整盒型封口类型不受支持。")
+        closure_contracts[cap_id] = {
+            "attached_body_face_id": attached_id,
+            "allow_assembled": allow_assembled,
+        }
+    if set(closure_contracts) != set(cap_ids):
+        raise StructureConfirmationError("structure_confirmation_invalid", "完整盒型封口提案不完整。")
     if front_id not in body_ids:
         raise StructureConfirmationError("structure_face_mapping_incomplete", "正面必须从四个盒身面中选择。")
     valid_anchors = net.get("valid_anchors")
@@ -507,6 +555,9 @@ def _anchor_decisions(
     for role in ("top", "bottom"):
         cap_id = role_ids[role]
         attached_id = _cap_body_neighbor(fold_neighbors, cap_id, set(body_ids))
+        closure_contract = closure_contracts[cap_id]
+        if closure_contract["attached_body_face_id"] != attached_id:
+            raise StructureConfirmationError("structure_confirmation_invalid", "完整盒型封口连接已经失效。")
         face_turns[role] = _turn_for_cap(
             structure,
             faces_by_id[cap_id],
@@ -515,11 +566,20 @@ def _anchor_decisions(
             attached_role=body_roles[attached_id],
             expected_size=expected_sizes[role],
             dimensions=dimensions,
+            allow_assembled=bool(closure_contract["allow_assembled"]),
         )
     normalized = []
     for role in ("front", "right", "back", "left", "top", "bottom"):
         face_id = role_ids[role]
-        normalized.append((face_id, role, face_turns[role], expected_sizes[role]))
+        normalized.append(
+            (
+                face_id,
+                role,
+                face_turns[role],
+                expected_sizes[role],
+                bool(closure_contracts.get(face_id, {}).get("allow_assembled", False)),
+            )
+        )
     return normalized
 
 
@@ -537,7 +597,7 @@ def _resolve_anchor(
     approved = canonicalize_structure(structure)
     faces_by_id = {face["id"]: face for face in approved["faces"]}
     normalized = _anchor_decisions(resolution, approved, anchor)
-    roles_by_face_id = {face_id: role for face_id, role, _turns, _expected in normalized}
+    roles_by_face_id = {face_id: role for face_id, role, _turns, _expected, _assembled in normalized}
     selected_face_ids = set(roles_by_face_id)
     selected_neighbors = _selected_fold_neighbors(approved, faces_by_id, selected_face_ids)
     body_face_ids = {
@@ -548,8 +608,9 @@ def _resolve_anchor(
     approved.pop("structure_hash", None)
     for face in approved["faces"]:
         face["role"] = "unknown"
-    closure_padded = False
-    for face_id, role, turns, expected_size in normalized:
+    closure_clearance = False
+    closure_assembly = False
+    for face_id, role, turns, expected_size, allow_assembled in normalized:
         face = faces_by_id[face_id]
         width, height = _mapped_size(approved, face)
         transform = _rotated_transform(
@@ -561,15 +622,19 @@ def _resolve_anchor(
         if role in {"top", "bottom"}:
             actual_size = _turned_size(approved, face, turns)
             policy = geometry_policy_for_source(approved.get("source")).dimensions
-            if not all(policy.close(actual, expected) for actual, expected in zip(actual_size, expected_size)):
+            fit = fit_closure_dimensions(
+                actual_size,
+                expected_size,
+                policy,
+                allow_assembled=allow_assembled,
+            )
+            if fit is None:
                 raise StructureConfirmationError(
                     "structure_face_dimensions_mismatch",
                     "盒盖主面尺寸与盒身宽深不一致，不能形成闭合盒。",
                 )
-            closure_padded = closure_padded or any(
-                normalized_mm(actual) != normalized_mm(expected)
-                for actual, expected in zip(actual_size, expected_size)
-            )
+            closure_clearance = closure_clearance or fit.kind == "clearance"
+            closure_assembly = closure_assembly or fit.kind == "assembly"
             attached_face_id = _cap_body_neighbor(selected_neighbors, face_id, body_face_ids)
             attached_role = roles_by_face_id[attached_face_id]
             transform = _align_closure_transform(
@@ -604,12 +669,17 @@ def _resolve_anchor(
         and fold["right_face"] in selected_face_ids
     ]
     approved["root_face"] = next(
-        face_id for face_id, role, _turns, _expected in normalized if role == "front"
+        face_id for face_id, role, _turns, _expected, _assembled in normalized if role == "front"
     )
+    warnings = []
+    if closure_clearance:
+        warnings.append("closure_clearance_padded")
+    if closure_assembly:
+        warnings.append("closure_assembly_partial")
     approved["validation"] = {
         "status": "accepted",
         "errors": [],
-        "warnings": ["closure_clearance_padded"] if closure_padded else [],
+        "warnings": warnings,
     }
     approved = canonicalize_structure(approved)
     resolved = resolve_structure_payload(approved)
