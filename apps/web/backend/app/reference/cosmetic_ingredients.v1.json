@@ -1,0 +1,265 @@
+{
+  "schema_version": 1,
+  "dataset_id": "shenmei-controlled-cosmetic-ingredient-reference",
+  "dataset_version": "2026-08-19.case-ff89a97a1fe3.v1",
+  "as_of": "2026-08-19",
+  "retrieved_at": "2026-08-31",
+  "scope": "Curated subset for review case ff89a97a1fe3; this is not a mirror of the official directory.",
+  "verdict_policy": "Reference names may rank or explain OCR candidates but never change a missing atom into a matched atom by themselves.",
+  "sources": [
+    {
+      "id": "nmpa_iecic_i",
+      "authority": "国家药品监督管理局 / 中国食品药品检定研究院",
+      "title": "《已使用化妆品原料目录》I",
+      "url": "https://hzpsys.nifdc.org.cn/hzpGS/ysyhzpylmla",
+      "as_of": "2026-08-19"
+    },
+    {
+      "id": "nmpa_iecic_ii",
+      "authority": "国家药品监督管理局 / 中国食品药品检定研究院",
+      "title": "《已使用化妆品原料目录》II",
+      "url": "https://hzpsys.nifdc.org.cn/hzpGS/ysyhzpylmlb",
+      "as_of": "2026-08-19"
+    },
+    {
+      "id": "nmpa_adjustment_2026_08_19",
+      "authority": "国家药品监督管理局 / 中国食品药品检定研究院",
+      "title": "2026-08-19 第五次动态调整",
+      "url": "https://www.nifdc.org.cn/directory/web/nifdc/bshff/hzhpbzh/hzhpbzhtzgg/202608281602522181999.html",
+      "as_of": "2026-08-19"
+    }
+  ],
+  "entries": [
+    {
+      "id": "nmpa-i-05675",
+      "canonical_zh": "乳酸杆菌发酵产物",
+      "inci": "LACTOBACILLUS FERMENT",
+      "aliases": [],
+      "cas": [],
+      "regulatory_status": "listed_i_objective_record",
+      "source_id": "nmpa_iecic_i",
+      "source_record": "05675",
+      "note": "/"
+    },
+    {
+      "id": "nmpa-i-02421",
+      "canonical_zh": "甘油",
+      "inci": "GLYCERIN",
+      "aliases": [],
+      "cas": [],
+      "regulatory_status": "listed_i_objective_record",
+      "source_id": "nmpa_iecic_i",
+      "source_record": "02421",
+      "note": "/"
+    },
+    {
+      "id": "nmpa-i-06259",
+      "canonical_zh": "水",
+      "inci": "AQUA",
+      "aliases": [],
+      "cas": [],
+      "regulatory_status": "listed_i_objective_record",
+      "source_id": "nmpa_iecic_i",
+      "source_record": "06259",
+      "note": "/"
+    },
+    {
+      "id": "nmpa-i-07201",
+      "canonical_zh": "辛酸/癸酸/琥珀酸甘油三酯",
+      "inci": "CAPRYLIC/CAPRIC/SUCCINIC TRIGLYCERIDE",
+      "aliases": [],
+      "cas": [],
+      "regulatory_status": "listed_i_objective_record",
+      "source_id": "nmpa_iecic_i",
+      "source_record": "07201",
+      "note": "/"
+    },
+    {
+      "id": "nmpa-i-00004",
+      "canonical_zh": "1,2-己二醇",
+      "inci": "1,2-HEXANEDIOL",
+      "aliases": [],
+      "cas": [],
+      "regulatory_status": "listed_i_objective_record",
+      "source_id": "nmpa_iecic_i",
+      "source_record": "00004",
+      "note": "/"
+    },
+    {
+      "id": "nmpa-i-02021",
+      "canonical_zh": "对羟基苯乙酮",
+      "inci": "HYDROXYACETOPHENONE",
+      "aliases": [],
+      "cas": [],
+      "regulatory_status": "listed_i_objective_record",
+      "source_id": "nmpa_iecic_i",
+      "source_record": "02021",
+      "note": "/"
+    },
+    {
+      "id": "nmpa-i-07206",
+      "canonical_zh": "辛酸/癸酸甘油三酯",
+      "inci": "CAPRYLIC/CAPRIC TRIGLYCERIDE",
+      "aliases": [],
+      "cas": [],
+      "regulatory_status": "listed_i_objective_record",
+      "source_id": "nmpa_iecic_i",
+      "source_record": "07206",
+      "note": "/"
+    },
+    {
+      "id": "nmpa-i-02292",
+      "canonical_zh": "泛醇",
+      "inci": "PANTHENOL",
+      "aliases": [],
+      "cas": [],
+      "regulatory_status": "listed_i_objective_record",
+      "source_id": "nmpa_iecic_i",
+      "source_record": "02292",
+      "note": "/"
+    },
+    {
+      "id": "nmpa-i-01341",
+      "canonical_zh": "蓖麻油/IPDI 共聚物",
+      "inci": "CASTOR OIL/IPDI COPOLYMER",
+      "aliases": [],
+      "cas": [],
+      "regulatory_status": "listed_i_objective_record",
+      "source_id": "nmpa_iecic_i",
+      "source_record": "01341",
+      "note": "/"
+    },
+    {
+      "id": "nmpa-i-04615",
+      "canonical_zh": "毛瑞榈（MAURITIA FLEXUOSA）果油",
+      "inci": "MAURITIA FLEXUOSA FRUIT OIL",
+      "aliases": [],
+      "cas": [],
+      "regulatory_status": "listed_i_objective_record",
+      "source_id": "nmpa_iecic_i",
+      "source_record": "04615",
+      "note": "/"
+    },
+    {
+      "id": "nmpa-i-03432",
+      "canonical_zh": "角鲨烷",
+      "inci": "SQUALANE",
+      "aliases": [],
+      "cas": [],
+      "regulatory_status": "listed_i_objective_record",
+      "source_id": "nmpa_iecic_i",
+      "source_record": "03432",
+      "note": "/"
+    },
+    {
+      "id": "nmpa-i-06596",
+      "canonical_zh": "糖类同分异构体",
+      "inci": "SACCHARIDE ISOMERATE",
+      "aliases": [],
+      "cas": [],
+      "regulatory_status": "listed_i_objective_record",
+      "source_id": "nmpa_iecic_i",
+      "source_record": "06596",
+      "note": "/"
+    },
+    {
+      "id": "nmpa-i-08913",
+      "canonical_zh": "长茎葡萄蕨藻（CAULERPA LENTILLIFERA）提取物",
+      "inci": "CAULERPA LENTILLIFERA EXTRACT",
+      "aliases": [],
+      "cas": [],
+      "regulatory_status": "listed_i_objective_record",
+      "source_id": "nmpa_iecic_i",
+      "source_record": "08913",
+      "note": "/"
+    },
+    {
+      "id": "nmpa-i-08245",
+      "canonical_zh": "愈创薁",
+      "inci": "GUAIAZULENE",
+      "aliases": [],
+      "cas": [],
+      "regulatory_status": "listed_i_objective_record",
+      "source_id": "nmpa_iecic_i",
+      "source_record": "08245",
+      "note": "/"
+    },
+    {
+      "id": "nmpa-i-00383",
+      "canonical_zh": "DNA 钠",
+      "inci": "SODIUM DNA",
+      "aliases": [],
+      "cas": [],
+      "regulatory_status": "listed_i_objective_record",
+      "source_id": "nmpa_iecic_i",
+      "source_record": "00383",
+      "note": "/"
+    },
+    {
+      "id": "nmpa-i-03472",
+      "canonical_zh": "结冷胶",
+      "inci": "GELLAN GUM",
+      "aliases": [],
+      "cas": [],
+      "regulatory_status": "listed_i_objective_record",
+      "source_id": "nmpa_iecic_i",
+      "source_record": "03472",
+      "note": "/"
+    },
+    {
+      "id": "nmpa-i-04856",
+      "canonical_zh": "柠檬酸钠",
+      "inci": "SODIUM CITRATE",
+      "aliases": [],
+      "cas": [],
+      "regulatory_status": "listed_i_objective_record",
+      "source_id": "nmpa_iecic_i",
+      "source_record": "04856",
+      "note": "按照《化妆品安全技术规范》要求使用"
+    },
+    {
+      "id": "nmpa-i-03086",
+      "canonical_zh": "黄原胶",
+      "inci": "XANTHAN GUM",
+      "aliases": [],
+      "cas": [],
+      "regulatory_status": "listed_i_objective_record",
+      "source_id": "nmpa_iecic_i",
+      "source_record": "03086",
+      "note": "/"
+    },
+    {
+      "id": "nmpa-i-04512",
+      "canonical_zh": "氯化钙",
+      "inci": "CALCIUM CHLORIDE",
+      "aliases": [],
+      "cas": [],
+      "regulatory_status": "listed_i_objective_record",
+      "source_id": "nmpa_iecic_i",
+      "source_record": "04512",
+      "note": "/"
+    },
+    {
+      "id": "nmpa-i-03247",
+      "canonical_zh": "季戊四醇四（双-叔丁基羟基氢化肉桂酸）酯",
+      "inci": "PENTAERYTHRITYL TETRA-DI-t-BUTYL HYDROXYHYDROCINNAMATE",
+      "aliases": [],
+      "cas": [],
+      "regulatory_status": "listed_i_objective_record",
+      "source_id": "nmpa_iecic_i",
+      "source_record": "03247",
+      "note": "/"
+    },
+    {
+      "id": "nmpa-i-04849",
+      "canonical_zh": "柠檬酸",
+      "inci": "CITRIC ACID",
+      "aliases": [],
+      "cas": [],
+      "regulatory_status": "listed_i_objective_record",
+      "source_id": "nmpa_iecic_i",
+      "source_record": "04849",
+      "note": "按照《化妆品安全技术规范》要求使用"
+    }
+  ]
+}
