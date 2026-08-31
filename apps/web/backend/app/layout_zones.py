@@ -195,7 +195,8 @@ FIELD_ZONE_MAP: dict[str, tuple[str, ...]] = {
     "logo标识": ("claims",),
     "使用方法": ("usage", "claims"),
     "生产信息": ("ingredients", "usage"),
-    "净含量": ("claims", "usage"),
+    "净含量": (),  # 喷雾毫升常在卖点区外，全文搜
+    "净含量&条形码": (),
     "条形码": (),  # 全文（码可能在任意角）
     "二维码": (),  # 全文 + 专用 API
 }

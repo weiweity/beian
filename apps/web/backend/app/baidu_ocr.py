@@ -328,10 +328,10 @@ def qrcode_image_bytes(png_or_jpg: bytes) -> tuple[list[dict], dict]:
                 }
             except Exception:
                 loc = {}
-        if text:
+        if text or loc.get("width") or loc.get("height"):
             codes.append(
                 {
-                    "text": str(text),
+                    "text": str(text or ""),
                     "location": {
                         "left": int(loc.get("left") or 0),
                         "top": int(loc.get("top") or 0),

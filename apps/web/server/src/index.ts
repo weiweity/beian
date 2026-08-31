@@ -131,9 +131,11 @@ import {
   assertTid,
   deleteTask,
   findTaskBySourceReceipt,
+  hitNeedsDecision,
   isHitDecision,
   isReviewableStatus,
   isReworkableTask,
+  isValidHitReviewState,
   listTasks,
   loadTask,
   newTid,
@@ -147,7 +149,7 @@ type NodeBindings = HttpBindings | Http2Bindings;
 type Env = { Bindings: NodeBindings; Variables: { session: Session } };
 
 const app = new Hono<Env>();
-const VERSION = "0.21.2.0";
+const VERSION = "0.21.3.0";
 
 class ApiProblem extends Error {
   constructor(
@@ -940,9 +942,11 @@ app.post("/api/tasks/:tid/complete", async (c) => {
     throw new HTTPException(400, { message: "当前状态不可签字" });
   }
   const hits = activeHits(task).filter((h) => !skipPackSheetField(h.field));
-  const pending = hits.filter(
-    (h) => (h.status === "疑点" || h.status === "缺失") && (h.decision || "pending") === "pending",
-  );
+  const invalid = hits.filter((h) => !isValidHitReviewState(h));
+  if (invalid.length) {
+    throw new HTTPException(400, { message: `有 ${invalid.length} 条审核数据状态异常，请重新对照` });
+  }
+  const pending = hits.filter(hitNeedsDecision);
   if (pending.length) throw new HTTPException(400, { message: `仍有 ${pending.length} 条疑点/缺失未处理` });
   const conclusion = (body.conclusion || "").trim();
   if (!conclusion) throw new HTTPException(400, { message: "请写下结论" });

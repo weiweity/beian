@@ -5,7 +5,7 @@ import { ApiError, api, type Decision, type FieldHit, type TaskDetail, type Task
 import { WaitCard } from "../chrome/WaitCard";
 import { forgetReviewHandoff, reviewHandoffFor } from "../jobHandoff";
 import { fittedPage, panBy, resetZoom, zoomAt, zoomCss, zoomToBox } from "./canvasZoom";
-import { overlayFromBox, overlaysForHit, pickHitBox, pinHitGroupsForPage, resolvePageMetrics } from "./pinBox";
+import { locateBoxesForHit, locationPageForHit, overlayFromBox, overlaysForHit, pickHitBox, pinHitGroupsForPage, resolvePageMetrics, visiblePinGroups } from "./pinBox";
 import {
   enterElementFullscreen,
   exitElementFullscreen,
@@ -35,7 +35,8 @@ import {
 import { detailLoadState, shouldShowWaitCard } from "./waitCard";
 import { reviewHits, shouldUseReworkView } from "./reviewVersion";
 import { ReviewDockPanel } from "./ReviewDockPanel";
-import { buildRevisionList, partitionReviewHits, withLocalNotes } from "./reviewEvidence";
+import { firstPendingIssueIndex, issueOrdinal, pageIndexForHit } from "./reviewNav";
+import { buildRevisionList, withLocalNotes } from "./reviewEvidence";
 import {
   prepareReviewMedia,
   prepareReviewMediaAfterFailure,
@@ -72,7 +73,7 @@ function statusLead(task: TaskDetail | null, pageIdx: number, pages: TaskPage[])
   const pageNo = pages[pageIdx]?.page || pageIdx + 1;
   if (!task) return "核对页";
   if (task.status === "completed") return `核对页 · 第 ${pageNo} 页 · 已签字`;
-  if (isReviewable(task.status)) return `核对页 · 点字段，图上定位。第 ${pageNo} 页 · 待审核`;
+  if (isReviewable(task.status)) return `核对页 · 点疑点，图上只亮这一条。第 ${pageNo} 页 · 待审核`;
   if (task.status === "compare_failed") return `核对页 · 第 ${pageNo} 页 · 对照中断`;
   return `核对页 · 第 ${pageNo} 页`;
 }
@@ -127,11 +128,18 @@ export function ReviewPage({ taskId, onBack }: Props) {
   } | null>(null);
   const dockDrag = useRef<{ x: number; y: number; place: DockPlace } | null>(null);
   const pendingFit = useRef<number | null>(null);
+  const seededNav = useRef("");
   const fitHitRef = useRef<(i: number) => void>(() => undefined);
   const busyDepthRef = useRef(0);
   const decisionQueueRef = useRef<Promise<boolean>>(Promise.resolve(true));
   const seededTaskId = useRef(taskId);
   const reviewMediaLoad = useRef<AbortController | null>(null);
+  const taskIdRef = useRef(taskId);
+  const useV2Ref = useRef(useV2);
+  const pageIdxRef = useRef(pageIdx);
+  taskIdRef.current = taskId;
+  useV2Ref.current = useV2;
+  pageIdxRef.current = pageIdx;
   const waiting = shouldShowWaitCard(task);
   const loadState = detailLoadState(task, error);
 
@@ -417,20 +425,40 @@ export function ReviewPage({ taskId, onBack }: Props) {
   const reviewable = isReviewable(task?.status);
   const reworkable = isReworkable(task);
   const current = hits[active];
-  const firstIssueIndex = partitionReviewHits(hits).issues[0]?.index ?? 0;
 
-  useEffect(() => {
-    setActive(firstIssueIndex);
-  }, [task?.id, useV2, hits.length, firstIssueIndex]);
+  useLayoutEffect(() => {
+    if (!task) return;
+    if (task.status === "completed") {
+      seededNav.current = `${task.id}:signed`;
+      return;
+    }
+    const phase = isReviewable(task.status) ? "review" : task.status;
+    const key = `${task.id}:${phase}:${useV2 ? "v2" : "v1"}:${hits.length}`;
+    if (seededNav.current === key) return;
+    seededNav.current = key;
+    const i = firstPendingIssueIndex(hits);
+    if (i == null) {
+      pendingFit.current = null;
+      setActive(0);
+      return;
+    }
+    pendingFit.current = i;
+    const idx = pageIndexForHit(pages, hits[i]);
+    if (idx != null) setPageIdx(idx);
+    setActive(i);
+  }, [task?.id, task?.status, useV2, hits.length]);
 
   const pageNo = Number(page?.page || pageIdx + 1);
   const metrics = resolvePageMetrics(page, nat);
   const laid = metrics && viewSize ? fittedPage(metrics, viewSize) : { imgW: 0, imgH: 0, offsetX: 0, offsetY: 0 };
   laidRef.current = laid;
   const pinHits = useMemo(() => {
-    return pinHitGroupsForPage(hits, pageNo);
-  }, [hits, pageNo]);
-  const currentBox = current ? pickHitBox(current.bboxes, Number(current.page) || pageNo) : null;
+    return visiblePinGroups(pinHitGroupsForPage(hits, pageNo), signed ? -1 : active);
+  }, [hits, pageNo, active, signed]);
+  const currentBox = current
+    ? pickHitBox(locateBoxesForHit(current), pageNo, metrics)
+    : null;
+  const currentHasBox = Boolean(currentBox);
 
   useEffect(() => {
     let cancelled = false;
@@ -493,13 +521,17 @@ export function ReviewPage({ taskId, onBack }: Props) {
 
   useEffect(() => {
     const i = pendingFit.current;
-    if (i == null || !metrics) return;
+    const mediaReady =
+      Boolean(reviewMedia) &&
+      Boolean(page) &&
+      (reviewMedia?.url === page?.url || reviewMedia?.url === page?.raster_url);
+    if (i == null || !metrics || !mediaReady || !viewSize) return;
     const id = window.requestAnimationFrame(() => {
       pendingFit.current = null;
       fitHitRef.current(i);
     });
     return () => window.cancelAnimationFrame(id);
-  }, [metrics, pageIdx, page?.url]);
+  }, [metrics?.width, metrics?.height, pageIdx, page?.url, page?.raster_url, reviewMedia?.url, viewSize]);
 
   useLayoutEffect(() => {
     const node = viewRef.current;
@@ -566,6 +598,24 @@ export function ReviewPage({ taskId, onBack }: Props) {
           note,
         });
         setTask((currentTask) => (currentTask?.id === targetTaskId ? next : currentTask));
+        if (taskIdRef.current !== targetTaskId) return true;
+        if (decision === "confirm" || decision === "ignore") {
+          const nextUseV2 = useV2Ref.current;
+          const nextHits = reviewHits(next, nextUseV2).filter((h) => !skipPackSheetField(h.field));
+          const nextPages = pageList(nextUseV2 ? { ...next, pages: next.pages_v2 } : next);
+          const nextPending = firstPendingIssueIndex(nextHits);
+          if (nextPending != null) {
+            setActive(nextPending);
+            const pIdx = pageIndexForHit(nextPages, nextHits[nextPending]);
+            if (pIdx != null && pIdx !== pageIdxRef.current) {
+              pendingFit.current = nextPending;
+              setPageIdx(pIdx);
+            } else {
+              pendingFit.current = null;
+              window.requestAnimationFrame(() => fitHitRef.current(nextPending));
+            }
+          }
+        }
         return true;
       } catch (err) {
         message.error(err instanceof Error ? err.message : "记录失败");
@@ -583,6 +633,14 @@ export function ReviewPage({ taskId, onBack }: Props) {
     const { text, count } = buildRevisionList(
       task.product_name || task.title,
       withLocalNotes(hits, notes),
+      {
+        located: (hit) => {
+          const hitPage = locationPageForHit(hit);
+          const hitPageMeta = pages.find((candidate) => Number(candidate.page) === hitPage);
+          const hitMetrics = resolvePageMetrics(hitPageMeta, hitPage === pageNo ? nat : null);
+          return Boolean(pickHitBox(locateBoxesForHit(hit), hitPage, hitMetrics));
+        },
+      },
     );
     try {
       await navigator.clipboard.writeText(text);
@@ -647,7 +705,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
     const h = hits[i];
     const el = viewRef.current;
     if (!h || !metrics || !el) return;
-    const box = pickHitBox(h.bboxes, Number(h.page) || pageNo);
+    const box = pickHitBox(locateBoxesForHit(h), pageNo, metrics);
     if (!box) {
       commitZoom(resetZoom());
       return;
@@ -658,9 +716,8 @@ export function ReviewPage({ taskId, onBack }: Props) {
 
   function pickHit(i: number) {
     setActive(i);
-    const p = Number(hits[i]?.page || 0);
-    const idx = pages.findIndex((pg) => Number(pg.page) === p);
-    if (idx >= 0 && idx !== pageIdx) {
+    const idx = pageIndexForHit(pages, hits[i]);
+    if (idx != null && idx !== pageIdx) {
       pendingFit.current = i;
       setPageIdx(idx);
       return;
@@ -735,6 +792,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
             <button
               type="button"
               className="btn-ghost"
+              disabled={busy}
               onClick={() => {
                 setUseV2((v) => !v);
                 setPageIdx(0);
@@ -769,6 +827,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
                   key={p.url || i}
                   type="button"
                   className={i === pageIdx ? "btn-primary" : "btn-ghost"}
+                  disabled={busy}
                   onClick={() => setPageIdx(i)}
                 >
                   第 {p.page || i + 1} 页
@@ -870,10 +929,12 @@ export function ReviewPage({ taskId, onBack }: Props) {
                   </div>
                 )}
                 {(reviewMedia ? pinHits : []).map(({ h, i, indices }) => {
-                  const overlays = overlaysForHit(h.bboxes, pageNo, metrics);
-                  const preferred = pickHitBox(h.bboxes, pageNo);
+                  const locateBoxes = locateBoxesForHit(h);
+                  const overlays = overlaysForHit(locateBoxes, pageNo, metrics);
+                  const preferred = pickHitBox(locateBoxes, pageNo, metrics);
                   const pin = preferred && metrics ? overlayFromBox(preferred, metrics) : null;
                   const pairActive = indices.includes(active);
+                  const pinNo = issueOrdinal(hits, pairActive ? active : i) || i + 1;
                   return (
                     <Fragment key={h.id || i}>
                       {boxesOn
@@ -893,7 +954,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
                           onPointerDown={(e) => e.stopPropagation()}
                           onClick={() => pickHit(pairActive ? active : i)}
                         >
-                          {i + 1}
+                          {pinNo}
                         </button>
                       ) : null}
                     </Fragment>
@@ -953,7 +1014,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
                         writePinsOn(browserStore(), next);
                       }}
                     >
-                      {pinsOn ? "隐藏钉" : "显示钉"}
+                      {pinsOn ? "隐藏本字段钉" : "显示本字段钉"}
                     </button>
                     <button
                       type="button"
@@ -964,7 +1025,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
                         writeBoxesOn(browserStore(), next);
                       }}
                     >
-                      {boxesOn ? "隐藏框" : "显示框"}
+                      {boxesOn ? "隐藏本字段框" : "显示本字段框"}
                     </button>
                     <button type="button" className="btn-ghost" onClick={() => setToolsOpen(false)}>
                       收缩
@@ -989,7 +1050,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
             />
           )}
           <p className="page-lead" style={{ padding: "0 16px 12px" }}>
-            紫框 已命中 · 黄框 待核对 · 钉和框可分开关 · 拖动画布会暂时藏框 · 滚轮缩放
+            只亮当前疑点 · 紫框已命中 · 黄框待核对 · 钉和框只作用于本字段 · 拖动画布会暂时藏框 · 滚轮缩放
           </p>
         </div>
 
@@ -1041,7 +1102,8 @@ export function ReviewPage({ taskId, onBack }: Props) {
                 active={active}
                 current={current}
                 fullscreen={reviewFullscreen}
-                currentHasBox={Boolean(currentBox)}
+                currentHasBox={currentHasBox}
+                pageNo={pageNo}
                 reviewable={reviewable}
                 busy={busy}
                 note={current?.id ? notes[current.id] || "" : ""}

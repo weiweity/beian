@@ -508,7 +508,7 @@ def locate_dual_evidence(
     zone = expected_zone(fg, fl, words, page_w=page_w, page_h=page_h)
 
     # ── 策略：pin 短字段 ──
-    if fg in ("logo标识", "中文品名", "英文品名", "净含量", "条形码", "二维码"):
+    if fg in ("logo标识", "中文品名", "英文品名", "净含量", "净含量&条形码", "条形码", "二维码"):
         # 排除 VL 歪坐标；净含量/条码优先右栏
         pin_words = [
             w
@@ -849,6 +849,7 @@ def refine_field_boxes(
         "中文品名",
         "英文品名",
         "净含量",
+        "净含量&条形码",
         "条形码",
         "二维码",
         "成分表",

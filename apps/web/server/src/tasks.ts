@@ -278,6 +278,7 @@ export function listTasks(q: string, viewer: Viewer): Record<string, unknown>[] 
 
 export const REVIEWABLE_STATUSES = ["pending_review", "in_review"] as const;
 export const HIT_DECISIONS = ["confirm", "issue", "ignore"] as const;
+const HIT_STATUSES = ["一致", "疑点", "缺失", "跳过"] as const;
 export type HitDecision = (typeof HIT_DECISIONS)[number];
 
 export function isReviewableStatus(status: string): boolean {
@@ -305,6 +306,16 @@ export function activeHits(task: Task): Hit[] {
 
 export function isHitDecision(value: unknown): value is HitDecision {
   return typeof value === "string" && (HIT_DECISIONS as readonly string[]).includes(value);
+}
+
+export function isValidHitReviewState(hit: Hit): boolean {
+  if (!(HIT_STATUSES as readonly string[]).includes(String(hit.status || ""))) return false;
+  const decision = hit.decision;
+  return decision == null || decision === "pending" || isHitDecision(decision);
+}
+
+export function hitNeedsDecision(hit: Hit): boolean {
+  return (hit.status === "疑点" || hit.status === "缺失") && !isHitDecision(hit.decision);
 }
 
 export type BoardColumn = "comparing" | "failed" | "review" | "done";

@@ -21,7 +21,7 @@
 ```
 
 `expected_status` ∈ `一致 | 疑点 | 缺失 | 跳过`  
-`doubt_bucket` 可选：`typo | ocr_unclear | branch | noise | reverse | coverage`
+`doubt_bucket` 可选：`typo | ocr_unclear | ocr_graphic | ocr_smallprint | branch | noise | reverse | coverage`
 
 ## 评测
 

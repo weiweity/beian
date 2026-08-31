@@ -4,7 +4,7 @@ import { makeTestTempDir } from "./testTemp.js";
 
 process.env.WB_DATA_DIR = makeTestTempDir("beian-ts-");
 
-const { activeHits, boardColumn, deleteTask, hasReworkPages, isHitDecision, isReviewableStatus, isReworkableStatus, isReworkableTask, listTasks, loadTask, saveTask } = await import("./tasks.js");
+const { activeHits, boardColumn, deleteTask, hasReworkPages, hitNeedsDecision, isHitDecision, isReviewableStatus, isReworkableStatus, isReworkableTask, isValidHitReviewState, listTasks, loadTask, saveTask } = await import("./tasks.js");
 
 const admin = { id: "ou_admin", name: "管理员", admin: true };
 
@@ -112,6 +112,16 @@ describe("review gates", () => {
     assert.equal(isHitDecision("pending"), false);
     assert.equal(isHitDecision("ai_pass"), false);
     assert.equal(isHitDecision(""), false);
+  });
+
+  it("fails closed for unknown hit statuses and decisions", () => {
+    assert.equal(isValidHitReviewState({ status: "疑点", decision: "pending" }), true);
+    assert.equal(isValidHitReviewState({ status: "一致", decision: "confirm" }), true);
+    assert.equal(isValidHitReviewState({ status: "新状态", decision: "pending" }), false);
+    assert.equal(isValidHitReviewState({ status: "疑点", decision: "confirmed" }), false);
+    assert.equal(hitNeedsDecision({ status: "疑点", decision: "confirmed" }), true);
+    assert.equal(hitNeedsDecision({ status: "缺失", decision: "pending" }), true);
+    assert.equal(hitNeedsDecision({ status: "疑点", decision: "ignore" }), false);
   });
 
   it("lets signed tasks rework but not failed or comparing ones", () => {

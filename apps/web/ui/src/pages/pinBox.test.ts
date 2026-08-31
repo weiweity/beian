@@ -1,12 +1,16 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  boxTooLarge,
   hitOnPage,
   overlayFromBox,
   overlaysForHit,
   pinHitGroupsForPage,
   pickHitBox,
   resolvePageMetrics,
+  visiblePinGroups,
+  locateBoxesForHit,
+  locationPageForHit,
 } from "./pinBox.js";
 
 describe("pinHitGroupsForPage", () => {
@@ -23,6 +27,23 @@ describe("pinHitGroupsForPage", () => {
     assert.equal(rows.length, 2);
     assert.deepEqual(rows[0].indices, [0, 1]);
     assert.deepEqual(rows[1].indices, [2]);
+  });
+});
+
+describe("visiblePinGroups", () => {
+  it("keeps only the active bilingual group", () => {
+    const rows = pinHitGroupsForPage(
+      [
+        { page: 1, bilingual_pair_id: "pair-a", field: "中文品名" },
+        { page: 1, bilingual_pair_id: "pair-a", field: "英文品名" },
+        { page: 1, field: "净含量" },
+      ],
+      1,
+    );
+    assert.equal(visiblePinGroups(rows, 1).length, 1);
+    assert.deepEqual(visiblePinGroups(rows, 1)[0]?.indices, [0, 1]);
+    assert.deepEqual(visiblePinGroups(rows, 2)[0]?.indices, [2]);
+    assert.deepEqual(visiblePinGroups(rows, -1), []);
   });
 });
 
@@ -50,6 +71,13 @@ describe("hitOnPage", () => {
     assert.equal(hitOnPage({ page: 2 }, 2), true);
     assert.equal(hitOnPage({ page: "2" }, 2), true);
     assert.equal(hitOnPage({ page: "x" }, 1), false);
+  });
+
+  it("uses a QR box page when guide text has no box", () => {
+    const hit = { page: 1, bboxes: [], qrcode_boxes: [{ page: 2, left: 10, top: 20, width: 30, height: 30 }] };
+    assert.equal(locationPageForHit(hit), 2);
+    assert.equal(hitOnPage(hit, 1), false);
+    assert.equal(hitOnPage(hit, 2), true);
   });
 });
 
@@ -84,6 +112,20 @@ describe("pickHitBox", () => {
   it("returns null when there is no box", () => {
     assert.equal(pickHitBox([], 1), null);
     assert.equal(pickHitBox([{ left: 0, top: 0, width: 0, height: 0 }], 1), null);
+  });
+
+  it("skips a page-sized box and keeps the smaller locate box", () => {
+    const page = { width: 1000, height: 1000 };
+    const box = pickHitBox(
+      [
+        { role: "check", left: 0, top: 0, width: 900, height: 900, page: 1 },
+        { role: "hit", left: 800, top: 300, width: 80, height: 80, page: 1 },
+      ],
+      1,
+      page,
+    );
+    assert.equal(box?.role, "hit");
+    assert.equal(box?.left, 800);
   });
 });
 
@@ -128,5 +170,36 @@ describe("overlaysForHit", () => {
 
   it("draws nothing without page metrics", () => {
     assert.deepEqual(overlaysForHit([{ left: 1, top: 1, width: 2, height: 2 }], 1, null), []);
+  });
+
+  it("drops a box that covers most of the page", () => {
+    const page = { width: 1000, height: 1000 };
+    assert.equal(
+      overlaysForHit([{ left: 0, top: 0, width: 900, height: 900, page: 1 }], 1, page).length,
+      0,
+    );
+    assert.equal(boxTooLarge({ left: 0, top: 0, width: 900, height: 900, role: "hit", page: 1 }, page), true);
+  });
+
+  it("filters exactly 30 percent but retains a box just below the boundary", () => {
+    const page = { width: 1000, height: 1000 };
+    assert.equal(boxTooLarge({ left: 0, top: 0, width: 300, height: 1000, role: "hit", page: 1 }, page), true);
+    assert.equal(boxTooLarge({ left: 0, top: 0, width: 299, height: 1000, role: "hit", page: 1 }, page), false);
+  });
+});
+
+describe("locateBoxesForHit", () => {
+  it("keeps guide boxes and adds QR graphic boxes", () => {
+    const boxes = locateBoxesForHit({
+      bboxes: [{ left: 12, top: 14, width: 100, height: 24, role: "check" }],
+      qrcode_boxes: [{ left: 800, top: 300, width: 180, height: 180 }],
+    });
+    assert.equal(boxes.length, 2);
+    assert.equal(boxes[1]?.role, "hit");
+    assert.equal(boxes[1]?.left, 800);
+  });
+
+  it("ignores malformed persisted box collections instead of crashing the page", () => {
+    assert.deepEqual(locateBoxesForHit({ bboxes: "broken", qrcode_boxes: { left: 1 } }), []);
   });
 });

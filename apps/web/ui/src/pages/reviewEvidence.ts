@@ -1,5 +1,5 @@
 import type { FieldHit } from "../api";
-import { doubtLines, excelText, pdfText } from "./hitText";
+import { coverageTally, doubtLines, excelText, humanMissLines, pdfText, spokenAsk } from "./hitText";
 
 export type EvidenceText = {
   summary: string;
@@ -8,7 +8,6 @@ export type EvidenceText = {
 };
 
 export type ReviewEvidence = {
-  issues: string[];
   expected: EvidenceText;
   observed: EvidenceText;
 };
@@ -42,16 +41,23 @@ export function withLocalNotes(hits: FieldHit[], notes: Record<string, string>):
   });
 }
 
-export function buildRevisionList(productName: string, hits: FieldHit[]) {
+export function buildRevisionList(
+  productName: string,
+  hits: FieldHit[],
+  options: { located?: (hit: FieldHit) => boolean | undefined } = {},
+) {
   const issues = hits.filter((hit) => hit.decision === "issue");
   const lines = [
     "待设计改稿",
     `品名：${productName || "—"}`,
     ...issues.map((hit, index) => {
       const note = hit.note ? `（${hit.note}）` : "";
-      const doubts = doubtLines(hit);
+      const spoken = spokenAsk(hit, hit.field, options.located?.(hit));
+      const doubts = spoken ? [spoken.lead, spoken.ask] : doubtLines(hit);
+      const miss = humanMissLines(hit);
+      const missText = miss.length ? ` / 没读到：${miss.join("；")}` : "";
       const doubtText = doubts.length ? ` / 疑点：${doubts.join("；")}` : "";
-      return `${index + 1}. ${hit.field || "字段"} / 第${hit.page ?? "?"}页 / Excel：${excelText(hit)} / 稿上：${pdfText(hit, hit.field)}${doubtText}${note}`;
+      return `${index + 1}. ${hit.field || "字段"} / 第${hit.page ?? "?"}页 / Excel：${excelText(hit)} / 稿上：${pdfText(hit, hit.field)}${doubtText}${missText}${note}`;
     }),
   ];
   return { text: lines.join("\n"), count: issues.length };
@@ -67,14 +73,17 @@ export function compactEvidence(value: string, limit = 180): EvidenceText {
   return { summary: `${clipped}…`, full, expandable: true };
 }
 
-export function issueEvidence(lines: string[]): EvidenceText {
-  return compactEvidence(lines.length ? lines.join("\n") : "暂无疑点");
-}
-
 export function reviewEvidence(hit: FieldHit): ReviewEvidence {
+  const observed = compactEvidence(pdfText(hit, hit.field));
+  const tally = coverageTally(hit);
   return {
-    issues: doubtLines(hit),
     expected: compactEvidence(excelText(hit)),
-    observed: compactEvidence(pdfText(hit, hit.field)),
+    observed: tally
+      ? {
+          summary: observed.summary,
+          full: observed.full === "没读到" ? tally : `${observed.full}\n${tally}`,
+          expandable: true,
+        }
+      : observed,
   };
 }

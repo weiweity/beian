@@ -569,8 +569,34 @@ export type FieldHit = {
   note?: string;
   decision?: string;
   bboxes?: Array<Record<string, unknown>>;
+  qrcode_boxes?: Array<Record<string, unknown>>;
   bilingual_pair_id?: string;
-  coverage?: { miss?: string[]; hit?: string[]; ratio?: number; matched?: number; total?: number };
+  field_group?: string;
+  doubt_bucket?: string;
+  coverage?: {
+    miss?: string[];
+    hit?: string[];
+    ratio?: number;
+    matched?: number;
+    total?: number;
+    parts?: {
+      net?: {
+        coverage?: number;
+        matched?: number;
+        total?: number;
+        hit_phrases?: string[];
+        miss_phrases?: string[];
+      };
+      barcode?: {
+        coverage?: number;
+        matched?: number;
+        total?: number;
+        hit_phrases?: string[];
+        miss_phrases?: string[];
+        ignored_codes?: string[];
+      };
+    };
+  };
   evidence?: string;
   sequence_diff?: { only_in_excel?: string[] };
 };

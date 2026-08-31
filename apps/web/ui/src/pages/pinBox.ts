@@ -33,8 +33,34 @@ export function resolvePageMetrics(
   return { width: w, height: h };
 }
 
-export function hitOnPage(hit: { page?: number | string }, pageNo: number): boolean {
-  const p = Number(hit.page);
+type LocatedHit = {
+  page?: number | string;
+  bboxes?: unknown;
+  qrcode_boxes?: unknown;
+};
+
+function recordBoxes(value: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(value)) return [];
+  return value.filter(
+    (box): box is Record<string, unknown> => Boolean(box) && typeof box === "object" && !Array.isArray(box),
+  );
+}
+
+/** 普通文字框决定主页面；没有文字框时，二维码几何框可提供页面定位。 */
+export function locationPageForHit(hit: LocatedHit): number {
+  const declared = Number(hit.page);
+  const textBoxes = recordBoxes(hit.bboxes);
+  const qrBoxes = recordBoxes(hit.qrcode_boxes);
+  const firstTextPage = Number(textBoxes.find((box) => Number(box.page) > 0)?.page || 0);
+  const firstQrPage = Number(qrBoxes.find((box) => Number(box.page) > 0)?.page || 0);
+  if (textBoxes.length && Number.isFinite(declared) && declared > 0) return declared;
+  if (firstTextPage > 0) return firstTextPage;
+  if (firstQrPage > 0) return firstQrPage;
+  return Number.isFinite(declared) && declared > 0 ? declared : 0;
+}
+
+export function hitOnPage(hit: LocatedHit, pageNo: number): boolean {
+  const p = locationPageForHit(hit);
   const n = Number(pageNo);
   if (!Number.isFinite(p) || p <= 0) return false;
   if (!Number.isFinite(n) || n <= 0) return false;
@@ -43,9 +69,32 @@ export function hitOnPage(hit: { page?: number | string }, pageNo: number): bool
 
 export type PinHitGroup<T> = { h: T; i: number; indices: number[] };
 
+/** 只亮当前字段（含双语共钉）。全页淡钉已废。 */
+export function visiblePinGroups<T>(
+  groups: Array<PinHitGroup<T>>,
+  active: number,
+): Array<PinHitGroup<T>> {
+  if (!Number.isFinite(active) || active < 0) return [];
+  return groups.filter((g) => g.indices.includes(active));
+}
+
+function boxAreaRatio(box: PixelBox, page: PageMetrics): number {
+  if (!(page.width > 1) || !(page.height > 1)) return 0;
+  return (Math.max(box.width, 0) * Math.max(box.height, 0)) / (page.width * page.height);
+}
+
+export function boxTooLarge(box: PixelBox, page: PageMetrics, ratio = 0.3): boolean {
+  return boxAreaRatio(box, page) >= ratio;
+}
+
+function pct(n: number): string {
+  const clamped = Math.min(100, Math.max(0, n));
+  return `${clamped}%`;
+}
+
 /** 中英文品名可共享同一个联合框；保留两条审核字段，只在画布上画一个钉。 */
 export function pinHitGroupsForPage<
-  T extends { page?: number | string; bilingual_pair_id?: string },
+  T extends LocatedHit & { bilingual_pair_id?: string },
 >(hits: T[], pageNo: number): Array<PinHitGroup<T>> {
   const out: Array<PinHitGroup<T>> = [];
   const pairIndex = new Map<string, number>();
@@ -95,12 +144,14 @@ const ROLE_RANK: Record<string, number> = {
 export function pickHitBox(
   bboxes: Array<Record<string, unknown>> | undefined,
   pageNo: number,
+  page?: PageMetrics | null,
 ): PixelBox | null {
   const boxes = (bboxes || [])
     .map(boxPixels)
     .filter((b): b is PixelBox => {
       if (!b) return false;
       if (b.page && pageNo && b.page !== pageNo) return false;
+      if (page && boxTooLarge(b, page)) return false;
       return true;
     });
   if (!boxes.length) return null;
@@ -116,14 +167,23 @@ export function overlayFromBox(box: PixelBox, page: PageMetrics): OverlayBox | n
   const cy = box.top + (box.height > 0 ? box.height / 2 : 0);
   const kind = box.role === "check" || box.role === "miss_anchor" ? "warn" : "hit";
   return {
-    left: `${(box.left / page.width) * 100}%`,
-    top: `${(box.top / page.height) * 100}%`,
-    width: `${(w / page.width) * 100}%`,
-    height: `${(h / page.height) * 100}%`,
-    pinLeft: `${(cx / page.width) * 100}%`,
-    pinTop: `${(cy / page.height) * 100}%`,
+    left: pct((box.left / page.width) * 100),
+    top: pct((box.top / page.height) * 100),
+    width: pct((w / page.width) * 100),
+    height: pct((h / page.height) * 100),
+    pinLeft: pct((cx / page.width) * 100),
+    pinTop: pct((cy / page.height) * 100),
     kind,
   };
+}
+
+/** 引导语框 + 码图框。码图只作定位，不改结论。 */
+export function locateBoxesForHit(hit: {
+  bboxes?: unknown;
+  qrcode_boxes?: unknown;
+}): Array<Record<string, unknown>> {
+  const extra = recordBoxes(hit.qrcode_boxes).map((box) => ({ ...box, role: box.role || "hit" }));
+  return [...recordBoxes(hit.bboxes), ...extra];
 }
 
 export function overlaysForHit(
@@ -137,6 +197,7 @@ export function overlaysForHit(
     const box = boxPixels(raw);
     if (!box) continue;
     if (box.page && pageNo && box.page !== pageNo) continue;
+    if (boxTooLarge(box, page)) continue;
     const ov = overlayFromBox(box, page);
     if (ov) out.push(ov);
   }
