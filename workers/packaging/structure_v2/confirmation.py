@@ -21,6 +21,7 @@ from .dimensions import (
     fit_closure_dimensions,
     fit_closure_member_dimensions,
     geometry_policy_for_source,
+    is_stroke_proposal_source,
     normalized_mm,
     solve_body_dimensions,
 )
@@ -207,22 +208,68 @@ def _selected_fold_neighbors(
     faces_by_id: Mapping[str, Mapping[str, Any]],
     selected_ids: set[str],
 ) -> dict[str, set[str]]:
+    folds = _selected_fold_records(structure, faces_by_id, selected_ids)
     boundaries = {
         face_id: set(faces_by_id[face_id]["boundary"])
         for face_id in selected_ids
     }
     neighbors = {face_id: set() for face_id in selected_ids}
-    for fold in structure["folds"]:
+    for fold in folds:
         left = str(fold["left_face"])
         right = str(fold["right_face"])
-        if left not in selected_ids or right not in selected_ids:
-            continue
         edge = str(fold["edge"])
         if edge not in boundaries[left] or edge not in boundaries[right]:
             raise StructureConfirmationError("structure_fold_graph_invalid", "折线没有同时属于相邻盒面。")
         neighbors[left].add(right)
         neighbors[right].add(left)
     return neighbors
+
+
+def _selected_fold_records(
+    structure: Mapping[str, Any],
+    faces_by_id: Mapping[str, Mapping[str, Any]],
+    selected_ids: set[str],
+) -> list[dict[str, Any]]:
+    """Resolve folds inside one complete-net selection.
+
+    A stroke proposal exposes the union of candidates from every whole-net
+    option.  Several alternative flap rectangles may therefore share the same
+    physical fold edge.  Global edge cardinality is not a fold contract; once
+    a net is selected, derive adjacency only from that net's face boundaries.
+    Explicit semantic structures continue to use their declared folds.
+    """
+    if not is_stroke_proposal_source(structure.get("source")):
+        return [
+            dict(fold)
+            for fold in structure["folds"]
+            if str(fold["left_face"]) in selected_ids
+            and str(fold["right_face"]) in selected_ids
+        ]
+
+    edges = {str(edge["id"]): edge for edge in structure["edges"]}
+    edge_faces: dict[str, list[str]] = {}
+    for face_id in sorted(selected_ids):
+        for edge_id in {str(value) for value in faces_by_id[face_id]["boundary"]}:
+            edge = edges.get(edge_id)
+            if edge is not None and edge.get("assignment") in {"crease", "perforation"}:
+                edge_faces.setdefault(edge_id, []).append(face_id)
+    folds: list[dict[str, Any]] = []
+    for edge_id, face_ids in sorted(edge_faces.items()):
+        if len(face_ids) > 2:
+            raise StructureConfirmationError(
+                "structure_fold_graph_invalid",
+                "所选完整盒型在同一折线上包含多个重叠盒面。",
+            )
+        if len(face_ids) == 2:
+            folds.append(
+                {
+                    "edge": edge_id,
+                    "left_face": face_ids[0],
+                    "right_face": face_ids[1],
+                    "angle_deg": 90.0,
+                }
+            )
+    return folds
 
 
 def _cap_body_neighbor(
@@ -243,11 +290,26 @@ def _shared_fold_midpoint(
 ) -> tuple[float, float]:
     cap_id = str(cap_face["id"])
     body_id = str(body_face["id"])
-    shared = [
-        str(fold["edge"])
-        for fold in structure["folds"]
-        if {str(fold["left_face"]), str(fold["right_face"])} == {cap_id, body_id}
-    ]
+    if is_stroke_proposal_source(structure.get("source")):
+        edge_assignments = {
+            str(edge["id"]): str(edge["assignment"])
+            for edge in structure["edges"]
+        }
+        shared = sorted(
+            set(str(edge_id) for edge_id in cap_face["boundary"])
+            & set(str(edge_id) for edge_id in body_face["boundary"])
+        )
+        shared = [
+            edge_id
+            for edge_id in shared
+            if edge_assignments.get(edge_id) in {"crease", "perforation"}
+        ]
+    else:
+        shared = [
+            str(fold["edge"])
+            for fold in structure["folds"]
+            if {str(fold["left_face"]), str(fold["right_face"])} == {cap_id, body_id}
+        ]
     if len(shared) != 1:
         raise StructureConfirmationError("structure_fold_graph_invalid", "盒盖与盒身必须只共享一条折线。")
     edges = {str(edge["id"]): edge for edge in structure["edges"]}
@@ -760,6 +822,11 @@ def _resolve_anchor(
         face["artwork_transform"] = transform
         face["role"] = decision.role
     approved["faces"] = [face for face in approved["faces"] if face["id"] in selected_face_ids]
+    approved["folds"] = _selected_fold_records(
+        approved,
+        faces_by_id,
+        selected_face_ids,
+    )
     selected_edge_ids = {
         edge_id
         for face in approved["faces"]

@@ -8,6 +8,7 @@ carton with different tolerances.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -23,12 +24,23 @@ MIN_CLOSURE_ASSEMBLY_MEMBER_RATIO = 0.45
 MAX_CLOSURE_ASSEMBLY_MEMBER_RATIO = 0.55
 MIN_CLOSURE_ASSEMBLY_UNION_RATIO = 0.94
 MAX_CLOSURE_ASSEMBLY_MEMBER_SUM_RATIO = 1.02
+# Coverage is a dimensionless public contract already serialized at six
+# decimals.  It must not inherit the millimetre measurement precision: doing
+# so can turn a physically valid 94.02% opposing-flap union into 93.9%.
+COVERAGE_CONTRACT_DECIMALS = 6
 
 
 def normalized_mm(value: float) -> float:
     """Remove sub-micron coordinate noise before dimensions cross a boundary."""
     result = round(float(value), MEASUREMENT_DECIMALS)
     return 0.0 if result == -0.0 else result
+
+
+def conservative_coverage_ratio(value: float) -> float:
+    """Publish a lower bound at the same precision as public geometry."""
+    scale = 10**COVERAGE_CONTRACT_DECIMALS
+    bounded = min(1.0, max(0.0, float(value)))
+    return math.floor(bounded * scale + 1e-9) / scale
 
 
 @dataclass(frozen=True)
@@ -92,8 +104,8 @@ def fit_closure_dimensions(
     """Classify one closure that independently covers an erected box face."""
     if len(actual) != 2 or len(expected) != 2:
         return None
-    actual_values = [float(value) for value in actual]
-    expected_values = [float(value) for value in expected]
+    actual_values = [normalized_mm(value) for value in actual]
+    expected_values = [normalized_mm(value) for value in expected]
     if any(value <= 0 for value in (*actual_values, *expected_values)):
         return None
 
@@ -102,17 +114,18 @@ def fit_closure_dimensions(
         for actual_value, expected_value in zip(actual_values, expected_values)
     ]
     ratios = [
-        actual_value / expected_value
+        min(1.0, actual_value / expected_value)
         for actual_value, expected_value in zip(actual_values, expected_values)
     ]
     if all(close):
-        exact = all(
-            normalized_mm(actual_value) == normalized_mm(expected_value)
+        coverage_ratio = round(ratios[0] * ratios[1], COVERAGE_CONTRACT_DECIMALS)
+        covers_footprint = all(
+            actual_value >= expected_value
             for actual_value, expected_value in zip(actual_values, expected_values)
         )
         return ClosureDimensionFit(
-            kind="full" if exact else "clearance",
-            coverage_ratio=round(min(1.0, min(ratios)), 6),
+            kind="full" if covers_footprint else "clearance",
+            coverage_ratio=coverage_ratio,
         )
     return None
 
@@ -130,8 +143,8 @@ def fit_closure_member_dimensions(
     """
     if len(actual) != 2 or len(expected) != 2:
         return None
-    actual_values = [float(value) for value in actual]
-    expected_values = [float(value) for value in expected]
+    actual_values = [normalized_mm(value) for value in actual]
+    expected_values = [normalized_mm(value) for value in expected]
     if any(value <= 0 for value in (*actual_values, *expected_values)):
         return None
     close = [
@@ -149,7 +162,9 @@ def fit_closure_member_dimensions(
         and not policy.close(actual_values[fold_index], expected_values[fold_index])
     ):
         return None
-    ratio = actual_values[reach_index] / expected_values[reach_index]
+    reach_ratio = actual_values[reach_index] / expected_values[reach_index]
+    fold_ratio = min(1.0, actual_values[fold_index] / expected_values[fold_index])
+    ratio = reach_ratio * fold_ratio
     if not (
         MIN_CLOSURE_ASSEMBLY_MEMBER_RATIO
         <= ratio
@@ -222,9 +237,9 @@ def solve_body_dimensions(
     if any(len(face_sizes[role]) != 2 for role in ("front", "right", "back", "left")):
         return None
     groups = {
-        "width": [float(face_sizes["front"][0]), float(face_sizes["back"][0])],
-        "depth": [float(face_sizes["left"][0]), float(face_sizes["right"][0])],
-        "height": [float(face_sizes[role][1]) for role in ("front", "right", "back", "left")],
+        "width": [normalized_mm(face_sizes["front"][0]), normalized_mm(face_sizes["back"][0])],
+        "depth": [normalized_mm(face_sizes["left"][0]), normalized_mm(face_sizes["right"][0])],
+        "height": [normalized_mm(face_sizes[role][1]) for role in ("front", "right", "back", "left")],
     }
     dimensions: dict[str, float] = {}
     for name, values in groups.items():
