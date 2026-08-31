@@ -286,29 +286,216 @@ function exportSemanticPath(item, pathIndex, assignment, structure, errors, artb
     return localEdges.length;
 }
 
-function hideSemanticItems(items) {
-    var states = [];
-    for (var index = 0; index < items.length; index += 1) {
-        var item = items[index];
-        states.push({item: item, hidden: item.hidden, locked: item.locked});
-        try {
-            item.locked = false;
-            item.hidden = true;
-        } catch (error) {
-            throw new Error("Cannot hide semantic object path:" + index + " " + error.message);
+function findLockState(states, target) {
+    for (var index = 0; index < states.length; index += 1) {
+        if (states[index].target === target) {
+            return index;
         }
     }
-    return states;
+    return -1;
 }
 
-function restoreSemanticItems(states) {
-    for (var index = states.length - 1; index >= 0; index -= 1) {
-        try {
-            states[index].item.hidden = states[index].hidden;
-            states[index].item.locked = states[index].locked;
-        } catch (error) {
-            // The document is closed without saving; restoration is best effort.
+function semanticNodeType(target) {
+    try {
+        return String(target.typename);
+    } catch (error) {
+        return "Unknown";
+    }
+}
+
+function isSemanticLockableType(typeName) {
+    return typeName === "Layer" ||
+        typeName === "GroupItem" ||
+        typeName === "CompoundPathItem" ||
+        typeName === "PathItem" ||
+        typeName === "SymbolItem" ||
+        typeName === "PlacedItem" ||
+        typeName === "RasterItem" ||
+        typeName === "TextFrame" ||
+        typeName === "MeshItem" ||
+        typeName === "PluginItem" ||
+        typeName === "GraphItem" ||
+        typeName === "LegacyTextItem";
+}
+
+function findSemanticAncestor(chain, target) {
+    for (var index = 0; index < chain.length; index += 1) {
+        if (chain[index] === target) {
+            return index;
         }
+    }
+    return -1;
+}
+
+function readSemanticParent(target, issues) {
+    try {
+        return target.parent;
+    } catch (parentError) {
+        // Some compound paths and symbols proxy parent through a host object.
+        // Their layer is still a safe ancestor and lets the outer lock restore.
+        try {
+            var layer = target.layer;
+            if (layer !== target) {
+                issues.push("ancestor_parent_via_layer:" + semanticNodeType(target));
+                return layer;
+            }
+        } catch (layerError) {
+            // Report below after both host properties have been attempted.
+        }
+        issues.push("ancestor_parent_unreadable:" + semanticNodeType(target));
+        return null;
+    }
+}
+
+function setSemanticLocked(target, value) {
+    var setterError = null;
+    try {
+        target.locked = value;
+    } catch (error) {
+        setterError = error;
+    }
+    try {
+        // Illustrator host setters can mutate successfully and then throw.
+        // Verify the observable state before deciding whether rollback failed.
+        if (Boolean(target.locked) === Boolean(value)) {
+            return null;
+        }
+    } catch (verificationError) {
+        if (setterError !== null) {
+            return setterError.message + " | lock verification failed: " + verificationError.message;
+        }
+        return "lock verification failed: " + verificationError.message;
+    }
+    if (setterError !== null) {
+        return setterError.message;
+    }
+    return "locked state did not change";
+}
+
+function unlockSemanticAncestors(item, lockStates, issues) {
+    var chain = [];
+    var current = item;
+    var depth = 0;
+    while (current !== null && current !== undefined && depth < 256) {
+        var typeName = semanticNodeType(current);
+        if (typeName === "Document") {
+            break;
+        }
+        if (findSemanticAncestor(chain, current) >= 0) {
+            issues.push("ancestor_cycle:" + typeName);
+            break;
+        }
+        chain.push(current);
+        current = readSemanticParent(current, issues);
+        depth += 1;
+    }
+    if (depth >= 256) {
+        issues.push("ancestor_depth_exceeded");
+    }
+    for (var index = chain.length - 1; index >= 0; index -= 1) {
+        var target = chain[index];
+        if (findLockState(lockStates, target) >= 0) {
+            continue;
+        }
+        var targetType = semanticNodeType(target);
+        if (!isSemanticLockableType(targetType)) {
+            issues.push("ancestor_lock_unsupported:" + targetType);
+            continue;
+        }
+        var locked = false;
+        try {
+            locked = Boolean(target.locked);
+        } catch (error) {
+            // One unsupported host node must not block the rest of the chain.
+            issues.push("ancestor_lock_unreadable:" + targetType);
+            continue;
+        }
+        if (locked) {
+            // Record the original state before touching the host object.  Some
+            // Illustrator proxy setters change state and then throw.
+            lockStates.push({target: target, locked: true, typeName: targetType});
+            var unlockFailure = setSemanticLocked(target, false);
+            if (unlockFailure !== null) {
+                issues.push("ancestor_unlock_failed:" + targetType);
+                throw new Error("Cannot unlock semantic ancestor " + targetType + ": " + unlockFailure);
+            }
+        }
+    }
+}
+
+function hideSemanticItems(items) {
+    var state = {items: [], locks: [], issues: []};
+    for (var index = 0; index < items.length; index += 1) {
+        var item = items[index];
+        try {
+            state.items.push({item: item, hidden: item.hidden});
+            unlockSemanticAncestors(item, state.locks, state.issues);
+            item.hidden = true;
+        } catch (error) {
+            var restoreFailure = null;
+            try {
+                restoreSemanticItems(state);
+            } catch (restoreError) {
+                restoreFailure = restoreError.message;
+            }
+            var hideMessage = "Cannot hide semantic object path:" + index + " " + error.message;
+            if (restoreFailure !== null) {
+                hideMessage += " | " + restoreFailure;
+            }
+            throw new Error(hideMessage);
+        }
+    }
+    return state;
+}
+
+function restoreSemanticItems(state) {
+    if (state === null || state === undefined) {
+        return;
+    }
+    var failures = [];
+    for (var itemIndex = state.items.length - 1; itemIndex >= 0; itemIndex -= 1) {
+        try {
+            state.items[itemIndex].item.hidden = state.items[itemIndex].hidden;
+        } catch (itemError) {
+            failures.push("hidden:" + itemIndex + ":" + itemError.message);
+        }
+    }
+    for (var lockIndex = state.locks.length - 1; lockIndex >= 0; lockIndex -= 1) {
+        var lockFailure = setSemanticLocked(
+            state.locks[lockIndex].target,
+            state.locks[lockIndex].locked
+        );
+        if (lockFailure !== null) {
+            failures.push("locked:" + state.locks[lockIndex].typeName + ":" + lockFailure);
+        }
+    }
+    if (failures.length > 0) {
+        throw new Error("Cannot fully restore semantic objects: " + failures.join(" | "));
+    }
+}
+
+function withHiddenSemanticItems(items, callback) {
+    var state = hideSemanticItems(items);
+    var callbackError = null;
+    try {
+        callback();
+    } catch (error) {
+        callbackError = error;
+    }
+    var restoreError = null;
+    try {
+        restoreSemanticItems(state);
+    } catch (error) {
+        restoreError = error;
+    }
+    if (callbackError !== null && restoreError !== null) {
+        throw new Error(callbackError.message + " | " + restoreError.message);
+    }
+    if (callbackError !== null) {
+        throw callbackError;
+    }
+    if (restoreError !== null) {
+        throw restoreError;
     }
 }
 
@@ -317,7 +504,6 @@ var config = eval("(" + readUtf8(configPath) + ")");
 var debugPath = config.debug_log;
 var previousInteractionLevel = app.userInteractionLevel;
 var documentRef = null;
-var semanticStates = [];
 var result = {
     success: false,
     source_ai: config.source_ai,
@@ -434,11 +620,10 @@ try {
 
     appendUtf8(debugPath, "v2 02 saving full pdf");
     savePdf(documentRef, config.full_pdf);
-    semanticStates = hideSemanticItems(semanticItems);
-    appendUtf8(debugPath, "v2 03 saving object-clean artwork pdf");
-    savePdf(documentRef, config.print_pdf);
-    restoreSemanticItems(semanticStates);
-    semanticStates = [];
+    withHiddenSemanticItems(semanticItems, function () {
+        appendUtf8(debugPath, "v2 03 saving object-clean artwork pdf");
+        savePdf(documentRef, config.print_pdf);
+    });
     writeUtf8(config.structure_json, jsonStringify(structure));
     result.semantic_errors = structure.validation.errors;
     result.success = true;
@@ -447,7 +632,6 @@ try {
     result.error = error.message;
     result.error_line = error.line || null;
 } finally {
-    restoreSemanticItems(semanticStates);
     if (documentRef !== null) {
         try {
             documentRef.close(SaveOptions.DONOTSAVECHANGES);

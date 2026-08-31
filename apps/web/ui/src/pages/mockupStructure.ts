@@ -85,10 +85,20 @@ export function structureProposalLabel(proposal: StructureNetProposal, index: nu
   const size = dimensions
     ? ` · 底面 ${dimensions.width}×${dimensions.depth} · 高 ${dimensions.height} mm`
     : "";
-  const partial = proposal.closure_assemblies?.some((item) => item.extent === "partial")
-    ? " · 主盖片有正常让位"
-    : "";
-  return `盒型方案 ${index + 1}${size}${partial}`;
+  return `盒型方案 ${index + 1}${size}${structureClosureNote(proposal)}`;
+}
+
+export function structureClosureNote(proposal: StructureNetProposal): string {
+  const closures = proposal.closure_assemblies || [];
+  if (closures.some((item) => item.closure_kind === "assembly")) {
+    return " · 组合封口由多折片共同闭合";
+  }
+  if (closures.some((item) => (
+    item.closure_kind === "clearance"
+  ))) {
+    return " · 主盖片有正常让位";
+  }
+  return "";
 }
 
 export function structureViewBox(

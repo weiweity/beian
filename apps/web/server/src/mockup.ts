@@ -54,6 +54,7 @@ export type StructurePreviewFace = {
 };
 
 export type StructureNetProposal = {
+  schema: "box-net-proposal/3";
   id: string;
   face_ids: string[];
   body_face_ids: [string, string, string, string];
@@ -62,12 +63,18 @@ export type StructureNetProposal = {
   bounds_mm?: [number, number, number, number];
   dimensions_mm?: { width: number; depth: number; height: number };
   valid_anchors?: Array<{ front_face_id: string; quarter_turns: Array<0 | 1 | 2 | 3> }>;
-  closure_assemblies?: Array<{
-    face_id: string;
-    attached_body_face_id: string;
+  closure_assemblies: Array<{
+    primary_face_id: string;
     side: -1 | 1;
     extent: "full" | "partial";
+    closure_kind: "full" | "clearance" | "assembly";
     coverage_ratio: number;
+    members: Array<{
+      face_id: string;
+      attached_body_face_id: string;
+      extent: "full" | "partial";
+      coverage_ratio: number;
+    }>;
   }>;
 };
 
@@ -78,6 +85,12 @@ export type StructureAnchorDecision = {
 };
 
 export type StructureConfirmationDecision = { anchor: StructureAnchorDecision };
+
+const BOX_NET_PROPOSAL_SCHEMA = "box-net-proposal/3";
+const MIN_ASSEMBLY_MEMBER_RATIO = 0.45;
+const MAX_ASSEMBLY_MEMBER_RATIO = 0.55;
+const MIN_ASSEMBLY_UNION_RATIO = 0.94;
+const MAX_ASSEMBLY_MEMBER_SUM_RATIO = 1.02;
 
 export function isStructureProposalId(value: string): boolean {
   return /^box-net-(?:\d{4}|[0-9a-f]{16})$/.test(value);
@@ -379,9 +392,11 @@ export function loadStructurePreview(job: MockupJob): {
         const stripAxis = net.strip_axis === "x" || net.strip_axis === "y" ? net.strip_axis : null;
         const bounds = finiteNumbers(net.bounds_mm, 4);
         if (
+          net.schema !== BOX_NET_PROPOSAL_SCHEMA ||
           !isStructureProposalId(id) ||
-          faceIdsRaw.length !== 6 ||
-          new Set(faceIdsRaw).size !== 6 ||
+          faceIdsRaw.length < 6 ||
+          faceIdsRaw.length > 8 ||
+          new Set(faceIdsRaw).size !== faceIdsRaw.length ||
           bodyIds.length !== 4 ||
           new Set(bodyIds).size !== 4 ||
           capIds.length !== 2 ||
@@ -416,37 +431,102 @@ export function loadStructurePreview(job: MockupJob): {
         }
         if (rawAnchors && !validAnchors.length) continue;
         const rawClosures = Array.isArray(net.closure_assemblies) ? net.closure_assemblies : undefined;
-        if (net.closure_assemblies !== undefined && !rawClosures) continue;
+        if (!rawClosures || rawClosures.length !== 2) continue;
         const closures: NonNullable<StructureNetProposal["closure_assemblies"]> = [];
-        if (rawClosures && rawClosures.length === 2) {
-          for (const rawClosure of rawClosures) {
-            if (!rawClosure || typeof rawClosure !== "object" || Array.isArray(rawClosure)) continue;
-            const closure = rawClosure as Record<string, unknown>;
-            const faceId = typeof closure.face_id === "string" ? closure.face_id : "";
-            const bodyId = typeof closure.attached_body_face_id === "string" ? closure.attached_body_face_id : "";
-            const side = closure.side === -1 || closure.side === 1 ? closure.side : null;
-            const extent = closure.extent === "full" || closure.extent === "partial" ? closure.extent : null;
-            const ratio = Number(closure.coverage_ratio);
+        const closureMemberIds = new Set<string>();
+        const closureSides = new Set<number>();
+        for (const rawClosure of rawClosures) {
+          if (!rawClosure || typeof rawClosure !== "object" || Array.isArray(rawClosure)) continue;
+          const closure = rawClosure as Record<string, unknown>;
+          const primaryFaceId = typeof closure.primary_face_id === "string" ? closure.primary_face_id : "";
+          const side = closure.side === -1 || closure.side === 1 ? closure.side : null;
+          const extent = closure.extent === "full" || closure.extent === "partial" ? closure.extent : null;
+          const closureKind = closure.closure_kind === "full"
+            || closure.closure_kind === "clearance"
+            || closure.closure_kind === "assembly"
+            ? closure.closure_kind
+            : null;
+          const ratio = closure.coverage_ratio;
+          const rawMembers = Array.isArray(closure.members) ? closure.members : null;
+          const expectedMembers = closureKind === "assembly" ? 2 : 1;
+          if (
+            !capIds.includes(primaryFaceId)
+            || side === null
+            || closureSides.has(side)
+            || !extent
+            || !closureKind
+            || typeof ratio !== "number"
+            || !Number.isFinite(ratio)
+            || ratio <= 0
+            || ratio > 1
+            || !rawMembers
+            || rawMembers.length !== expectedMembers
+            || (closureKind === "full" && Math.abs(ratio - 1) > 1e-6)
+            || (closureKind === "assembly" && ratio < MIN_ASSEMBLY_UNION_RATIO)
+          ) continue;
+          const members: NonNullable<StructureNetProposal["closure_assemblies"]>[number]["members"] = [];
+          for (const rawMember of rawMembers) {
+            if (!rawMember || typeof rawMember !== "object" || Array.isArray(rawMember)) continue;
+            const member = rawMember as Record<string, unknown>;
+            const faceId = typeof member.face_id === "string" ? member.face_id : "";
+            const bodyId = typeof member.attached_body_face_id === "string" ? member.attached_body_face_id : "";
+            const memberExtent = member.extent === "full" || member.extent === "partial" ? member.extent : null;
+            const memberRatio = member.coverage_ratio;
             if (
-              !capIds.includes(faceId)
+              !faceIdsRaw.includes(faceId)
+              || bodyIds.includes(faceId)
+              || closureMemberIds.has(faceId)
               || !bodyIds.includes(bodyId)
-              || side === null
-              || !extent
-              || !Number.isFinite(ratio)
-              || ratio <= 0
-              || ratio > 1
+              || !memberExtent
+              || typeof memberRatio !== "number"
+              || !Number.isFinite(memberRatio)
+              || memberRatio <= 0
+              || memberRatio > 1
+              || (closureKind === "assembly" && (
+                memberExtent !== "partial"
+                || memberRatio < MIN_ASSEMBLY_MEMBER_RATIO
+                || memberRatio > MAX_ASSEMBLY_MEMBER_RATIO
+              ))
             ) continue;
-            closures.push({
+            closureMemberIds.add(faceId);
+            members.push({
               face_id: faceId,
               attached_body_face_id: bodyId,
-              side,
-              extent,
-              coverage_ratio: ratio,
+              extent: memberExtent,
+              coverage_ratio: memberRatio,
             });
           }
+          if (members.length !== expectedMembers || !members.some((member) => member.face_id === primaryFaceId)) continue;
+          if (closureKind === "assembly") {
+            const attachmentIndexes = members.map((member) => bodyIds.indexOf(member.attached_body_face_id));
+            const declaredMemberCoverage = members.reduce((total, member) => total + member.coverage_ratio, 0);
+            if (
+              attachmentIndexes.length !== 2
+              || Math.abs(attachmentIndexes[0] - attachmentIndexes[1]) !== 2
+              || ratio > Math.min(1, declaredMemberCoverage) + 1e-6
+              || declaredMemberCoverage > MAX_ASSEMBLY_MEMBER_SUM_RATIO + 1e-6
+            ) continue;
+          } else if (Math.abs(members[0].coverage_ratio - ratio) > 1e-6) {
+            continue;
+          }
+          closureSides.add(side);
+          closures.push({
+            primary_face_id: primaryFaceId,
+            side,
+            extent,
+            closure_kind: closureKind,
+            coverage_ratio: ratio,
+            members,
+          });
         }
-        if (rawClosures && closures.length !== 2) continue;
+        if (
+          closures.length !== 2
+          || closureSides.size !== 2
+          || new Set([...bodyIds, ...closureMemberIds]).size !== faceIdsRaw.length
+          || faceIdsRaw.some((faceId) => !bodyIds.includes(faceId) && !closureMemberIds.has(faceId))
+        ) continue;
         netProposals.push({
+          schema: BOX_NET_PROPOSAL_SCHEMA,
           id,
           face_ids: faceIdsRaw,
           body_face_ids: bodyIds as StructureNetProposal["body_face_ids"],
@@ -455,7 +535,7 @@ export function loadStructurePreview(job: MockupJob): {
           ...(bounds ? { bounds_mm: bounds as StructureNetProposal["bounds_mm"] } : {}),
           ...(dimensions ? { dimensions_mm: dimensions } : {}),
           ...(validAnchors.length ? { valid_anchors: validAnchors } : {}),
-          ...(closures.length === 2 ? { closure_assemblies: closures } : {}),
+          closure_assemblies: closures,
         });
       }
     }

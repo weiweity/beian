@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import { ApiError } from "../api.js";
 import {
   selectedStructureAnchor,
+  structureClosureNote,
   structureConfirmationErrorCopy,
   structureIssueCopy,
   structurePolygonPoints,
@@ -53,11 +54,40 @@ describe("mockup V2 structure UX", () => {
 
   it("accepts one front anchor only when it belongs to the chosen complete net", () => {
     const proposal = {
+      schema: "box-net-proposal/3" as const,
       id: "box-net-0001",
       face_ids: faces.map((face) => face.id),
       body_face_ids: [faces[0].id, faces[1].id, faces[2].id, faces[3].id] as [string, string, string, string],
       cap_face_ids: [faces[4].id, faces[5].id] as [string, string],
       strip_axis: "x" as const,
+      closure_assemblies: [
+        {
+          primary_face_id: faces[4].id,
+          side: -1 as const,
+          extent: "full" as const,
+          closure_kind: "full" as const,
+          coverage_ratio: 1,
+          members: [{
+            face_id: faces[4].id,
+            attached_body_face_id: faces[0].id,
+            extent: "full" as const,
+            coverage_ratio: 1,
+          }],
+        },
+        {
+          primary_face_id: faces[5].id,
+          side: 1 as const,
+          extent: "full" as const,
+          closure_kind: "full" as const,
+          coverage_ratio: 1,
+          members: [{
+            face_id: faces[5].id,
+            attached_body_face_id: faces[2].id,
+            extent: "full" as const,
+            coverage_ratio: 1,
+          }],
+        },
+      ],
     };
     assert.deepEqual(selectedStructureAnchor(proposal, faces[1].id, 2), {
       proposal_id: proposal.id,
@@ -71,6 +101,7 @@ describe("mockup V2 structure UX", () => {
 
   it("exposes only preflight-valid face directions and explains main-panel clearance", () => {
     const proposal = {
+      schema: "box-net-proposal/3" as const,
       id: "box-net-0123456789abcdef",
       face_ids: faces.map((face) => face.id),
       body_face_ids: [faces[0].id, faces[1].id, faces[2].id, faces[3].id] as [string, string, string, string],
@@ -80,18 +111,30 @@ describe("mockup V2 structure UX", () => {
       valid_anchors: [{ front_face_id: faces[1].id, quarter_turns: [0, 2] as Array<0 | 2> }],
       closure_assemblies: [
         {
-          face_id: faces[4].id,
-          attached_body_face_id: faces[0].id,
+          primary_face_id: faces[4].id,
           side: -1 as const,
           extent: "partial" as const,
+          closure_kind: "clearance" as const,
           coverage_ratio: 0.94,
+          members: [{
+            face_id: faces[4].id,
+            attached_body_face_id: faces[0].id,
+            extent: "partial" as const,
+            coverage_ratio: 0.94,
+          }],
         },
         {
-          face_id: faces[5].id,
-          attached_body_face_id: faces[0].id,
+          primary_face_id: faces[5].id,
           side: 1 as const,
           extent: "full" as const,
+          closure_kind: "full" as const,
           coverage_ratio: 1,
+          members: [{
+            face_id: faces[5].id,
+            attached_body_face_id: faces[0].id,
+            extent: "full" as const,
+            coverage_ratio: 1,
+          }],
         },
       ],
     };
@@ -105,6 +148,50 @@ describe("mockup V2 structure UX", () => {
       quarter_turns: 2,
     });
     assert.equal(structureProposalLabel(proposal, 0), "盒型方案 1 · 底面 30×20 · 高 50 mm · 主盖片有正常让位");
+
+    const assembled = {
+      ...proposal,
+      closure_assemblies: proposal.closure_assemblies.map((closure, index) => (
+        index === 0
+          ? {
+              ...closure,
+              closure_kind: "assembly" as const,
+              extent: "full" as const,
+              coverage_ratio: 1,
+              members: [
+                { ...closure.members[0], extent: "partial" as const, coverage_ratio: 0.5 },
+                {
+                  face_id: "face-extra-top",
+                  attached_body_face_id: faces[2].id,
+                  extent: "partial" as const,
+                  coverage_ratio: 0.5,
+                },
+              ],
+            }
+          : closure
+      )),
+    };
+    assert.equal(structureClosureNote(assembled), " · 组合封口由多折片共同闭合");
+    assert.equal(
+      structureProposalLabel(assembled, 0),
+      "盒型方案 1 · 底面 30×20 · 高 50 mm · 组合封口由多折片共同闭合",
+    );
+
+    const full = {
+      ...proposal,
+      closure_assemblies: proposal.closure_assemblies.map((closure) => ({
+        ...closure,
+        extent: "full" as const,
+        closure_kind: "full" as const,
+        coverage_ratio: 1,
+      })),
+    };
+    assert.equal(structureClosureNote(full), "");
+
+    assert.equal(
+      structureProposalLabel({ ...full, dimensions_mm: undefined }, 0),
+      "盒型方案 1",
+    );
   });
 
   it("builds a padded SVG viewBox around all proposed faces", () => {

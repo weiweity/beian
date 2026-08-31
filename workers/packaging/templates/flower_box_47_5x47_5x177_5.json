@@ -27,6 +27,7 @@
   },
   "composite_inset_reference_px": 4,
   "render": {
+    "substrate_rgba": [1.0, 1.0, 1.0, 1.0],
     "resolution_x": 2000,
     "resolution_y": 2400,
     "camera_ortho_scale_mm": 224.0,
