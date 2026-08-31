@@ -78,6 +78,17 @@ describe("reviewEvidence", () => {
     assert.doesNotMatch(evidence.observed.full, /亮泽/);
   });
 
+  it("hides the word tally until 查看全部", () => {
+    const evidence = reviewEvidence({
+      field: "文案",
+      status: "疑点",
+      coverage: { hit: ["保湿"], miss: ["亮泽"], matched: 8, total: 36 },
+    });
+    assert.doesNotMatch(evidence.observed.summary, /36 个词里读到/);
+    assert.match(evidence.observed.full, /36 个词里读到 8 个/);
+    assert.equal(evidence.observed.expandable, true);
+  });
+
   it("keeps concrete missing phrases in the copied revision list", () => {
     const result = buildRevisionList("海葡萄喷雾", [
       {
@@ -93,7 +104,25 @@ describe("reviewEvidence", () => {
 
     assert.equal(result.count, 1);
     assert.match(result.text, /稿上：保湿/);
-    assert.match(result.text, /疑点：亮泽/);
+    assert.match(result.text, /没读到：亮泽/);
+    assert.doesNotMatch(result.text, /score=|0\/5|覆盖偏低/);
+  });
+
+  it("does not copy accounting coverage talk", () => {
+    const result = buildRevisionList("海葡萄喷雾", [
+      {
+        id: "copy-issue",
+        field: "净含量",
+        field_group: "净含量",
+        status: "疑点",
+        decision: "issue",
+        excel_value: "30ml",
+        evidence: "覆盖偏低 0/5 · best score=40",
+        bboxes: [{ left: 1, top: 1, width: 10, height: 10 }],
+      },
+    ]);
+    assert.doesNotMatch(result.text, /score=|0\/5|覆盖偏低/);
+    assert.match(result.text, /30ml/);
   });
 
   it("copies the latest local note even before its server response returns", () => {

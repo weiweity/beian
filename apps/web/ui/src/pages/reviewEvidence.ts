@@ -1,5 +1,5 @@
 import type { FieldHit } from "../api";
-import { doubtLines, excelText, pdfText } from "./hitText";
+import { coverageTally, doubtLines, excelText, pdfText, spokenAsk } from "./hitText";
 
 export type EvidenceText = {
   summary: string;
@@ -49,9 +49,12 @@ export function buildRevisionList(productName: string, hits: FieldHit[]) {
     `品名：${productName || "—"}`,
     ...issues.map((hit, index) => {
       const note = hit.note ? `（${hit.note}）` : "";
-      const doubts = doubtLines(hit);
+      const spoken = spokenAsk(hit, hit.field);
+      const doubts = spoken ? [spoken.lead, spoken.ask] : doubtLines(hit);
+      const miss = (hit.coverage?.miss || []).map((s) => String(s).trim()).filter(Boolean).slice(0, 8);
+      const missText = miss.length ? ` / 没读到：${miss.join("；")}` : "";
       const doubtText = doubts.length ? ` / 疑点：${doubts.join("；")}` : "";
-      return `${index + 1}. ${hit.field || "字段"} / 第${hit.page ?? "?"}页 / Excel：${excelText(hit)} / 稿上：${pdfText(hit, hit.field)}${doubtText}${note}`;
+      return `${index + 1}. ${hit.field || "字段"} / 第${hit.page ?? "?"}页 / Excel：${excelText(hit)} / 稿上：${pdfText(hit, hit.field)}${doubtText}${missText}${note}`;
     }),
   ];
   return { text: lines.join("\n"), count: issues.length };
@@ -72,9 +75,17 @@ export function issueEvidence(lines: string[]): EvidenceText {
 }
 
 export function reviewEvidence(hit: FieldHit): ReviewEvidence {
+  const observed = compactEvidence(pdfText(hit, hit.field));
+  const tally = coverageTally(hit);
   return {
     issues: doubtLines(hit),
     expected: compactEvidence(excelText(hit)),
-    observed: compactEvidence(pdfText(hit, hit.field)),
+    observed: tally
+      ? {
+          summary: observed.summary,
+          full: observed.full === "没读到" ? tally : `${observed.full}\n${tally}`,
+          expandable: true,
+        }
+      : observed,
   };
 }

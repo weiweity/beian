@@ -77,9 +77,8 @@ test("核对 Dock 脱离工作区置顶，全屏时进入全屏根，处理疑�
   await expect(dock).toBeVisible();
   expect(await dock.evaluate((node) => node.parentElement === document.body)).toBe(true);
   await expect(dock.getByLabel("疑点列表")).toBeVisible();
-  await expect(dock.getByText("疑点 / 错误点", { exact: true })).toBeVisible();
   await expect(dock.getByText("Excel 应印", { exact: true })).toBeVisible();
-  await expect(dock.getByText("稿上 OCR", { exact: true })).toBeVisible();
+  await expect(dock.getByText("稿上读到", { exact: true })).toBeVisible();
   const [dockZ, signZ] = await Promise.all([
     dock.evaluate((node) => Number.parseInt(getComputedStyle(node).zIndex, 10)),
     page.locator(".review-sign-layer").first().evaluate((node) => Number.parseInt(getComputedStyle(node).zIndex, 10)),
@@ -88,7 +87,7 @@ test("核对 Dock 脱离工作区置顶，全屏时进入全屏根，处理疑�
   await expect(page.locator(".canvas-zoom")).toHaveCSS("transform", "none");
   expect(
     await dock.locator(".review-evidence-grid").evaluate((node) => getComputedStyle(node).gridTemplateColumns.split(" ").length),
-  ).toBe(3);
+  ).toBe(2);
 
   await page.getByRole("button", { name: "全屏核对" }).click();
   await expect(page.getByRole("button", { name: "退出全屏" })).toBeVisible();
@@ -143,7 +142,7 @@ test("浏览器拒绝核对全屏时显示可执行中文提示", async ({ page,
   expect(await page.getByTestId("review-dock").evaluate((node) => node.parentElement === document.body)).toBe(true);
 });
 
-test("一致字段没有疑点时只显示 Excel 与稿上 OCR 两列", async ({ page, syntheticApi }) => {
+test("一致字段没有疑点时只显示 Excel 应印与稿上读到两列", async ({ page, syntheticApi }) => {
   const task = reviewTask("e5969b58cd50");
   const hit = task.hits?.[0];
   if (!hit) throw new Error("合成核对单缺少字段");
@@ -159,7 +158,7 @@ test("一致字段没有疑点时只显示 Excel 与稿上 OCR 两列", async ({
   const grid = page.getByTestId("review-dock").locator(".review-evidence-grid");
   await expect(grid.getByText("疑点 / 错误点", { exact: true })).toHaveCount(0);
   await expect(grid.getByText("Excel 应印", { exact: true })).toBeVisible();
-  await expect(grid.getByText("稿上 OCR", { exact: true })).toBeVisible();
+  await expect(grid.getByText("稿上读到", { exact: true })).toBeVisible();
   expect(await grid.evaluate((node) => getComputedStyle(node).gridTemplateColumns.split(" ").length)).toBe(2);
 });
 
