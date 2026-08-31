@@ -964,11 +964,28 @@ def match_field(
         len(excel_value or "") >= 80 and fg not in ("中文品名", "英文品名", "logo标识")
     )
     cov_source = compare_text if fg in ("中文品名", "英文品名", "logo标识") else excel_value
-    phrases = key_phrases(cov_source, max_n=48 if long_mode else 16)
+    ingredient_analysis: dict[str, Any] | None = None
+    if fg == "成分表":
+        from app.ingredient_match import analyze_ingredient_field
+
+        ingredient_analysis = analyze_ingredient_field(
+            excel_value or "", locate_words if locate_words is not None else ocr_words
+        )
+        phrases = list(ingredient_analysis.get("atoms") or [])
+    else:
+        phrases = key_phrases(cov_source, max_n=48 if long_mode else 16)
 
     # 单点最佳（短字段）
-    score, chunk, boxes, page = _match_words(compare_text, ocr_words)
-    if score < SCORE_WARN and ocr_text:
+    if ingredient_analysis is not None:
+        ingredient_box = ingredient_analysis.get("block_bbox")
+        boxes = [ingredient_box] if ingredient_box else []
+        page = int(ingredient_box.get("page") or 1) if ingredient_box else 1
+        score = float(ingredient_analysis.get("coverage") or 0) * 100.0
+        hit_atoms = list(ingredient_analysis.get("hit_atoms") or [])
+        chunk = hit_atoms[0] if hit_atoms else ""
+    else:
+        score, chunk, boxes, page = _match_words(compare_text, ocr_words)
+    if ingredient_analysis is None and score < SCORE_WARN and ocr_text:
         n_ocr = normalize(ocr_text)
         n_ocr_u = normalize_units(ocr_text)
         for ch in split_chunks(compare_text):
@@ -989,7 +1006,10 @@ def match_field(
     # 长字段：短语定位；成分/生产用整段扩展，文案/用法定点多框（避免一条窄带）
     multi_boxes: list[dict] = []
     hit_ph: list[str] = []
-    if long_mode and phrases:
+    if ingredient_analysis is not None:
+        multi_boxes = list(boxes)
+        hit_ph = list(ingredient_analysis.get("hit_atoms") or [])
+    elif long_mode and phrases:
         multi_boxes, hit_ph = collect_phrase_boxes(phrases, ocr_words, min_score=86.0)
         if multi_boxes:
             if fg in ("成分表", "生产信息"):
@@ -1004,9 +1024,21 @@ def match_field(
             if hit_ph:
                 chunk = hit_ph[0]
 
-    cov = coverage_against_ocr(cov_source, ocr_text or "")
+    if ingredient_analysis is not None:
+        hit_atoms = list(ingredient_analysis.get("hit_atoms") or [])
+        miss_atoms = list(ingredient_analysis.get("miss_atoms") or [])
+        total_atoms = len(phrases)
+        cov = {
+            "coverage": (len(hit_atoms) / total_atoms) if total_atoms else 0.0,
+            "matched": len(hit_atoms),
+            "total": total_atoms,
+            "hit_phrases": hit_atoms[:COVERAGE_PHRASE_CAP],
+            "miss_phrases": miss_atoms[:COVERAGE_PHRASE_CAP],
+        }
+    else:
+        cov = coverage_against_ocr(cov_source, ocr_text or "")
     # 合并 bbox 命中 + 软匹配命中
-    if long_mode and phrases:
+    if ingredient_analysis is None and long_mode and phrases:
         n_ocr_m = normalize(ocr_text or "")
         n_ocr_u_m = normalize_units(ocr_text or "")
         hit_set = {normalize(x) for x in hit_ph}
@@ -1437,6 +1469,7 @@ def match_field(
             hit_phrases=list(cov.get("hit_phrases") or []),
             page_w=page_w,
             page_h=page_h,
+            ingredient_analysis=ingredient_analysis,
         )
         if refined:
             display_boxes = refined
@@ -1537,6 +1570,20 @@ def match_field(
                 + (ev or "")
             )
 
+    ingredient_fuzzy = [
+        item["atom"]
+        for item in (ingredient_analysis or {}).get("matches", [])
+        if item.get("matched") and item.get("mode") == "edit_distance"
+    ]
+    if ingredient_fuzzy and status == "一致":
+        status = "疑点"
+        ev = (
+            "存在 OCR 模糊命中，需肉眼确认："
+            + "、".join(ingredient_fuzzy[:4])
+            + " · "
+            + (ev or "")
+        )
+
     # OCR 置信度：缺失/低覆盖时若区域字置信度低 → 看不清（非硬缺失）
     ocr_low = False
     ocr_prob = None
@@ -1636,6 +1683,18 @@ def match_field(
             ),
         },
     }
+    if ingredient_analysis is not None:
+        hit_out["ingredient_atoms"] = list(ingredient_analysis.get("atoms") or [])
+        hit_out["ingredient_matches"] = list(
+            ingredient_analysis.get("matches") or []
+        )
+        hit_out["ingredient_anchor"] = ingredient_analysis.get("anchor_point")
+        hit_out["ingredient_label_anchor"] = ingredient_analysis.get("label_anchor")
+        hit_out["ingredient_locate_mode"] = ingredient_analysis.get("locate_mode")
+        hit_out["ingredient_fuzzy_atoms"] = ingredient_fuzzy
+        hit_out["ingredient_reference_dataset"] = ingredient_analysis.get(
+            "reference_dataset"
+        )
     hit_out["doubt_bucket"] = assign_doubt_bucket(hit_out)
     if force_typo_bucket:
         hit_out["doubt_bucket"] = "typo"
