@@ -10,7 +10,7 @@
 |---|---|
 | `apps/web/ui` | React + Ant Design 6 审稿台 / 打样台 / 历史 / 设置 |
 | `apps/web/server` | Hono + TypeScript，对外 HTTP `:8787` |
-| `apps/web/backend` | Python 对照 worker（TS 用 `python -m app.cli` 调用）。PDF 按页分为活字 / 转曲 / 图片：活字直接读文字层，其他页只跑一次 OCR，再进入既有字段规则与单钉证据收敛 |
+| `apps/web/backend` | Python 对照 worker（TS 用 `python -m app.cli` 调用）。PDF 按页分为活字 / 转曲 / 图片：活字直接读文字层，其他页只跑一次 OCR，再进入既有字段规则与单钉证据收敛；成分表按完整原料原子核对，并只在可靠正文锚点或高密度成分块内定位，模糊命中保留为人工疑点 |
 | `workers/packaging/` | 2D→3D CLI，打样台调用。V2 以显式 `cut/crease/...` 语义为结构事实；旧稿经确定性曲线适配、统一毫米坐标、连通分量隔离和有界拓扑，形成“盒身环 + 封口组件”的完整候选，不能自动接受。管理员只确认整套盒型、产品正面和阅读方向，其余五面由同一确认引擎推导；不按颜色、零散矩形或 bbox 静默套盒。macOS 用 AppleScript，Windows 由登录桌面的 Illustrator Agent 经命名管道执行现有 VBS/JSX，服务进程不在 Session 0 拉起 Illustrator。平面出图用 pymupdf（对照同一 Python）；杭州不需要 macOS qlmanage。PPT 用两张白底写 OOXML；两张白底再合成一页 PDF。缺 PPT/PDF 仍算出图 |
 | `docs/` | 章程、ADR、设计 |
 
@@ -24,6 +24,7 @@
 | `apps/web/README.md` | Web 子系统边界、入口与本地启动关系 |
 | `apps/web/ui/README.md` | UI 开发、构建与浏览器回归入口 |
 | `apps/web/backend/data/gold/README.md` | L2 金标数据格式与人工核定边界 |
+| `apps/web/backend/app/reference/README.md` | 受控化妆品原料参考词典的判定边界、来源与更新流程 |
 | `docs/00-charter.md` | 8/31 章程 |
 | `docs/adr-001-frontend-stack.md` | 历史前端选型；旧前端已退场，以当前 React + Hono 结构为准 |
 | `docs/adr-002-typescript-http.md` | 为什么对外 HTTP 是 TypeScript |
