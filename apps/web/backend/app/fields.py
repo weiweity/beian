@@ -72,9 +72,17 @@ def normalize_units(s: str) -> str:
     return t
 
 
+def _field_alias_hit(field: str, canon: str) -> bool:
+    fl = (field or "").strip().lower()
+    aliases = FIELD_ALIASES.get(canon) or (canon,)
+    return any(a.lower() in fl or fl in a.lower() for a in aliases)
+
+
 def field_group(field: str) -> str:
     """更具体的字段优先（避免「品名」误吃「英文品名」）。"""
     f = (field or "").strip()
+    if _field_alias_hit(f, "净含量") and _field_alias_hit(f, "条形码"):
+        return "净含量&条形码"
     fl = f.lower()
     # 显式优先表
     priority = (
@@ -844,7 +852,7 @@ def _primary_compare_text(field: str, excel_value: str) -> str:
         first = re.split(r"[\n\r]+", text.strip())[0].strip()
         # 去掉「1.命名依据」后的说明
         first = re.split(r"\d+[.．、]命名", first)[0].strip()
-        return first or text
+        return first
     return text
 
 
@@ -879,9 +887,10 @@ def _dedupe_miss_phrases(misses: list[str]) -> list[str]:
 
 def assign_doubt_bucket(hit: dict) -> str | None:
     """
-    疑点分桶：typo | ocr_unclear | branch | noise | reverse | coverage
+    疑点分桶：typo | ocr_unclear | ocr_graphic | ocr_smallprint | branch | noise | reverse | coverage
     一致/跳过 → None
     真漏字(typo)：硬规则缺字/漏空格、品名单字错；文案脚注未见 → coverage
+    装饰字/竖排走 ocr_graphic，法规小字走 ocr_smallprint；两者仍是疑点，不新开状态。
     """
     st = hit.get("status")
     if st in ("一致", "跳过"):
@@ -894,6 +903,11 @@ def assign_doubt_bucket(hit: dict) -> str | None:
         return "ocr_unclear"
     ev = hit.get("evidence") or ""
     fg = hit.get("field_group") or ""
+    field_name = hit.get("field") or ""
+    excel = hit.get("excel_value") or ""
+    blob = f"{field_name}{excel}{ev}"
+    if re.search(r"材料来源|良好管理|FSC|防伪", blob):
+        return "ocr_smallprint"
     cat = hit.get("category") or ""
     cov_miss = list(
         (hit.get("coverage") or {}).get("miss")
@@ -913,6 +927,19 @@ def assign_doubt_bucket(hit: dict) -> str | None:
         return "noise"
     # 文案：条款/脚注未见 = 覆盖问题，绝不标「真漏字」
     if fg == "文案" and st in ("疑点", "缺失"):
+        excel_n = normalize(excel)
+        digit_miss = bool(
+            cov_miss
+            and all(re.fullmatch(r"\d{1,4}", normalize(m) or "") for m in cov_miss)
+        )
+        short_cell = bool(
+            excel_n
+            and len(excel_n) <= 6
+            and cov_miss
+            and all(1 <= len(normalize(m)) <= 4 for m in cov_miss)
+        )
+        if digit_miss or short_cell:
+            return "ocr_graphic"
         return "coverage"
     if only_excel and st in ("疑点", "缺失"):
         if fg in ("中文品名",) and any(len(normalize(x)) <= 6 for x in only_excel[:3]):
@@ -1074,7 +1101,8 @@ def match_field(
 
     # 条码：按「规格分支」评估（护肤品常 5片/1片 两码，花盒只印一码）
     # miss 只计「当前装必检码」，忽略装不进 miss / 待处理
-    if fg == "条形码":
+    barcode_cov: dict[str, Any] | None = None
+    if fg in ("条形码", "净含量&条形码"):
         codes = re.findall(r"\d{8,14}", excel_value or "")
         if codes:
             n_ocr = normalize(ocr_text or "")
@@ -1112,15 +1140,34 @@ def match_field(
                 score = max(score, 95.0)
             elif must_codes:
                 score = min(score, 40.0)
+            if fg == "净含量&条形码":
+                barcode_cov = dict(cov)
+        elif fg == "净含量&条形码":
+            barcode_cov = {
+                "coverage": 0.0,
+                "matched": 0,
+                "total": 1,
+                "hit_phrases": [],
+                "miss_phrases": ["条形码"],
+            }
 
     # 净含量：拆「装型分支」（5片装/单片装）；装型画像只考核当前装
     net_branch_info: dict[str, Any] | None = None
-    if fg == "净含量":
+    if fg in ("净含量", "净含量&条形码"):
         branches = [
             ln.strip()
             for ln in re.split(r"[\n\r]+", excel_value or "")
             if ln.strip()
         ] or [excel_value or ""]
+        if fg == "净含量&条形码":
+            net_only = [
+                br
+                for br in branches
+                if re.search(r"净含量|\d+\s*(?:ml|mL|毫升|g)\b", br, re.I)
+                and not re.search(r"\d{8,14}", br)
+            ]
+            if net_only:
+                branches = net_only
         active = str((pack_profile or {}).get("active_piece") or "")
         active_spec = str((pack_profile or {}).get("active_spec") or "")
         focused = []
@@ -1226,7 +1273,12 @@ def match_field(
             "miss_phrases": miss_br,
         }
         if hit_br and not miss_br:
-            score = max(score, 95.0)
+            if fg == "净含量&条形码" and (
+                not barcode_cov or (barcode_cov.get("coverage") or 0) < 0.99
+            ):
+                score = min(score, 78.0)
+            else:
+                score = max(score, 95.0)
             chunk = hit_br[0]
         elif hit_br and miss_br:
             # 护肤品：确认单常写多规格，包装只印当前装 — 疑点非缺失
@@ -1258,6 +1310,25 @@ def match_field(
                 f"净含量装型命中「{show[:40]}」{how}"
             )
 
+    if fg == "净含量&条形码" and barcode_cov is not None:
+        net_cov = dict(cov)
+        hit_phrases = list(net_cov.get("hit_phrases") or []) + list(
+            barcode_cov.get("hit_phrases") or []
+        )
+        miss_phrases = list(net_cov.get("miss_phrases") or []) + list(
+            barcode_cov.get("miss_phrases") or []
+        )
+        matched = int(net_cov.get("matched") or 0) + int(barcode_cov.get("matched") or 0)
+        total = int(net_cov.get("total") or 0) + int(barcode_cov.get("total") or 0)
+        cov = {
+            "coverage": (matched / total) if total else 0.0,
+            "matched": matched,
+            "total": total,
+            "hit_phrases": hit_phrases[:COVERAGE_PHRASE_CAP],
+            "miss_phrases": miss_phrases[:COVERAGE_PHRASE_CAP],
+            "parts": {"net": net_cov, "barcode": barcode_cov},
+        }
+
     # 二维码字段只核完整引导语。图形码 payload 是独立审计信息，不能替代文案。
     if fg == "二维码":
         guide = matched_qr_guide(ocr_text or "", excel_value)
@@ -1282,8 +1353,9 @@ def match_field(
                 "miss_phrases": [expected_guide],
             }
 
-    # 长字段：覆盖率决定结论；禁止「只命中一句水」变一致
-    if long_mode and cov.get("total", 0) >= 3:
+    # 长字段：覆盖率决定结论；禁止「只命中一句水」变一致。
+    # 混合净含量&条形码必须走各自 coverage，不能被长文案 0.78 阈值写成一致。
+    if long_mode and fg != "净含量&条形码" and cov.get("total", 0) >= 3:
         cov_pct = cov["coverage"] * 100
         # 单点 100 分不能盖过低覆盖
         score = min(float(score), max(cov_pct, float(score) * 0.25 + cov_pct * 0.75))
@@ -1327,7 +1399,19 @@ def match_field(
             )
         else:
             status = "缺失" if score < 50 else "疑点"
-            ev = f"净含量装型未在包装找到 · best score={score:.0f}"
+            ev = "确认单要的净含量，我在这一面没读到。"
+    elif fg == "净含量&条形码":
+        net_ok = bool(net_branch_info and net_branch_info.get("hit") and not net_branch_info.get("miss"))
+        bar_cov = (cov or {}).get("parts", {}).get("barcode") if isinstance((cov or {}).get("parts"), dict) else None
+        bar_ok = bool(bar_cov and (bar_cov.get("coverage") or 0) >= 0.99)
+        if net_ok and bar_ok:
+            status, ev = "一致", "净含量和条码都在这一面读到了。"
+        elif net_ok or bar_ok:
+            status = "疑点"
+            ev = "净含量和条码没有都读全，请对着这一面看毫升和条码。"
+        else:
+            status = "疑点"
+            ev = "确认单要的毫升和条码，我在这一面没读全。"
     elif fg == "二维码":
         if score >= SCORE_OK and (cov or {}).get("coverage", 0) >= 0.85:
             status, ev = (
@@ -1397,10 +1481,10 @@ def match_field(
     if fg == "净含量" and status == "疑点" and score >= 75:
         if "装型" not in (ev or ""):
             ev = "单位/装型可能不一致 · " + ev
-    if remark:
+    if fg != "中文品名" and remark:
         ev = ev + f" · Excel备注：{remark[:80]}"
 
-    if remark and len(remark) >= 6:
+    if fg != "中文品名" and remark and len(remark) >= 6:
         # 备注常含工厂指示（「花盒上要写明…」），包装只需落地关键点
         n_ocr_r = normalize(ocr_text or "")
         pack_must = re.findall(
@@ -1443,34 +1527,34 @@ def match_field(
 
     # —— 证据框：必须用「全页 OCR 词」定位，不能只用 zone 词（logo 常在底部）——
     words_for_locate = locate_words if locate_words is not None else ocr_words
+    page_h = 2400
+    page_w = 2200
+    for w in words_for_locate or []:
+        loc = w.get("location") or {}
+        page_h = max(page_h, int(loc.get("top") or 0) + int(loc.get("height") or 0) + 40)
+        page_w = max(page_w, int(loc.get("left") or 0) + int(loc.get("width") or 0) + 40)
     try:
         from app.evidence_locate import refine_field_boxes
 
-        page_h = 2400
-        page_w = 2200
-        for w in words_for_locate or []:
-            loc = w.get("location") or {}
-            page_h = max(
-                page_h,
-                int(loc.get("top") or 0) + int(loc.get("height") or 0) + 40,
-            )
-            page_w = max(
-                page_w,
-                int(loc.get("left") or 0) + int(loc.get("width") or 0) + 40,
-            )
-        refined = refine_field_boxes(
-            field_group=fg,
-            field=field,
-            excel_value=excel_value or "",
-            primary_query=compare_text or "",
-            ocr_words=words_for_locate or [],
-            existing_boxes=[],
-            miss_phrases=list(cov.get("miss_phrases") or []),
-            hit_phrases=list(cov.get("hit_phrases") or []),
-            page_w=page_w,
-            page_h=page_h,
-            ingredient_analysis=ingredient_analysis,
-        )
+        def _refine(group: str) -> list:
+            return refine_field_boxes(
+                field_group=group,
+                field=field,
+                excel_value=excel_value or "",
+                primary_query=compare_text or "",
+                ocr_words=words_for_locate or [],
+                existing_boxes=[],
+                miss_phrases=list(cov.get("miss_phrases") or []),
+                hit_phrases=list(cov.get("hit_phrases") or []),
+                page_w=page_w,
+                page_h=page_h,
+                ingredient_analysis=ingredient_analysis,
+            ) or []
+
+        if fg == "净含量&条形码":
+            refined = _refine("净含量") + _refine("条形码")
+        else:
+            refined = _refine(fg)
         if refined:
             display_boxes = refined
             page = display_boxes[0].get("page") or page
@@ -1478,7 +1562,7 @@ def match_field(
             if any(b.get("role") in ("check", "miss_anchor") for b in refined):
                 # keep
                 pass
-        elif fg in ("logo标识", "中文品名", "英文品名", "净含量", "条形码", "二维码"):
+        elif fg in ("logo标识", "中文品名", "英文品名", "净含量", "净含量&条形码", "条形码", "二维码"):
             # 全文再扫一遍兜底（不继承错误 zone 框）
             display_boxes = []
         elif not refined and display_boxes:
@@ -1487,6 +1571,8 @@ def match_field(
             display_boxes = refined or []
     except Exception:
         pass
+
+    # 面积 ≥ 页 30% 的框只在前端丢掉，不从任务 JSON 删除。
 
     # —— 供应链硬规则：明显缺字/漏空格 → 直接「缺失」（非疑点）——
     hard_typo_issues: list = []
@@ -1660,15 +1746,18 @@ def match_field(
             "hit": "蓝/绿框 = 包装上已命中的字",
             "check": "黄框 = 疑点/漏印请核这里",
         },
-        "coverage": {
-            "ratio": round(cov["coverage"], 3),
-            "matched": cov["matched"],
-            "total": cov["total"],
-            "miss": (cov.get("miss_phrases") or [])[:COVERAGE_PHRASE_CAP],
-            "hit": (cov.get("hit_phrases") or [])[:COVERAGE_PHRASE_CAP],
-        }
-        if cov.get("total")
-        else None,
+        "coverage": (
+            {
+                "ratio": round(cov["coverage"], 3),
+                "matched": cov["matched"],
+                "total": cov["total"],
+                "miss": (cov.get("miss_phrases") or [])[:COVERAGE_PHRASE_CAP],
+                "hit": (cov.get("hit_phrases") or [])[:COVERAGE_PHRASE_CAP],
+                **({"parts": cov["parts"]} if cov.get("parts") else {}),
+            }
+            if cov.get("total")
+            else None
+        ),
         "long_field": long_mode,
         "match_mode": "block_coverage" if long_mode and cov.get("total", 0) >= 3 else "phrase",
         "zone_scope": zone_scope,

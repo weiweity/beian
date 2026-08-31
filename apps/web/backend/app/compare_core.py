@@ -170,10 +170,11 @@ def _apply_qrcode_to_hits(
         if "二维码" not in field and "QR" not in field.upper() and fg != "二维码":
             continue
         h["qrcode_meta"] = qr_meta
+        if boxes:
+            h["qrcode_boxes"] = boxes
         if qr_texts:
             joined = " | ".join(qr_texts[:5])
             h["qrcode_values"] = qr_texts
-            h["qrcode_boxes"] = boxes
             h["qrcode_payload_evidence"] = f"二维码载荷已解出：{joined[:120]}"
         else:
             h["qrcode_degraded"] = True
