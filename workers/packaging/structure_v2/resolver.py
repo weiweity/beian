@@ -10,7 +10,13 @@ import tempfile
 from typing import Any, Mapping
 
 from .adapters import AdaptationResult, adapt_structure
-from .dimensions import DimensionPolicy, geometry_policy_for_source, is_stroke_proposal_source
+from .dimensions import (
+    DimensionPolicy,
+    geometry_policy_for_source,
+    is_stroke_proposal_source,
+    normalized_mm,
+    solve_body_dimensions,
+)
 from .model import StructureContractError, canonicalize_structure, structure_cache_key
 from .topology import (
     TopologyError,
@@ -30,8 +36,17 @@ ROLE_DIMENSIONS = {
     "top": ("width", "depth"),
     "bottom": ("width", "depth"),
 }
-CACHE_SCHEMA = "packaging-structure-cache/3"
+CACHE_SCHEMA = "packaging-structure-cache/4"
 RESOLVED_SCHEMA = "resolved-packaging-job/2"
+PROPOSAL_EXPECTED_VALIDATION_ERRORS = {
+    "structure_face_mapping_incomplete",
+    "structure_proposal_requires_confirmation",
+}
+UNSUPPORTED_STRUCTURE_ERRORS = {
+    "structure_curve_complexity_exceeded",
+    "structure_limit_exceeded",
+    "structure_schema_unsupported",
+}
 
 
 @dataclass(frozen=True)
@@ -178,7 +193,7 @@ def _fold_graph_valid(
     return visited == face_ids
 
 
-def _mapped_face_size(
+def _mapped_face_bounds(
     structure: Mapping[str, Any],
     face: Mapping[str, Any],
 ) -> list[float] | None:
@@ -196,11 +211,53 @@ def _mapped_face_size(
     if len(points) < 3:
         return None
     mapped = [(a * x + c * y + e, b * x + d * y + f) for x, y in points]
-    width = max(point[0] for point in mapped) - min(point[0] for point in mapped)
-    height = max(point[1] for point in mapped) - min(point[1] for point in mapped)
-    if width <= 0 or height <= 0:
+    bounds = [
+        min(point[0] for point in mapped),
+        min(point[1] for point in mapped),
+        max(point[0] for point in mapped),
+        max(point[1] for point in mapped),
+    ]
+    if bounds[2] <= bounds[0] or bounds[3] <= bounds[1]:
         return None
-    return [round(width, 6), round(height, 6)]
+    return [normalized_mm(value) for value in bounds]
+
+
+def _mapped_face_size(
+    structure: Mapping[str, Any],
+    face: Mapping[str, Any],
+) -> list[float] | None:
+    bounds = _mapped_face_bounds(structure, face)
+    if bounds is None:
+        return None
+    return [normalized_mm(bounds[2] - bounds[0]), normalized_mm(bounds[3] - bounds[1])]
+
+
+def _artwork_coverage_bounds(
+    structure: Mapping[str, Any],
+    face: Mapping[str, Any],
+    expected: list[float],
+    policy: DimensionPolicy,
+) -> list[float] | None:
+    """Return the real printed region inside a role-sized texture canvas."""
+    bounds = _mapped_face_bounds(structure, face)
+    if bounds is None:
+        return None
+    if (
+        (bounds[0] < 0 and not policy.close(bounds[0], 0))
+        or (bounds[1] < 0 and not policy.close(bounds[1], 0))
+        or (bounds[2] > expected[0] and not policy.close(bounds[2], expected[0]))
+        or (bounds[3] > expected[1] and not policy.close(bounds[3], expected[1]))
+    ):
+        return None
+    clipped = [
+        max(0.0, bounds[0]),
+        max(0.0, bounds[1]),
+        min(expected[0], bounds[2]),
+        min(expected[1], bounds[3]),
+    ]
+    if clipped[2] <= clipped[0] or clipped[3] <= clipped[1]:
+        return None
+    return [normalized_mm(value) for value in clipped]
 
 
 def _solve_dimensions(
@@ -221,22 +278,12 @@ def _solve_dimensions(
     if any(value is None for value in mapped.values()):
         return None
     sizes = {role: value for role, value in mapped.items() if value is not None}
-    groups = {
-        # Closure flaps can intentionally be shorter than the erected box by
-        # a small clearance. The four body panels define the physical box;
-        # top/bottom are validated against that footprint below, never averaged
-        # into width/depth.
-        "width": [sizes["front"][0], sizes["back"][0]],
-        "depth": [sizes["left"][0], sizes["right"][0]],
-        "height": [sizes["front"][1], sizes["back"][1], sizes["left"][1], sizes["right"][1]],
-    }
-    dimensions: dict[str, float] = {}
-    for name, values in groups.items():
-        anchor = values[0]
-        if not all(policy.close(anchor, value) for value in values[1:]):
-            return None
-        dimensions[name] = round(sum(values) / len(values), 6)
-    return dimensions
+    # Closure panels can intentionally be shorter than the erected box by a
+    # small allowance. Only the four body panels define physical dimensions.
+    return solve_body_dimensions(
+        {role: sizes[role] for role in ("front", "right", "back", "left")},
+        policy,
+    )
 
 
 def _artwork_orientations_valid(
@@ -255,6 +302,8 @@ def _artwork_orientations_valid(
             policy.close(left, right)
             for left, right in zip(actual, expected)
         ):
+            return False
+        if _artwork_coverage_bounds(structure, face, expected, policy) is None:
             return False
     return True
 
@@ -318,27 +367,73 @@ def resolve_structure_payload(
         code = getattr(error, "code", "structure_contract_invalid")
         status = "unsupported" if code in {"structure_schema_unsupported", "structure_limit_exceeded"} else "review_required"
         return ResolutionResult(status=status, code=code, message=str(error))
-    topology = analyze_topology(structure, snap_tolerance_mm=snap_tolerance_mm)
     proposal_adapter = is_stroke_proposal_source(structure.get("source"))
     if proposal_adapter and not structure["faces"]:
+        blocking_validation_errors = [
+            code
+            for code in structure["validation"]["errors"]
+            if code not in PROPOSAL_EXPECTED_VALIDATION_ERRORS
+        ]
+        if blocking_validation_errors:
+            code = blocking_validation_errors[0]
+            return ResolutionResult(
+                status="unsupported" if code in UNSUPPORTED_STRUCTURE_ERRORS else "review_required",
+                code=code,
+                message="Illustrator 结构导出未完整完成，不能用残余线段生成盒型候选。",
+                structure=structure,
+            )
         try:
             proposal = derive_rectangular_face_proposal(structure)
-        except TopologyError:
-            proposal = None
-        if proposal is not None:
-            proposal_topology = dict(topology)
-            proposal_topology["proposal_diagnostics"] = {
-                "errors": list(topology.get("errors") or []),
-                "diagnostics": topology.get("diagnostics") or {},
-            }
-            proposal_topology["face_proposal"] = proposal["faces"]
-            proposal_topology["net_proposals"] = proposal["net_proposals"]
+        except TopologyError as error:
+            return ResolutionResult(
+                status="unsupported" if error.code in UNSUPPORTED_STRUCTURE_ERRORS else "review_required",
+                code=error.code,
+                message=str(error),
+                structure=structure,
+            )
+        diagnostics = dict(proposal.get("proposal_diagnostics") or {})
+        proposal_topology = {
+            "status": "review_required",
+            "errors": list(diagnostics.get("errors") or ["structure_face_mapping_incomplete"]),
+            "warnings": list(diagnostics.get("warnings") or []),
+            "counts": dict(proposal.get("topology_counts") or {}),
+            "faces": [],
+            "diagnostics": dict(diagnostics.get("diagnostics") or {}),
+            "proposal_diagnostics": diagnostics,
+            "face_proposal": proposal["faces"],
+            "net_proposals": proposal["net_proposals"],
+        }
+        # Keep one source of truth for what the UI may submit: every exposed
+        # anchor is dry-run through the same decision engine used by the final
+        # confirmation command.  Proposal adapters never run the whole-sheet
+        # polygonizer first; detached annotation components stay diagnostics.
+        from .confirmation import preflight_anchor_proposals
+
+        confirmable, rejected = preflight_anchor_proposals(
+            proposal["structure"],
+            proposal["net_proposals"],
+        )
+        proposal_topology["proposal_diagnostics"]["rejected_unconfirmable"] = rejected
+        if not confirmable:
+            proposal_topology["net_proposals"] = []
             return _review(
-                "structure_face_mapping_incomplete",
-                "已识别完整盒型，请对照原稿选择正面和朝向。",
+                "structure_box_net_missing",
+                "候选线没有形成可提交的完整盒型，请检查刀线与折线。",
                 structure=proposal["structure"],
                 topology=proposal_topology,
             )
+        proposal_topology["net_proposals"] = confirmable
+        return _review(
+            "structure_face_mapping_incomplete",
+            "已识别完整盒型，请对照原稿选择正面和朝向。",
+            structure=proposal["structure"],
+            topology=proposal_topology,
+        )
+    try:
+        topology = analyze_topology(structure, snap_tolerance_mm=snap_tolerance_mm)
+    except TopologyError as error:
+        status = "unsupported" if error.code == "structure_limit_exceeded" else "review_required"
+        return ResolutionResult(status=status, code=error.code, message=str(error), structure=structure)
     if topology["status"] != "accepted":
         return _review(
             topology["errors"][0] if topology["errors"] else "structure_face_mapping_incomplete",
@@ -398,10 +493,13 @@ def resolve_structure_payload(
             metrics[role_faces["right"]["id"]]["size_mm"],
             dimensions_policy,
         )
-        and _matching_pair(
-            metrics[role_faces["top"]["id"]]["size_mm"],
-            metrics[role_faces["bottom"]["id"]]["size_mm"],
-            dimensions_policy,
+        and (
+            is_stroke_proposal_source(structure.get("source"))
+            or _matching_pair(
+                metrics[role_faces["top"]["id"]]["size_mm"],
+                metrics[role_faces["bottom"]["id"]]["size_mm"],
+                dimensions_policy,
+            )
         )
     ):
         return _review("structure_face_dimensions_mismatch", "相对面的尺寸不一致。", structure=structure, topology=topology)
@@ -422,15 +520,33 @@ def resolve_structure_payload(
     if not _fold_graph_valid(structure, role_faces, dimensions, dimensions_policy):
         return _review("structure_fold_graph_invalid", "六面折叠邻接不完整。", structure=structure, topology=topology)
 
-    resolved_faces = {
-        role: {
+    resolved_faces: dict[str, dict[str, Any]] = {}
+    for role, face in role_faces.items():
+        dimension_keys = ROLE_DIMENSIONS[role]
+        expected_size = [
+            float(dimensions[dimension_keys[0]]),
+            float(dimensions[dimension_keys[1]]),
+        ]
+        coverage_bounds = _artwork_coverage_bounds(
+            structure,
+            face,
+            expected_size,
+            dimensions_policy,
+        )
+        if coverage_bounds is None:  # Kept defensive beside the validation gate above.
+            return _review(
+                "artwork_transform_invalid",
+                "六面贴图范围不能落入对应盒面。",
+                structure=structure,
+                topology=topology,
+            )
+        resolved_faces[role] = {
             "face_id": face["id"],
             "boundary": face["boundary"],
             "artwork_transform": face["artwork_transform"],
+            "artwork_coverage_bounds_mm": coverage_bounds,
             **metrics[face["id"]],
         }
-        for role, face in role_faces.items()
-    }
     resolved = {
         "schema": RESOLVED_SCHEMA,
         "structure_schema": structure["schema"],

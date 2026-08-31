@@ -36,6 +36,7 @@ PPT_SCRIPT = ROOT / "ppt" / "build_product_ppt.mjs"
 ILLUSTRATOR_WORKER = ROOT / "illustrator" / "illustrator_worker.py"
 ILLUSTRATOR_JSX = ROOT / "illustrator" / "export_ai.jsx"
 ILLUSTRATOR_STRUCTURE_JSX = ROOT / "illustrator" / "export_structure.jsx"
+ILLUSTRATOR_CURVE_HELPER = ROOT / "illustrator" / "curve_flatten.js"
 ILLUSTRATOR_RUNNER = ROOT / "illustrator" / "run_export.applescript"
 ILLUSTRATOR_WINDOWS_RUNNER = ROOT / "illustrator" / "run_export.vbs"
 ILLUSTRATOR_AGENT_CLIENT = ROOT / "illustrator" / "illustrator_agent.py"
@@ -220,6 +221,7 @@ def job_fingerprint(
         ILLUSTRATOR_WORKER,
         ILLUSTRATOR_JSX,
         ILLUSTRATOR_STRUCTURE_JSX,
+        ILLUSTRATOR_CURVE_HELPER,
         ILLUSTRATOR_RUNNER,
         ILLUSTRATOR_WINDOWS_RUNNER,
         ILLUSTRATOR_AGENT_CLIENT,

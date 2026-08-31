@@ -8,6 +8,8 @@ stable product error codes; it never guesses cut/crease semantics.
 from __future__ import annotations
 
 from collections import defaultdict
+import hashlib
+import json
 import math
 from typing import Any, Iterable, Mapping
 
@@ -23,7 +25,11 @@ from .dimensions import STROKE_PROPOSAL_GEOMETRY
 
 
 LINEWORK_ASSIGNMENTS = ("cut", "crease", "perforation")
-DEFAULT_LIMITS = {"linework_edges": 20_000, "components": 100, "faces": 10_000}
+DEFAULT_LIMITS = {"linework_edges": 20_000, "components": 4_096, "faces": 10_000}
+PROPOSAL_COMPONENT_REVIEW_THRESHOLD = 100
+MAX_PROPOSAL_CANDIDATE_COMPONENTS = 64
+MAX_PROPOSAL_SPATIAL_LINKS = 100_000
+MAX_PROPOSAL_WORK = 50_000
 
 
 class TopologyError(RuntimeError):
@@ -115,6 +121,70 @@ def _connected_components(lines: list[LineString]) -> int:
             previous = endpoints.setdefault(key, index)
             groups.union(index, previous)
     return len({groups.find(index) for index in range(len(lines))})
+
+
+def _component_sort_key(lines: list[LineString]) -> tuple[float, float, float, float, float]:
+    bounds = [line.bounds for line in lines]
+    return (
+        -sum(float(line.length) for line in lines),
+        min(float(item[0]) for item in bounds),
+        min(float(item[1]) for item in bounds),
+        max(float(item[2]) for item in bounds),
+        max(float(item[3]) for item in bounds),
+    )
+
+
+def _partition_line_components(lines: list[LineString]) -> list[list[LineString]]:
+    """Partition already-noded linework by shared coordinates."""
+    if not lines:
+        return []
+    coordinates: dict[tuple[float, float], int] = {}
+    groups = _DisjointSet(len(lines))
+    for index, line in enumerate(lines):
+        for raw in line.coords:
+            key = (round(float(raw[0]), 9), round(float(raw[1]), 9))
+            previous = coordinates.setdefault(key, index)
+            groups.union(index, previous)
+    members: dict[int, list[LineString]] = defaultdict(list)
+    for index, line in enumerate(lines):
+        members[groups.find(index)].append(line)
+    return sorted(members.values(), key=_component_sort_key)
+
+
+def _partition_spatial_line_components(
+    lines: list[LineString],
+    tolerance: float,
+) -> list[list[LineString]]:
+    """Partition raw strokes before any global noding or polygonization.
+
+    Annotation boxes and reference diagrams are common in Illustrator files.
+    A global GEOS union lets thousands of unrelated marks consume the topology
+    budget before the real carton is considered.  STRtree only links strokes
+    that touch or lie within the adapter tolerance; each resulting component is
+    then snapped and noded independently.
+    """
+    if not lines:
+        return []
+    groups = _DisjointSet(len(lines))
+    tree = STRtree(lines)
+    links = 0
+    for index, line in enumerate(lines):
+        for candidate in tree.query(line, predicate="dwithin", distance=tolerance):
+            other = int(candidate)
+            if other <= index:
+                continue
+            links += 1
+            if links > MAX_PROPOSAL_SPATIAL_LINKS:
+                raise TopologyError(
+                    "structure_limit_exceeded",
+                    "结构线邻接关系超过候选扫描预算",
+                    details={"links": links, "limit": MAX_PROPOSAL_SPATIAL_LINKS},
+                )
+            groups.union(index, other)
+    members: dict[int, list[LineString]] = defaultdict(list)
+    for index, line in enumerate(lines):
+        members[groups.find(index)].append(line)
+    return sorted(members.values(), key=_component_sort_key)
 
 
 def _diagnostic(geometry: Any) -> dict[str, Any]:
@@ -369,6 +439,162 @@ def _cluster_axis_coordinates(
     return result
 
 
+def _basis_transform(angle: float) -> list[float]:
+    cosine = math.cos(angle)
+    sine = math.sin(angle)
+    # Affine convention: x'=a*x+c*y+e, y'=b*x+d*y+f.
+    return [
+        round(cosine, 9),
+        round(-sine, 9),
+        round(sine, 9),
+        round(cosine, 9),
+        0.0,
+        0.0,
+    ]
+
+
+def _candidate_identity(source_hash: str, points: list[tuple[float, float]]) -> str:
+    material = {
+        "source_sha256": source_hash,
+        "points_mm": sorted(
+            [[round(float(x), 6), round(float(y), 6)] for x, y in points]
+        ),
+    }
+    encoded = json.dumps(material, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return "rect-face-" + hashlib.sha256(encoded).hexdigest()[:16]
+
+
+def _rectangular_candidates_for_component(
+    lines: list[LineString],
+    *,
+    source_hash: str,
+    tolerance: float,
+    work_state: list[int],
+) -> tuple[list[dict[str, Any]], list[float]]:
+    basis_angle = _dominant_orthogonal_angle(lines)
+    local_lines = [
+        LineString([_rotate_coordinate(tuple(point), -basis_angle) for point in line.coords])
+        for line in lines
+    ]
+    minimum_axis_length = 5.0
+    angular_error = math.sin(math.radians(3.0))
+    horizontal: list[LineString] = []
+    vertical: list[LineString] = []
+    for line in local_lines:
+        left, right = list(line.coords)[0], list(line.coords)[-1]
+        dx = float(right[0]) - float(left[0])
+        dy = float(right[1]) - float(left[1])
+        length = math.hypot(dx, dy)
+        if length < minimum_axis_length:
+            continue
+        if abs(dy) <= length * angular_error:
+            horizontal.append(line)
+        elif abs(dx) <= length * angular_error:
+            vertical.append(line)
+    x_values = _cluster_axis_coordinates(
+        [((float(line.coords[0][0]) + float(line.coords[-1][0])) / 2.0, float(line.length)) for line in vertical],
+        tolerance,
+    )
+    y_values = _cluster_axis_coordinates(
+        [((float(line.coords[0][1]) + float(line.coords[-1][1])) / 2.0, float(line.length)) for line in horizontal],
+        tolerance,
+    )
+    if len(x_values) > 40 or len(y_values) > 40:
+        raise TopologyError(
+            "structure_limit_exceeded",
+            "结构组件坐标轴超过候选扫描预算",
+            details={"x_axes": len(x_values), "y_axes": len(y_values), "limit": 40},
+        )
+    if len(x_values) < 2 or len(y_values) < 2:
+        return [], _basis_transform(basis_angle)
+
+    maximum_axis_gap = 12
+
+    def pair_count(size: int) -> int:
+        return sum(min(maximum_axis_gap, size - index - 1) for index in range(size - 1))
+
+    estimated_work = pair_count(len(x_values)) * pair_count(len(y_values))
+    if work_state[0] + estimated_work > MAX_PROPOSAL_WORK:
+        raise TopologyError(
+            "structure_limit_exceeded",
+            "结构候选计算超过全局工作预算",
+            details={
+                "work": work_state[0],
+                "estimated_component_work": estimated_work,
+                "limit": MAX_PROPOSAL_WORK,
+            },
+        )
+
+    covered = unary_union(local_lines).buffer(tolerance, cap_style=2)
+    coverage_cache: dict[tuple[float, float, float, float], float] = {}
+
+    def coverage(left: tuple[float, float], right: tuple[float, float]) -> float:
+        key = tuple(round(value, 6) for value in (*left, *right))
+        cached = coverage_cache.get(key)
+        if cached is not None:
+            return cached
+        line = LineString([left, right])
+        ratio = min(1.0, float(line.intersection(covered).length) / max(float(line.length), 1e-9))
+        coverage_cache[key] = ratio
+        return ratio
+
+    candidates: list[dict[str, Any]] = []
+    for x_index, x1 in enumerate(x_values):
+        for x2 in x_values[x_index + 1 : x_index + 1 + maximum_axis_gap]:
+            width = x2 - x1
+            if width < 5.0:
+                continue
+            for y_index, y1 in enumerate(y_values):
+                for y2 in y_values[y_index + 1 : y_index + 1 + maximum_axis_gap]:
+                    work_state[0] += 1
+                    if work_state[0] > MAX_PROPOSAL_WORK:
+                        raise TopologyError(
+                            "structure_limit_exceeded",
+                            "结构候选计算超过全局工作预算",
+                            details={"work": work_state[0], "limit": MAX_PROPOSAL_WORK},
+                        )
+                    height = y2 - y1
+                    if height < 5.0 or max(width, height) / min(width, height) > 20.0:
+                        continue
+                    sides = [
+                        coverage((x1, y1), (x2, y1)),
+                        coverage((x2, y1), (x2, y2)),
+                        coverage((x2, y2), (x1, y2)),
+                        coverage((x1, y2), (x1, y1)),
+                    ]
+                    if sum(value >= 0.88 for value in sides) < 3 or min(sides) < 0.52:
+                        continue
+                    internal_x = max(
+                        [coverage((x, y1), (x, y2)) for x in x_values if x1 + tolerance < x < x2 - tolerance]
+                        or [0.0]
+                    )
+                    internal_y = max(
+                        [coverage((x1, y), (x2, y)) for y in y_values if y1 + tolerance < y < y2 - tolerance]
+                        or [0.0]
+                    )
+                    if internal_x >= 0.84 or internal_y >= 0.84:
+                        continue
+                    local_points = [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
+                    points = [_rotate_coordinate(point, basis_angle) for point in local_points]
+                    polygon = Polygon(points)
+                    frame = _face_transform(polygon)
+                    if frame is None:
+                        continue
+                    candidates.append(
+                        {
+                            "id": _candidate_identity(source_hash, points),
+                            "local_bounds": (x1, y1, x2, y2),
+                            "points": points,
+                            "polygon": polygon,
+                            "transform": frame[0],
+                            "size_mm": [round(width, 6), round(height, 6)],
+                            "coverage": [round(value, 6) for value in sides],
+                        }
+                    )
+    candidates.sort(key=lambda item: tuple(round(float(value), 9) for value in item["local_bounds"]))
+    return candidates, _basis_transform(basis_angle)
+
+
 def derive_rectangular_face_proposal(
     payload: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -394,137 +620,93 @@ def derive_rectangular_face_proposal(
     tolerance = STROKE_PROPOSAL_GEOMETRY.boundary_mm
     if tolerance is None:
         raise TopologyError("structure_contract_invalid", "旧刀线候选缺少边界容差策略")
-    basis_angle = _dominant_orthogonal_angle(source_lines)
-    local_lines = [
-        LineString([_rotate_coordinate(tuple(point), -basis_angle) for point in line.coords])
-        for line in source_lines
-    ]
-    minimum_axis_length = 5.0
-    angular_error = math.sin(math.radians(3.0))
-    horizontal: list[LineString] = []
-    vertical: list[LineString] = []
-    for line in local_lines:
-        left, right = list(line.coords)[0], list(line.coords)[-1]
-        dx = float(right[0]) - float(left[0])
-        dy = float(right[1]) - float(left[1])
-        length = math.hypot(dx, dy)
-        if length < minimum_axis_length:
+    # Partition before GEOS noding.  Thousands of detached annotation marks
+    # must not force a global union/polygonization or hide a valid carton.
+    source_components = _partition_spatial_line_components(source_lines, tolerance)
+    components: list[list[LineString]] = []
+    ignored_open_components = 0
+    for source_component in source_components:
+        if len(source_component) < 4:
+            ignored_open_components += 1
             continue
-        if abs(dy) <= length * angular_error:
-            horizontal.append(line)
-        elif abs(dx) <= length * angular_error:
-            vertical.append(line)
-    x_values = _cluster_axis_coordinates(
-        [((float(line.coords[0][0]) + float(line.coords[-1][0])) / 2.0, float(line.length)) for line in vertical],
-        tolerance,
-    )
-    y_values = _cluster_axis_coordinates(
-        [((float(line.coords[0][1]) + float(line.coords[-1][1])) / 2.0, float(line.length)) for line in horizontal],
-        tolerance,
-    )
-    if len(x_values) < 2 or len(y_values) < 2:
-        raise TopologyError("structure_face_mapping_incomplete", "结构线不足以生成矩形盒面候选")
-    # Bound worst-case work for annotation-heavy files.  A useful carton grid
-    # has far fewer axes; exceeding this limit is a reviewable source problem.
-    if len(x_values) > 40 or len(y_values) > 40:
-        raise TopologyError(
-            "structure_limit_exceeded",
-            "结构候选轴线过多，不能安全生成盒面候选",
-            details={"x_axes": len(x_values), "y_axes": len(y_values)},
-        )
-
-    covered = unary_union(local_lines).buffer(tolerance, cap_style=2)
-    coverage_cache: dict[tuple[float, float, float, float], float] = {}
-
-    def coverage(left: tuple[float, float], right: tuple[float, float]) -> float:
-        key = tuple(round(value, 6) for value in (*left, *right))
-        cached = coverage_cache.get(key)
-        if cached is not None:
-            return cached
-        line = LineString([left, right])
-        ratio = min(1.0, float(line.intersection(covered).length) / max(float(line.length), 1e-9))
-        coverage_cache[key] = ratio
-        return ratio
-
-    candidates: list[dict[str, Any]] = []
-    maximum_axis_gap = 12
-    for x_index, x1 in enumerate(x_values):
-        for x2 in x_values[x_index + 1 : x_index + 1 + maximum_axis_gap]:
-            width = x2 - x1
-            if width < 5.0:
+        # Illustrator commonly exports the same finished edge more than once
+        # (appearance stroke, dieline stroke, or a nearly coincident duplicate).
+        # Normalize only inside one spatial component before GEOS nodes it.
+        normalized = _snap_same_assignment(source_component, tolerance)
+        for noded_component in _partition_line_components(_extract_lines(unary_union(normalized))):
+            if len(noded_component) < 4:
+                ignored_open_components += 1
                 continue
-            for y_index, y1 in enumerate(y_values):
-                for y2 in y_values[y_index + 1 : y_index + 1 + maximum_axis_gap]:
-                    height = y2 - y1
-                    if height < 5.0 or max(width, height) / min(width, height) > 20.0:
-                        continue
-                    sides = [
-                        coverage((x1, y1), (x2, y1)),
-                        coverage((x2, y1), (x2, y2)),
-                        coverage((x2, y2), (x1, y2)),
-                        coverage((x1, y2), (x1, y1)),
-                    ]
-                    if sum(value >= 0.88 for value in sides) < 3 or min(sides) < 0.52:
-                        continue
-                    internal_x = max(
-                        [coverage((x, y1), (x, y2)) for x in x_values if x1 + tolerance < x < x2 - tolerance]
-                        or [0.0]
-                    )
-                    internal_y = max(
-                        [coverage((x1, y), (x2, y)) for y in y_values if y1 + tolerance < y < y2 - tolerance]
-                        or [0.0]
-                    )
-                    # A nearly complete internal divider means this rectangle
-                    # spans multiple panels.  Short slots and flap notches are
-                    # retained because they do not divide the finished face.
-                    if internal_x >= 0.84 or internal_y >= 0.84:
-                        continue
-                    local_points = [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
-                    points = [_rotate_coordinate(point, basis_angle) for point in local_points]
-                    polygon = Polygon(points)
-                    frame = _face_transform(polygon)
-                    if frame is None:
-                        continue
-                    candidates.append(
-                        {
-                            "local_bounds": (x1, y1, x2, y2),
-                            "points": points,
-                            "polygon": polygon,
-                            "transform": frame[0],
-                            "size_mm": [round(width, 6), round(height, 6)],
-                            "coverage": [round(value, 6) for value in sides],
-                        }
-                    )
-    candidates.sort(key=lambda item: tuple(round(float(value), 9) for value in item["local_bounds"]))
-    if len(candidates) < 6:
-        raise TopologyError("structure_face_mapping_incomplete", "没有找到至少六个可确认的成品盒面候选")
-    if len(candidates) > 200:
-        raise TopologyError(
-            "structure_limit_exceeded",
-            "盒面候选过多，不能安全交给人工确认",
-            details={"count": len(candidates), "limit": 200},
+            components.append(noded_component)
+    candidates_by_id: dict[str, dict[str, Any]] = {}
+    net_proposals: list[dict[str, Any]] = []
+    work_state = [0]
+    candidate_components = 0
+    for component_index, component_lines in enumerate(components, start=1):
+        if len(component_lines) < 4:
+            continue
+        component_candidates, basis_transform = _rectangular_candidates_for_component(
+            component_lines,
+            source_hash=structure["source"]["sha256"],
+            tolerance=tolerance,
+            work_state=work_state,
         )
-    for index, candidate in enumerate(candidates, start=1):
-        candidate["id"] = f"rect-face-{index:04d}"
-    try:
-        net_proposals = derive_box_net_proposals(candidates, policy=STROKE_PROPOSAL_GEOMETRY)
-    except BoxNetProposalLimitError as error:
-        raise TopologyError(
-            "structure_limit_exceeded",
-            "完整盒型方案过多，不能安全交给人工确认",
-            details={"cause": str(error)},
-        ) from error
+        if len(component_candidates) < 6:
+            continue
+        candidate_components += 1
+        if candidate_components > MAX_PROPOSAL_CANDIDATE_COMPONENTS:
+            raise TopologyError(
+                "structure_limit_exceeded",
+                "可成盒结构组件超过人工确认预算",
+                details={
+                    "count": candidate_components,
+                    "limit": MAX_PROPOSAL_CANDIDATE_COMPONENTS,
+                },
+            )
+        try:
+            component_proposals = derive_box_net_proposals(
+                component_candidates,
+                policy=STROKE_PROPOSAL_GEOMETRY,
+                binding_seed=f'{structure["source"]["sha256"]}:component:{component_index}',
+                basis_transform=basis_transform,
+            )
+        except BoxNetProposalLimitError as error:
+            raise TopologyError(
+                "structure_limit_exceeded",
+                "完整盒型方案过多，不能安全交给人工确认",
+                details={"component": component_index, "cause": str(error)},
+            ) from error
+        if not component_proposals:
+            continue
+        for candidate in component_candidates:
+            candidates_by_id[str(candidate["id"])] = candidate
+        net_proposals.extend(component_proposals)
+        if len(net_proposals) > 24:
+            raise TopologyError(
+                "structure_limit_exceeded",
+                "完整盒型方案超过人工确认上限",
+                details={"count": len(net_proposals), "limit": 24},
+            )
     if not net_proposals:
         raise TopologyError(
             "structure_box_net_missing",
-            "候选线没有形成尺寸自洽的完整六面盒型",
+            "候选线没有形成尺寸自洽、可确认的闭合盒型",
         )
+    net_proposals.sort(
+        key=lambda item: (
+            -float(item["dimensions_mm"]["width"] * item["dimensions_mm"]["depth"] * item["dimensions_mm"]["height"]),
+            str(item["id"]),
+        )
+    )
     exposed_ids = {
         face_id
         for proposal in net_proposals
         for face_id in proposal["face_ids"]
     }
-    candidates = [candidate for candidate in candidates if candidate["id"] in exposed_ids]
+    candidates = sorted(
+        (candidate for face_id, candidate in candidates_by_id.items() if face_id in exposed_ids),
+        key=lambda item: str(item["id"]),
+    )
 
     point_keys = sorted(
         {
@@ -614,10 +796,36 @@ def derive_rectangular_face_proposal(
             "warnings": ["legacy_stroke_proposal_requires_human_confirmation"],
         },
     }
+    normalized_proposal = canonicalize_structure(proposal)
+    for net in net_proposals:
+        net["structure_hash"] = normalized_proposal["structure_hash"]
     return {
-        "structure": canonicalize_structure(proposal),
+        "structure": normalized_proposal,
         "faces": preview,
         "net_proposals": net_proposals,
+        "topology_counts": {
+            "linework_edges": len(source_lines),
+            "faces": len(candidates),
+            "components": len(source_components),
+        },
+        "proposal_diagnostics": {
+            "errors": [
+                *(["structure_open_boundary"] if ignored_open_components else []),
+                *(["structure_multiple_components"] if len(source_components) > 1 else []),
+            ],
+            "warnings": (
+                ["structure_many_components_partitioned"]
+                if len(source_components) > PROPOSAL_COMPONENT_REVIEW_THRESHOLD
+                else []
+            ),
+            "diagnostics": {
+                "ignored_open_components": ignored_open_components,
+            },
+            "components_seen": len(source_components),
+            "components_noded": len(components),
+            "candidate_components": candidate_components,
+            "work_units": work_state[0],
+        },
     }
 
 
@@ -859,6 +1067,7 @@ def analyze_topology(
         )
 
     errors: list[str] = []
+    warnings: list[str] = []
     dangle_info = _diagnostic(dangles)
     cut_info = _diagnostic(cut_edges)
     invalid_info = _diagnostic(invalid_rings)
@@ -868,6 +1077,8 @@ def analyze_topology(
         errors.append("structure_invalid_ring")
     if components > 1:
         errors.append("structure_multiple_components")
+    if components > PROPOSAL_COMPONENT_REVIEW_THRESHOLD:
+        warnings.append("structure_many_components_partitioned")
     if not polygon_items:
         errors.append("structure_face_mapping_incomplete")
 
@@ -883,7 +1094,7 @@ def analyze_topology(
     return {
         "status": "accepted" if not errors else "review_required",
         "errors": errors,
-        "warnings": [],
+        "warnings": warnings,
         "counts": {
             "linework_edges": edge_count,
             "cut_edges": len(assignment_lines["cut"]),

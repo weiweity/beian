@@ -8,6 +8,8 @@
 
 `0.15.0.0` 在不改变闸门的前提下，把 GLB 验证从轴向和毫米尺寸扩展到六个已确认面的贴图来源、方向与镜像；底面缺图或任一面绑定不一致都不得作为成功产物。
 
+V2.1 把旧稿迁移从“六个完整矩形 + 全局阈值”的案例模型升级为有预算的确定性结构求解：Illustrator 曲线先适配为可审计折线；所有几何进入同一毫米坐标系；按连通分量隔离结构与标注；候选由四面盒身环和上下封口组件组成；公共 API 只发布经过最终确认引擎预演成功的锚点。它不按纸色、印刷色、普通图层名或文件名猜外盒，也不增加第二套 3D 流水线。
+
 ## 背景
 
 旧打样链路只要发现“刀线/刀版”层，就从栅格或普通矢量线推断长宽高和六面。真实 AI 中结构线、转曲正文、工艺标注和重复路径可能位于同一 OCG；结果会出现错误裁切、红线进入贴图、文字丢失和尺寸看似合理但实际错误。继续增加颜色、间距或 bbox 阈值无法证明线条的包装语义。
@@ -22,26 +24,30 @@
 3. 使用 Shapely/GEOS 做吸附、线合并、polygonize 和 dangle/cut/invalid-ring 诊断。
 4. 只有验证为 `accepted` 的 IR 才能生成 `ResolvedPackagingJob` 并调用现有 Blender；歧义结构进入人工确认，不再自动猜。
 5. 旧 `dieline.py` 冻结，只保留给命令行诊断；Hono 对所有网页新任务写 `structure_engine=v2`，不再暴露运行时旧引擎开关。V2 不能解析时返回人工确认或不支持，绝不静默回退。
-6. 对没有对象级语义的历史 AI，服务端先识别刀线层，Illustrator 只提取该层内“描边且无填充”的路径作为不可信线稿。结构模块先枚举四个连续盒身面和两个相对封口面组成的完整六面盒型，过滤内嵌尺寸框、参考图和不完整矩形；页面不得把零散矩形直接交给用户猜。若有多个完整盒型，管理员先选择整套盒型，再只选择产品正面和 0/90/180/270° 阅读方向。其余 front/right/back/left/top/bottom 角色由连通顺序推导，并再次经过相对面尺寸、折叠图和六面贴图验证；无法形成完整盒型时失败关闭。
-7. 尺寸精度属于输入适配器合同，不允许提案、人工确认和最终解析各写一套阈值。显式语义/sidecar 使用严格精度；`illustrator-stroke-proposal/1` 才使用受限的 `1.5 mm / 3%` 旧刀线容差，以吸收重复描边和封口让位。成盒 `width/depth/height` 只由四个盒身面求解；顶底封口只校验能否覆盖该 footprint，不能把有意缩短的封口让位平均进产品尺寸。
-8. 顶底贴图方向由“盒盖质心相对唯一共享折线中点的向外向量”映射到 Blender 面轴，不再用盒盖质心相对盒身质心的长向量近似。尺寸没有候选时返回 `structure_face_dimensions_mismatch`；只有尺寸成立但方向仍不唯一时才返回贴图方向歧义，避免用错误文案掩盖真正原因。
+6. 对没有对象级语义的历史 AI，服务端先识别刀线层，Illustrator 只提取该层内“描边且无填充”的路径作为不可信线稿。直线保持原端点；三次贝塞尔曲线由唯一的 ES3 helper 自适应细分，并把容差、原路径引用、段数和 `bezier_flatten` repair 写入 `source.geometry`。Mac AppleScript 与 Windows Agent 都在执行前把这份固定 helper 内联到运行 JSX，避免相对 include、当前目录和系统代码页产生平台分叉。超过单段、单路径或全稿预算时失败关闭。
+7. 输入适配器只输出一个 `artboard-top-left` 毫米坐标系；吸附、提案、人工确认、贴图变换和最终尺寸都消费同一 basis。毫米结果按统一精度归一，避免整体旋转、Illustrator 浮点噪声或重复描边让“识别时可选、提交时失效”。候选身份由源稿哈希、basis 和候选几何生成的稳定 `proposal_id`，再与当前 `structure_hash` 双重绑定，不再使用可被重排复用的序号。
+8. 拓扑先用 Shapely `STRtree` 按容差把原始描边分成空间连通分量，再只在各分量内部吸附、节点化和寻找候选；不能先对整张稿 `unary_union` / `polygonize`。大量尺寸标注、签字框、表格和内衬因此不会先耗尽全稿拓扑上限。硬上限、候选分量上限与全局工作预算仍然保留，任何预算耗尽都以 `structure_limit_exceeded` 失败关闭。它是资源安全边界，不是用“放大连通分量数量”掩盖结构问题。
+9. 候选模型是“四个连续盒身面 + 两个主封口面”。主封口面允许来源适配器尺寸策略内的正常制造让位，但宽深都必须接近成盒 footprint；短防尘翼、插舌和其他局部折片不能冒充顶部或底部。确认后保持源稿仿射比例，以共享折线对齐真实主盖片，并只把未覆盖的窄让位区补白，不得把折片拉伸到整面。成盒 `width/depth/height` 只由四个盒身面求解。若同稿同时存在外盒与白色内衬，只有各自结构完整时才分别成为候选并按成盒体积排序，管理员选择整套盒型，系统仍不读取颜色作判断。
+10. 每个候选在返回页面前，使用与最终确认完全相同的决策引擎枚举四个盒身面和 0/90/180/270° 阅读方向。只有能唯一推导 front/right/back/left/top/bottom、折叠关系和六面 artwork transform 的锚点才进入 `valid_anchors`；页面禁用其余组合。确认时再次校验当前源稿、structure hash、basis 与锚点，防止旧页面提交已失效序号。
+11. HTTP 合同把语义失败与网络失败分开：格式错误仍是 400；源稿或候选版本过期是 409；当前结构在形式上有效但不能成盒是 422。页面捕获确认失败并在原位显示可执行说明，不再留下未处理 Promise，也不把 400/409/422 说成网络中断。重复提交沿用同一确认锁和幂等恢复合同。
 
 ### 人工确认合同
 
 - 人只提供一个最小语义锚点：`proposal_id + front_face_id + quarter_turns`，不再逐面填写六个角色。
-- `proposal_id` 只引用后端生成且与当前源稿哈希绑定的完整盒型；原始矩形候选、路径编号和本机路径不进入公共 API。
-- 四个盒身面按展开图连通顺序形成环。正面确定后，右侧、反面、左侧可唯一推导；两个位于盒身横带相对侧的封口面映射为顶部和底部。
+- 公共锚点只引用后端生成的完整盒型：稳定 `proposal_id` 绑定当前源稿、坐标 basis 和候选几何，独立 `structure_hash` 再绑定当前结构版本；原始矩形候选、路径编号和本机路径不进入公共 API。
+- 四个盒身面按展开图连通顺序形成环。正面确定后，右侧、反面、左侧可唯一推导；位于盒身横带相对侧、尺寸接近完整 footprint 且各自只连接一个盒身面的主封口面映射为顶部和底部。局部防尘翼不会通过人工选择升级成完整盒面。
 - 同一来源适配器的尺寸策略贯穿完整盒型提案、锚点确认和最终解析；用户选择正面不会切换精度规则，也不会把封口让位改写成成盒尺寸。
 - 锚点只能减少“哪一面是产品正面”这种业务歧义，不能覆盖结构歧义。完整网不唯一、相对面尺寸不一致、折叠图不连通或贴图方向不成立时仍停在待确认/不支持状态。
 - 旧任务若只有零散 `face_proposal` 而没有完整 `net_proposals`，前端拒绝沿用旧逐面表单，要求补齐结构语义并重新识别。
-- 最终解析合同为 `resolved-packaging-job/2`，缓存合同为 `packaging-structure-cache/3`。旧合同不继续进入贴图阶段，必须按当前尺寸与折叠规则重算，避免旧缓存绕过新验证。
+- 最终解析合同仍为 `resolved-packaging-job/2`，其中每面携带真实 `artwork_coverage_bounds_mm`；V2.1 将缓存合同升为 `packaging-structure-cache/4`。旧合同不继续进入贴图阶段，必须按当前候选、尺寸、覆盖范围与折叠规则重算，避免旧缓存绕过新验证。
 
 ## 依据
 
 - ISO 19593-1 定义包装 PDF 中切割、压痕、折叠、上胶和尺寸等处理步骤元数据。
 - Esko 的结构设计/3D 文档把 cut、crease、fold angle 与 artwork 分离。
-- Adobe Illustrator scripting 能读取路径属性，但不能凭 PathItem 本身证明包装领域语义。
-- Shapely/GEOS 已提供 `snap`、`line_merge` 和 `polygonize_full` 及拓扑错误输出。
+- Adobe Illustrator scripting 的 `PathPoint` 同时提供 anchor、leftDirection 和 rightDirection；曲线必须读取控制柄，不能把相邻 anchor 直接当直线。
+- Shapely/GEOS 的 `polygonize_full` 会分别返回 polygon、cut edge、dangle 和 invalid ring；`snap` 只在容差内移动顶点。因此本项目把曲线适配、同源近点归一与拓扑诊断分开，而不是用一次无界“自动补线”掩盖断口。
+- Shapely `STRtree` 是只读空间索引；当前 V2.1 用它在任何全局 GEOS 节点化之前隔离原始描边分量，并限制空间邻接数量。索引只缩小搜索范围，不决定 cut / crease 语义，也不改变最终盒型判断。
 - Shapely 的 `shared_paths` / 拓扑关系以真实共享边表达几何邻接；盒盖方向因此从共享折线派生，而不是从相邻多边形 bbox 或中心距猜测。
 - FOLD 图模型证明 vertices/edges/faces/assignment/fold-angle 的抽象可复用；因规范仍是 rough draft，本项目不直接采用 `.fold` 作为生产合同。
 - Esko Studio Toolkit 与 ArtiosCAD 都先检查完整刀线/压痕形成的面，再让操作者选一个 base panel，其他面围绕该面折叠；若面不完整或不能选中目标面，应回头修结构，而不是逐个手填面角色。
@@ -50,7 +56,7 @@
 - Windows Task Scheduler 的 `InteractiveToken` 只在用户已登录的现成交互会话运行，符合“注销即不可打样、绝不静默降级到 Session 0”的失败语义。
 - Adobe 官方说明 Illustrator 支持 Visual Basic、AppleScript 与 JavaScript/ExtendScript。本项目据此保留一份 JSX，把 Windows VBS 和 macOS AppleScript 限定为平台启动桥，而不是两套结构识别实现。
 
-交叉验证来源：[Esko：Select the Base Panel](https://docs.esko.com/docs/en-us/studiotoolkitforboxes/12.1/userguide/en-us/common/stb/task/ta_select_the_base_panel.html)、[Esko：Folding a box](https://docs.esko.com/docs/en-us/studioessentials/22.03/userguide/en-us/common/ste/task/ta_ste_tutorialARD.html)、[Esko ArtiosCAD：Creating a new 3D workspace](https://docs.esko.com/docs/en-us/artioscad/14.1/userguide/en-us/common/ac/topic/UG5_Artios-3D_id873265U3D24.html)、[EngView：3D environment](https://downloads.engview.com/online_help/7.3/package_designer/en/ang/3D/td-work-env.htm)、[Shapely：Shared paths and topology](https://shapely.readthedocs.io/en/stable/manual.html#shared-paths)、[Blender：UV orientation](https://docs.blender.org/manual/en/3.5/modeling/meshes/uv/editing.html)、[Microsoft Interactive Services](https://learn.microsoft.com/en-us/windows/win32/services/interactive-services)、[Microsoft Named Pipe Security](https://learn.microsoft.com/en-us/windows/win32/ipc/named-pipe-security-and-access-rights)、[Microsoft InteractiveToken](https://learn.microsoft.com/en-us/windows/win32/taskschd/taskfolder-registertaskdefinition)、[Adobe Illustrator scripts](https://helpx.adobe.com/illustrator/desktop/automate-visualize-data/automate-actions/install-and-run-scripts.html)。
+交叉验证来源：[Adobe PathPoint scripting](https://ai-scripting.docsforadobe.dev/jsobjref/PathPoint/)、[Adobe Paths and shapes](https://helpx.adobe.com/illustrator/using/artwork-essentials/paths-and-shapes.html)、[Shapely polygonize_full](https://shapely.readthedocs.io/en/2.0.6/reference/shapely.polygonize_full.html)、[Shapely snap](https://shapely.readthedocs.io/en/stable/reference/shapely.snap.html)、[Shapely STRtree](https://shapely.readthedocs.io/en/latest/strtree.html)、[Esko：Select the Base Panel](https://docs.esko.com/docs/en-us/studiotoolkitforboxes/12.1/userguide/en-us/common/stb/task/ta_select_the_base_panel.html)、[Esko：Folding a box](https://docs.esko.com/docs/en-us/studioessentials/22.03/userguide/en-us/common/ste/task/ta_ste_tutorialARD.html)、[Esko ArtiosCAD：Creating a new 3D workspace](https://docs.esko.com/docs/en-us/artioscad/14.1/userguide/en-us/common/ac/topic/UG5_Artios-3D_id873265U3D24.html)、[EngView：3D environment](https://downloads.engview.com/online_help/7.3/package_designer/en/ang/3D/td-work-env.htm)、[Khronos glTF 2.0](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html)、[Khronos glTF Validator](https://github.com/KhronosGroup/glTF-Validator)、[Microsoft Interactive Services](https://learn.microsoft.com/en-us/windows/win32/services/interactive-services)、[Microsoft Named Pipe Security](https://learn.microsoft.com/en-us/windows/win32/ipc/named-pipe-security-and-access-rights)、[Microsoft InteractiveToken](https://learn.microsoft.com/en-us/windows/win32/taskschd/taskfolder-registertaskdefinition)、[Adobe Illustrator scripts](https://helpx.adobe.com/illustrator/desktop/automate-visualize-data/automate-actions/install-and-run-scripts.html)。
 
 ## Windows 交互会话边界
 
@@ -68,6 +74,7 @@
 - 不新增 Python HTTP、数据库、端口或第二套 3D 流水线。
 - 无显式对象语义的旧 AI 只能生成待人工确认的刀线层候选；没有可靠刀线层、单位或闭合六面时进入 `review_required` / `unsupported`。
 - 私有稿件、人工真值和金标输出留在 Git 外。
+- Git 只保存人工构造的脱敏结构回归矩阵，覆盖白色外盒+内衬、曲线闭合、任意整体旋转和大量标注分量；这些 L0 合同不能替代任何真实品牌稿的 L2 结论。
 - Mac L0 不替代杭州 Illustrator/Blender L1/L2。
 - GLB 必须同时通过轴向、毫米尺寸和 front/right/back/left/top/bottom 六面贴图绑定验证；不能用「模型能打开」替代六面完整性。
 - 杭州 self-hosted runner 是生产执行边界，只接受 `main` push；PR 与可选择任意 ref 的 `workflow_dispatch` 均不得在其上执行代码。Mac L0 先验证协议和失败路径，合入后的不可变目标 SHA 由 `hangzhou-release` 在 transaction fence 内同步生产 InteractiveToken Agent，再通过管道 → VBS → 唯一 JSX 做 L1 身份冒烟；通过后才开放业务。冒烟不接触真实稿件，完整 L2 仍需人工核定的黄金样本。
@@ -76,4 +83,4 @@
 
 ## 后果
 
-新增格式只需实现适配器，不再修改核心拓扑。网页双路径和临时设置闸门已经移除；旧实现只保留为离线诊断基线。自动率可能下降；错误自动接受必须为零。Phase 0 持续扩充覆盖率，Windows 门验证运行环境，二者都不能用降低拓扑或六面贴图断言来绕过。
+新增格式只需实现适配器，不再修改 Blender 或复制核心拓扑。网页双路径和临时设置闸门已经移除；旧实现只保留为离线诊断基线。更多真实盒型可通过“适配器 → 标准 IR → 有预算拓扑 → 同一确认引擎”扩展，而不是继续按任务 ID 增加阈值。自动率可能下降；错误自动接受必须为零。Phase 0 持续扩充覆盖率，Windows 门验证运行环境，二者都不能用降低拓扑或六面贴图断言来绕过。

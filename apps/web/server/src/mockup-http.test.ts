@@ -373,7 +373,7 @@ describe("mockup structure confirmation http", () => {
       method: "POST",
       headers: { authorization: `Bearer ${admin.token}`, "content-type": "application/json" },
       body: JSON.stringify({
-        anchor: { proposal_id: "box-net-0001", front_face_id: "proposal-face-0001", quarter_turns: 0 },
+        anchor: { proposal_id: "box-net-0123456789abcdef", front_face_id: "proposal-face-0001", quarter_turns: 0 },
       }),
     });
     let calls = 0;
@@ -395,6 +395,30 @@ describe("mockup structure confirmation http", () => {
           timedOut: false,
         };
       }
+      if (calls === 2) {
+        return {
+          code: 1,
+          stdout: "",
+          stderr: '{"code":"structure_confirmation_stale","message":"完整盒型已失效，请重新识别"}',
+          timedOut: false,
+        };
+      }
+      if (calls === 3) {
+        return {
+          code: 1,
+          stdout: "",
+          stderr: '{"code":"structure_source_mismatch","message":"源稿已变化，请重新识别结构"}',
+          timedOut: false,
+        };
+      }
+      if (calls === 4) {
+        return {
+          code: 1,
+          stdout: "",
+          stderr: "synthetic worker crash without result json",
+          timedOut: false,
+        };
+      }
       writeFileSync(options.output, "{}");
       return {
         code: 0,
@@ -413,16 +437,44 @@ describe("mockup structure confirmation http", () => {
 
       releaseFirst();
       const failed = await firstPending;
-      assert.equal(failed.status, 400);
+      assert.equal(failed.status, 422);
+      assert.equal(
+        ((await failed.json()) as { code?: string }).code,
+        "structure_fold_graph_invalid",
+      );
       assert.equal(calls, 1);
+
+      const staleFailure = await request();
+      assert.equal(staleFailure.status, 409);
+      assert.equal(
+        ((await staleFailure.json()) as { code?: string }).code,
+        "structure_confirmation_stale",
+      );
+      assert.equal(calls, 2);
+
+      const sourceMismatch = await request();
+      assert.equal(sourceMismatch.status, 409);
+      assert.equal(
+        ((await sourceMismatch.json()) as { code?: string }).code,
+        "structure_source_mismatch",
+      );
+      assert.equal(calls, 3);
+
+      const operationalFailure = await request();
+      assert.equal(operationalFailure.status, 500);
+      assert.equal(
+        ((await operationalFailure.json()) as { code?: string }).code,
+        "worker_exit_1",
+      );
+      assert.equal(calls, 4);
 
       const retried = await request();
       assert.equal(retried.status, 200);
-      assert.equal(calls, 2);
+      assert.equal(calls, 5);
 
       const responseLostRetry = await request();
       assert.equal(responseLostRetry.status, 200);
-      assert.equal(calls, 2);
+      assert.equal(calls, 5);
       assert.equal(((await responseLostRetry.json()) as { structure_status?: string }).structure_status, "ready");
     } finally {
       releaseFirst();

@@ -60,6 +60,15 @@ export type StructureNetProposal = {
   cap_face_ids: [string, string];
   strip_axis: "x" | "y";
   bounds_mm?: [number, number, number, number];
+  dimensions_mm?: { width: number; depth: number; height: number };
+  valid_anchors?: Array<{ front_face_id: string; quarter_turns: Array<0 | 1 | 2 | 3> }>;
+  closure_assemblies?: Array<{
+    face_id: string;
+    attached_body_face_id: string;
+    side: -1 | 1;
+    extent: "full" | "partial";
+    coverage_ratio: number;
+  }>;
 };
 
 export type StructureAnchorDecision = {
@@ -69,6 +78,26 @@ export type StructureAnchorDecision = {
 };
 
 export type StructureConfirmationDecision = { anchor: StructureAnchorDecision };
+
+export function isStructureProposalId(value: string): boolean {
+  return /^box-net-(?:\d{4}|[0-9a-f]{16})$/.test(value);
+}
+
+const STRUCTURE_CONFIRMATION_UNPROCESSABLE = new Set([
+  "artwork_transform_invalid",
+  "structure_confirmation_invalid",
+  "structure_dimensions_ambiguous",
+  "structure_face_dimensions_mismatch",
+  "structure_face_mapping_incomplete",
+  "structure_face_not_rectangular",
+  "structure_fold_graph_invalid",
+]);
+
+export function structureConfirmationFailureStatus(code: string): 409 | 422 | 500 {
+  if (code === "structure_confirmation_stale" || code === "structure_source_mismatch") return 409;
+  if (STRUCTURE_CONFIRMATION_UNPROCESSABLE.has(code)) return 422;
+  return 500;
+}
 
 const cache = new Map<string, MockupJob>();
 const activeStructureConfirmations = new Set<string>();
@@ -289,6 +318,16 @@ function finitePointPairs(value: unknown): Array<[number, number]> | undefined {
   return points;
 }
 
+function positiveDimensions(value: unknown): StructureNetProposal["dimensions_mm"] | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const raw = value as Record<string, unknown>;
+  const width = Number(raw.width);
+  const depth = Number(raw.depth);
+  const height = Number(raw.height);
+  if (![width, depth, height].every((item) => Number.isFinite(item) && item > 0)) return undefined;
+  return { width, depth, height };
+}
+
 export function loadStructurePreview(job: MockupJob): {
   faces: StructurePreviewFace[];
   net_proposals: StructureNetProposal[];
@@ -340,7 +379,7 @@ export function loadStructurePreview(job: MockupJob): {
         const stripAxis = net.strip_axis === "x" || net.strip_axis === "y" ? net.strip_axis : null;
         const bounds = finiteNumbers(net.bounds_mm, 4);
         if (
-          !/^box-net-\d{4}$/.test(id) ||
+          !isStructureProposalId(id) ||
           faceIdsRaw.length !== 6 ||
           new Set(faceIdsRaw).size !== 6 ||
           bodyIds.length !== 4 ||
@@ -355,6 +394,58 @@ export function loadStructurePreview(job: MockupJob): {
         ) {
           continue;
         }
+        const dimensions = positiveDimensions(net.dimensions_mm);
+        const rawAnchors = Array.isArray(net.valid_anchors) ? net.valid_anchors : undefined;
+        if (net.dimensions_mm !== undefined && !dimensions) continue;
+        if (net.valid_anchors !== undefined && !rawAnchors) continue;
+        const validAnchors: NonNullable<StructureNetProposal["valid_anchors"]> = [];
+        if (rawAnchors && rawAnchors.length <= 4) {
+          for (const rawAnchor of rawAnchors) {
+            if (!rawAnchor || typeof rawAnchor !== "object" || Array.isArray(rawAnchor)) continue;
+            const anchor = rawAnchor as Record<string, unknown>;
+            const frontFaceId = typeof anchor.front_face_id === "string" ? anchor.front_face_id : "";
+            const turns = Array.isArray(anchor.quarter_turns)
+              ? anchor.quarter_turns.map(Number).filter((turn) => Number.isInteger(turn) && turn >= 0 && turn <= 3)
+              : [];
+            if (!bodyIds.includes(frontFaceId) || !turns.length || new Set(turns).size !== turns.length) continue;
+            validAnchors.push({
+              front_face_id: frontFaceId,
+              quarter_turns: turns as Array<0 | 1 | 2 | 3>,
+            });
+          }
+        }
+        if (rawAnchors && !validAnchors.length) continue;
+        const rawClosures = Array.isArray(net.closure_assemblies) ? net.closure_assemblies : undefined;
+        if (net.closure_assemblies !== undefined && !rawClosures) continue;
+        const closures: NonNullable<StructureNetProposal["closure_assemblies"]> = [];
+        if (rawClosures && rawClosures.length === 2) {
+          for (const rawClosure of rawClosures) {
+            if (!rawClosure || typeof rawClosure !== "object" || Array.isArray(rawClosure)) continue;
+            const closure = rawClosure as Record<string, unknown>;
+            const faceId = typeof closure.face_id === "string" ? closure.face_id : "";
+            const bodyId = typeof closure.attached_body_face_id === "string" ? closure.attached_body_face_id : "";
+            const side = closure.side === -1 || closure.side === 1 ? closure.side : null;
+            const extent = closure.extent === "full" || closure.extent === "partial" ? closure.extent : null;
+            const ratio = Number(closure.coverage_ratio);
+            if (
+              !capIds.includes(faceId)
+              || !bodyIds.includes(bodyId)
+              || side === null
+              || !extent
+              || !Number.isFinite(ratio)
+              || ratio <= 0
+              || ratio > 1
+            ) continue;
+            closures.push({
+              face_id: faceId,
+              attached_body_face_id: bodyId,
+              side,
+              extent,
+              coverage_ratio: ratio,
+            });
+          }
+        }
+        if (rawClosures && closures.length !== 2) continue;
         netProposals.push({
           id,
           face_ids: faceIdsRaw,
@@ -362,6 +453,9 @@ export function loadStructurePreview(job: MockupJob): {
           cap_face_ids: capIds as StructureNetProposal["cap_face_ids"],
           strip_axis: stripAxis,
           ...(bounds ? { bounds_mm: bounds as StructureNetProposal["bounds_mm"] } : {}),
+          ...(dimensions ? { dimensions_mm: dimensions } : {}),
+          ...(validAnchors.length ? { valid_anchors: validAnchors } : {}),
+          ...(closures.length === 2 ? { closure_assemblies: closures } : {}),
         });
       }
     }

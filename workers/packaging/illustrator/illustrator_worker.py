@@ -19,6 +19,8 @@ from illustrator_agent import IllustratorAgentError, request_agent
 RUNNER = ROOT / "run_export.applescript"
 LEGACY_JSX = ROOT / "export_ai.jsx"
 STRUCTURE_JSX = ROOT / "export_structure.jsx"
+CURVE_FLATTEN_JS = ROOT / "curve_flatten.js"
+CURVE_FLATTEN_INCLUDE = '#include "curve_flatten.js"'
 
 
 def load_json(path: Path) -> dict:
@@ -29,6 +31,23 @@ def load_json(path: Path) -> dict:
 def select_jsx(config: dict) -> Path:
     """V2 is opt-in until pipeline cutover; legacy configs are unchanged."""
     return STRUCTURE_JSX if config.get("structure_json") else LEGACY_JSX
+
+
+def bind_runtime_jsx(config_path: Path, config: dict) -> Path:
+    """Materialize fixed JSX dependencies beside the job before AppleScript reads it."""
+    exporter = select_jsx(config)
+    if exporter != STRUCTURE_JSX:
+        return exporter
+    source = exporter.read_text(encoding="utf-8")
+    if source.count(CURVE_FLATTEN_INCLUDE) != 1:
+        raise RuntimeError("Illustrator structure exporter has an invalid curve helper binding")
+    helper = CURVE_FLATTEN_JS.read_text(encoding="utf-8")
+    runtime_path = config_path.parent / "export_structure.runtime.jsx"
+    runtime_path.write_text(
+        source.replace(CURVE_FLATTEN_INCLUDE, helper),
+        encoding="utf-8",
+    )
+    return runtime_path
 
 
 def warm_up_illustrator(app_path: Path, timeout_seconds: int) -> str:
@@ -156,6 +175,17 @@ def main() -> int:
     for key in output_keys:
         Path(config[key]).parent.mkdir(parents=True, exist_ok=True)
 
+    runtime_jsx: Path | None = None
+    if sys.platform != "win32":
+        try:
+            # Materialize every fixed dependency before touching Illustrator.
+            # A missing helper must not leave the source document open and poison
+            # the next job's clean-document safety gate.
+            runtime_jsx = bind_runtime_jsx(config_path, config)
+        except (OSError, RuntimeError) as error:
+            print(f"Illustrator exporter setup failed: {error}", file=sys.stderr)
+            return 2
+
     started = time.perf_counter()
     warmup_started = time.perf_counter()
     app_path = Path(config["application"]).expanduser().resolve()
@@ -211,13 +241,14 @@ def main() -> int:
         args.timeout - int(warmup_elapsed) - int(external_open_elapsed),
     )
     if sys.platform != "win32":
-        command = [
-            "/usr/bin/osascript",
-            str(RUNNER),
-            str(select_jsx(config)),
-            str(config_path),
-        ]
         try:
+            assert runtime_jsx is not None
+            command = [
+                "/usr/bin/osascript",
+                str(RUNNER),
+                str(runtime_jsx),
+                str(config_path),
+            ]
             process = subprocess.run(
                 command,
                 capture_output=True,
@@ -230,6 +261,9 @@ def main() -> int:
                 file=sys.stderr,
             )
             return 3
+        except OSError as error:
+            print(f"Illustrator exporter setup failed: {error}", file=sys.stderr)
+            return 2
 
     result_path = Path(config["result_json"])
     if sys.platform != "win32" and (process.returncode != 0 or not result_path.is_file()):

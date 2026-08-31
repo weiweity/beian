@@ -3,9 +3,12 @@ import { Alert, App, Button, Segmented, Select } from "antd";
 import { api, type MockupJob } from "../api";
 import {
   selectedStructureAnchor,
+  structureConfirmationErrorCopy,
   structureIssueCopy,
   structurePolygonPoints,
+  structureProposalLabel,
   structureViewBox,
+  validTurnsForFace,
 } from "./mockupStructure";
 
 type Props = {
@@ -60,6 +63,14 @@ export function StructureConfirmPanel({ job, canAdmin, onConfirmed }: Props) {
     setSubmitError(null);
   }
 
+  function selectFront(nextFaceId: string) {
+    const validTurns = validTurnsForFace(proposal, nextFaceId);
+    if (!validTurns.length) return;
+    setFrontFaceId(nextFaceId);
+    setQuarterTurns(validTurns.includes(quarterTurns) ? quarterTurns : validTurns[0]);
+    setSubmitError(null);
+  }
+
   async function submit() {
     if (!confirmedAnchor || !canAdmin || submitLock.current) return;
     submitLock.current = true;
@@ -70,7 +81,7 @@ export function StructureConfirmPanel({ job, canAdmin, onConfirmed }: Props) {
       onConfirmed(next);
       message.success("正面已确认，开始打样。");
     } catch (error) {
-      setSubmitError(error instanceof Error ? error.message : "结构确认失败，请检查后重试");
+      setSubmitError(structureConfirmationErrorCopy(error));
     } finally {
       submitLock.current = false;
       setSubmitting(false);
@@ -131,6 +142,7 @@ export function StructureConfirmPanel({ job, canAdmin, onConfirmed }: Props) {
               const [left, top, right, bottom] = face.bounds_mm;
               const candidateIndex = bodyIndex.get(face.id);
               const isBody = candidateIndex !== undefined;
+              const isConfirmable = validTurnsForFace(proposal, face.id).length > 0;
               const isFront = face.id === effectiveFrontId;
               const outline = structurePolygonPoints(face);
               const label = isFront ? "正面" : isBody ? String.fromCharCode(65 + candidateIndex) : "封口";
@@ -139,17 +151,14 @@ export function StructureConfirmPanel({ job, canAdmin, onConfirmed }: Props) {
                   key={face.id}
                   className={`${isBody ? "is-body" : "is-cap"}${isFront ? " is-selected" : ""}`}
                   role={isBody ? "button" : undefined}
-                  tabIndex={isBody && canAdmin && hasArtwork ? 0 : undefined}
+                  aria-disabled={isBody && (!isConfirmable || !canAdmin || !hasArtwork) ? true : undefined}
+                  tabIndex={isBody ? 0 : undefined}
                   aria-label={isBody ? `选择正面候选 ${label}` : "自动推导封口面"}
-                  onClick={isBody && canAdmin && hasArtwork ? () => {
-                    setFrontFaceId(face.id);
-                    setSubmitError(null);
-                  } : undefined}
-                  onKeyDown={isBody && canAdmin && hasArtwork ? (event) => {
+                  onClick={isBody && isConfirmable && canAdmin && hasArtwork ? () => selectFront(face.id) : undefined}
+                  onKeyDown={isBody && isConfirmable && canAdmin && hasArtwork ? (event) => {
                     if (event.key === "Enter" || event.key === " ") {
                       event.preventDefault();
-                      setFrontFaceId(face.id);
-                      setSubmitError(null);
+                      selectFront(face.id);
                     }
                   } : undefined}
                 >
@@ -188,7 +197,7 @@ export function StructureConfirmPanel({ job, canAdmin, onConfirmed }: Props) {
                   disabled={!canAdmin}
                   options={proposals.map((item, index) => ({
                     value: item.id,
-                    label: `盒型方案 ${index + 1} · 六面连通`,
+                    label: structureProposalLabel(item, index),
                   }))}
                   onChange={selectProposal}
                 />
@@ -196,7 +205,11 @@ export function StructureConfirmPanel({ job, canAdmin, onConfirmed }: Props) {
             ) : (
               <div className="structure-net-found">
                 <span>完整盒型</span>
-                <strong>六面连通 · 已通过拓扑筛选</strong>
+                <strong>
+                  {proposal.dimensions_mm
+                    ? `底面 ${proposal.dimensions_mm.width}×${proposal.dimensions_mm.depth} · 高 ${proposal.dimensions_mm.height} mm${proposal.closure_assemblies?.some((item) => item.extent === "partial") ? " · 主盖片有正常让位" : ""}`
+                    : "闭合盒型 · 已通过确认预检"}
+                </strong>
               </div>
             )}
 
@@ -206,15 +219,13 @@ export function StructureConfirmPanel({ job, canAdmin, onConfirmed }: Props) {
                 {proposal.body_face_ids.map((faceId, index) => {
                   const face = facesById.get(faceId);
                   const selected = faceId === effectiveFrontId;
+                  const validTurns = validTurnsForFace(proposal, faceId);
                   return (
                     <Button
                       key={faceId}
                       type={selected ? "primary" : "default"}
-                      disabled={!canAdmin || !hasArtwork}
-                      onClick={() => {
-                        setFrontFaceId(faceId);
-                        setSubmitError(null);
-                      }}
+                      disabled={!canAdmin || !hasArtwork || !validTurns.length}
+                      onClick={() => selectFront(faceId)}
                     >
                       候选 {String.fromCharCode(65 + index)}{dimensions(face?.size_mm)}
                     </Button>
@@ -230,10 +241,10 @@ export function StructureConfirmPanel({ job, canAdmin, onConfirmed }: Props) {
                 disabled={!effectiveFrontId || !canAdmin || !hasArtwork}
                 value={quarterTurns}
                 options={[
-                  { label: "不旋转", value: 0 },
-                  { label: "右转 90°", value: 1 },
-                  { label: "转 180°", value: 2 },
-                  { label: "左转 90°", value: 3 },
+                  { label: "不旋转", value: 0, disabled: !validTurnsForFace(proposal, effectiveFrontId).includes(0) },
+                  { label: "右转 90°", value: 1, disabled: !validTurnsForFace(proposal, effectiveFrontId).includes(1) },
+                  { label: "转 180°", value: 2, disabled: !validTurnsForFace(proposal, effectiveFrontId).includes(2) },
+                  { label: "左转 90°", value: 3, disabled: !validTurnsForFace(proposal, effectiveFrontId).includes(3) },
                 ]}
                 onChange={(value) => {
                   setQuarterTurns(value as QuarterTurns);

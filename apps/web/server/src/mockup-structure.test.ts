@@ -16,6 +16,7 @@ const {
   prepareStructureConfirmation,
   publicMockup,
   saveMockup,
+  structureConfirmationFailureStatus,
 } = await import("./mockup.js");
 
 function previewFaceIds(): string[] {
@@ -50,12 +51,30 @@ function reviewJob() {
       topology: {
         face_proposal: previewFaces,
         net_proposals: [{
-          id: "box-net-0001",
+          id: "box-net-0123456789abcdef",
           face_ids: previewFaces.map((face) => face.id),
           body_face_ids: previewFaces.slice(0, 4).map((face) => face.id),
           cap_face_ids: previewFaces.slice(4).map((face) => face.id),
           strip_axis: "x",
           bounds_mm: [0, 0, 180, 50],
+          dimensions_mm: { width: 30, depth: 20, height: 50 },
+          valid_anchors: [{ front_face_id: previewFaces[1].id, quarter_turns: [0, 2] }],
+          closure_assemblies: [
+            {
+              face_id: previewFaces[4].id,
+              attached_body_face_id: previewFaces[0].id,
+              side: -1,
+              extent: "partial",
+              coverage_ratio: 0.4,
+            },
+            {
+              face_id: previewFaces[5].id,
+              attached_body_face_id: previewFaces[0].id,
+              side: 1,
+              extent: "full",
+              coverage_ratio: 1,
+            },
+          ],
           secret: "/never/expose-net",
         }],
       },
@@ -86,6 +105,15 @@ function reviewJob() {
 }
 
 describe("mockup structure confirmation persistence", () => {
+  it("separates stale identity, impossible structure, and unknown worker failures", () => {
+    assert.equal(structureConfirmationFailureStatus("structure_confirmation_stale"), 409);
+    assert.equal(structureConfirmationFailureStatus("structure_source_mismatch"), 409);
+    assert.equal(structureConfirmationFailureStatus("structure_fold_graph_invalid"), 422);
+    assert.equal(structureConfirmationFailureStatus("structure_confirmation_storage_invalid"), 500);
+    assert.equal(structureConfirmationFailureStatus("worker_exit_1"), 500);
+    assert.equal(structureConfirmationFailureStatus("packaging_dependency_missing"), 500);
+  });
+
   it("publishes only a bounded face preview, never local paths", () => {
     const { job } = reviewJob();
     const view = publicMockup(job);
@@ -100,12 +128,30 @@ describe("mockup structure confirmation persistence", () => {
     assert.equal(JSON.stringify(view).includes("/never/expose"), false);
     assert.equal(JSON.stringify(view).includes(DATA_DIR), false);
     assert.deepEqual(view.structure_preview?.net_proposals, [{
-      id: "box-net-0001",
+      id: "box-net-0123456789abcdef",
       face_ids: previewFaceIds(),
       body_face_ids: previewFaceIds().slice(0, 4),
       cap_face_ids: previewFaceIds().slice(4),
       strip_axis: "x",
       bounds_mm: [0, 0, 180, 50],
+      dimensions_mm: { width: 30, depth: 20, height: 50 },
+      valid_anchors: [{ front_face_id: "proposal-face-0002", quarter_turns: [0, 2] }],
+      closure_assemblies: [
+        {
+          face_id: "proposal-face-0005",
+          attached_body_face_id: "proposal-face-0001",
+          side: -1,
+          extent: "partial",
+          coverage_ratio: 0.4,
+        },
+        {
+          face_id: "proposal-face-0006",
+          attached_body_face_id: "proposal-face-0001",
+          side: 1,
+          extent: "full",
+          coverage_ratio: 1,
+        },
+      ],
     }]);
     assert.deepEqual(view.structure_preview?.page_size_mm, [210, 297]);
     assert.equal(view.structure_preview?.image_url, `/api/mockups/${job.id}/structure-preview`);
@@ -123,7 +169,7 @@ describe("mockup structure confirmation persistence", () => {
     writeFileSync(resolutionPath, JSON.stringify(resolution));
     assert.deepEqual(
       publicMockup(job).structure_preview?.net_proposals.map((proposal) => proposal.id),
-      ["box-net-0001"],
+      ["box-net-0123456789abcdef"],
     );
     assert.equal(JSON.stringify(publicMockup(job)).includes("/never/expose-net"), false);
 
@@ -134,6 +180,9 @@ describe("mockup structure confirmation persistence", () => {
       { ...valid, cap_face_ids: [valid.cap_face_ids[0], valid.body_face_ids[0]] },
       { ...valid, strip_axis: "diagonal" },
       { ...valid, face_ids: [...valid.face_ids.slice(0, 5), "missing-face"] },
+      { ...valid, dimensions_mm: { width: -1, depth: 20, height: 50 } },
+      { ...valid, valid_anchors: [{ front_face_id: valid.cap_face_ids[0], quarter_turns: [0] }] },
+      { ...valid, closure_assemblies: [{ face_id: valid.cap_face_ids[0] }] },
     ];
     writeFileSync(resolutionPath, JSON.stringify(resolution));
 

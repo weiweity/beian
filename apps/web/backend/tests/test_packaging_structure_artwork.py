@@ -73,6 +73,35 @@ def test_exact_affine_faces_keep_product_color_and_white_background(tmp_path: Pa
     assert center_rgb(tmp_path / "assets" / "panel_top.png") == (255, 255, 255)
 
 
+def test_closure_clearance_is_white_padded_without_stretching_adjacent_artwork(tmp_path: Path):
+    mm_to_pt = 72.0 / 25.4
+    source = tmp_path / "closure-clearance.pdf"
+    document = pymupdf.open()
+    page = document.new_page(width=120 * mm_to_pt, height=70 * mm_to_pt)
+    # The blue strip sits outside the real closure panel. If the old whole-face
+    # inverse crop returns, it leaks into the 3D top instead of being padded.
+    page.draw_rect(
+        pymupdf.Rect(50 * mm_to_pt, 50 * mm_to_pt, 80 * mm_to_pt, 51.2 * mm_to_pt),
+        color=None,
+        fill=(0.0, 0.0, 1.0),
+    )
+    page.draw_rect(
+        pymupdf.Rect(50 * mm_to_pt, 51.2 * mm_to_pt, 80 * mm_to_pt, 70 * mm_to_pt),
+        color=None,
+        fill=(117 / 255, 35 / 255, 46 / 255),
+    )
+    document.save(source)
+    document.close()
+    resolved = resolved_fixture()
+    resolved["faces"]["top"]["artwork_coverage_bounds_mm"] = [0.0, 1.2, 30.0, 20.0]
+
+    render_face_assets(source, resolved, tmp_path / "assets", raster_width_px=1200)
+
+    with Image.open(tmp_path / "assets" / "panel_top.png").convert("RGB") as image:
+        assert image.getpixel((image.width // 2, 1)) == (255, 255, 255)
+        assert image.getpixel((image.width // 2, image.height // 2)) == pytest.approx((117, 35, 46), abs=2)
+
+
 def test_legacy_resolved_contract_is_rejected_for_recomputation(tmp_path: Path):
     source = artwork_pdf(tmp_path / "artwork.pdf")
     resolved = resolved_fixture()

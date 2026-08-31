@@ -10,7 +10,12 @@ import tempfile
 from typing import Any, Mapping
 
 from .adapters import sha256_file
-from .dimensions import DimensionPolicy, geometry_policy_for_source
+from .dimensions import (
+    DimensionPolicy,
+    geometry_policy_for_source,
+    normalized_mm,
+    solve_body_dimensions,
+)
 from .model import canonicalize_structure
 from .resolver import BOX_ROLES, resolve_structure_payload
 
@@ -46,9 +51,15 @@ def _read_json(path: Path, *, maximum: int = 25 * 1024 * 1024) -> dict[str, Any]
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
-        raise StructureConfirmationError("structure_confirmation_invalid", "结构确认文件不是有效 JSON。") from error
+        raise StructureConfirmationError(
+            "structure_confirmation_storage_invalid",
+            "结构确认数据损坏，请稍后重试。",
+        ) from error
     if not isinstance(value, dict):
-        raise StructureConfirmationError("structure_confirmation_invalid", "结构确认文件必须是对象。")
+        raise StructureConfirmationError(
+            "structure_confirmation_storage_invalid",
+            "结构确认数据损坏，请稍后重试。",
+        )
     return value
 
 
@@ -68,8 +79,12 @@ def _atomic_json(path: Path, payload: Mapping[str, Any]) -> None:
         raise
 
 
-def _mapped_size(structure: Mapping[str, Any], face: Mapping[str, Any]) -> tuple[float, float]:
-    transform = face.get("artwork_transform")
+def _mapped_bounds(
+    structure: Mapping[str, Any],
+    face: Mapping[str, Any],
+    transform: list[float] | None = None,
+) -> tuple[float, float, float, float]:
+    transform = face.get("artwork_transform") if transform is None else transform
     if not isinstance(transform, list) or len(transform) != 6:
         raise StructureConfirmationError("artwork_transform_invalid", "所选盒面没有可用贴图方向。")
     a, b, c, d, e, f = (float(value) for value in transform)
@@ -80,9 +95,24 @@ def _mapped_size(structure: Mapping[str, Any], face: Mapping[str, Any]) -> tuple
         edge = edges[edge_id]
         points.add(vertices[edge["start"]])
         points.add(vertices[edge["end"]])
+    if len(points) < 3:
+        raise StructureConfirmationError("artwork_transform_invalid", "所选盒面贴图边界不完整。")
     mapped = [(a * x + c * y + e, b * x + d * y + f) for x, y in points]
-    width = max(point[0] for point in mapped) - min(point[0] for point in mapped)
-    height = max(point[1] for point in mapped) - min(point[1] for point in mapped)
+    bounds = (
+        min(point[0] for point in mapped),
+        min(point[1] for point in mapped),
+        max(point[0] for point in mapped),
+        max(point[1] for point in mapped),
+    )
+    if bounds[2] <= bounds[0] or bounds[3] <= bounds[1]:
+        raise StructureConfirmationError("artwork_transform_invalid", "所选盒面贴图尺寸无效。")
+    return bounds
+
+
+def _mapped_size(structure: Mapping[str, Any], face: Mapping[str, Any]) -> tuple[float, float]:
+    minimum_x, minimum_y, maximum_x, maximum_y = _mapped_bounds(structure, face)
+    width = maximum_x - minimum_x
+    height = maximum_y - minimum_y
     if width <= 0 or height <= 0:
         raise StructureConfirmationError("artwork_transform_invalid", "所选盒面贴图尺寸无效。")
     return width, height
@@ -242,14 +272,11 @@ def _turn_for_cap(
     fold_center = _shared_fold_midpoint(structure, cap_face, attached_body)
     source_outward = (cap_center[0] - fold_center[0], cap_center[1] - fold_center[1])
     width, height = _mapped_size(structure, cap_face)
-    size_matches = [
-        candidate
-        for candidate in range(4)
-        if all(
-            dimensions.close(actual, target)
-            for actual, target in zip(_turned_size(structure, cap_face, candidate), expected_size)
-        )
-    ]
+    size_matches = []
+    for candidate in range(4):
+        actual = _turned_size(structure, cap_face, candidate)
+        if all(dimensions.close(value, expected) for value, expected in zip(actual, expected_size)):
+            size_matches.append(candidate)
     if not size_matches:
         raise StructureConfirmationError(
             "structure_face_dimensions_mismatch",
@@ -270,11 +297,50 @@ def _turn_for_cap(
     return matches[0]
 
 
+def _align_closure_transform(
+    structure: Mapping[str, Any],
+    face: Mapping[str, Any],
+    transform: list[float],
+    expected_size: tuple[float, float],
+    outward_direction: tuple[int, int],
+) -> list[float]:
+    """Align a main closure panel without scaling its printed artwork.
+
+    A normal manufacturing clearance leaves a narrow uncovered strip on the
+    erected footprint.  Keep the fold edge fixed, center the perpendicular
+    allowance, and let the renderer pad only the uncovered area with white.
+    Short dust/tuck flaps never reach this function because proposal and
+    confirmation use the same dimensional policy.
+    """
+    minimum_x, minimum_y, maximum_x, maximum_y = _mapped_bounds(structure, face, transform)
+    actual_width = maximum_x - minimum_x
+    actual_height = maximum_y - minimum_y
+    shift_x = (expected_size[0] - actual_width) / 2.0 - minimum_x
+    shift_y = (expected_size[1] - actual_height) / 2.0 - minimum_y
+    if outward_direction[0] > 0:
+        shift_x = -minimum_x
+    elif outward_direction[0] < 0:
+        shift_x = expected_size[0] - maximum_x
+    elif outward_direction[1] > 0:
+        shift_y = -minimum_y
+    else:
+        shift_y = expected_size[1] - maximum_y
+    a, b, c, d, e, f = transform
+    return [
+        round(a, 9),
+        round(b, 9),
+        round(c, 9),
+        round(d, 9),
+        round(e + shift_x, 9),
+        round(f + shift_y, 9),
+    ]
+
+
 def _anchor_decisions(
     resolution: Mapping[str, Any],
     structure: Mapping[str, Any],
     anchor: Mapping[str, Any],
-) -> list[tuple[str, str, int]]:
+) -> list[tuple[str, str, int, tuple[float, float]]]:
     dimensions = geometry_policy_for_source(structure.get("source")).dimensions
     proposal_id = str(anchor.get("proposal_id") or "")
     front_id = str(anchor.get("front_face_id") or "")
@@ -295,6 +361,9 @@ def _anchor_decisions(
     )
     if net is None:
         raise StructureConfirmationError("structure_confirmation_stale", "所选完整盒型已经失效，请刷新后重试。")
+    bound_hash = net.get("structure_hash")
+    if bound_hash is not None and bound_hash != structure.get("structure_hash"):
+        raise StructureConfirmationError("structure_confirmation_stale", "完整盒型与当前结构版本不一致，请重新识别。")
     body_ids = [str(value) for value in net.get("body_face_ids", [])]
     cap_ids = [str(value) for value in net.get("cap_face_ids", [])]
     face_ids = [str(value) for value in net.get("face_ids", [])]
@@ -302,14 +371,31 @@ def _anchor_decisions(
         raise StructureConfirmationError("structure_confirmation_invalid", "完整盒型提案格式不对。")
     if front_id not in body_ids:
         raise StructureConfirmationError("structure_face_mapping_incomplete", "正面必须从四个盒身面中选择。")
+    valid_anchors = net.get("valid_anchors")
+    if isinstance(valid_anchors, list):
+        allowed_turns = next(
+            (
+                item.get("quarter_turns")
+                for item in valid_anchors
+                if isinstance(item, Mapping) and item.get("front_face_id") == front_id
+            ),
+            None,
+        )
+        if not isinstance(allowed_turns, list) or turns not in allowed_turns:
+            raise StructureConfirmationError("structure_confirmation_invalid", "这个正面方向未通过结构预检。")
     faces_by_id = {face["id"]: face for face in structure["faces"]}
     if any(face_id not in faces_by_id for face_id in face_ids):
         raise StructureConfirmationError("structure_confirmation_stale", "完整盒型引用的盒面已经失效。")
     first_center = _face_centroid(structure, faces_by_id[body_ids[0]])
     last_center = _face_centroid(structure, faces_by_id[body_ids[-1]])
     source_strip = (last_center[0] - first_center[0], last_center[1] - first_center[1])
-    first_transform = list(faces_by_id[body_ids[0]]["artwork_transform"])
-    proposal_strip = _linear_vector(first_transform, source_strip)
+    raw_basis = net.get("basis_transform")
+    if isinstance(raw_basis, list) and len(raw_basis) == 6:
+        basis_transform = [float(value) for value in raw_basis]
+    else:
+        # Backward compatibility for waiting-input records created before V2.1.
+        basis_transform = list(faces_by_id[body_ids[0]]["artwork_transform"])
+    proposal_strip = _linear_vector(basis_transform, source_strip)
     actual_strip_axis = "x" if abs(proposal_strip[0]) > abs(proposal_strip[1]) else "y"
     if net.get("strip_axis") not in {"x", "y"} or actual_strip_axis != net.get("strip_axis"):
         raise StructureConfirmationError("structure_confirmation_invalid", "完整盒型的盒身排列方向已经失效。")
@@ -368,6 +454,36 @@ def _anchor_decisions(
     if right_turn < 0:
         raise StructureConfirmationError("structure_face_dimensions_mismatch", "盒身高度无法形成一致的四个侧面。")
     depth = _turned_size(structure, right_face, right_turn)[0]
+    provisional_sizes = {
+        "front": (width, height),
+        "back": (width, height),
+        "left": (depth, height),
+        "right": (depth, height),
+    }
+    face_turns = {"front": turns, "right": right_turn}
+    for role in ("back", "left"):
+        face_turns[role] = _turn_for_size(
+            structure,
+            faces_by_id[role_ids[role]],
+            provisional_sizes[role],
+            turns,
+            dimensions,
+        )
+    solved_dimensions = solve_body_dimensions(
+        {
+            role: _turned_size(structure, faces_by_id[role_ids[role]], face_turns[role])
+            for role in ("front", "right", "back", "left")
+        },
+        dimensions,
+    )
+    if solved_dimensions is None:
+        raise StructureConfirmationError(
+            "structure_face_dimensions_mismatch",
+            "完整盒型的相对盒身面尺寸不一致。",
+        )
+    width = solved_dimensions["width"]
+    depth = solved_dimensions["depth"]
+    height = solved_dimensions["height"]
     expected_sizes = {
         "front": (width, height),
         "back": (width, height),
@@ -376,20 +492,18 @@ def _anchor_decisions(
         "top": (width, depth),
         "bottom": (width, depth),
     }
+    for role in ("front", "right", "back", "left"):
+        actual = _turned_size(structure, faces_by_id[role_ids[role]], face_turns[role])
+        if not all(dimensions.close(value, expected) for value, expected in zip(actual, expected_sizes[role])):
+            raise StructureConfirmationError(
+                "structure_face_dimensions_mismatch",
+                "完整盒型的相对盒身面尺寸不一致。",
+            )
     body_roles = {
         face_id: role
         for role, face_id in role_ids.items()
         if role in {"front", "right", "back", "left"}
     }
-    face_turns = {"front": turns}
-    for role in ("right", "back", "left"):
-        face_turns[role] = _turn_for_size(
-            structure,
-            faces_by_id[role_ids[role]],
-            expected_sizes[role],
-            turns,
-            dimensions,
-        )
     for role in ("top", "bottom"):
         cap_id = role_ids[role]
         attached_id = _cap_body_neighbor(fold_neighbors, cap_id, set(body_ids))
@@ -405,8 +519,145 @@ def _anchor_decisions(
     normalized = []
     for role in ("front", "right", "back", "left", "top", "bottom"):
         face_id = role_ids[role]
-        normalized.append((face_id, role, face_turns[role]))
+        normalized.append((face_id, role, face_turns[role], expected_sizes[role]))
     return normalized
+
+
+def _resolve_anchor(
+    resolution: Mapping[str, Any],
+    structure: Mapping[str, Any],
+    anchor: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Apply one anchor and require the final resolver to accept the result.
+
+    Both proposal preflight and the persisted confirmation command use this
+    exact path.  The preflight therefore cannot expose an option that later
+    fails only after role assignment, dimension averaging, or cap alignment.
+    """
+    approved = canonicalize_structure(structure)
+    faces_by_id = {face["id"]: face for face in approved["faces"]}
+    normalized = _anchor_decisions(resolution, approved, anchor)
+    roles_by_face_id = {face_id: role for face_id, role, _turns, _expected in normalized}
+    selected_face_ids = set(roles_by_face_id)
+    selected_neighbors = _selected_fold_neighbors(approved, faces_by_id, selected_face_ids)
+    body_face_ids = {
+        face_id
+        for face_id, role in roles_by_face_id.items()
+        if role in {"front", "right", "back", "left"}
+    }
+    approved.pop("structure_hash", None)
+    for face in approved["faces"]:
+        face["role"] = "unknown"
+    closure_padded = False
+    for face_id, role, turns, expected_size in normalized:
+        face = faces_by_id[face_id]
+        width, height = _mapped_size(approved, face)
+        transform = _rotated_transform(
+            list(face["artwork_transform"]),
+            width,
+            height,
+            turns,
+        )
+        if role in {"top", "bottom"}:
+            actual_size = _turned_size(approved, face, turns)
+            policy = geometry_policy_for_source(approved.get("source")).dimensions
+            if not all(policy.close(actual, expected) for actual, expected in zip(actual_size, expected_size)):
+                raise StructureConfirmationError(
+                    "structure_face_dimensions_mismatch",
+                    "盒盖主面尺寸与盒身宽深不一致，不能形成闭合盒。",
+                )
+            closure_padded = closure_padded or any(
+                normalized_mm(actual) != normalized_mm(expected)
+                for actual, expected in zip(actual_size, expected_size)
+            )
+            attached_face_id = _cap_body_neighbor(selected_neighbors, face_id, body_face_ids)
+            attached_role = roles_by_face_id[attached_face_id]
+            transform = _align_closure_transform(
+                approved,
+                face,
+                transform,
+                expected_size,
+                CAP_OUTWARD_DIRECTIONS[role][attached_role],
+            )
+        face["artwork_transform"] = transform
+        face["role"] = role
+    approved["faces"] = [face for face in approved["faces"] if face["id"] in selected_face_ids]
+    selected_edge_ids = {
+        edge_id
+        for face in approved["faces"]
+        for edge_id in face["boundary"]
+    }
+    approved["edges"] = [edge for edge in approved["edges"] if edge["id"] in selected_edge_ids]
+    selected_vertex_ids = {
+        vertex_id
+        for edge in approved["edges"]
+        for vertex_id in (edge["start"], edge["end"])
+    }
+    approved["vertices"] = [
+        vertex for vertex in approved["vertices"] if vertex["id"] in selected_vertex_ids
+    ]
+    approved["folds"] = [
+        fold
+        for fold in approved["folds"]
+        if fold["edge"] in selected_edge_ids
+        and fold["left_face"] in selected_face_ids
+        and fold["right_face"] in selected_face_ids
+    ]
+    approved["root_face"] = next(
+        face_id for face_id, role, _turns, _expected in normalized if role == "front"
+    )
+    approved["validation"] = {
+        "status": "accepted",
+        "errors": [],
+        "warnings": ["closure_clearance_padded"] if closure_padded else [],
+    }
+    approved = canonicalize_structure(approved)
+    resolved = resolve_structure_payload(approved)
+    if resolved.status != "ready" or resolved.resolved is None:
+        raise StructureConfirmationError(
+            resolved.code or "structure_confirmation_invalid",
+            resolved.message or "完整盒型锚点不能形成受支持的闭合盒。",
+        )
+    return approved, resolved.resolved
+
+
+def preflight_anchor_proposals(
+    structure: Mapping[str, Any],
+    proposals: list[Mapping[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Expose only proposals that the exact confirmation engine can accept."""
+    accepted: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
+    for raw in proposals:
+        proposal = dict(raw)
+        valid: list[dict[str, Any]] = []
+        reasons: dict[str, int] = {}
+        resolution = {"topology": {"net_proposals": [proposal]}}
+        for front_face_id in [str(value) for value in proposal.get("body_face_ids", [])]:
+            turns: list[int] = []
+            for quarter_turns in range(4):
+                try:
+                    _resolve_anchor(
+                        resolution,
+                        structure,
+                        {
+                            "proposal_id": proposal.get("id"),
+                            "front_face_id": front_face_id,
+                            "quarter_turns": quarter_turns,
+                        },
+                    )
+                except StructureConfirmationError as error:
+                    reasons[error.code] = reasons.get(error.code, 0) + 1
+                else:
+                    turns.append(quarter_turns)
+            if turns:
+                valid.append({"front_face_id": front_face_id, "quarter_turns": turns})
+        if valid:
+            proposal["valid_anchors"] = valid
+            accepted.append(proposal)
+        else:
+            rejected.append({"proposal_id": proposal.get("id"), "reasons": reasons})
+    return accepted, rejected
 
 
 def confirm_structure(
@@ -426,66 +677,19 @@ def confirm_structure(
     structure = canonicalize_structure(structure_value)
     if structure["source"]["sha256"] != sha256_file(source_path):
         raise StructureConfirmationError("structure_source_mismatch", "源稿已变化，请重新识别结构。")
-    faces_by_id = {face["id"]: face for face in structure["faces"]}
     if not isinstance(decisions, Mapping) or not isinstance(decisions.get("anchor"), Mapping):
         raise StructureConfirmationError(
             "structure_confirmation_stale",
             "这单还是旧版逐面确认，请重新识别完整盒型。",
         )
-    normalized = _anchor_decisions(resolution, structure, decisions["anchor"])
-
-    structure.pop("structure_hash", None)
-    for face in structure["faces"]:
-        face["role"] = "unknown"
-    for face_id, role, turns in normalized:
-        face = faces_by_id[face_id]
-        width, height = _mapped_size(structure, face)
-        face["artwork_transform"] = _rotated_transform(
-            list(face["artwork_transform"]),
-            width,
-            height,
-            turns,
-        )
-        face["role"] = role
-    selected_face_ids = {face_id for face_id, _role, _turns in normalized}
-    structure["faces"] = [face for face in structure["faces"] if face["id"] in selected_face_ids]
-    selected_edge_ids = {
-        edge_id
-        for face in structure["faces"]
-        for edge_id in face["boundary"]
-    }
-    structure["edges"] = [edge for edge in structure["edges"] if edge["id"] in selected_edge_ids]
-    selected_vertex_ids = {
-        vertex_id
-        for edge in structure["edges"]
-        for vertex_id in (edge["start"], edge["end"])
-    }
-    structure["vertices"] = [
-        vertex for vertex in structure["vertices"] if vertex["id"] in selected_vertex_ids
-    ]
-    structure["folds"] = [
-        fold
-        for fold in structure["folds"]
-        if fold["edge"] in selected_edge_ids
-        and fold["left_face"] in selected_face_ids
-        and fold["right_face"] in selected_face_ids
-    ]
-    structure["root_face"] = next(face_id for face_id, role, _turns in normalized if role == "front")
-    structure["validation"] = {"status": "accepted", "errors": [], "warnings": []}
-    approved = canonicalize_structure(structure)
-    resolved = resolve_structure_payload(approved)
-    if resolved.status != "ready" or resolved.resolved is None:
-        raise StructureConfirmationError(
-            resolved.code or "structure_confirmation_invalid",
-            resolved.message or "完整盒型锚点不能形成受支持的闭合盒。",
-        )
+    approved, resolved = _resolve_anchor(resolution, structure, decisions["anchor"])
     destination = Path(output_path).expanduser().resolve()
     _atomic_json(destination, approved)
     return {
         "ok": True,
         "sidecar": str(destination),
         "structure_hash": approved["structure_hash"],
-        "dimensions_mm": resolved.resolved["dimensions_mm"],
+        "dimensions_mm": resolved["dimensions_mm"],
     }
 
 

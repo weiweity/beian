@@ -80,12 +80,14 @@ import {
   findMockupBySourceReceipt,
   getJob,
   isMockupJobFile,
+  isStructureProposalId,
   isWhiteFile,
   listJobsFor,
   publicMockup,
   prepareStructureConfirmation,
   queueMockup,
   finishStructureConfirmation,
+  structureConfirmationFailureStatus,
   type StructureAnchorDecision,
   type StructureConfirmationDecision,
 } from "./mockup.js";
@@ -145,11 +147,11 @@ type NodeBindings = HttpBindings | Http2Bindings;
 type Env = { Bindings: NodeBindings; Variables: { session: Session } };
 
 const app = new Hono<Env>();
-const VERSION = "0.20.6.0";
+const VERSION = "0.21.0.0";
 
 class ApiProblem extends Error {
   constructor(
-    readonly status: 400 | 409,
+    readonly status: 400 | 409 | 422 | 500,
     readonly code: string,
     message: string,
   ) {
@@ -829,7 +831,7 @@ app.post("/api/mockups/:id/structure", async (c) => {
   const frontFaceId = String(value.front_face_id || "");
   const turns = value.quarter_turns ?? 0;
   if (
-    !/^box-net-\d{4}$/.test(proposalId) ||
+    !isStructureProposalId(proposalId) ||
     !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(frontFaceId) ||
     typeof turns !== "number" ||
     !Number.isInteger(turns) ||
@@ -853,13 +855,27 @@ app.post("/api/mockups/:id/structure", async (c) => {
     const output = finalJsonObject(result.stdout);
     if (result.code !== 0 || output?.ok !== true || typeof output.sidecar !== "string") {
       const failure = finalJsonObject(result.stderr);
-      const message = typeof failure?.message === "string" ? failure.message.slice(0, 120) : "结构确认不能形成闭合盒";
-      console.warn("confirm packaging structure failed", {
-        problem: "管理员提交了完整盒型锚点，但 V2 resolver 没有接受",
-        cause: typeof failure?.code === "string" ? failure.code : `worker_exit_${result.code}`,
-        fix: "保留待确认状态，调整盒型、正面或方向后重试",
-      });
-      throw new HTTPException(400, { message });
+      const code = typeof failure?.code === "string" ? failure.code : `worker_exit_${result.code}`;
+      const status = structureConfirmationFailureStatus(code);
+      const message = typeof failure?.message === "string"
+        ? failure.message.slice(0, 120)
+        : status === 500
+          ? "结构确认服务异常，请稍后重试"
+          : "结构确认不能形成闭合盒";
+      const logContext = status === 500
+        ? {
+            problem: "结构确认 worker 未返回受支持的业务结果",
+            cause: code,
+            fix: "检查 worker 退出、运行依赖和最后一行 JSON；保留待确认状态",
+          }
+        : {
+            problem: "管理员提交了完整盒型锚点，但 V2 resolver 没有接受",
+            cause: code,
+            fix: "保留待确认状态，调整盒型、正面或方向后重试",
+          };
+      if (status === 500) console.error("confirm packaging structure failed", logContext);
+      else console.warn("confirm packaging structure failed", logContext);
+      throw new ApiProblem(status, code, message);
     }
     const fresh = getJob(id);
     if (!fresh) throw new HTTPException(404, { message: "打样单已删除" });
