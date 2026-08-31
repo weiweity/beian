@@ -562,17 +562,16 @@ def _rectangular_candidates_for_component(
                         coverage((x2, y2), (x1, y2)),
                         coverage((x1, y2), (x1, y1)),
                     ]
-                    if sum(value >= 0.88 for value in sides) < 3 or min(sides) < 0.52:
-                        continue
-                    internal_x = max(
-                        [coverage((x, y1), (x, y2)) for x in x_values if x1 + tolerance < x < x2 - tolerance]
-                        or [0.0]
-                    )
-                    internal_y = max(
-                        [coverage((x1, y), (x2, y)) for y in y_values if y1 + tolerance < y < y2 - tolerance]
-                        or [0.0]
-                    )
-                    if internal_x >= 0.84 or internal_y >= 0.84:
+                    # A finished body panel may contain dimension or annotation
+                    # strokes.  Those internal strokes do not split the physical
+                    # panel, so candidate identity is determined by its outer
+                    # frame only.  A closure flap may also have a curved or
+                    # notched free edge; retain that three-sided frame as an
+                    # auditable closure candidate, but mark the missing side so
+                    # box_net can never use it as one of the four body panels.
+                    strong_sides = [index for index, value in enumerate(sides) if value >= 0.88]
+                    open_sides = [index for index, value in enumerate(sides) if value < 0.52]
+                    if len(strong_sides) < 3 or len(open_sides) > 1:
                         continue
                     local_points = [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
                     points = [_rotate_coordinate(point, basis_angle) for point in local_points]
@@ -589,6 +588,7 @@ def _rectangular_candidates_for_component(
                             "transform": frame[0],
                             "size_mm": [round(width, 6), round(height, 6)],
                             "coverage": [round(value, 6) for value in sides],
+                            "open_sides": open_sides,
                         }
                     )
     candidates.sort(key=lambda item: tuple(round(float(value), 9) for value in item["local_bounds"]))

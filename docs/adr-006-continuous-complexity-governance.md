@@ -40,7 +40,7 @@
 
 ### 3. 两速扫描
 
-- `npm run quality`：PR 硬门。Knip 使用完整仓库引用图，让测试入口可证明测试钩子的存在；Playwright 支撑代码、仓库脚本和宿主 JSX 都在项目范围内，真正的动态入口逐个列名，禁止用目录通配符把孤儿文件伪装成入口；Vulture 只收 80% 及以上置信度。当前基线为 Knip 65 条、Vulture 2 条。
+- `npm run quality`：PR 硬门。Knip 使用完整仓库引用图，让测试入口可证明测试钩子的存在；Playwright 支撑代码、仓库脚本和宿主 JSX 都在项目范围内，真正的动态入口逐个列名，禁止用目录通配符把孤儿文件伪装成入口；Vulture 只收 80% 及以上置信度。当前基线为 Knip 59 条、Vulture 2 条。
 - `npm run quality:deep`：人工 report-only。Knip 增加 production 视角，Vulture 降到 60% 置信度，用于专门 cleanup PR 取证；不参与日常基线，不自动删除。
 
 直接把 production 视角作为 PR 基线会把大量仅供测试验证的稳定导出误判为死代码，因此不采用。深审仍保留该视角，但与快速门禁分开。

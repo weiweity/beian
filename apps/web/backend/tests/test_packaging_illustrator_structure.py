@@ -104,6 +104,343 @@ def test_structure_export_hides_objects_not_whole_layers():
     assert 'structure_face_mapping_incomplete' in source
 
 
+def test_structure_export_temporarily_unlocks_parent_chain_and_restores_it():
+    source = EXPORTER.read_text(encoding="utf-8")
+    helper_start = source.index("function findLockState")
+    helper_end = source.index("var configPath", helper_start)
+    helpers = source[helper_start:helper_end]
+    program = helpers + r"""
+var documentRef = {typename: "Document"};
+var layer = {typename: "Layer", locked: true, parent: documentRef};
+var group = {typename: "GroupItem", locked: true, parent: layer};
+var first = {typename: "PathItem", locked: true, hidden: false, parent: group};
+var second = {typename: "PathItem", locked: false, hidden: false, parent: group};
+var state = hideSemanticItems([first, second]);
+var hiddenState = {
+    firstHidden: first.hidden,
+    secondHidden: second.hidden,
+    firstLocked: first.locked,
+    groupLocked: group.locked,
+    layerLocked: layer.locked,
+    lockCount: state.locks.length
+};
+restoreSemanticItems(state);
+process.stdout.write(JSON.stringify({
+    hiddenState: hiddenState,
+    restored: {
+        firstHidden: first.hidden,
+        secondHidden: second.hidden,
+        firstLocked: first.locked,
+        secondLocked: second.locked,
+        groupLocked: group.locked,
+        layerLocked: layer.locked
+    }
+}));
+"""
+    completed = subprocess.run(
+        ["node", "-e", program],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    result = json.loads(completed.stdout)
+    assert result["hiddenState"] == {
+        "firstHidden": True,
+        "secondHidden": True,
+        "firstLocked": False,
+        "groupLocked": False,
+        "layerLocked": False,
+        "lockCount": 3,
+    }
+    assert result["restored"] == {
+        "firstHidden": False,
+        "secondHidden": False,
+        "firstLocked": True,
+        "secondLocked": False,
+        "groupLocked": True,
+        "layerLocked": True,
+    }
+
+
+def test_structure_export_restores_partial_changes_when_hiding_fails():
+    source = EXPORTER.read_text(encoding="utf-8")
+    helper_start = source.index("function findLockState")
+    helper_end = source.index("var configPath", helper_start)
+    helpers = source[helper_start:helper_end]
+    program = helpers + r"""
+var documentRef = {typename: "Document"};
+var layer = {typename: "Layer", locked: true, parent: documentRef};
+var group = {typename: "GroupItem", locked: true, parent: layer};
+var first = {typename: "PathItem", locked: true, hidden: false, parent: group};
+var secondHidden = false;
+var second = {typename: "PathItem", locked: false, parent: group};
+Object.defineProperty(second, "hidden", {
+    get: function () { return secondHidden; },
+    set: function (value) {
+        if (value === true) {
+            throw new Error("blocked by Illustrator");
+        }
+        secondHidden = value;
+    }
+});
+var message = null;
+try {
+    hideSemanticItems([first, second]);
+} catch (error) {
+    message = error.message;
+}
+process.stdout.write(JSON.stringify({
+    message: message,
+    firstHidden: first.hidden,
+    secondHidden: second.hidden,
+    firstLocked: first.locked,
+    secondLocked: second.locked,
+    groupLocked: group.locked,
+    layerLocked: layer.locked
+}));
+"""
+    completed = subprocess.run(
+        ["node", "-e", program],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert json.loads(completed.stdout) == {
+        "message": "Cannot hide semantic object path:1 blocked by Illustrator",
+        "firstHidden": False,
+        "secondHidden": False,
+        "firstLocked": True,
+        "secondLocked": False,
+        "groupLocked": True,
+        "layerLocked": True,
+    }
+
+
+def test_structure_export_restores_original_state_when_artwork_save_fails():
+    source = EXPORTER.read_text(encoding="utf-8")
+    helper_start = source.index("function findLockState")
+    helper_end = source.index("var configPath", helper_start)
+    helpers = source[helper_start:helper_end]
+    program = helpers + r"""
+var documentRef = {typename: "Document"};
+var layer = {typename: "Layer", locked: true, parent: documentRef};
+var visible = {typename: "PathItem", locked: true, hidden: false, parent: layer};
+var alreadyHidden = {typename: "PathItem", locked: false, hidden: true, parent: layer};
+var observed = null;
+var message = null;
+try {
+    withHiddenSemanticItems([visible, alreadyHidden], function () {
+        observed = {
+            visibleHidden: visible.hidden,
+            alreadyHidden: alreadyHidden.hidden,
+            layerLocked: layer.locked
+        };
+        throw new Error("artwork save failed");
+    });
+} catch (error) {
+    message = error.message;
+}
+process.stdout.write(JSON.stringify({
+    message: message,
+    observed: observed,
+    restored: {
+        visibleHidden: visible.hidden,
+        alreadyHidden: alreadyHidden.hidden,
+        visibleLocked: visible.locked,
+        alreadyHiddenLocked: alreadyHidden.locked,
+        layerLocked: layer.locked
+    }
+}));
+"""
+    completed = subprocess.run(
+        ["node", "-e", program],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert json.loads(completed.stdout) == {
+        "message": "artwork save failed",
+        "observed": {
+            "visibleHidden": True,
+            "alreadyHidden": True,
+            "layerLocked": False,
+        },
+        "restored": {
+            "visibleHidden": False,
+            "alreadyHidden": True,
+            "visibleLocked": True,
+            "alreadyHiddenLocked": False,
+            "layerLocked": True,
+        },
+    }
+
+
+def test_structure_export_skips_unsupported_host_locks_and_uses_layer_parent_fallback():
+    source = EXPORTER.read_text(encoding="utf-8")
+    helper_start = source.index("function findLockState")
+    helper_end = source.index("var configPath", helper_start)
+    helpers = source[helper_start:helper_end]
+    program = helpers + r"""
+var documentRef = {typename: "Document"};
+var layer = {typename: "Layer", locked: true, parent: documentRef};
+var clip = {typename: "GroupItem", parent: layer};
+Object.defineProperty(clip, "locked", {
+    get: function () { throw new Error("clip lock is not exposed"); },
+    set: function () { throw new Error("clip lock is not exposed"); }
+});
+var compound = {typename: "CompoundPathItem", locked: true, hidden: false, parent: clip};
+var symbol = {typename: "SymbolItem", locked: true, hidden: false, layer: layer};
+Object.defineProperty(symbol, "parent", {
+    get: function () { throw new Error("symbol parent proxy failed"); }
+});
+var compoundState = hideSemanticItems([compound]);
+var compoundObserved = {
+    hidden: compound.hidden,
+    locked: compound.locked,
+    layerLocked: layer.locked,
+    issues: compoundState.issues
+};
+restoreSemanticItems(compoundState);
+var symbolState = hideSemanticItems([symbol]);
+var symbolObserved = {
+    hidden: symbol.hidden,
+    locked: symbol.locked,
+    layerLocked: layer.locked,
+    issues: symbolState.issues
+};
+restoreSemanticItems(symbolState);
+process.stdout.write(JSON.stringify({
+    compoundObserved: compoundObserved,
+    symbolObserved: symbolObserved,
+    restored: {
+        compoundHidden: compound.hidden,
+        compoundLocked: compound.locked,
+        symbolHidden: symbol.hidden,
+        symbolLocked: symbol.locked,
+        layerLocked: layer.locked
+    }
+}));
+"""
+    completed = subprocess.run(
+        ["node", "-e", program],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    result = json.loads(completed.stdout)
+    assert result["compoundObserved"] == {
+        "hidden": True,
+        "locked": False,
+        "layerLocked": False,
+        "issues": ["ancestor_lock_unreadable:GroupItem"],
+    }
+    assert result["symbolObserved"] == {
+        "hidden": True,
+        "locked": False,
+        "layerLocked": False,
+        "issues": ["ancestor_parent_via_layer:SymbolItem"],
+    }
+    assert result["restored"] == {
+        "compoundHidden": False,
+        "compoundLocked": True,
+        "symbolHidden": False,
+        "symbolLocked": True,
+        "layerLocked": True,
+    }
+
+
+def test_structure_export_attempts_every_rollback_before_reporting_failure():
+    source = EXPORTER.read_text(encoding="utf-8")
+    helper_start = source.index("function findLockState")
+    helper_end = source.index("var configPath", helper_start)
+    helpers = source[helper_start:helper_end]
+    program = helpers + r"""
+var firstValue = false;
+var first = {typename: "PathItem"};
+Object.defineProperty(first, "locked", {
+    get: function () { return firstValue; },
+    set: function (value) {
+        if (value === true) { throw new Error("first restore failed"); }
+        firstValue = value;
+    }
+});
+var second = {typename: "PathItem", locked: false};
+var state = {
+    items: [],
+    locks: [
+        {target: second, locked: true, typeName: "PathItem"},
+        {target: first, locked: true, typeName: "PathItem"}
+    ],
+    issues: []
+};
+var message = null;
+try {
+    restoreSemanticItems(state);
+} catch (error) {
+    message = error.message;
+}
+process.stdout.write(JSON.stringify({message: message, secondLocked: second.locked}));
+"""
+    completed = subprocess.run(
+        ["node", "-e", program],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    result = json.loads(completed.stdout)
+    assert result == {
+        "message": "Cannot fully restore semantic objects: locked:PathItem:first restore failed",
+        "secondLocked": True,
+    }
+
+
+def test_structure_export_records_lock_before_a_host_setter_mutates_then_throws():
+    source = EXPORTER.read_text(encoding="utf-8")
+    helper_start = source.index("function findLockState")
+    helper_end = source.index("var configPath", helper_start)
+    helpers = source[helper_start:helper_end]
+    program = helpers + r"""
+var lockedValue = true;
+var item = {typename: "PathItem", hidden: false};
+Object.defineProperty(item, "locked", {
+    get: function () { return lockedValue; },
+    set: function (value) {
+        lockedValue = value;
+        throw new Error("Illustrator proxy setter threw after mutation");
+    }
+});
+var state = hideSemanticItems([item]);
+var observed = {
+    hidden: item.hidden,
+    locked: item.locked,
+    lockCount: state.locks.length
+};
+restoreSemanticItems(state);
+process.stdout.write(JSON.stringify({
+    observed: observed,
+    restoredHidden: item.hidden,
+    restoredLocked: item.locked
+}));
+"""
+    completed = subprocess.run(
+        ["node", "-e", program],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert json.loads(completed.stdout) == {
+        "observed": {"hidden": True, "locked": False, "lockCount": 1},
+        "restoredHidden": False,
+        "restoredLocked": True,
+    }
+
+
 def test_structure_export_flattens_curves_with_a_bounded_audited_adapter():
     source = EXPORTER.read_text(encoding="utf-8")
     assert '#include "curve_flatten.js"' in source

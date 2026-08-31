@@ -11,7 +11,15 @@ _PACKAGING = Path(__file__).resolve().parents[1]
 if str(_PACKAGING) not in sys.path:
     sys.path.insert(0, str(_PACKAGING))
 from camera_frame import aabb_after_z_rotation, camera_fit_after_yaw, camera_location_mm, camera_ortho_scale_mm, camera_target_mm
-from glb_verify import SEMANTIC_FACES, compare_glb_dimensions, compare_glb_texture_bindings
+from glb_verify import (
+    SEMANTIC_FACES,
+    compare_glb_core_contract,
+    compare_glb_dimensions,
+    compare_glb_material_contract,
+    compare_glb_surface_contract,
+    compare_glb_texture_bindings,
+    load_glb_artifact,
+)
 
 
 def job_path_from_argv():
@@ -52,13 +60,19 @@ def make_material(name, image_path, roughness=0.52, specular_ior=0.08):
     image.pack()
     texture.image = image
     texture.interpolation = "Linear"
+    alpha_mask = nodes.new("ShaderNodeMath")
+    alpha_mask.operation = "ROUND"
+    alpha_mask.use_clamp = True
     shader.inputs["Roughness"].default_value = roughness
     shader.inputs["Specular IOR Level"].default_value = specular_ior
     links.new(texture.outputs["Color"], shader.inputs["Base Color"])
-    # Printed carton panels are opaque RGB artwork. Reusing the same image for
-    # Base Color and Alpha makes Blender's glTF exporter treat two sockets as
-    # competing samplers, even though there is only one texture node.
-    shader.inputs["Alpha"].default_value = 1.0
+    links.new(texture.outputs["Alpha"], alpha_mask.inputs[0])
+    links.new(alpha_mask.outputs[0], shader.inputs["Alpha"])
+    # Alpha is a binary physical-coverage mask, not translucent paper.  The
+    # opaque core immediately behind the panel supplies the substrate colour.
+    if hasattr(material, "blend_method"):
+        material.blend_method = "CLIP"
+        material.alpha_threshold = 0.5
     links.new(shader.outputs["BSDF"], output.inputs["Surface"])
     return material
 
@@ -90,7 +104,7 @@ def add_panel(name, vertices, material):
     return obj
 
 
-def make_core_material():
+def make_core_material(substrate_rgba):
     material = bpy.data.materials.new("MAT_PaperboardEdge")
     material.use_nodes = True
     nodes = material.node_tree.nodes
@@ -99,7 +113,7 @@ def make_core_material():
         nodes.remove(node)
     output = nodes.new("ShaderNodeOutputMaterial")
     shader = nodes.new("ShaderNodeBsdfPrincipled")
-    shader.inputs["Base Color"].default_value = (0.80, 0.81, 0.81, 1.0)
+    shader.inputs["Base Color"].default_value = tuple(float(value) for value in substrate_rgba)
     shader.inputs["Roughness"].default_value = 0.60
     links.new(shader.outputs["BSDF"], output.inputs["Surface"])
     return material
@@ -113,6 +127,14 @@ def add_box(job):
     assets = {name: Path(path) for name, path in job["assets"].items()}
     roughness = float(job["render"].get("material_roughness", 0.52))
     specular_ior = float(job["render"].get("material_specular_ior", 0.08))
+    substrate_rgba = job["render"].get("substrate_rgba", [1.0, 1.0, 1.0, 1.0])
+    if (
+        not isinstance(substrate_rgba, list)
+        or len(substrate_rgba) != 4
+        or any(not isinstance(value, (int, float)) or not 0.0 <= float(value) <= 1.0 for value in substrate_rgba)
+        or float(substrate_rgba[3]) != 1.0
+    ):
+        raise RuntimeError("render.substrate_rgba must be an opaque four-channel colour in the 0-1 range")
     mats = {
         name: make_material(f"MAT_{name}", path, roughness, specular_ior)
         for name, path in assets.items()
@@ -127,7 +149,7 @@ def add_box(job):
     core.name = f"{job['code']}_Box_Core"
     core.dimensions = (width, depth, height)
     bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
-    core.data.materials.append(make_core_material())
+    core.data.materials.append(make_core_material(substrate_rgba))
     bevel = core.modifiers.new("Paperboard edge radius", "BEVEL")
     bevel.width = 0.45
     bevel.segments = 4
@@ -331,6 +353,21 @@ def export_model(job, root, model_objects):
 
 
 def verify_glb(job):
+    substrate_rgba = job["render"].get("substrate_rgba", [1.0, 1.0, 1.0, 1.0])
+    try:
+        artifact = load_glb_artifact(job["outputs"]["glb"])
+        material_report = compare_glb_material_contract(
+            artifact,
+            job["assets"],
+            substrate_rgba,
+        )
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        raise RuntimeError(f"GLB verification failed: cannot inspect exported material contract: {error}") from error
+    if not material_report["ok"]:
+        raise RuntimeError(
+            "GLB verification failed: material contract mismatch="
+            + json.dumps(material_report, ensure_ascii=False, sort_keys=True)
+        )
     clean_scene()
     bpy.ops.import_scene.gltf(filepath=job["outputs"]["glb"])
     points = []
@@ -387,6 +424,72 @@ def verify_glb(job):
             "GLB verification failed: semantic artwork binding mismatch="
             + json.dumps(binding_report, ensure_ascii=False, sort_keys=True)
         )
+    surfaces = {}
+    for face in SEMANTIC_FACES:
+        samples = []
+        for obj in bpy.context.scene.objects:
+            if (
+                obj.type != "MESH"
+                or obj.name.lower().split(".", 1)[0].removesuffix("_mesh") != face
+            ):
+                continue
+            uv_layer = obj.data.uv_layers.active
+            if uv_layer is None:
+                continue
+            for loop in obj.data.loops:
+                point = obj.matrix_world @ obj.data.vertices[loop.vertex_index].co
+                uv = uv_layer.data[loop.index].uv
+                samples.append(
+                    {
+                        "position": [float(point.x), float(point.y), float(point.z)],
+                        "uv": [float(uv.x), float(uv.y)],
+                    }
+                )
+        surfaces[face] = samples
+    surface_report = compare_glb_surface_contract(
+        surfaces,
+        job["dimensions_mm"],
+        float(job["glb_tolerance_mm"]),
+    )
+    if not surface_report["ok"]:
+        raise RuntimeError(
+            "GLB verification failed: semantic UV contract mismatch="
+            + json.dumps(surface_report, ensure_ascii=False, sort_keys=True)
+        )
+    core_objects = []
+    for obj in bpy.context.scene.objects:
+        if obj.type != "MESH" or not obj.name.lower().split(".", 1)[0].endswith("_box_core"):
+            continue
+        obj.data.calc_loop_triangles()
+        core_objects.append(
+            {
+                "materials": [material.name for material in obj.data.materials if material],
+                "points": [
+                    [float(point.x), float(point.y), float(point.z)]
+                    for point in (obj.matrix_world @ vertex.co for vertex in obj.data.vertices)
+                ],
+                "triangles": [
+                    [
+                        [float(point.x), float(point.y), float(point.z)]
+                        for point in (
+                            obj.matrix_world @ obj.data.vertices[vertex_index].co
+                            for vertex_index in triangle.vertices
+                        )
+                    ]
+                    for triangle in obj.data.loop_triangles
+                ],
+            }
+        )
+    core_report = compare_glb_core_contract(
+        core_objects,
+        job["dimensions_mm"],
+        float(job["glb_tolerance_mm"]),
+    )
+    if not core_report["ok"]:
+        raise RuntimeError(
+            "GLB verification failed: paperboard core geometry mismatch="
+            + json.dumps(core_report, ensure_ascii=False, sort_keys=True)
+        )
     mins = [min(point[i] for point in points) for i in range(3)]
     maxs = [max(point[i] for point in points) for i in range(3)]
     report = compare_glb_dimensions(
@@ -400,7 +503,12 @@ def verify_glb(job):
             f"measured={report['measured_mm']}, expected={report['expected_mm']}, "
             f"tolerance={report['tolerance_mm']}"
         )
-    return report
+    return {
+        **report,
+        "material_contract": material_report,
+        "surface_contract": surface_report,
+        "core_contract": core_report,
+    }
 
 
 def main():

@@ -3,6 +3,7 @@ import { Alert, App, Button, Segmented, Select } from "antd";
 import { api, type MockupJob } from "../api";
 import {
   selectedStructureAnchor,
+  structureClosureNote,
   structureConfirmationErrorCopy,
   structureIssueCopy,
   structurePolygonPoints,
@@ -207,8 +208,8 @@ export function StructureConfirmPanel({ job, canAdmin, onConfirmed }: Props) {
                 <span>完整盒型</span>
                 <strong>
                   {proposal.dimensions_mm
-                    ? `底面 ${proposal.dimensions_mm.width}×${proposal.dimensions_mm.depth} · 高 ${proposal.dimensions_mm.height} mm${proposal.closure_assemblies?.some((item) => item.extent === "partial") ? " · 主盖片有正常让位" : ""}`
-                    : "闭合盒型 · 已通过确认预检"}
+                    ? `底面 ${proposal.dimensions_mm.width}×${proposal.dimensions_mm.depth} · 高 ${proposal.dimensions_mm.height} mm${structureClosureNote(proposal)}`
+                    : `闭合盒型 · 已通过确认预检${structureClosureNote(proposal)}`}
                 </strong>
               </div>
             )}
