@@ -19,7 +19,6 @@
 from __future__ import annotations
 
 import re
-from typing import Any
 
 from rapidfuzz import fuzz
 
@@ -402,7 +401,6 @@ def expected_zone(
     通用 profile，不绑死品牌。
     """
     fg = field_group or ""
-    fl = field or ""
     words = ocr_words or []
 
     def _zone_from_anchor(
@@ -431,32 +429,9 @@ def expected_zone(
         return None
 
     if fg == "成分表":
-        step = (
-            "1"
-            if re.search(r"步骤\s*0*1|精华液", fl)
-            else ("2" if re.search(r"步骤\s*0*2|面膜", fl) else "")
-        )
-        bands = step_y_bands(words)
-        if step and step in bands:
-            y0, y1 = bands[step]
-            tb = find_best_word(
-                "步骤01" if step == "1" else "步骤02",
-                words,
-                min_score=85.0,
-                prefer_re=r"步骤",
-            )
-            left = int(tb["left"]) - 40 if tb else int(page_w * 0.52)
-            return {
-                "page": int(tb["page"]) if tb else 1,
-                "left": max(0, left),
-                "top": int(y0),
-                "width": max(300, int(page_w * 0.42)),
-                "height": max(60, int(y1 - y0)),
-                "role": "context",
-                "status": "ok",
-                "label": f"期望·步骤0{step}整段",
-                "locate": "expected_zone",
-            }
+        # 成分缺失时不能按步骤标题或页面方向猜“应出现区域”。真实框统一由
+        # ingredient_match 的正文锚点/高密度原子块提供。
+        return None
 
     if fg == "二维码":
         # 缺完整引导语时没有真实位置；禁止回退到猜测的右侧矩形。
@@ -507,6 +482,7 @@ def locate_dual_evidence(
     hit_phrases: list[str] | None = None,
     page_w: int = 2200,
     page_h: int = 2400,
+    ingredient_analysis: dict | None = None,
 ) -> list[dict]:
     """
     双轨总入口：
@@ -747,190 +723,16 @@ def locate_dual_evidence(
                     hits.append(b)
     # ── 成分 block ──
     elif fg == "成分表" or "成分" in fl:
-        step = (
-            "1"
-            if re.search(r"步骤\s*0*1|精华液", fl)
-            else ("2" if re.search(r"步骤\s*0*2|面膜", fl) else "")
-        )
-        # 定位只用 accurate/裁块词，排除 Paddle-VL 块坐标（比例易偏，会把整段框拉飞）
-        locate_words = [
-            w
-            for w in words
-            if not str(w.get("source") or "").startswith("paddle_vl")
-            and not w.get("vl_tag")
-        ] or words
-        bands = step_y_bands(locate_words)
-        band_words = locate_words
-        y_band = None
-        if step and step in bands:
-            y_band = bands[step]
-            band_words = words_in_y_band(locate_words, y_band[0], y_band[1]) or locate_words
-        tq = "步骤01" if step == "1" else ("步骤02" if step == "2" else "步骤")
-        # 刀版常左图右字：步骤0X 标题取「最靠右」的真锚，禁止命中左侧「步骤.涂/敷」
-        step_pat = (
-            re.compile(r"步骤\s*0*1")
-            if step == "1"
-            else re.compile(r"步骤\s*0*2")
-            if step == "2"
-            else re.compile(r"步骤\s*0*\d")
-        )
-        step_cands: list[dict] = []
-        for w in locate_words:
-            raw = w.get("text") or ""
-            if not step_pat.search(raw):
-                continue
-            # 排除用法区「步骤.涂·精华液」与脚注「昵称」
-            if re.search(r"涂|敷|·", raw) and not re.search(r"步骤\s*0*[12]", raw):
-                continue
-            if re.search(r"步骤\s*[\.．、]?\s*(涂|敷)", raw):
-                continue
-            if re.search(r"昵称|为本品步骤", raw):
-                continue
-            bb = _box(w, role="hit", label=tq)
-            if bb:
-                # 附原文便于排序
-                bb["_raw"] = raw
-                step_cands.append(bb)
-        tb = None
-        if step_cands:
-            # 真成分标题优先：含「精华液/面膜/成分」+ 合理宽度 + 偏右
-            def _step_rank(b: dict) -> tuple:
-                raw = b.get("_raw") or ""
-                w = int(b.get("width") or 0)
-                left = int(b.get("left") or 0)
-                has_title = 1 if re.search(r"精华液|面膜|成分", raw) else 0
-                not_thin = 1 if w >= 40 else 0
-                return (has_title, not_thin, left, w)
+        # 成分定位先找正文引导词和同栏文本块；没有可靠块时宁可不框。
+        # coverage 的 hit/miss 只影响列表文案，绝不再生成猜测性的黄条。
+        from app.ingredient_match import analyze_ingredient_field
 
-            tb = max(step_cands, key=_step_rank)
-            tb = {k: v for k, v in tb.items() if k != "_raw"}
-        if not tb:
-            tb = locate_phrase_span(
-                tq,
-                words,
-                min_score=88.0,
-                prefer_re=r"步骤\s*0*[12].{0,6}(精华|面膜)?",
-                exclude_re=r"步骤\s*[\.．]?\s*(涂|敷)|涂·|敷·|昵称",
-                x_min=float(page_w) * 0.42 if page_w else None,
-                label=tq,
-            )
-        # 右栏默认：以步骤标题为锚，向左至少覆盖半栏，向右拉满
-        if tb:
-            col_left = max(0, min(int(tb["left"]) - 40, int(page_w * 0.48)))
-            # 标题若是细竖条，强制从页面中线起算
-            if int(tb.get("width") or 0) < 50:
-                col_left = max(0, int(page_w * 0.48))
-            col_right = int(page_w * 0.99) if page_w else int(tb["left"]) + 900
-        else:
-            col_left = int(page_w * 0.48)
-            col_right = int(page_w * 0.98)
-        # y 带：有 band 用 band；否则以标题上下扩
-        if y_band is None and tb:
-            y_band = (
-                max(0, int(tb["top"]) - 20),
-                int(tb["top"]) + max(int(tb.get("height") or 20) + 220, 260),
-            )
-            band_words = (
-                words_in_y_band(locate_words, y_band[0], y_band[1]) or locate_words
-            )
-        col_words = _filter_words(
-            band_words, x_min=col_left, x_max=col_right
-        ) or _filter_words(words, x_min=col_left)
-        # 优先并入成分语义词，避免只并到竖条数字
-        ing_like = []
-        other_boxes = []
-        for w in col_words:
-            raw = w.get("text") or ""
-            bb = _box(w, role="hit", label=tq)
-            if not bb:
-                continue
-            if re.fullmatch(r"[\d\s./\-]+", raw) and len(raw) <= 4:
-                continue  # 跳过孤立数字
-            if re.search(
-                r"成分|步骤\s*0|提取|甘油|水|酸|醇|肽|油|微量|精华|面膜|丁二醇|烟酰胺",
-                raw,
-            ) or len(raw) >= 4:
-                ing_like.append(bb)
-            else:
-                other_boxes.append(bb)
-        band_boxes = ing_like or other_boxes
-        if band_boxes:
-            full = _union(band_boxes, pad=adaptive_pad(col_words), role="hit")
-            for b in full:
-                b["label"] = f"{tq}·整段" if step else "成分整段"
-                b["locate"] = "block_band"
-                # 拒「细竖条」：宽过窄说明栏锚偏了，向左扩到右栏内容
-                if int(b.get("width") or 0) < 180:
-                    left_new = max(0, min(int(b["left"]) - 500, int(page_w * 0.48)))
-                    right_edge = max(
-                        int(b["left"]) + int(b["width"]),
-                        left_new + 520,
-                        int(page_w * 0.92) if page_w else left_new + 700,
-                    )
-                    b["left"] = left_new
-                    b["width"] = max(200, right_edge - left_new)
-                    y0b, y1b = int(b["top"]) - 10, int(b["top"]) + max(
-                        int(b["height"]), 160
-                    )
-                    extra = []
-                    for w in locate_words:
-                        loc = w.get("location") or {}
-                        top = int(loc.get("top") or 0)
-                        left = int(loc.get("left") or 0)
-                        if y0b - 30 <= top <= y1b + 40 and left >= left_new - 20:
-                            raw = w.get("text") or ""
-                            if re.fullmatch(r"[\d\s./\-]+", raw) and len(raw) <= 4:
-                                continue
-                            if re.search(
-                                r"成分|微量|提取|甘油|步骤\s*0|油|肽|酸|醇|水|精华|面膜|"
-                                r"丁二醇|烟酰胺|卵磷脂|维生素|酵母",
-                                raw,
-                            ) or len(raw) >= 6:
-                                bb = _box(w, role="hit", label=tq)
-                                if bb:
-                                    extra.append(bb)
-                    if extra:
-                        u2 = _union(extra + [b], pad=10, role="hit")
-                        for x in u2:
-                            x["label"] = f"{tq}·整段" if step else "成分整段"
-                            x["locate"] = "block_band_expanded"
-                            if int(x.get("width") or 0) < 180:
-                                x["left"] = left_new
-                                x["width"] = max(400, int(page_w * 0.45) if page_w else 500)
-                        hits.extend(u2)
-                        continue
-                hits.append(b)
-        # miss：带内 span，否则带底黄条
-        for mp in misses[:5]:
-            cn = re.sub(r"[（(][^）)]+[）)]", "", mp).strip()[:20]
-            mb = locate_phrase_span(
-                cn,
-                col_words,
-                min_score=82.0,
-                role="check",
-                status="warn",
-                label=f"未见?{mp[:14]}",
-            )
-            if mb:
-                checks.append(mb)
-            elif hits:
-                base = hits[-1]
-                checks.append(
-                    {
-                        "page": int(base.get("page") or 1),
-                        "left": int(base["left"]),
-                        "top": max(
-                            int(base["top"]),
-                            int(base["top"]) + int(base["height"]) - 30,
-                        ),
-                        "width": int(base["width"]),
-                        "height": 28,
-                        "role": "check",
-                        "status": "warn",
-                        "label": f"未见:{mp[:14]}",
-                        "locate": "expect_strip",
-                    }
-                )
+        analysis = ingredient_analysis or analyze_ingredient_field(
+            excel_value or "", words, page_w=page_w, page_h=page_h
+        )
+        block = analysis.get("block_bbox")
+        if block:
+            hits.append(dict(block))
 
     # ── 长文案 / 生产信息 / 使用方法：只消费本次 coverage 真实短语 ──
     elif fg in ("文案", "生产信息", "使用方法"):
@@ -1005,58 +807,6 @@ def locate_dual_evidence(
     return c + h + ctx
 
 
-def step_y_bands(ocr_words: list[dict]) -> dict[str, tuple[float, float]]:
-    anchors: list[tuple[str, float]] = []
-    for w in ocr_words:
-        t = w.get("text") or ""
-        loc = w.get("location") or {}
-        y = float(loc.get("top") or 0) + float(loc.get("height") or 0) / 2
-        if re.search(r"步骤\s*0*1|步骤01", t):
-            anchors.append(("1", y))
-        if re.search(r"步骤\s*0*2|步骤02", t):
-            anchors.append(("2", y))
-    if not anchors:
-        return {}
-    ys = [
-        float((w.get("location") or {}).get("top") or 0)
-        + float((w.get("location") or {}).get("height") or 0)
-        for w in ocr_words
-    ]
-    page_h = max(ys) if ys else 2400
-    y1s = [y for k, y in anchors if k == "1"]
-    y2s = [y for k, y in anchors if k == "2"]
-    bands: dict[str, tuple[float, float]] = {}
-    if y1s:
-        top = min(y1s) - 12
-        bot = (min(y2s) - 8) if y2s else min(y1s) + page_h * 0.22
-        bands["1"] = (max(0.0, top), max(top + 50, bot))
-    if y2s:
-        top = min(y2s) - 12
-        bot = page_h * 0.72
-        for w in ocr_words:
-            t = w.get("text") or ""
-            if re.search(r"使用方法|贮存条件|备案人|生产企业|净含量[：:]", t):
-                yy = float((w.get("location") or {}).get("top") or 0)
-                if yy > top + 40:
-                    bot = min(bot, yy - 6)
-        bands["2"] = (max(0.0, top), max(top + 50, bot))
-    return bands
-
-
-def words_in_y_band(
-    ocr_words: list[dict], y0: float, y1: float, *, page: int | None = None
-) -> list[dict]:
-    out = []
-    for w in ocr_words:
-        if page is not None and int(w.get("page") or 1) != page:
-            continue
-        loc = w.get("location") or {}
-        y = float(loc.get("top") or 0) + float(loc.get("height") or 0) / 2
-        if y0 <= y <= y1:
-            out.append(w)
-    return out
-
-
 def extract_excel_barcodes(excel_value: str) -> list[str]:
     return re.findall(r"\d{8,14}", excel_value or "")
 
@@ -1073,6 +823,7 @@ def refine_field_boxes(
     page_w: int = 2200,
     page_h: int = 2400,
     hit_phrases: list[str] | None = None,
+    ingredient_analysis: dict | None = None,
 ) -> list[dict]:
     """
     最终展示框：工业双轨（词级 span 命中 + 疑点期望区）。
@@ -1088,6 +839,7 @@ def refine_field_boxes(
         hit_phrases=list(hit_phrases or []),
         page_w=page_w,
         page_h=page_h,
+        ingredient_analysis=ingredient_analysis,
     )
     if dual:
         return dual[:12]
@@ -1099,6 +851,7 @@ def refine_field_boxes(
         "净含量",
         "条形码",
         "二维码",
+        "成分表",
     ):
         return []
     return list(existing_boxes or [])[:1]

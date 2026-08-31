@@ -87,6 +87,17 @@ def _ocr_pages(
     return recognize_pages(page_metas, ingested)
 
 
+def _attach_page_size(words: list[dict], page_metas: list[dict]) -> None:
+    """把渲染画布尺寸附在内部 OCR 词上，供绝对坐标裁剪使用。"""
+    metas = {int(meta.get("page") or 1): meta for meta in page_metas or []}
+    for word in words or []:
+        meta = metas.get(int(word.get("page") or 1))
+        if not meta:
+            continue
+        word["_page_width"] = int(meta.get("width") or 0)
+        word["_page_height"] = int(meta.get("height") or 0)
+
+
 def _qrcode_pages(page_metas: list[dict]) -> tuple[list[dict], dict]:
     """
     各页二维码识别。
@@ -231,6 +242,7 @@ def _surface_job(
         ocr_words,
         prefer_layer=prefer_layer,
     )
+    _attach_page_size(words, page_metas)
     emit_stage("layout")
     layout = detect_regions(words, page_metas)
     zones = (
