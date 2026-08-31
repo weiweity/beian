@@ -1,8 +1,9 @@
 import { Button, Input, Select, Tag } from "antd";
 import type { Decision, FieldHit, TaskDetail } from "../api";
+import { spokenAsk } from "./hitText";
 import { REVIEW_DOCK_POPUP_LAYER } from "./reviewDock";
+import { reviewProgress } from "./reviewNav";
 import {
-  issueEvidence,
   partitionReviewHits,
   reviewEvidence,
   type EvidenceText,
@@ -15,6 +16,7 @@ type Props = {
   current?: FieldHit;
   fullscreen: boolean;
   currentHasBox: boolean;
+  pageNo: number;
   reviewable: boolean;
   busy: boolean;
   note: string;
@@ -55,6 +57,7 @@ export function ReviewDockPanel({
   current,
   fullscreen,
   currentHasBox,
+  pageNo,
   reviewable,
   busy,
   note,
@@ -72,8 +75,8 @@ export function ReviewDockPanel({
     current?.decision === "confirm" || current?.decision === "issue" || current?.decision === "ignore"
       ? (current.decision as Decision)
       : undefined;
-  const issueText = issueEvidence(evidence?.issues || []);
-  const hasIssues = Boolean(evidence?.issues.length);
+  const spoken = current ? spokenAsk(current, current.field, currentHasBox) : null;
+  const progress = reviewProgress(hits, pageNo, active);
   const noteDirty = note.trim() !== String(current?.note || "").trim();
 
   return (
@@ -81,14 +84,16 @@ export function ReviewDockPanel({
       <section className="review-dock-issues" aria-label="疑点列表">
         <p className="field-label">疑点列表</p>
         <div className="review-dock-issue-row">
-          {grouped.issues.length ? grouped.issues.map(({ hit, index }) => (
+          {grouped.issues.length ? grouped.issues.map(({ hit, index }, ordinal) => (
             <button
               key={hit.id || index}
               type="button"
               className={index === active ? "hit-card is-on" : "hit-card"}
+              aria-current={index === active ? "true" : undefined}
+              disabled={busy}
               onClick={() => onPick(index)}
             >
-              <span className="hit-no">{index + 1}</span>
+              <span className="hit-no">{ordinal + 1}</span>
               <strong>{hit.field || "字段"}</strong>
               {statusTag(hit.status)}
             </button>
@@ -103,6 +108,8 @@ export function ReviewDockPanel({
                   key={hit.id || index}
                   type="button"
                   className={index === active ? "hit-card is-on" : "hit-card"}
+                  aria-current={index === active ? "true" : undefined}
+                  disabled={busy}
                   onClick={() => onPick(index)}
                 >
                   <span className="hit-no">{index + 1}</span>
@@ -117,17 +124,16 @@ export function ReviewDockPanel({
 
       {current && evidence ? (
         <>
-          <div className={hasIssues ? "review-evidence-grid has-issues" : "review-evidence-grid"}>
-            {hasIssues ? <EvidenceBlock title="疑点 / 错误点" value={issueText} tone="issue" /> : null}
-            <EvidenceBlock title="Excel 应印" value={evidence.expected} />
-            <EvidenceBlock title="稿上 OCR" value={evidence.observed} />
-          </div>
-          <div className="review-evidence-location">
-            <span>包装定位</span>
-            <strong>{currentHasBox ? `第 ${current.page ?? "?"} 页 · 点击序号查看` : "这一条没有图上位置"}</strong>
-          </div>
+          {spoken ? (
+            <section className="review-spoken" aria-label="嘱咐">
+              <p>{spoken.lead}</p>
+              <p>{spoken.because}</p>
+              <p className="is-ask">{spoken.ask}</p>
+            </section>
+          ) : null}
           <div className="review-evidence-actions">
             <Select<Decision>
+              key={current.id || "review-decision"}
               aria-label="核对结论"
               className="review-decision-select"
               placeholder="选择结论"
@@ -152,6 +158,21 @@ export function ReviewDockPanel({
             />
             <Button onClick={onCopy}>复制改稿清单</Button>
           </div>
+          <div className="review-evidence-grid">
+            <EvidenceBlock title="Excel 应印" value={evidence.expected} />
+            <EvidenceBlock title="稿上读到" value={evidence.observed} />
+          </div>
+          <div className="review-evidence-location">
+            <span>包装定位</span>
+            <strong>
+              {currentHasBox
+                ? `第 ${current.page ?? "?"} 页 · 点序号看这里`
+                : "这条我钉不住，请整面看"}
+            </strong>
+          </div>
+          <p className="review-progress" aria-live="polite">
+            当前：{current.field || "字段"} · 这单还剩 {progress.jobPending} 条 · 本页还有 {progress.pageLeft} 条
+          </p>
           <Input
             className="review-evidence-note"
             placeholder="补充说明，会进改稿清单"

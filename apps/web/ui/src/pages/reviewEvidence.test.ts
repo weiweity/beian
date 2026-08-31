@@ -3,7 +3,6 @@ import { describe, it } from "node:test";
 import {
   buildRevisionList,
   compactEvidence,
-  issueEvidence,
   partitionReviewHits,
   reviewEvidence,
   withLocalNotes,
@@ -26,13 +25,6 @@ describe("compactEvidence", () => {
     assert.equal(result.full, full);
   });
 
-  it("keeps a long issue list concise while preserving every phrase", () => {
-    const lines = Array.from({ length: 24 }, (_, i) => `缺少条款${i + 1}`);
-    const result = issueEvidence(lines);
-    assert.equal(result.expandable, true);
-    assert.ok(result.summary.length <= 181);
-    assert.equal(result.full, lines.join("\n"));
-  });
 });
 
 describe("partitionReviewHits", () => {
@@ -66,16 +58,26 @@ describe("partitionReviewHits", () => {
 });
 
 describe("reviewEvidence", () => {
-  it("separates missing phrases from observed OCR", () => {
+  it("keeps missing phrases out of observed OCR", () => {
     const evidence = reviewEvidence({
       field: "文案",
       status: "疑点",
       excel_value: "保湿亮泽",
       coverage: { hit: ["保湿"], miss: ["亮泽"], matched: 1, total: 2 },
     });
-    assert.deepEqual(evidence.issues, ["亮泽"]);
     assert.match(evidence.observed.full, /保湿/);
     assert.doesNotMatch(evidence.observed.full, /亮泽/);
+  });
+
+  it("hides the word tally until 查看全部", () => {
+    const evidence = reviewEvidence({
+      field: "文案",
+      status: "疑点",
+      coverage: { hit: ["保湿"], miss: ["亮泽"], matched: 8, total: 36 },
+    });
+    assert.doesNotMatch(evidence.observed.summary, /36 个词里读到/);
+    assert.match(evidence.observed.full, /36 个词里读到 8 个/);
+    assert.equal(evidence.observed.expandable, true);
   });
 
   it("keeps concrete missing phrases in the copied revision list", () => {
@@ -93,7 +95,25 @@ describe("reviewEvidence", () => {
 
     assert.equal(result.count, 1);
     assert.match(result.text, /稿上：保湿/);
-    assert.match(result.text, /疑点：亮泽/);
+    assert.match(result.text, /没读到：亮泽/);
+    assert.doesNotMatch(result.text, /score=|0\/5|覆盖偏低/);
+  });
+
+  it("does not copy accounting coverage talk", () => {
+    const result = buildRevisionList("海葡萄喷雾", [
+      {
+        id: "copy-issue",
+        field: "净含量",
+        field_group: "净含量",
+        status: "疑点",
+        decision: "issue",
+        excel_value: "30ml",
+        evidence: "覆盖偏低 0/5 · best score=40",
+        bboxes: [{ left: 1, top: 1, width: 10, height: 10 }],
+      },
+    ]);
+    assert.doesNotMatch(result.text, /score=|0\/5|覆盖偏低/);
+    assert.match(result.text, /30ml/);
   });
 
   it("copies the latest local note even before its server response returns", () => {
@@ -105,5 +125,28 @@ describe("reviewEvidence", () => {
 
     assert.match(result.text, /刚输入的新备注/);
     assert.doesNotMatch(result.text, /旧备注/);
+  });
+
+  it("keeps every concrete miss in the copied revision list", () => {
+    const misses = Array.from({ length: 10 }, (_, i) => `缺项${i + 1}`);
+    const result = buildRevisionList("海葡萄喷雾", [
+      { id: "copy-many", field: "文案", status: "疑点", decision: "issue", coverage: { miss: misses } },
+    ]);
+    assert.match(result.text, /缺项9/);
+    assert.match(result.text, /缺项10/);
+  });
+
+  it("uses the caller's page-aware location verdict in copied wording", () => {
+    const hit = {
+      id: "copy-large-box",
+      field: "文案",
+      status: "疑点",
+      decision: "issue",
+      excel_value: "保湿亮泽",
+      bboxes: [{ left: 0, top: 0, width: 900, height: 900 }],
+    };
+    const result = buildRevisionList("海葡萄喷雾", [hit], { located: () => false });
+    assert.match(result.text, /没在图上圈到/);
+    assert.match(result.text, /整面/);
   });
 });

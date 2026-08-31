@@ -3591,11 +3591,32 @@ html[data-theme="dark"] .notes.is-float {
   gap: 10px;
 }
 
-.review-evidence-grid.has-issues {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+.review-spoken {
+  display: grid;
+  gap: 4px;
+  padding: 2px 2px 4px;
 }
 
-@container (max-width: 700px) {
+.review-spoken p {
+  margin: 0;
+  color: var(--ink);
+  font-size: 16px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.review-spoken .is-ask {
+  font-weight: 600;
+}
+
+.review-progress {
+  margin: 0;
+  padding: 0 4px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+@container (max-width: 520px) {
   .review-evidence-grid {
     grid-template-columns: 1fr;
   }
@@ -3768,10 +3789,6 @@ html[data-theme="dark"] .notes.is-float {
   .notes.is-float {
     left: auto;
     max-width: calc(100% - 24px);
-  }
-
-  .review-evidence-grid {
-    grid-template-columns: 1fr;
   }
 
   .new-meta {

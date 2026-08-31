@@ -18,6 +18,8 @@ type SyntheticHit = {
   evidence?: string;
   coverage?: { hit?: string[]; miss?: string[]; matched?: number; total?: number };
   bboxes?: Array<Record<string, unknown>>;
+  qrcode_boxes?: Array<Record<string, unknown>>;
+  bilingual_pair_id?: string;
 };
 
 export type SyntheticTask = {
@@ -132,6 +134,7 @@ export type SyntheticApi = {
   uploads: SyntheticUploadSession[];
   calls: ApiCall[];
   failDeletes: Set<string>;
+  failNextDecision: boolean;
   loseNextUploadResponse: boolean;
   holdNextUploadComplete: boolean;
   expireNextTaskStart: boolean;
@@ -205,7 +208,7 @@ export function reviewTask(id = "e5969b58cd47"): SyntheticTask {
         pdf: "合成核对",
         page: 1,
         decision: "pending",
-        bboxes: [{ page: 1, x0: 40, y0: 50, x1: 260, y1: 95, kind: "miss" }],
+        bboxes: [{ page: 1, left: 40, top: 50, width: 220, height: 45, role: "check" }],
       },
     ],
   };
@@ -474,6 +477,10 @@ async function installSyntheticApi(page: Page, state: SyntheticApi) {
 
       const decision = path.match(/^\/api\/tasks\/([0-9a-f]{12})\/decision$/);
       if (method === "POST" && decision) {
+        if (state.failNextDecision) {
+          state.failNextDecision = false;
+          return json(route, { detail: "合成记录失败" }, 500);
+        }
         const task = state.tasks.find((item) => item.id === decision[1]);
         if (!task) return json(route, { detail: "合成任务不存在" }, 404);
         const data = (body || {}) as Record<string, unknown>;
@@ -574,6 +581,7 @@ export const test = base.extend<{ syntheticApi: SyntheticApi }>({
       uploads: [],
       calls: [],
       failDeletes: new Set(),
+      failNextDecision: false,
       loseNextUploadResponse: false,
       holdNextUploadComplete: false,
       expireNextTaskStart: false,
