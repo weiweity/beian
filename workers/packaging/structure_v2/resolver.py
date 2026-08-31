@@ -45,7 +45,7 @@ ROLE_DIMENSIONS = {
     "top": ("width", "depth"),
     "bottom": ("width", "depth"),
 }
-CACHE_SCHEMA = "packaging-structure-cache/6"
+CACHE_SCHEMA = "packaging-structure-cache/7"
 RESOLVED_SCHEMA = "resolved-packaging-job/3"
 PROPOSAL_EXPECTED_VALIDATION_ERRORS = {
     "structure_face_mapping_incomplete",
@@ -228,7 +228,12 @@ def _mapped_face_bounds(
     ]
     if bounds[2] <= bounds[0] or bounds[3] <= bounds[1]:
         return None
-    return [normalized_mm(value) for value in bounds]
+    # Keep affine endpoints at source precision.  Quantizing both endpoints
+    # before subtracting them can move a rotated face by one public
+    # millimetre quantum and make confirmation and final resolution classify
+    # the same closure differently.  Callers quantize the derived size or the
+    # final clipped coverage bounds exactly once.
+    return bounds
 
 
 def _mapped_face_size(
@@ -239,6 +244,35 @@ def _mapped_face_size(
     if bounds is None:
         return None
     return [normalized_mm(bounds[2] - bounds[0]), normalized_mm(bounds[3] - bounds[1])]
+
+
+def _public_coverage_interval(
+    raw_start: float,
+    raw_end: float,
+    expected: float,
+) -> list[float] | None:
+    """Quantize one aligned interval without changing its measured extent.
+
+    Closure alignment deliberately places each axis against the start edge,
+    the end edge, or in the centre.  Rounding the two affine endpoints
+    independently can shrink that interval by one 0.001 mm quantum.  Measure
+    the extent once, retain the alignment, and derive the second endpoint from
+    that public extent so proposal and final coverage use the same geometry.
+    """
+    public_expected = normalized_mm(expected)
+    clipped_start = max(0.0, float(raw_start))
+    clipped_end = min(public_expected, float(raw_end))
+    if public_expected <= 0 or clipped_end <= clipped_start:
+        return None
+    public_extent = normalized_mm(clipped_end - clipped_start)
+    if public_extent <= 0:
+        return None
+    public_start = normalized_mm(clipped_start)
+    public_end = normalized_mm(public_start + public_extent)
+    if public_end > public_expected:
+        public_end = public_expected
+        public_start = normalized_mm(public_end - public_extent)
+    return [public_start, public_end]
 
 
 def _artwork_coverage_bounds(
@@ -258,15 +292,11 @@ def _artwork_coverage_bounds(
         or (bounds[3] > expected[1] and not policy.close(bounds[3], expected[1]))
     ):
         return None
-    clipped = [
-        max(0.0, bounds[0]),
-        max(0.0, bounds[1]),
-        min(expected[0], bounds[2]),
-        min(expected[1], bounds[3]),
-    ]
-    if clipped[2] <= clipped[0] or clipped[3] <= clipped[1]:
+    horizontal = _public_coverage_interval(bounds[0], bounds[2], expected[0])
+    vertical = _public_coverage_interval(bounds[1], bounds[3], expected[1])
+    if horizontal is None or vertical is None:
         return None
-    return [normalized_mm(value) for value in clipped]
+    return [horizontal[0], vertical[0], horizontal[1], vertical[1]]
 
 
 def _solve_dimensions(

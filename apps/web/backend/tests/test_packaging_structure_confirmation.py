@@ -560,6 +560,40 @@ def test_anchor_confirmation_accepts_a_verified_multi_flap_closure_without_stret
     assert sorted(layer_counts.values()) == [1, 2]
 
 
+def test_anchor_confirmation_scopes_unequal_opposing_flaps_to_the_selected_net(
+    tmp_path: Path,
+):
+    source, resolution, proposed, net, front = anchor_proposal_files(
+        tmp_path,
+        top_cap_depth=10.8,
+        top_support_depth=9.2,
+    )
+    assembly = next(
+        closure
+        for closure in net["closure_assemblies"]
+        if closure["closure_kind"] == "assembly"
+    )
+
+    assert proposed["code"] == "structure_face_mapping_incomplete"
+    assert assembly["coverage_ratio"] == 1.0
+    assert sorted(member["coverage_ratio"] for member in assembly["members"]) == [
+        0.46,
+        0.54,
+    ]
+    assert net["valid_anchors"]
+
+    result = confirm_anchor(
+        source,
+        resolution,
+        net["id"],
+        front["id"],
+        0,
+        tmp_path / "unequal-opposing-flaps.structure.json",
+    )
+
+    assert result["ok"] is True
+
+
 def test_anchor_confirmation_accepts_the_exact_multi_flap_coverage_boundary(tmp_path: Path):
     source, resolution, proposed, net, front = anchor_proposal_files(
         tmp_path,
@@ -630,7 +664,10 @@ def test_artwork_assembly_contract_rejects_untrusted_overlap_above_two_percent(t
     assert raised.value.code == "structure_contract_invalid"
 
 
-@pytest.mark.parametrize("case", ["wrong_body", "overclaimed_member", "wrong_kind"])
+@pytest.mark.parametrize(
+    "case",
+    ["wrong_body", "overclaimed_member", "wrong_kind", "shifted_union"],
+)
 def test_resolver_revalidates_artwork_assembly_claims_against_geometry(
     tmp_path: Path,
     case: str,
@@ -661,6 +698,14 @@ def test_resolver_revalidates_artwork_assembly_claims_against_geometry(
             if closure["closure_kind"] == "full"
         )
         full["closure_kind"] = "clearance"
+    elif case == "shifted_union":
+        # Each flap still has the declared 50% area and a valid fold, but
+        # translating both toward the centre leaves the erected footprint
+        # uncovered.  Coverage validation must use their physical union.
+        faces_by_id = {face["id"]: face for face in approved["faces"]}
+        first, second = assembly["members"]
+        faces_by_id[first["face_id"]]["artwork_transform"][5] += 4.0
+        faces_by_id[second["face_id"]]["artwork_transform"][5] -= 4.0
     else:  # pragma: no cover - parametrization is exhaustive
         raise AssertionError(case)
 
@@ -793,19 +838,89 @@ def test_anchor_confirmation_rejects_a_tampered_strip_axis(tmp_path: Path):
     assert raised.value.code == "structure_confirmation_invalid"
 
 
-def test_anchor_confirmation_rejects_a_cap_without_one_folded_body_neighbor(tmp_path: Path):
+def test_anchor_confirmation_rejects_a_cap_without_one_shared_crease(tmp_path: Path):
     source, resolution, proposed, net, front = anchor_proposal_files(tmp_path)
     detached = deepcopy(proposed)
-    cap_id = detached["topology"]["net_proposals"][0]["cap_face_ids"][0]
+    first_closure = detached["topology"]["net_proposals"][0]["closure_assemblies"][0]
+    cap_id = first_closure["members"][0]["face_id"]
+    body_id = first_closure["members"][0]["attached_body_face_id"]
+    faces_by_id = {face["id"]: face for face in detached["structure"]["faces"]}
+    shared_edges = set(faces_by_id[cap_id]["boundary"]) & set(
+        faces_by_id[body_id]["boundary"]
+    )
+    assert len(shared_edges) == 1
+    shared_edge = next(iter(shared_edges))
+    next(
+        edge
+        for edge in detached["structure"]["edges"]
+        if edge["id"] == shared_edge
+    )["assignment"] = "cut"
+    # structure.folds is only a diagnostic cache for a legacy stroke
+    # proposal; selected-net confirmation derives adjacency from the shared
+    # physical crease so alternative candidates cannot erase one another.
     detached["structure"]["folds"] = [
         fold
         for fold in detached["structure"]["folds"]
-        if cap_id not in {fold["left_face"], fold["right_face"]}
+        if fold["edge"] != shared_edge
     ]
     write_resolution(resolution, detached)
 
     with pytest.raises(StructureConfirmationError) as raised:
         confirm_anchor(source, resolution, net["id"], front["id"], 0, tmp_path / "never.json")
+
+    assert raised.value.code == "structure_fold_graph_invalid"
+
+
+def test_anchor_confirmation_rejects_two_alternative_flaps_on_one_selected_crease(
+    tmp_path: Path,
+):
+    source, resolution, proposed, _net, front = anchor_proposal_files(
+        tmp_path,
+        top_cap_depth=10.8,
+        top_support_depth=9.2,
+    )
+    tampered = deepcopy(proposed)
+    target = tampered["topology"]["net_proposals"][0]
+    assembly = next(
+        closure
+        for closure in target["closure_assemblies"]
+        if closure["closure_kind"] == "assembly"
+    )
+    primary = next(
+        member
+        for member in assembly["members"]
+        if member["face_id"] == assembly["primary_face_id"]
+    )
+    replaced = next(
+        member
+        for member in assembly["members"]
+        if member["face_id"] != primary["face_id"]
+    )
+    faces_by_id = {face["id"]: face for face in tampered["structure"]["faces"]}
+    duplicate = deepcopy(faces_by_id[primary["face_id"]])
+    duplicate["id"] = "same-crease-alternative"
+    tampered["structure"]["faces"].append(duplicate)
+    alternate = deepcopy(replaced)
+    alternate["face_id"] = duplicate["id"]
+    alternate["attached_body_face_id"] = primary["attached_body_face_id"]
+    assembly["members"] = [primary, alternate]
+    target["face_ids"] = [
+        face_id
+        for face_id in target["face_ids"]
+        if face_id != replaced["face_id"]
+    ]
+    target["face_ids"].append(alternate["face_id"])
+    write_resolution(resolution, tampered)
+
+    with pytest.raises(StructureConfirmationError) as raised:
+        confirm_anchor(
+            source,
+            resolution,
+            target["id"],
+            front["id"],
+            0,
+            tmp_path / "never.json",
+        )
 
     assert raised.value.code == "structure_fold_graph_invalid"
 
