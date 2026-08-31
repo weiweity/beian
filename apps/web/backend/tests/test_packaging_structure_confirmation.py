@@ -679,6 +679,7 @@ def test_resolver_revalidates_artwork_assembly_claims_against_geometry(
         "invalid_kind",
         "assembly_missing_schema",
         "assembly_missing_member",
+        "assembly_invalid_extent",
         "assembly_below_threshold",
         "assembly_excessive_overlap",
         "attached_body_mismatch",
@@ -706,6 +707,9 @@ def test_anchor_confirmation_rejects_tampered_closure_contracts(tmp_path: Path, 
         proposal.pop("schema")
     elif case == "assembly_missing_member":
         next(item for item in closures if item["closure_kind"] == "assembly")["members"].pop()
+    elif case == "assembly_invalid_extent":
+        assembly = next(item for item in closures if item["closure_kind"] == "assembly")
+        assembly["members"][0]["extent"] = "full"
     elif case == "assembly_below_threshold":
         next(item for item in closures if item["closure_kind"] == "assembly")["coverage_ratio"] = 0.939
     elif case == "assembly_excessive_overlap":
