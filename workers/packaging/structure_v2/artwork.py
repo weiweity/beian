@@ -46,16 +46,55 @@ def _inverse(transform: list[float]) -> tuple[float, float, float, float, float,
     )
 
 
-def _source_corners(
-    inverse: tuple[float, float, float, float, float, float],
+def _coverage_bounds(
+    face: Mapping[str, Any],
     width_mm: float,
     height_mm: float,
-) -> list[tuple[float, float]]:
-    ia, ic, ie, ib, id_, if_ = inverse
-    return [
-        (ia * x + ic * y + ie, ib * x + id_ * y + if_)
-        for x, y in ((0.0, 0.0), (width_mm, 0.0), (width_mm, height_mm), (0.0, height_mm))
-    ]
+    tolerance_mm: float,
+) -> tuple[float, float, float, float]:
+    raw = face.get("artwork_coverage_bounds_mm")
+    if raw is None:
+        return (0.0, 0.0, width_mm, height_mm)
+    if not isinstance(raw, list) or len(raw) != 4:
+        raise ArtworkMappingError("artwork_transform_invalid", "贴图覆盖范围格式无效")
+    try:
+        left, top, right, bottom = (float(value) for value in raw)
+    except (TypeError, ValueError) as error:
+        raise ArtworkMappingError("artwork_transform_invalid", "贴图覆盖范围格式无效") from error
+    if (
+        not all(math.isfinite(value) for value in (left, top, right, bottom))
+        or right <= left
+        or bottom <= top
+        or left < -tolerance_mm
+        or top < -tolerance_mm
+        or right > width_mm + tolerance_mm
+        or bottom > height_mm + tolerance_mm
+    ):
+        raise ArtworkMappingError("artwork_transform_invalid", "贴图覆盖范围超出盒面")
+    return (
+        max(0.0, left),
+        max(0.0, top),
+        min(width_mm, right),
+        min(height_mm, bottom),
+    )
+
+
+def _mask_unprinted_area(
+    image: Image.Image,
+    coverage: tuple[float, float, float, float],
+    width_mm: float,
+    height_mm: float,
+) -> Image.Image:
+    if coverage == (0.0, 0.0, width_mm, height_mm):
+        return image
+    left = max(0, min(image.width, math.floor(coverage[0] / width_mm * image.width)))
+    top = max(0, min(image.height, math.floor(coverage[1] / height_mm * image.height)))
+    right = max(left, min(image.width, math.ceil(coverage[2] / width_mm * image.width)))
+    bottom = max(top, min(image.height, math.ceil(coverage[3] / height_mm * image.height)))
+    padded = Image.new("RGB", image.size, (255, 255, 255))
+    if right > left and bottom > top:
+        padded.paste(image.crop((left, top, right, bottom)), (left, top))
+    return padded
 
 
 def render_face_assets(
@@ -128,8 +167,16 @@ def render_face_assets(
             raise ArtworkMappingError("artwork_transform_invalid", f"{role} 面缺少仿射变换")
         width_mm = float(dimensions[keys[0]])
         height_mm = float(dimensions[keys[1]])
+        coverage = _coverage_bounds(face, width_mm, height_mm, bounds_tolerance_mm)
         inverse = _inverse(transform)
-        corners = _source_corners(inverse, width_mm, height_mm)
+        left, top, right, bottom = coverage
+        corners = [
+            (
+                inverse[0] * x + inverse[1] * y + inverse[2],
+                inverse[3] * x + inverse[4] * y + inverse[5],
+            )
+            for x, y in ((left, top), (right, top), (right, bottom), (left, bottom))
+        ]
         if any(
             x < -bounds_tolerance_mm
             or y < -bounds_tolerance_mm
@@ -162,6 +209,7 @@ def render_face_assets(
             resample=Image.Resampling.BICUBIC,
             fillcolor=(255, 255, 255),
         )
+        face_image = _mask_unprinted_area(face_image, coverage, width_mm, height_mm)
         output = destination / f"panel_{role}.png"
         face_image.save(output, compress_level=3)
         sizes[role] = [face_image.width, face_image.height]

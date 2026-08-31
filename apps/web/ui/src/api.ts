@@ -777,6 +777,15 @@ export type MockupJob = {
       cap_face_ids: [string, string];
       strip_axis: "x" | "y";
       bounds_mm?: [number, number, number, number];
+      dimensions_mm?: { width: number; depth: number; height: number };
+      valid_anchors?: Array<{ front_face_id: string; quarter_turns: Array<0 | 1 | 2 | 3> }>;
+      closure_assemblies?: Array<{
+        face_id: string;
+        attached_body_face_id: string;
+        side: -1 | 1;
+        extent: "full" | "partial";
+        coverage_ratio: number;
+      }>;
     }>;
     faces: Array<{
       id: string;

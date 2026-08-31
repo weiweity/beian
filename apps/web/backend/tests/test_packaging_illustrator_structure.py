@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import math
 from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -11,6 +13,7 @@ PACKAGING = Path(__file__).resolve().parents[4] / "workers" / "packaging"
 WORKER = PACKAGING / "illustrator" / "illustrator_worker.py"
 PIPELINE = PACKAGING / "pipeline.py"
 EXPORTER = PACKAGING / "illustrator" / "export_structure.jsx"
+CURVE_HELPER = PACKAGING / "illustrator" / "curve_flatten.js"
 WINDOWS_RUNNER = PACKAGING / "illustrator" / "run_export.vbs"
 AGENT_CLIENT = PACKAGING / "illustrator" / "illustrator_agent.py"
 AGENT_SCRIPT = PACKAGING.parents[1] / "scripts" / "windows" / "illustrator-agent.ps1"
@@ -43,10 +46,54 @@ def load_agent_client():
     return module
 
 
-def test_structure_export_is_opt_in_and_legacy_worker_is_unchanged():
+def test_structure_export_is_opt_in_and_legacy_worker_is_unchanged(tmp_path: Path):
     worker = load_worker()
     assert worker.select_jsx({}).name == "export_ai.jsx"
     assert worker.select_jsx({"structure_json": "structure.json"}).name == "export_structure.jsx"
+    config_path = tmp_path / "job.json"
+    runtime = worker.bind_runtime_jsx(config_path, {"structure_json": "structure.json"})
+    source = runtime.read_text(encoding="utf-8")
+    assert runtime.parent == tmp_path
+    assert '#include "curve_flatten.js"' not in source
+    assert source.count("function flattenCubicSegment") == 1
+    assert "flattenCubicSegment(" in source
+
+
+def test_mac_worker_reports_runtime_jsx_binding_failure_without_traceback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    worker = load_worker()
+    config_path = tmp_path / "illustrator-input.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "application": str(tmp_path / "Illustrator.app"),
+                "source_ai": str(tmp_path / "source.ai"),
+                "full_pdf": str(tmp_path / "full.pdf"),
+                "print_pdf": str(tmp_path / "print.pdf"),
+                "structure_json": str(tmp_path / "structure.json"),
+                "result_json": str(tmp_path / "result.json"),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(worker.sys, "platform", "darwin")
+    monkeypatch.setattr(worker, "warm_up_illustrator", lambda *_args: pytest.fail("Illustrator must not start"))
+    monkeypatch.setattr(worker, "open_document_externally", lambda *_args: pytest.fail("source must not open"))
+    monkeypatch.setattr(
+        worker,
+        "bind_runtime_jsx",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("curve helper missing")),
+    )
+    monkeypatch.setattr(worker.sys, "argv", [str(WORKER), str(config_path)])
+
+    assert worker.main() == 2
+    stderr = capsys.readouterr().err
+    assert stderr.strip() == "Illustrator exporter setup failed: curve helper missing"
+    assert "Traceback" not in stderr
 
 
 def test_structure_export_hides_objects_not_whole_layers():
@@ -55,6 +102,94 @@ def test_structure_export_hides_objects_not_whole_layers():
     assert "documentRef.layers[layerIndex].visible =" not in source
     assert 'adapter: "illustrator-semantic/1"' in source
     assert 'structure_face_mapping_incomplete' in source
+
+
+def test_structure_export_flattens_curves_with_a_bounded_audited_adapter():
+    source = EXPORTER.read_text(encoding="utf-8")
+    assert '#include "curve_flatten.js"' in source
+    assert "flattenCubicSegment(" in source
+    assert "structure_curve_requires_adapter" not in source
+    assert 'kind: "bezier_flatten"' in source
+    assert '"structure_repair_ledger_truncated"' in source
+    assert '"structure_curve_complexity_exceeded"' in source
+    assert "flattened === null" in source
+    assert "flattened.length - 1 > 256" in source
+    assert "localEdges.length + flattened.length - 1 > 4096" in source
+    assert "structure.edges.length + localEdges.length > 20000" in source
+    assert "chosenRecords.length > 5000" in source
+    assert "!hasFatalStructureError(structure.validation.errors)" in source
+    assert 'coordinate_frame: "artboard-top-left"' in source
+    assert 'adapter_version: "1.1.0"' in source
+
+
+def test_curve_adapter_preserves_endpoints_and_stays_inside_the_declared_tolerance():
+    helper = CURVE_HELPER.read_text(encoding="utf-8")
+    program = helper + "\nprocess.stdout.write(JSON.stringify(flattenCubicSegment([0,0],[0,100],[100,100],[100,0],0.25,12)));"
+    completed = subprocess.run(
+        ["node", "-e", program],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    points = json.loads(completed.stdout)
+
+    assert points[0] == [0, 0]
+    assert points[-1] == [100, 0]
+    assert 2 < len(points) <= 257
+
+    def cubic(t: float) -> tuple[float, float]:
+        one = 1.0 - t
+        return (
+            3 * one * t * t * 100 + t * t * t * 100,
+            3 * one * one * t * 100 + 3 * one * t * t * 100,
+        )
+
+    def segment_distance(point: tuple[float, float], start: list[float], end: list[float]) -> float:
+        dx = end[0] - start[0]
+        dy = end[1] - start[1]
+        length_squared = dx * dx + dy * dy
+        if length_squared == 0:
+            return math.hypot(point[0] - start[0], point[1] - start[1])
+        ratio = max(0.0, min(1.0, ((point[0] - start[0]) * dx + (point[1] - start[1]) * dy) / length_squared))
+        nearest = (start[0] + ratio * dx, start[1] + ratio * dy)
+        return math.hypot(point[0] - nearest[0], point[1] - nearest[1])
+
+    maximum_error = max(
+        min(segment_distance(cubic(index / 1000), points[item], points[item + 1]) for item in range(len(points) - 1))
+        for index in range(1001)
+    )
+    assert maximum_error <= 0.25
+
+
+def test_curve_adapter_preserves_collinear_handle_reversals_instead_of_collapsing_them():
+    helper = CURVE_HELPER.read_text(encoding="utf-8")
+    program = helper + "\nprocess.stdout.write(JSON.stringify(flattenCubicSegment([0,0],[100,0],[-100,0],[1,0],0.25,12)));"
+    completed = subprocess.run(
+        ["node", "-e", program],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    points = json.loads(completed.stdout)
+
+    assert points[0] == [0, 0]
+    assert points[-1] == [1, 0]
+    assert 2 < len(points) <= 257
+    assert min(point[0] for point in points) < -28
+    assert max(point[0] for point in points) > 28
+
+
+def test_curve_adapter_fails_closed_when_the_depth_budget_cannot_meet_tolerance():
+    helper = CURVE_HELPER.read_text(encoding="utf-8")
+    program = helper + "\nprocess.stdout.write(JSON.stringify(flattenCubicSegment([0,0],[0,100],[100,100],[100,0],0.25,0)));"
+    completed = subprocess.run(
+        ["node", "-e", program],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert json.loads(completed.stdout) is None
 
 
 def test_explicit_ignore_objects_are_removed_from_artwork_without_becoming_edges():
@@ -295,7 +430,7 @@ def test_windows_bridge_uses_official_com_jsx_entrypoint_and_guards_open_docs():
     assert "Shell.Application" not in source
 
 
-def test_agent_client_and_server_changes_invalidate_pipeline_cache(
+def test_agent_and_curve_adapter_changes_invalidate_pipeline_cache(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -304,21 +439,27 @@ def test_agent_client_and_server_changes_invalidate_pipeline_cache(
     template = tmp_path / "template.json"
     client = tmp_path / "illustrator_agent.py"
     server = tmp_path / "illustrator-agent.ps1"
+    curve_helper = tmp_path / "curve_flatten.js"
     source.write_bytes(b"ai")
     template.write_text("{}", encoding="utf-8")
     client.write_text("client-v1", encoding="utf-8")
     server.write_text("server-v1", encoding="utf-8")
+    curve_helper.write_text("curve-v1", encoding="utf-8")
     monkeypatch.setattr(pipeline, "ILLUSTRATOR_AGENT_CLIENT", client)
     monkeypatch.setattr(pipeline, "ILLUSTRATOR_AGENT_SERVER", server)
+    monkeypatch.setattr(pipeline, "ILLUSTRATOR_CURVE_HELPER", curve_helper)
 
     first = pipeline.job_fingerprint(source, template, {"structure_engine": "v2"})
     client.write_text("client-v2", encoding="utf-8")
     second = pipeline.job_fingerprint(source, template, {"structure_engine": "v2"})
     server.write_text("server-v2", encoding="utf-8")
     third = pipeline.job_fingerprint(source, template, {"structure_engine": "v2"})
+    curve_helper.write_text("curve-v2", encoding="utf-8")
+    fourth = pipeline.job_fingerprint(source, template, {"structure_engine": "v2"})
 
     assert first != second
     assert second != third
+    assert third != fourth
 
 
 def test_windows_worker_has_no_session_zero_launch_or_direct_com_path():
@@ -424,6 +565,8 @@ def test_session_one_agent_is_acl_bounded_timeout_safe_and_fixed_exporter_only()
     assert 'Write-Heartbeat "busy"' in enter_lock
     assert '"export_structure.jsx"' in source
     assert '"export_ai.jsx"' in source
+    assert 'Join-Path $ExporterRoot "curve_flatten.js"' in source
+    assert "$source.Replace($include, $helper)" in source
     assert "DoJavaScriptFile" not in source
     assert "Illustrator.Application" not in source
 

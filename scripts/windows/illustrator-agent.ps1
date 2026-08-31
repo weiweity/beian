@@ -586,7 +586,18 @@ function Bind-RuntimeJsx([string]$ExporterPath, [string]$ConfigPath) {
   }
   $runtimePath = Join-Path ([System.IO.Path]::GetDirectoryName($ConfigPath)) (([System.IO.Path]::GetFileNameWithoutExtension($ExporterPath)) + ".runtime.jsx")
   $configLiteral = ConvertTo-Json ([string]$ConfigPath) -Compress
-  $source = "var PIPELINE_CONFIG_PATH = $configLiteral;`n" + [System.IO.File]::ReadAllText($ExporterPath, $Utf8NoBom)
+  $source = [System.IO.File]::ReadAllText($ExporterPath, $Utf8NoBom)
+  if ([System.IO.Path]::GetFileName($ExporterPath) -eq "export_structure.jsx") {
+    $include = '#include "curve_flatten.js"'
+    $matches = [regex]::Matches($source, [regex]::Escape($include))
+    $helperPath = Join-Path $ExporterRoot "curve_flatten.js"
+    if ($matches.Count -ne 1 -or -not (Test-Path -LiteralPath $helperPath -PathType Leaf)) {
+      Throw-AgentFailure "illustrator_bridge_missing" "fixed curve helper binding was not found"
+    }
+    $helper = [System.IO.File]::ReadAllText($helperPath, $Utf8NoBom)
+    $source = $source.Replace($include, $helper)
+  }
+  $source = "var PIPELINE_CONFIG_PATH = $configLiteral;`n" + $source
   Write-Utf8File $runtimePath $source
   return $runtimePath
 }

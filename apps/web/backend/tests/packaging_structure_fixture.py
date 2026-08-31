@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 
 def semantic_box(
     *,
@@ -10,17 +12,26 @@ def semantic_box(
     depth: float = 20.0,
     height: float = 50.0,
     cap_clearance: float = 0.0,
+    top_cap_depth: float | None = None,
+    bottom_cap_depth: float | None = None,
+    body_width_overrides: Mapping[str, float] | None = None,
 ) -> dict:
     if cap_body_role not in {"front", "right", "back", "left"}:
         raise ValueError(f"unsupported cap_body_role: {cap_body_role}")
     if net_axis not in {"x", "y"}:
         raise ValueError(f"unsupported net_axis: {net_axis}")
     body_widths = {"back": width, "left": depth, "front": width, "right": depth}
+    if body_width_overrides:
+        body_widths.update({role: float(value) for role, value in body_width_overrides.items()})
+    if set(body_widths) != {"back", "left", "front", "right"} or any(value <= 0 for value in body_widths.values()):
+        raise ValueError("body widths must define four positive panels")
     expected_cap_depth = depth if body_widths[cap_body_role] == width else width
-    cap_depth = expected_cap_depth - cap_clearance
-    if cap_depth <= 0:
+    default_cap_depth = expected_cap_depth - cap_clearance
+    top_depth = default_cap_depth if top_cap_depth is None else top_cap_depth
+    bottom_depth = default_cap_depth if bottom_cap_depth is None else bottom_cap_depth
+    if top_depth <= 0 or bottom_depth <= 0:
         raise ValueError("cap_clearance leaves no cap depth")
-    body_top = cap_depth
+    body_top = bottom_depth
     rectangles = {}
     cursor = 0.0
     for role in ("back", "left", "front", "right"):
@@ -29,8 +40,8 @@ def semantic_box(
         cursor += panel_width
     cap_left, _body_y0, cap_right, body_bottom = rectangles[cap_body_role]
     rectangles.update({
-        "top": (cap_left, body_bottom, cap_right, body_bottom + cap_depth),
-        "bottom": (cap_left, 0.0, cap_right, cap_depth),
+        "top": (cap_left, body_bottom, cap_right, body_bottom + top_depth),
+        "bottom": (cap_left, 0.0, cap_right, bottom_depth),
     })
     if net_axis == "y":
         rectangles = {
@@ -78,9 +89,9 @@ def semantic_box(
             "adapter_version": "1.0.0",
             "coordinate_space": "artboard-top-left",
             "page_size": (
-                [120, height + 2 * cap_depth]
+                [120, height + top_depth + bottom_depth]
                 if net_axis == "x"
-                else [height + 2 * cap_depth, 120]
+                else [height + top_depth + bottom_depth, 120]
             ),
         },
         "vertices": [

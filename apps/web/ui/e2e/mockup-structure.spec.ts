@@ -169,6 +169,13 @@ test("切换完整盒型时清空上一方案的正面和方向", async ({ page,
           body_face_ids: ["body-a", "body-b", "body-c", "body-d"],
           cap_face_ids: ["cap-top", "cap-bottom"],
           strip_axis: "x",
+          dimensions_mm: { width: 30, depth: 20, height: 50 },
+          valid_anchors: [
+            { front_face_id: "body-a", quarter_turns: [0, 1] },
+            { front_face_id: "body-b", quarter_turns: [0, 1] },
+            { front_face_id: "body-c", quarter_turns: [0, 1] },
+            { front_face_id: "body-d", quarter_turns: [0, 1] },
+          ],
         },
         {
           id: "box-net-0002",
@@ -176,6 +183,13 @@ test("切换完整盒型时清空上一方案的正面和方向", async ({ page,
           body_face_ids: ["body-d", "body-c", "body-b", "body-a"],
           cap_face_ids: ["cap-top", "cap-bottom"],
           strip_axis: "x",
+          dimensions_mm: { width: 31, depth: 20, height: 50 },
+          valid_anchors: [
+            { front_face_id: "body-d", quarter_turns: [0, 2] },
+            { front_face_id: "body-c", quarter_turns: [0, 2] },
+            { front_face_id: "body-b", quarter_turns: [0, 2] },
+            { front_face_id: "body-a", quarter_turns: [0, 2] },
+          ],
         },
       ],
     },
@@ -189,7 +203,7 @@ test("切换完整盒型时清空上一方案的正面和方向", async ({ page,
   await expect(startButton).toBeEnabled();
 
   await page.locator(".structure-anchor-field .ant-select").click();
-  await page.getByText("盒型方案 2 · 六面连通", { exact: true }).click();
+  await page.getByText("盒型方案 2 · 底面 31×20 · 高 50 mm", { exact: true }).click();
 
   await expect(startButton).toBeDisabled();
   await expect(page.locator(".structure-front-choices .ant-btn-primary")).toHaveCount(0);

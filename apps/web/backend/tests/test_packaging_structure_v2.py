@@ -143,6 +143,86 @@ def test_points_are_normalized_to_millimetres():
     assert by_id["v2"]["x"] == pytest.approx(10 * 25.4 / 72, abs=1e-6)
 
 
+def test_curve_repair_ledger_is_unit_normalized_bounded_and_idempotent():
+    payload = base_structure(units="pt")
+    payload["source"]["geometry"] = {
+        "coordinate_frame": "artboard-top-left",
+        "precision": 0.001,
+        "curve_tolerance": 0.25,
+        "curved_source_segments": 1,
+        "generated_line_segments": 16,
+        "repairs": [
+            {
+                "kind": "bezier_flatten",
+                "source_ref": "path:4/segment:2",
+                "output_segments": 8,
+            }
+        ],
+    }
+
+    normalized = canonicalize_structure(payload)
+    geometry = normalized["source"]["geometry"]
+
+    assert geometry["coordinate_frame"] == "artboard-top-left"
+    assert geometry["precision"] == pytest.approx(0.001 * 25.4 / 72, abs=1e-6)
+    assert geometry["curve_tolerance"] == pytest.approx(0.25 * 25.4 / 72, abs=1e-6)
+    assert geometry["repairs"] == [
+        {
+            "kind": "bezier_flatten",
+            "source_ref": "path:4/segment:2",
+            "output_segments": 8,
+        }
+    ]
+    assert canonicalize_structure(normalized) == normalized
+
+
+def test_minimum_legal_geometry_precision_remains_positive_and_idempotent():
+    payload = base_structure(units="pt")
+    payload["source"]["geometry"] = {
+        "coordinate_frame": "artboard-top-left",
+        "precision": 1e-9,
+        "curve_tolerance": 0.0,
+        "curved_source_segments": 0,
+        "generated_line_segments": 0,
+        "repairs": [],
+    }
+
+    normalized = canonicalize_structure(payload)
+
+    assert normalized["source"]["geometry"]["precision"] == 1e-9
+    assert canonicalize_structure(normalized) == normalized
+
+
+def test_curve_repair_ledger_changes_geometry_identity_and_rejects_unbounded_audit_data():
+    original = base_structure()
+    original["source"]["geometry"] = {
+        "coordinate_frame": "artboard-top-left",
+        "precision": 0.001,
+        "curve_tolerance": 0.25,
+        "curved_source_segments": 1,
+        "generated_line_segments": 8,
+        "repairs": [
+            {"kind": "bezier_flatten", "source_ref": "path:1/segment:0", "output_segments": 8}
+        ],
+    }
+    changed = deepcopy(original)
+    changed["source"]["geometry"]["repairs"][0]["output_segments"] = 9
+
+    assert canonicalize_structure(original)["structure_hash"] != canonicalize_structure(changed)["structure_hash"]
+
+    unbounded = deepcopy(original)
+    unbounded["source"]["geometry"]["repairs"] *= 101
+    with pytest.raises(StructureContractError) as error:
+        canonicalize_structure(unbounded)
+    assert error.value.code == "structure_limit_exceeded"
+
+    unknown = deepcopy(original)
+    unknown["source"]["geometry"]["repairs"][0]["kind"] = "guess_curve"
+    with pytest.raises(StructureContractError) as error:
+        canonicalize_structure(unknown)
+    assert error.value.code == "structure_contract_invalid"
+
+
 def test_contract_rejects_unknown_units_and_broken_references():
     payload = base_structure()
     payload["units"] = None
