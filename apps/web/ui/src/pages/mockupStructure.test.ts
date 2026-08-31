@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import { ApiError } from "../api.js";
 import {
   selectedStructureAnchor,
+  structureClosureNote,
   structureConfirmationErrorCopy,
   structureIssueCopy,
   structurePolygonPoints,
@@ -84,6 +85,7 @@ describe("mockup V2 structure UX", () => {
           attached_body_face_id: faces[0].id,
           side: -1 as const,
           extent: "partial" as const,
+          closure_kind: "clearance" as const,
           coverage_ratio: 0.94,
         },
         {
@@ -91,6 +93,7 @@ describe("mockup V2 structure UX", () => {
           attached_body_face_id: faces[0].id,
           side: 1 as const,
           extent: "full" as const,
+          closure_kind: "full" as const,
           coverage_ratio: 1,
         },
       ],
@@ -105,6 +108,51 @@ describe("mockup V2 structure UX", () => {
       quarter_turns: 2,
     });
     assert.equal(structureProposalLabel(proposal, 0), "盒型方案 1 · 底面 30×20 · 高 50 mm · 主盖片有正常让位");
+
+    const assembled = {
+      ...proposal,
+      closure_assemblies: proposal.closure_assemblies.map((closure, index) => (
+        index === 0
+          ? { ...closure, closure_kind: "assembly" as const }
+          : closure
+      )),
+    };
+    assert.equal(structureClosureNote(assembled), " · 组合封口由多折片共同闭合");
+    assert.equal(
+      structureProposalLabel(assembled, 0),
+      "盒型方案 1 · 底面 30×20 · 高 50 mm · 组合封口由多折片共同闭合",
+    );
+
+    const full = {
+      ...proposal,
+      closure_assemblies: proposal.closure_assemblies.map((closure) => ({
+        ...closure,
+        extent: "full" as const,
+        closure_kind: "full" as const,
+        coverage_ratio: 1,
+      })),
+    };
+    assert.equal(structureClosureNote(full), "");
+
+    const legacyPartial = {
+      ...proposal,
+      closure_assemblies: proposal.closure_assemblies.map((closure, index) => (
+        index === 0
+          ? {
+              face_id: closure.face_id,
+              attached_body_face_id: closure.attached_body_face_id,
+              side: closure.side,
+              extent: "partial" as const,
+              coverage_ratio: closure.coverage_ratio,
+            }
+          : closure
+      )),
+    };
+    assert.equal(structureClosureNote(legacyPartial), " · 主盖片有正常让位");
+    assert.equal(
+      structureProposalLabel({ ...full, dimensions_mm: undefined }, 0),
+      "盒型方案 1",
+    );
   });
 
   it("builds a padded SVG viewBox around all proposed faces", () => {

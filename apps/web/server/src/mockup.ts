@@ -67,6 +67,7 @@ export type StructureNetProposal = {
     attached_body_face_id: string;
     side: -1 | 1;
     extent: "full" | "partial";
+    closure_kind?: "full" | "clearance" | "assembly";
     coverage_ratio: number;
   }>;
 };
@@ -78,6 +79,9 @@ export type StructureAnchorDecision = {
 };
 
 export type StructureConfirmationDecision = { anchor: StructureAnchorDecision };
+
+const BOX_NET_PROPOSAL_SCHEMA = "box-net-proposal/2";
+const MIN_ASSEMBLED_CLOSURE_RATIO = 0.6;
 
 export function isStructureProposalId(value: string): boolean {
   return /^box-net-(?:\d{4}|[0-9a-f]{16})$/.test(value);
@@ -426,21 +430,34 @@ export function loadStructurePreview(job: MockupJob): {
             const bodyId = typeof closure.attached_body_face_id === "string" ? closure.attached_body_face_id : "";
             const side = closure.side === -1 || closure.side === 1 ? closure.side : null;
             const extent = closure.extent === "full" || closure.extent === "partial" ? closure.extent : null;
+            const rawClosureKind = closure.closure_kind;
+            const closureKind = rawClosureKind === "full"
+              || rawClosureKind === "clearance"
+              || rawClosureKind === "assembly"
+              ? rawClosureKind
+              : null;
             const ratio = Number(closure.coverage_ratio);
             if (
               !capIds.includes(faceId)
               || !bodyIds.includes(bodyId)
               || side === null
               || !extent
+              || (rawClosureKind !== undefined && !closureKind)
               || !Number.isFinite(ratio)
               || ratio <= 0
               || ratio > 1
+              || (closureKind === "assembly" && (
+                net.schema !== BOX_NET_PROPOSAL_SCHEMA
+                || extent !== "partial"
+                || ratio < MIN_ASSEMBLED_CLOSURE_RATIO
+              ))
             ) continue;
             closures.push({
               face_id: faceId,
               attached_body_face_id: bodyId,
               side,
               extent,
+              ...(closureKind ? { closure_kind: closureKind } : {}),
               coverage_ratio: ratio,
             });
           }

@@ -784,6 +784,7 @@ export type MockupJob = {
         attached_body_face_id: string;
         side: -1 | 1;
         extent: "full" | "partial";
+        closure_kind?: "full" | "clearance" | "assembly";
         coverage_ratio: number;
       }>;
     }>;

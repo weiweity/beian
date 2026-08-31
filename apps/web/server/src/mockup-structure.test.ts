@@ -51,6 +51,7 @@ function reviewJob() {
       topology: {
         face_proposal: previewFaces,
         net_proposals: [{
+          schema: "box-net-proposal/2",
           id: "box-net-0123456789abcdef",
           face_ids: previewFaces.map((face) => face.id),
           body_face_ids: previewFaces.slice(0, 4).map((face) => face.id),
@@ -65,13 +66,15 @@ function reviewJob() {
               attached_body_face_id: previewFaces[0].id,
               side: -1,
               extent: "partial",
-              coverage_ratio: 0.4,
+              closure_kind: "assembly",
+              coverage_ratio: 0.6,
             },
             {
               face_id: previewFaces[5].id,
               attached_body_face_id: previewFaces[0].id,
               side: 1,
               extent: "full",
+              closure_kind: "full",
               coverage_ratio: 1,
             },
           ],
@@ -142,19 +145,56 @@ describe("mockup structure confirmation persistence", () => {
           attached_body_face_id: "proposal-face-0001",
           side: -1,
           extent: "partial",
-          coverage_ratio: 0.4,
+          closure_kind: "assembly",
+          coverage_ratio: 0.6,
         },
         {
           face_id: "proposal-face-0006",
           attached_body_face_id: "proposal-face-0001",
           side: 1,
           extent: "full",
+          closure_kind: "full",
           coverage_ratio: 1,
         },
       ],
     }]);
     assert.deepEqual(view.structure_preview?.page_size_mm, [210, 297]);
     assert.equal(view.structure_preview?.image_url, `/api/mockups/${job.id}/structure-preview`);
+  });
+
+  it("keeps legacy full and clearance closures without a proposal schema or closure kind", () => {
+    const { job } = reviewJob();
+    const resolutionPath = job.structure_resolution_path || "";
+    const resolution = JSON.parse(readFileSync(resolutionPath, "utf8"));
+    const proposal = resolution.topology.net_proposals[0];
+    delete proposal.schema;
+    proposal.closure_assemblies = proposal.closure_assemblies.map(
+      (closure: Record<string, unknown>, index: number) => {
+        const legacy = { ...closure };
+        delete legacy.closure_kind;
+        return index === 0
+          ? { ...legacy, extent: "partial", coverage_ratio: 0.94 }
+          : { ...legacy, extent: "full", coverage_ratio: 1 };
+      },
+    );
+    writeFileSync(resolutionPath, JSON.stringify(resolution));
+
+    assert.deepEqual(publicMockup(job).structure_preview?.net_proposals[0]?.closure_assemblies, [
+      {
+        face_id: "proposal-face-0005",
+        attached_body_face_id: "proposal-face-0001",
+        side: -1,
+        extent: "partial",
+        coverage_ratio: 0.94,
+      },
+      {
+        face_id: "proposal-face-0006",
+        attached_body_face_id: "proposal-face-0001",
+        side: 1,
+        extent: "full",
+        coverage_ratio: 1,
+      },
+    ]);
   });
 
   it("drops malformed or unbounded whole-net proposals instead of exposing raw guesses", () => {
@@ -183,6 +223,25 @@ describe("mockup structure confirmation persistence", () => {
       { ...valid, dimensions_mm: { width: -1, depth: 20, height: 50 } },
       { ...valid, valid_anchors: [{ front_face_id: valid.cap_face_ids[0], quarter_turns: [0] }] },
       { ...valid, closure_assemblies: [{ face_id: valid.cap_face_ids[0] }] },
+      {
+        ...valid,
+        closure_assemblies: valid.closure_assemblies.map((closure: Record<string, unknown>, index: number) => (
+          index === 0 ? { ...closure, closure_kind: "guessed" } : closure
+        )),
+      },
+      { ...valid, schema: "box-net-proposal/1" },
+      {
+        ...valid,
+        closure_assemblies: valid.closure_assemblies.map((closure: Record<string, unknown>, index: number) => (
+          index === 0 ? { ...closure, coverage_ratio: 0.599 } : closure
+        )),
+      },
+      {
+        ...valid,
+        closure_assemblies: valid.closure_assemblies.map((closure: Record<string, unknown>, index: number) => (
+          index === 0 ? { ...closure, extent: "full" } : closure
+        )),
+      },
     ];
     writeFileSync(resolutionPath, JSON.stringify(resolution));
 
