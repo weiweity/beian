@@ -7,7 +7,7 @@
 - 包装结构候选改为确定性的“闭合四面盒身 + 上下封口组件”模型：开放三边框只能作为封口证据，不能再冒充盒身；FEFCO 0201/RSC 一类相向对开摇盖按两个 45%–55% 物理成员及其几何并集验证，不再要求任意单片独立覆盖整面。
 - Illustrator 贴图导出会临时解锁结构对象及其父组/图层，隐藏刀线与折线后再导出干净 artwork；复合路径、裁切组或 Symbol 单节点属性异常不会截断其余祖先处理，回滚会尝试完全部对象后统一报告，且不保存修改后的源稿。
 - 盒型提案、解析与缓存合同分别升为 `box-net-proposal/3`、`resolved-packaging-job/3` 和 `packaging-structure-cache/6`；批准 sidecar 新增 `packaging-artwork-assemblies/1`，旧待确认记录不能被静默赋予新语义。
-- 组合封口为每个折片输出独立 Alpha 覆盖遮罩，且保留原始 PDF 未绘制像素的透明度；Blender 用 Alpha Clip 把 artwork 覆盖在显式纸板基底上，未知基材默认白卡，最终 GLB 会验证六面 `MASK`、RGBA 来源、Core 绑定和基材色，纸盒材质不会变成半透明 `BLEND`。
+- 组合封口为每个折片输出独立 Alpha 覆盖遮罩，且保留原始 PDF 未绘制像素的透明度；Blender 用 Alpha Clip 把 artwork 覆盖在显式纸板基底上，未知基材默认白卡。最终 GLB 会逐张解码内嵌 PNG 并核对 RGBA/Alpha 像素，再经回读检查六面 UV 方向、镜像及纸板 Core 的六个边界面，不再只信图片名、材质名或一个 Core primitive。
 
 ### Fixed
 
@@ -17,7 +17,7 @@
 
 ### For contributors
 
-- L0 新增拓扑、50% 对开封口、透明遮罩数据、完整盒型、确认解析、缓存、Illustrator 异常宿主回滚以及 Hono/UI 合同回归；Mac 脱敏合成验证不替代合入后杭州 Session 1 Agent → VBS → 唯一 JSX 的 L1 身份冒烟；真实 Illustrator → Blender、六面贴图和管理员金标仍属于独立 L2 业务验收。
+- L0 新增拓扑、50% 对开封口、透明遮罩数据、完整盒型、确认解析、缓存、Illustrator 异常宿主回滚、GLB 内嵌像素/UV/Core 反例以及 Hono/UI 合同回归；Mac 脱敏合成验证不替代合入后杭州 Session 1 Agent → VBS → 唯一 JSX 的 L1 身份冒烟；真实 Illustrator → Blender、六面贴图和管理员金标仍属于独立 L2 业务验收。
 
 ## [0.21.1.0] - 2026-08-31
 
