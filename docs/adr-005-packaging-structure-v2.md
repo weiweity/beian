@@ -8,7 +8,7 @@
 
 `0.15.0.0` 在不改变闸门的前提下，把 GLB 验证从轴向和毫米尺寸扩展到六个已确认面的贴图来源、方向与镜像；底面缺图或任一面绑定不一致都不得作为成功产物。
 
-V2.1 把旧稿迁移从“六个完整矩形 + 全局阈值”的案例模型升级为有预算的确定性结构求解：Illustrator 曲线先适配为可审计折线；所有几何进入同一毫米坐标系；按连通分量隔离结构与标注；候选由四面盒身环和上下封口组件组成；公共 API 只发布经过最终确认引擎预演成功的锚点。后续的组合封口合同继续沿用同一内核：盒身必须四边闭合，盒盖可由主插舌与相邻防尘翼共同证明，但不能把单个短折片冒充整面。它不按纸色、印刷色、普通图层名或文件名猜外盒，也不增加第二套 3D 流水线。
+V2.2 把旧稿迁移从“六个完整矩形 + 全局阈值”的案例模型升级为有预算的确定性结构求解：Illustrator 曲线先适配为可审计折线；所有几何进入同一毫米坐标系；按连通分量隔离结构与标注；候选由四面盒身环和上下封口组件组成；公共 API 只发布经过最终确认引擎预演成功的锚点。封口组件不再用一个主盖片代理整套物理结构，而是显式携带每个折片、连接盒身、覆盖范围与层序；标准相向对开摇盖因此由组合覆盖证明，而不是靠降低单片阈值。它不按纸色、印刷色、普通图层名或文件名猜外盒，也不增加第二套 3D 流水线。
 
 ## 背景
 
@@ -19,7 +19,7 @@ V2.1 把旧稿迁移从“六个完整矩形 + 全局阈值”的案例模型升
 新增独立的 `workers/packaging/structure_v2` 深模块，以版本化 `PackagingStructure v1` 作为唯一结构事实源：
 
 1. 输入适配器只把可验证的显式语义翻译为 IR。当前实现是结构 sidecar 与 Illustrator 语义导出；ISO 19593、CF2、DXF 等必须取得真实样本并完成独立适配器验证后再接入。
-   Illustrator 语义导出只有一份 `export_structure.jsx`：macOS 由 AppleScript 调用；Windows 的 LocalSystem worker 通过 UTF-8 命名管道请求登录桌面的 PowerShell Agent，Agent 再调用现有 `cscript` / `run_export.vbs`，由 VBS `GetObject` 连接同一交互会话中的 Illustrator 并执行 JSX。平台桥只负责会话、生命周期、超时与错误合同，不复制结构算法。导出贴图时，唯一 JSX 只在未保存的工作副本中临时解锁目标对象及其父组/图层，隐藏结构语义路径后输出 artwork；无论成功或异常都按原状态恢复可见性与锁定，关闭文档时不保存，任何无法恢复的路径都失败关闭。
+   Illustrator 语义导出只有一份 `export_structure.jsx`：macOS 由 AppleScript 调用；Windows 的 LocalSystem worker 通过 UTF-8 命名管道请求登录桌面的 PowerShell Agent，Agent 再调用现有 `cscript` / `run_export.vbs`，由 VBS `GetObject` 连接同一交互会话中的 Illustrator 并执行 JSX。平台桥只负责会话、生命周期、超时与错误合同，不复制结构算法。导出贴图时，唯一 JSX 只在未保存的工作副本中临时解锁目标对象及其父组/图层，隐藏结构语义路径后输出 artwork；`CompoundPathItem`、裁切 `GroupItem`、`SymbolItem` 等宿主属性逐节点隔离读取，单个节点不支持锁属性时仍继续处理其余祖先。回滚按相反顺序尝试恢复全部可见性与实际改过的锁，最后统一报告失败；关闭文档时不保存，任何无法证明完整恢复的路径都失败关闭。
 2. IR 显式记录顶点、`cut/crease/perforation/glue/ignore` 边、面、折角、六面角色、artwork 变换和来源对象。
 3. 使用 Shapely/GEOS 做吸附、线合并、polygonize 和 dangle/cut/invalid-ring 诊断。
 4. 只有验证为 `accepted` 的 IR 才能生成 `ResolvedPackagingJob` 并调用现有 Blender；歧义结构进入人工确认，不再自动猜。
@@ -27,7 +27,7 @@ V2.1 把旧稿迁移从“六个完整矩形 + 全局阈值”的案例模型升
 6. 对没有对象级语义的历史 AI，服务端先识别刀线层，Illustrator 只提取该层内“描边且无填充”的路径作为不可信线稿。直线保持原端点；三次贝塞尔曲线由唯一的 ES3 helper 自适应细分，并把容差、原路径引用、段数和 `bezier_flatten` repair 写入 `source.geometry`。Mac AppleScript 与 Windows Agent 都在执行前把这份固定 helper 内联到运行 JSX，避免相对 include、当前目录和系统代码页产生平台分叉。超过单段、单路径或全稿预算时失败关闭。
 7. 输入适配器只输出一个 `artboard-top-left` 毫米坐标系；吸附、提案、人工确认、贴图变换和最终尺寸都消费同一 basis。毫米结果按统一精度归一，避免整体旋转、Illustrator 浮点噪声或重复描边让“识别时可选、提交时失效”。候选身份由提案合同版本、源稿哈希、basis 和候选几何生成的稳定 `proposal_id`，再与当前 `structure_hash` 双重绑定，不再使用可被重排复用的序号；合同升级后旧页面提交会明确失效，而不是套用新语义。
 8. 拓扑先用 Shapely `STRtree` 按容差把原始描边分成空间连通分量，再只在各分量内部吸附、节点化和寻找候选；不能先对整张稿 `unary_union` / `polygonize`。大量尺寸标注、签字框、表格和内衬因此不会先耗尽全稿拓扑上限。硬上限、候选分量上限与全局工作预算仍然保留，任何预算耗尽都以 `structure_limit_exceeded` 失败关闭。它是资源安全边界，不是用“放大连通分量数量”掩盖结构问题。
-9. 候选模型是“四个连续盒身面 + 上下两个封口组件”。盒身候选必须四边都有来源线，内部尺寸线、标注线或正文描边不会把物理盒面切成两个；缺一条外边的三边框只能作为封口候选，不能进入盒身环。完整闭合且尺寸接近 footprint 的主盖片始终优先。若主插舌存在曲线或缺口导致自由边不能形成矩形，它只有在共享折边长度匹配、垂直覆盖不少于 footprint 的 60%，并且同侧至少另有一个连接到不同盒身面的有效折片时，才以 `assembly` 进入人工确认；该 60% 是本项目的失败关闭阈值，不冒充行业标准。单个短防尘翼、插舌或由交叉标注线构造的开放盒身仍会被拒。确认后保持源稿仿射比例，以共享折线对齐真实主盖片，并把未覆盖区补白，不得把折片拉伸到整面。成盒 `width/depth/height` 只由四个盒身面求解。若同稿同时存在外盒与白色内衬，只有各自结构完整时才分别成为候选并按成盒体积排序，管理员选择整套盒型，系统仍不读取颜色作判断。
+9. 候选模型是“四个连续盒身面 + 上下两个封口组件”。盒身候选必须四边都有来源线，内部尺寸线、标注线或正文描边不会把物理盒面切成两个；缺一条外边的三边框只能作为封口候选，不能进入盒身环。完整闭合且尺寸接近 footprint 的单片盖板仍优先。对 FEFCO 0201/RSC 一类相向对开摇盖，两个成员必须连接到相对盒身面，每片覆盖 45%–55%，覆盖率总和位于 94%–102%，且在成盒 footprint 上的几何并集至少为 94%；超过工艺缝范围的重叠因为缺少可信叠放顺序而失败关闭。单个短防尘翼、插舌、正交侧翼或由交叉标注线构造的开放盒身仍会被拒。确认后每个成员按自己的共享折线独立确定方向和仿射变换；原始 PDF 未绘制区域与物理未覆盖区域的 Alpha 都保留为 0，不得拉伸或填成白色。Blender 以二值 Alpha Mask 覆盖在显式 `render.substrate_rgba` 纸板核心之上，最终 GLB 必须复核六面 `MASK`、RGBA 来源、Core 绑定和基材颜色。未知基材明确默认白卡 `[1,1,1,1]`；牛皮纸或深色纸板必须由渲染配置显式给值，不能从印刷颜色猜测。成盒 `width/depth/height` 只由四个盒身面求解。若同稿同时存在外盒与白色内衬，只有各自结构完整时才分别成为候选并按成盒体积排序，管理员选择整套盒型，系统仍不读取颜色作判断。
 10. 每个候选在返回页面前，使用与最终确认完全相同的决策引擎枚举四个盒身面和 0/90/180/270° 阅读方向。只有能唯一推导 front/right/back/left/top/bottom、折叠关系和六面 artwork transform 的锚点才进入 `valid_anchors`；页面禁用其余组合。确认时再次校验当前源稿、structure hash、basis 与锚点，防止旧页面提交已失效序号。
 11. HTTP 合同把语义失败与网络失败分开：格式错误仍是 400；源稿或候选版本过期是 409；当前结构在形式上有效但不能成盒是 422。页面捕获确认失败并在原位显示可执行说明，不再留下未处理 Promise，也不把 400/409/422 说成网络中断。重复提交沿用同一确认锁和幂等恢复合同。
 
@@ -35,11 +35,11 @@ V2.1 把旧稿迁移从“六个完整矩形 + 全局阈值”的案例模型升
 
 - 人只提供一个最小语义锚点：`proposal_id + front_face_id + quarter_turns`，不再逐面填写六个角色。
 - 公共锚点只引用后端生成的完整盒型：稳定 `proposal_id` 绑定当前源稿、坐标 basis 和候选几何，独立 `structure_hash` 再绑定当前结构版本；原始矩形候选、路径编号和本机路径不进入公共 API。
-- 四个盒身面按展开图连通顺序形成环。正面确定后，右侧、反面、左侧可唯一推导；位于盒身横带相对侧、各自只连接一个盒身面的封口组件映射为顶部和底部。普通主盖片仍须尺寸接近完整 footprint；组合封口还须携带 `box-net-proposal/2` 的独立多折片证据。局部防尘翼不会仅靠人工点击升级成完整盒面。
+- 四个盒身面按展开图连通顺序形成环。正面确定后，右侧、反面、左侧可唯一推导；位于盒身横带相对侧、各自只连接一个盒身面的封口组件映射为顶部和底部。`box-net-proposal/3` 的每个 closure 显式携带 `primary_face_id + members[]`；所有物理成员都进入候选身份、确认和贴图合同。局部防尘翼不会仅靠人工点击升级成完整盒面。
 - 同一来源适配器的尺寸策略贯穿完整盒型提案、锚点确认和最终解析；用户选择正面不会切换精度规则，也不会把封口让位改写成成盒尺寸。
 - 锚点只能减少“哪一面是产品正面”这种业务歧义，不能覆盖结构歧义。完整网不唯一、相对面尺寸不一致、折叠图不连通或贴图方向不成立时仍停在待确认/不支持状态。
 - 旧任务若只有零散 `face_proposal` 而没有完整 `net_proposals`，前端拒绝沿用旧逐面表单，要求补齐结构语义并重新识别。
-- 最终解析合同仍为 `resolved-packaging-job/2`，其中每面携带真实 `artwork_coverage_bounds_mm`；组合封口把候选合同升为 `box-net-proposal/2`、缓存合同升为 `packaging-structure-cache/5`。新缓存必须按当前候选、尺寸、覆盖范围与折叠规则重算；已有待确认单仅可按旧版完整封口/让位合同继续，不能获得 `assembly` 语义或绕过新版验证。
+- 批准后的 sidecar 用 `packaging-artwork-assemblies/1` 保存 top/bottom 物理成员及层序；`resolved-packaging-job/3` 为每个角色输出 `artwork_layers[]`，每层独立携带 `artwork_transform`、`artwork_coverage_bounds_mm` 和 `z_index`。候选合同为 `box-net-proposal/3`，缓存合同为 `packaging-structure-cache/6`，流程版本为 `1.4.0`。旧 `/2`、`/5` 待确认记录必须重新识别，不能被静默升级或绕过新版验证。
 
 ## 依据
 
@@ -56,8 +56,11 @@ V2.1 把旧稿迁移从“六个完整矩形 + 全局阈值”的案例模型升
 - Microsoft 明确说明 Windows 服务运行在 Session 0，带 GUI 的程序应拆成登录用户侧进程，并通过命名管道等 IPC 与服务通信；命名管道默认 ACL 还会给 Everyone 与匿名账户读权限，因此本项目显式只授权 LocalSystem 与当前登录管理员。
 - Windows Task Scheduler 的 `InteractiveToken` 只在用户已登录的现成交互会话运行，符合“注销即不可打样、绝不静默降级到 Session 0”的失败语义。
 - Adobe 官方说明 Illustrator 支持 Visual Basic、AppleScript 与 JavaScript/ExtendScript。本项目据此保留一份 JSX，把 Windows VBS 和 macOS AppleScript 限定为平台启动桥，而不是两套结构识别实现。
+- FEFCO 把 02 系列定义为带顶底摇盖、通过这些摇盖闭合的开槽箱；0201/RSC 的物理闭合来自相向摇盖组合，不应要求任意单片独立覆盖整面。
+- Khronos glTF 2.0 把 `MASK` 定义为全不透明/全透明的覆盖遮罩，而 `BLEND` 面向半透明材质且存在排序实现差异；Blender 官方导出文档同样建议可用时优先 Alpha Clip/Mask。因此本项目让未印刷区显示纸板核心，不把纸盒本体做成半透明表面。
+- Illustrator 脚本对象模型分别声明 `CompoundPathItem`、`GroupItem`、`SymbolItem` 的 `parent`、`layer`、`locked` 与 `hidden` 属性；真实宿主仍可能在代理对象或关闭中的文档上抛异常，所以属性访问和回滚必须逐节点隔离，而不是假设普通 JavaScript 对象。
 
-交叉验证来源：[ISO 19593-1 processing steps](https://www.iso.org/obp/ui?_escaped_fragment_=iso%3Astd%3Aiso%3A19593%3A-1%3Adis%3Aed-2%3Av1%3Aen)、[Adobe PathPoint scripting](https://ai-scripting.docsforadobe.dev/jsobjref/PathPoint/)、[Adobe Paths and shapes](https://helpx.adobe.com/illustrator/using/artwork-essentials/paths-and-shapes.html)、[Shapely polygonize_full](https://shapely.readthedocs.io/en/2.0.6/reference/shapely.polygonize_full.html)、[Shapely snap](https://shapely.readthedocs.io/en/stable/reference/shapely.snap.html)、[Shapely STRtree](https://shapely.readthedocs.io/en/latest/strtree.html)、[Esko：Select the Base Panel](https://docs.esko.com/docs/en-us/studiotoolkitforboxes/12.1/userguide/en-us/common/stb/task/ta_select_the_base_panel.html)、[Esko：Folding a box](https://docs.esko.com/docs/en-us/studioadvanced/22.07/userguide/en-us/common/ste/task/ta_ste_tutorialARD.html)、[Esko ArtiosCAD Style Catalog](https://docs.esko.com/docs/en-us/artioscad/23.11/adminguide/pdf/StyleCatalogReference.pdf)、[Esko ArtiosCAD：Creating a new 3D workspace](https://docs.esko.com/docs/en-us/artioscad/14.1/userguide/en-us/common/ac/topic/UG5_Artios-3D_id873265U3D24.html)、[EngView：3D environment](https://downloads.engview.com/online_help/7.3/package_designer/en/ang/3D/td-work-env.htm)、[Khronos glTF 2.0](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html)、[Khronos glTF Validator](https://github.com/KhronosGroup/glTF-Validator)、[Microsoft Interactive Services](https://learn.microsoft.com/en-us/windows/win32/services/interactive-services)、[Microsoft Named Pipe Security](https://learn.microsoft.com/en-us/windows/win32/ipc/named-pipe-security-and-access-rights)、[Microsoft InteractiveToken](https://learn.microsoft.com/en-us/windows/win32/taskschd/taskfolder-registertaskdefinition)、[Adobe Illustrator scripts](https://helpx.adobe.com/illustrator/desktop/automate-visualize-data/automate-actions/install-and-run-scripts.html)。
+交叉验证来源：[ISO 19593-1 processing steps](https://www.iso.org/obp/ui?_escaped_fragment_=iso%3Astd%3Aiso%3A19593%3A-1%3Adis%3Aed-2%3Av1%3Aen)、[FEFCO Code](https://www.fefco.org/technical-information/fefco-code)、[FEFCO RSC](https://www.fefco.org/node/656)、[Adobe PathPoint scripting](https://ai-scripting.docsforadobe.dev/jsobjref/PathPoint/)、[Adobe CompoundPathItem](https://ai-scripting.docsforadobe.dev/jsobjref/CompoundPathItem/)、[Adobe GroupItem](https://ai-scripting.docsforadobe.dev/jsobjref/GroupItem/)、[Adobe SymbolItem](https://ai-scripting.docsforadobe.dev/jsobjref/SymbolItem/)、[Adobe Paths and shapes](https://helpx.adobe.com/illustrator/using/artwork-essentials/paths-and-shapes.html)、[Shapely polygonize_full](https://shapely.readthedocs.io/en/2.0.6/reference/shapely.polygonize_full.html)、[Shapely snap](https://shapely.readthedocs.io/en/stable/reference/shapely.snap.html)、[Shapely STRtree](https://shapely.readthedocs.io/en/latest/strtree.html)、[Esko：Select the Base Panel](https://docs.esko.com/docs/en-us/studiotoolkitforboxes/12.1/userguide/en-us/common/stb/task/ta_select_the_base_panel.html)、[Esko：Folding a box](https://docs.esko.com/docs/en-us/studioadvanced/22.07/userguide/en-us/common/ste/task/ta_ste_tutorialARD.html)、[Esko ArtiosCAD Style Catalog](https://docs.esko.com/docs/en-us/artioscad/23.11/adminguide/pdf/StyleCatalogReference.pdf)、[Esko ArtiosCAD：Creating a new 3D workspace](https://docs.esko.com/docs/en-us/artioscad/14.1/userguide/en-us/common/ac/topic/UG5_Artios-3D_id873265U3D24.html)、[EngView：3D environment](https://downloads.engview.com/online_help/7.3/package_designer/en/ang/3D/td-work-env.htm)、[Khronos glTF 2.0](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html)、[Blender glTF material export](https://docs.blender.org/manual/en/5.3/addons/scene_gltf2.html)、[Khronos glTF Validator](https://github.com/KhronosGroup/glTF-Validator)、[Microsoft Interactive Services](https://learn.microsoft.com/en-us/windows/win32/services/interactive-services)、[Microsoft Named Pipe Security](https://learn.microsoft.com/en-us/windows/win32/ipc/named-pipe-security-and-access-rights)、[Microsoft InteractiveToken](https://learn.microsoft.com/en-us/windows/win32/taskschd/taskfolder-registertaskdefinition)、[Adobe Illustrator scripts](https://helpx.adobe.com/illustrator/desktop/automate-visualize-data/automate-actions/install-and-run-scripts.html)。
 
 ## Windows 交互会话边界
 
