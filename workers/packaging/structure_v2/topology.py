@@ -21,7 +21,7 @@ except ImportError as error:  # pragma: no cover - exercised by deployment probe
 
 from .model import canonicalize_structure
 from .box_net import BoxNetProposalLimitError, derive_box_net_proposals
-from .dimensions import STROKE_PROPOSAL_GEOMETRY
+from .dimensions import STROKE_PROPOSAL_GEOMETRY, normalized_mm
 
 
 LINEWORK_ASSIGNMENTS = ("cut", "crease", "perforation")
@@ -574,19 +574,43 @@ def _rectangular_candidates_for_component(
                     if len(strong_sides) < 3 or len(open_sides) > 1:
                         continue
                     local_points = [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
-                    points = [_rotate_coordinate(point, basis_angle) for point in local_points]
+                    points = [
+                        tuple(round(value, 6) for value in _rotate_coordinate(point, basis_angle))
+                        for point in local_points
+                    ]
                     polygon = Polygon(points)
                     frame = _face_transform(polygon)
                     if frame is None:
                         continue
+                    public_transform = [round(float(value), 6) for value in frame[0]]
+                    a, b, c, d, e, f = public_transform
+                    mapped_points = [
+                        (a * x + c * y + e, b * x + d * y + f)
+                        for x, y in points
+                    ]
+                    frame_width = normalized_mm(
+                        max(point[0] for point in mapped_points)
+                        - min(point[0] for point in mapped_points)
+                    )
+                    frame_height = normalized_mm(
+                        max(point[1] for point in mapped_points)
+                        - min(point[1] for point in mapped_points)
+                    )
+                    direct_error = abs(frame_width - width) + abs(frame_height - height)
+                    swapped_error = abs(frame_height - width) + abs(frame_width - height)
+                    measured_size = (
+                        [frame_width, frame_height]
+                        if direct_error <= swapped_error
+                        else [frame_height, frame_width]
+                    )
                     candidates.append(
                         {
                             "id": _candidate_identity(source_hash, points),
                             "local_bounds": (x1, y1, x2, y2),
                             "points": points,
                             "polygon": polygon,
-                            "transform": frame[0],
-                            "size_mm": [round(width, 6), round(height, 6)],
+                            "transform": public_transform,
+                            "size_mm": measured_size,
                             "coverage": [round(value, 6) for value in sides],
                             "open_sides": open_sides,
                         }
@@ -768,6 +792,11 @@ def derive_rectangular_face_proposal(
         }
         for key in segment_keys
     ]
+    # This union structure is a preview over every exposed whole-net option.
+    # Its fold list is diagnostic only: alternative flap candidates can share
+    # one physical edge and make the global face count exceed two.  Human
+    # confirmation derives authoritative adjacency again inside the selected
+    # net instead of treating candidate-union cardinality as structure truth.
     folds = [
         {
             "edge": edge_id,

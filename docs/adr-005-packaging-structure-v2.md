@@ -38,8 +38,9 @@ V2.2 把旧稿迁移从“六个完整矩形 + 全局阈值”的案例模型升
 - 四个盒身面按展开图连通顺序形成环。正面确定后，右侧、反面、左侧可唯一推导；位于盒身横带相对侧、各自只连接一个盒身面的封口组件映射为顶部和底部。`box-net-proposal/3` 的每个 closure 显式携带 `primary_face_id + members[]`；所有物理成员都进入候选身份、确认和贴图合同。局部防尘翼不会仅靠人工点击升级成完整盒面。
 - 同一来源适配器的尺寸策略贯穿完整盒型提案、锚点确认和最终解析；用户选择正面不会切换精度规则，也不会把封口让位改写成成盒尺寸。
 - 锚点只能减少“哪一面是产品正面”这种业务歧义，不能覆盖结构歧义。完整网不唯一、相对面尺寸不一致、折叠图不连通或贴图方向不成立时仍停在待确认/不支持状态。
+- 旧线稿候选全集中的 `folds` 只作诊断。确认时必须在用户所选的完整盒型内部，按共享的 `crease` / `perforation` 边重建权威邻接；同一条已选折线若关联超过两个盒面，必须失败关闭，不能让其他候选的重叠关系抹掉合法封口或形成多面共用折线。
 - 旧任务若只有零散 `face_proposal` 而没有完整 `net_proposals`，前端拒绝沿用旧逐面表单，要求补齐结构语义并重新识别。
-- 批准后的 sidecar 用 `packaging-artwork-assemblies/1` 保存 top/bottom 物理成员及层序；`resolved-packaging-job/3` 为每个角色输出 `artwork_layers[]`，每层独立携带 `artwork_transform`、`artwork_coverage_bounds_mm` 和 `z_index`。候选合同为 `box-net-proposal/3`，缓存合同为 `packaging-structure-cache/6`，流程版本为 `1.4.0`。旧 `/2`、`/5` 待确认记录必须重新识别，不能被静默升级或绕过新版验证。
+- 批准后的 sidecar 用 `packaging-artwork-assemblies/1` 保存 top/bottom 物理成员及层序；`resolved-packaging-job/3` 为每个角色输出 `artwork_layers[]`，每层独立携带 `artwork_transform`、`artwork_coverage_bounds_mm` 和 `z_index`。候选合同为 `box-net-proposal/3`，缓存合同为 `packaging-structure-cache/7`，流程版本为 `1.4.0`。旧 `/2`、`/5` 待确认记录以及 `/6` 缓存必须重新识别或重建，不能被静默升级或绕过新版验证。
 
 ## 依据
 

@@ -20,6 +20,7 @@ from .dimensions import (
     MAX_CLOSURE_ASSEMBLY_MEMBER_SUM_RATIO,
     MIN_CLOSURE_ASSEMBLY_UNION_RATIO,
     STROKE_PROPOSAL_GEOMETRY,
+    conservative_coverage_ratio,
     fit_closure_dimensions,
     fit_closure_member_dimensions,
     rectangular_coverage_ratio,
@@ -67,11 +68,25 @@ def _outer_side_index(axis: str, side: int) -> int:
 
 
 def _along_size(candidate: Mapping[str, Any], axis: str) -> float:
+    size = candidate.get("size_mm")
+    if (
+        isinstance(size, list)
+        and len(size) == 2
+        and all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in size)
+    ):
+        return float(size[0 if axis == "x" else 1])
     left, top, right, bottom = _bounds(candidate)
     return right - left if axis == "x" else bottom - top
 
 
 def _cross_size(candidate: Mapping[str, Any], axis: str) -> float:
+    size = candidate.get("size_mm")
+    if (
+        isinstance(size, list)
+        and len(size) == 2
+        and all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in size)
+    ):
+        return float(size[1 if axis == "x" else 0])
     left, top, right, bottom = _bounds(candidate)
     return bottom - top if axis == "x" else right - left
 
@@ -177,10 +192,11 @@ def _closure_options(
     axis: str,
     tolerance: float,
     dimensions: DimensionPolicy,
+    solved_dimensions: Mapping[str, float],
 ) -> dict[int, list[dict[str, Any]]]:
     body_ids = {str(item["id"]) for item in body_path}
-    body_along = [_along_size(item, axis) for item in body_path]
-    first, second = body_along[0], body_along[1]
+    first = float(solved_dimensions["width"])
+    second = float(solved_dimensions["depth"])
     attached_candidates: dict[int, list[dict[str, Any]]] = {-1: [], 1: []}
     for candidate in candidates:
         if str(candidate["id"]) in body_ids:
@@ -191,11 +207,11 @@ def _closure_options(
                 continue
             along = _along_size(candidate, axis)
             cross = _cross_size(candidate, axis)
-            attached = _along_size(body, axis)
-            expected_cross = second if dimensions.close(attached, first) else first
+            expected_attached = first if body_index in (0, 2) else second
+            expected_cross = second if body_index in (0, 2) else first
             open_sides = _open_sides(candidate)
             if (
-                not dimensions.close(along, attached)
+                not dimensions.close(along, expected_attached)
                 or expected_cross <= 0
                 or (open_sides and open_sides != (_outer_side_index(axis, side),))
             ):
@@ -205,7 +221,8 @@ def _closure_options(
                     "face": candidate,
                     "body_index": body_index,
                     "attached_body_face_id": str(body["id"]),
-                    "attached_along": attached,
+                    "attached_along": expected_attached,
+                    "along": along,
                     "cross": cross,
                     "expected_cross": expected_cross,
                 }
@@ -226,11 +243,12 @@ def _closure_options(
             )
             if fit is None:
                 continue
+            contract_ratio = conservative_coverage_ratio(fit.coverage_ratio)
             member = {
                 "face": item["face"],
                 "face_id": str(item["face"]["id"]),
                 "attached_body_face_id": str(item["attached_body_face_id"]),
-                "coverage_ratio": fit.coverage_ratio,
+                "coverage_ratio": contract_ratio,
                 "extent": "full" if not fit.padded else "partial",
             }
             single_options.append(
@@ -238,7 +256,7 @@ def _closure_options(
                     "primary_face": item["face"],
                     "primary_face_id": str(item["face"]["id"]),
                     "members": [member],
-                    "coverage_ratio": fit.coverage_ratio,
+                    "coverage_ratio": contract_ratio,
                     "extent": "full" if not fit.padded else "partial",
                     "closure_kind": fit.kind,
                 }
@@ -275,12 +293,15 @@ def _closure_options(
             for item, _fit in member_items:
                 body_index = int(item["body_index"])
                 reach = min(float(item["cross"]), float(item["expected_cross"]))
+                fold_extent = min(float(item["along"]), float(item["attached_along"]))
                 if body_index in (0, 2):
+                    left_edge = (first - fold_extent) / 2.0
                     top = 0.0 if body_index == 0 else second - reach
-                    coverage_bounds.append([0.0, top, first, top + reach])
+                    coverage_bounds.append([left_edge, top, left_edge + fold_extent, top + reach])
                 else:
+                    top = (second - fold_extent) / 2.0
                     left_edge = 0.0 if body_index == 1 else first - reach
-                    coverage_bounds.append([left_edge, 0.0, left_edge + reach, second])
+                    coverage_bounds.append([left_edge, top, left_edge + reach, top + fold_extent])
             union_ratio = rectangular_coverage_ratio(coverage_bounds, (first, second))
             if union_ratio < MIN_CLOSURE_ASSEMBLY_UNION_RATIO:
                 continue
@@ -290,7 +311,7 @@ def _closure_options(
                         "face": item["face"],
                         "face_id": str(item["face"]["id"]),
                         "attached_body_face_id": str(item["attached_body_face_id"]),
-                        "coverage_ratio": fit.coverage_ratio,
+                        "coverage_ratio": conservative_coverage_ratio(fit.coverage_ratio),
                         "extent": "partial",
                     }
                     for item, fit in member_items
@@ -314,13 +335,24 @@ def _closure_options(
                 ),
                 key=lambda member: str(member["face_id"]),
             )
+            contract_union_ratio = min(
+                conservative_coverage_ratio(union_ratio),
+                sum(float(member["coverage_ratio"]) for member in members),
+            )
+            # The proposal is a public confirmation contract, not a raw
+            # geometry diagnostic.  Conservative quantization can move a
+            # borderline raw fit below the minimum that confirmation and the
+            # final resolver enforce.  Never publish an option that the shared
+            # acceptance path is guaranteed to reject.
+            if contract_union_ratio < MIN_CLOSURE_ASSEMBLY_UNION_RATIO:
+                continue
             assembly_options.append(
                 {
                     "primary_face": primary["face"],
                     "primary_face_id": str(primary["face_id"]),
                     "members": members,
-                    "coverage_ratio": union_ratio,
-                    "extent": "full" if union_ratio == 1.0 else "partial",
+                    "coverage_ratio": contract_union_ratio,
+                    "extent": "full" if contract_union_ratio == 1.0 else "partial",
                     "closure_kind": "assembly",
                 }
             )
@@ -332,12 +364,6 @@ def _closure_options(
             option
             for option in single_options
             if not _open_sides(option["primary_face"])
-            and dimensions.close(
-                _cross_size(option["primary_face"], axis),
-                second
-                if dimensions.close(_along_size(option["primary_face"], axis), first)
-                else first,
-            )
         ]
         options[side] = closed_full if closed_full else assembly_options
         options[side].sort(
@@ -422,7 +448,27 @@ def derive_box_net_proposals(
             dimensions,
             search_state,
         ):
-            closures = _closure_options(unique_candidates, body_path, axis, tolerance_mm, dimensions)
+            body_along = [_along_size(item, axis) for item in body_path]
+            body_cross = [_cross_size(item, axis) for item in body_path]
+            solved_dimensions = solve_body_dimensions(
+                {
+                    "front": (body_along[0], body_cross[0]),
+                    "right": (body_along[1], body_cross[1]),
+                    "back": (body_along[2], body_cross[2]),
+                    "left": (body_along[3], body_cross[3]),
+                },
+                dimensions,
+            )
+            if solved_dimensions is None:
+                continue
+            closures = _closure_options(
+                unique_candidates,
+                body_path,
+                axis,
+                tolerance_mm,
+                dimensions,
+                solved_dimensions,
+            )
             for negative in closures[-1]:
                 for positive in closures[1]:
                     negative_face = negative["primary_face"]
@@ -436,19 +482,6 @@ def derive_box_net_proposals(
                     if len(set(face_ids)) < 6:
                         continue
                     area = sum(_along_size(item, axis) * _cross_size(item, axis) for item in face_items)
-                    body_along = [_along_size(item, axis) for item in body_path]
-                    body_cross = [_cross_size(item, axis) for item in body_path]
-                    solved_dimensions = solve_body_dimensions(
-                        {
-                            "front": (body_along[0], body_cross[0]),
-                            "right": (body_along[1], body_cross[1]),
-                            "back": (body_along[2], body_cross[2]),
-                            "left": (body_along[3], body_cross[3]),
-                        },
-                        dimensions,
-                    )
-                    if solved_dimensions is None:
-                        continue
                     candidate = {
                         "schema": BOX_NET_PROPOSAL_SCHEMA,
                         "id": _stable_proposal_id(

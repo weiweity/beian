@@ -77,6 +77,41 @@ def append_linework(
         )
 
 
+def rectangle_stroke_payload(
+    rectangles: list[tuple[str, tuple[float, float, float, float]]],
+) -> dict:
+    """Build synthetic Illustrator linework without declaring any face roles."""
+    payload = stroke_payload()
+    segment_faces: dict[
+        tuple[tuple[float, float], tuple[float, float]],
+        list[str],
+    ] = {}
+    for name, (left, top, right, bottom) in rectangles:
+        corners = ((left, top), (right, top), (right, bottom), (left, bottom))
+        for start, end in zip(corners, corners[1:] + corners[:1]):
+            segment_faces.setdefault(tuple(sorted((start, end))), []).append(name)
+    points = sorted({point for segment in segment_faces for point in segment})
+    vertex_ids = {point: f"synthetic-v-{index}" for index, point in enumerate(points)}
+    payload["vertices"] = [
+        {"id": vertex_ids[point], "x": point[0], "y": point[1]}
+        for point in points
+    ]
+    payload["edges"] = [
+        {
+            "id": f"synthetic-e-{index}",
+            "start": vertex_ids[start],
+            "end": vertex_ids[end],
+            "assignment": "crease" if len(names) > 1 else "cut",
+            "source_refs": [f"synthetic:rectangle:{index}"],
+        }
+        for index, ((start, end), names) in enumerate(sorted(segment_faces.items()))
+    ]
+    right = max(bounds[2] for _name, bounds in rectangles)
+    bottom = max(bounds[3] for _name, bounds in rectangles)
+    payload["source"]["page_size"] = [right + 20.0, bottom + 20.0]
+    return payload
+
+
 def test_resolver_builds_explicit_dimensions_and_six_faces():
     result = resolve_structure_payload(semantic_box())
     assert result.status == "ready"
@@ -138,7 +173,7 @@ def test_only_ready_results_enter_atomic_cache(tmp_path: Path):
     cache_files = list(tmp_path.glob("*.json"))
     assert len(cache_files) == 1
     cached = json.loads(cache_files[0].read_text(encoding="utf-8"))
-    assert cached["schema"] == "packaging-structure-cache/6"
+    assert cached["schema"] == "packaging-structure-cache/7"
     assert cached["resolved"]["schema"] == "resolved-packaging-job/3"
 
     bad = semantic_box(source_hash="e" * 64)
@@ -148,13 +183,13 @@ def test_only_ready_results_enter_atomic_cache(tmp_path: Path):
     assert len(list(tmp_path.glob("*.json"))) == 1
 
 
-def test_legacy_dimension_cache_is_rebuilt_under_current_contract(tmp_path: Path):
+def test_previous_closure_contract_cache_is_rebuilt_under_current_contract(tmp_path: Path):
     payload = semantic_box()
     primed = resolve_structure_payload(payload, cache_dir=tmp_path)
     assert primed.status == "ready"
     cache_file = next(tmp_path.glob("*.json"))
     cached = json.loads(cache_file.read_text(encoding="utf-8"))
-    cached["schema"] = "packaging-structure-cache/3"
+    cached["schema"] = "packaging-structure-cache/6"
     cached["resolved"]["schema"] = "resolved-packaging-job/1"
     cached["resolved"]["dimensions_mm"]["depth"] = 49.4
     cache_file.write_text(json.dumps(cached), encoding="utf-8")
@@ -165,7 +200,7 @@ def test_legacy_dimension_cache_is_rebuilt_under_current_contract(tmp_path: Path
     assert rebuilt.cache_hit is False
     assert rebuilt.resolved["dimensions_mm"] == {"width": 30.0, "depth": 20.0, "height": 50.0}
     migrated = json.loads(cache_file.read_text(encoding="utf-8"))
-    assert migrated["schema"] == "packaging-structure-cache/6"
+    assert migrated["schema"] == "packaging-structure-cache/7"
     assert migrated["resolved"]["schema"] == "resolved-packaging-job/3"
 
 
@@ -544,6 +579,157 @@ def test_sanitized_white_carton_fixture_keeps_outer_and_insert_choices_without_c
     assert any(item["extent"] == "partial" for item in nets[0]["closure_assemblies"])
     assert all(net["valid_anchors"] for net in nets)
     assert "color" not in json.dumps(proposed.as_dict()).lower()
+
+
+def test_preflight_keeps_complete_caps_when_opposite_panels_need_dimension_averaging():
+    payload = stroke_payload(
+        width=34.0,
+        depth=145.0,
+        height=204.4372,
+        cap_body_role="left",
+        top_cap_depth=34.6362,
+        bottom_cap_depth=33.4093,
+        body_width_overrides={
+            "back": 33.4606,
+            "left": 145.6442,
+            "front": 34.3552,
+            "right": 145.6709,
+        },
+    )
+
+    proposed = resolve_structure_payload(payload)
+
+    assert proposed.status == "review_required"
+    assert proposed.code == "structure_face_mapping_incomplete"
+    nets = proposed.topology["net_proposals"]
+    assert len(nets) == 1
+    assert nets[0]["dimensions_mm"] == {
+        "width": 33.908,
+        "depth": 145.657,
+        "height": 204.437,
+    }
+    assert nets[0]["valid_anchors"]
+
+
+def test_preflight_keeps_larger_near_square_outer_ahead_of_insert():
+    outer: list[tuple[str, tuple[float, float, float, float]]] = []
+    cursor = 0.0
+    outer_widths = (47.1986, 47.3623, 47.3998, 47.3407)
+    for index, panel_width in enumerate(outer_widths):
+        outer.append((f"outer-body-{index}", (cursor, 50.0, cursor + panel_width, 227.2804)))
+        cursor += panel_width
+    third_panel_left = outer_widths[0] + outer_widths[1]
+    outer.extend(
+        [
+            (
+                "outer-top",
+                (third_panel_left, 3.3528, third_panel_left + outer_widths[2], 50.0),
+            ),
+            (
+                "outer-bottom-left",
+                (outer_widths[0], 227.2804, third_panel_left, 250.1926),
+            ),
+            (
+                "outer-bottom-right",
+                (third_panel_left + outer_widths[2], 227.2804, cursor, 250.1926),
+            ),
+        ]
+    )
+    insert: list[tuple[str, tuple[float, float, float, float]]] = []
+    cursor = 300.0
+    insert_widths = (43.9844, 45.0, 45.0311, 45.0)
+    for index, panel_width in enumerate(insert_widths):
+        insert.append((f"insert-body-{index}", (cursor, 45.0, cursor + panel_width, 218.1257)))
+        cursor += panel_width
+    insert.extend(
+        [
+            ("insert-top", (343.9844, 0.0, 388.9844, 45.0)),
+            ("insert-bottom", (cursor - 45.0, 218.1257, cursor, 263.9547)),
+        ]
+    )
+    payload = rectangle_stroke_payload([*outer, *insert])
+    angle = math.radians(0.0075)
+    cosine = math.cos(angle)
+    sine = math.sin(angle)
+    for vertex in payload["vertices"]:
+        x = float(vertex["x"])
+        y = float(vertex["y"])
+        vertex["x"] = x * cosine - y * sine
+        vertex["y"] = x * sine + y * cosine
+
+    proposed = resolve_structure_payload(payload)
+
+    assert proposed.status == "review_required"
+    assert proposed.code == "structure_face_mapping_incomplete"
+    nets = proposed.topology["net_proposals"]
+    assert len(nets) == 2
+    assert nets[0]["dimensions_mm"] == {
+        "width": 47.299,
+        "depth": 47.352,
+        "height": 177.28,
+    }
+    assert nets[1]["dimensions_mm"] == {
+        "width": 44.508,
+        "depth": 45.0,
+        "height": 173.126,
+    }
+    assert any(
+        closure["closure_kind"] == "assembly"
+        for closure in nets[0]["closure_assemblies"]
+    )
+    assert all(net["valid_anchors"] for net in nets)
+
+
+def test_preflight_preserves_valid_split_closure_coverage_above_94_percent():
+    payload = rectangle_stroke_payload(
+        [
+            ("body-0", (0.0, 20.0, 30.0, 70.0)),
+            ("body-1", (30.0, 20.0, 50.0, 70.0)),
+            ("body-2", (50.0, 20.0, 79.1, 70.0)),
+            ("body-3", (79.1, 20.0, 99.1, 70.0)),
+            ("top-front", (0.0, 10.525, 30.0, 20.0)),
+            ("top-back", (50.0, 10.525, 79.1, 20.0)),
+            ("bottom", (0.0, 70.0, 30.0, 90.0)),
+        ]
+    )
+
+    proposed = resolve_structure_payload(payload)
+
+    assert proposed.status == "review_required"
+    assert proposed.code == "structure_face_mapping_incomplete"
+    nets = proposed.topology["net_proposals"]
+    assert len(nets) == 1
+    split = next(
+        closure
+        for closure in nets[0]["closure_assemblies"]
+        if closure["closure_kind"] == "assembly"
+    )
+    assert split["coverage_ratio"] == 0.940286
+    assert nets[0]["valid_anchors"]
+
+
+def test_public_precision_keeps_rotated_full_caps_confirmable():
+    cases = [
+        (60.48348625698108, 59.024947652281284, 32.22724851101719, -21.57061912512478),
+        (55.24148365631086, 57.497909250827036, 137.2374452869556, 41.72322335672877),
+    ]
+    for width, depth, height, rotation_degrees in cases:
+        payload = stroke_payload(width=width, depth=depth, height=height)
+        angle = math.radians(rotation_degrees)
+        cosine = math.cos(angle)
+        sine = math.sin(angle)
+        for vertex in payload["vertices"]:
+            x = float(vertex["x"])
+            y = float(vertex["y"])
+            vertex["x"] = x * cosine - y * sine
+            vertex["y"] = x * sine + y * cosine
+
+        proposed = resolve_structure_payload(payload)
+
+        assert proposed.status == "review_required"
+        assert proposed.code == "structure_face_mapping_incomplete"
+        assert len(proposed.topology["net_proposals"]) == 1
+        assert proposed.topology["net_proposals"][0]["valid_anchors"]
 
 
 def test_annotation_heavy_fixture_partitions_noise_before_candidate_search():

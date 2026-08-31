@@ -265,6 +265,31 @@ def test_accepts_a_standard_fefco_0201_pair_as_one_closure_assembly():
     }
 
 
+def test_preserves_a_valid_assembly_above_the_public_coverage_contract():
+    candidates = horizontal_net(
+        "contract-floor",
+        width=100.0,
+        depth=100.0,
+        height=60.0,
+    )[:4]
+    candidates.extend(
+        [
+            rectangle("contract-floor-top-front", (0.0, 53.04, 100.0, 100.0)),
+            rectangle("contract-floor-top-back", (200.0, 52.94, 300.0, 100.0)),
+            rectangle("contract-floor-bottom-front", (0.0, 160.0, 100.0, 206.96)),
+            rectangle("contract-floor-bottom-back", (200.0, 160.0, 300.0, 207.06)),
+        ]
+    )
+
+    proposal = derive_box_net_proposals(candidates)[0]
+    for closure in proposal["closure_assemblies"]:
+        assert closure["coverage_ratio"] == 0.9402
+        assert sorted(member["coverage_ratio"] for member in closure["members"]) == [
+            0.4696,
+            0.4706,
+        ]
+
+
 def test_oversized_annotation_frame_cannot_supply_closure_evidence():
     candidates = horizontal_net("annotation-frame")
     candidates[4] = rectangle(
