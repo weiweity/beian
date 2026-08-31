@@ -13,10 +13,12 @@ if str(_PACKAGING) not in sys.path:
 from camera_frame import aabb_after_z_rotation, camera_fit_after_yaw, camera_location_mm, camera_ortho_scale_mm, camera_target_mm
 from glb_verify import (
     SEMANTIC_FACES,
+    compare_glb_core_contract,
     compare_glb_dimensions,
     compare_glb_material_contract,
+    compare_glb_surface_contract,
     compare_glb_texture_bindings,
-    load_glb_json,
+    load_glb_artifact,
 )
 
 
@@ -353,8 +355,9 @@ def export_model(job, root, model_objects):
 def verify_glb(job):
     substrate_rgba = job["render"].get("substrate_rgba", [1.0, 1.0, 1.0, 1.0])
     try:
+        artifact = load_glb_artifact(job["outputs"]["glb"])
         material_report = compare_glb_material_contract(
-            load_glb_json(job["outputs"]["glb"]),
+            artifact,
             job["assets"],
             substrate_rgba,
         )
@@ -421,6 +424,72 @@ def verify_glb(job):
             "GLB verification failed: semantic artwork binding mismatch="
             + json.dumps(binding_report, ensure_ascii=False, sort_keys=True)
         )
+    surfaces = {}
+    for face in SEMANTIC_FACES:
+        samples = []
+        for obj in bpy.context.scene.objects:
+            if (
+                obj.type != "MESH"
+                or obj.name.lower().split(".", 1)[0].removesuffix("_mesh") != face
+            ):
+                continue
+            uv_layer = obj.data.uv_layers.active
+            if uv_layer is None:
+                continue
+            for loop in obj.data.loops:
+                point = obj.matrix_world @ obj.data.vertices[loop.vertex_index].co
+                uv = uv_layer.data[loop.index].uv
+                samples.append(
+                    {
+                        "position": [float(point.x), float(point.y), float(point.z)],
+                        "uv": [float(uv.x), float(uv.y)],
+                    }
+                )
+        surfaces[face] = samples
+    surface_report = compare_glb_surface_contract(
+        surfaces,
+        job["dimensions_mm"],
+        float(job["glb_tolerance_mm"]),
+    )
+    if not surface_report["ok"]:
+        raise RuntimeError(
+            "GLB verification failed: semantic UV contract mismatch="
+            + json.dumps(surface_report, ensure_ascii=False, sort_keys=True)
+        )
+    core_objects = []
+    for obj in bpy.context.scene.objects:
+        if obj.type != "MESH" or not obj.name.lower().split(".", 1)[0].endswith("_box_core"):
+            continue
+        obj.data.calc_loop_triangles()
+        core_objects.append(
+            {
+                "materials": [material.name for material in obj.data.materials if material],
+                "points": [
+                    [float(point.x), float(point.y), float(point.z)]
+                    for point in (obj.matrix_world @ vertex.co for vertex in obj.data.vertices)
+                ],
+                "triangles": [
+                    [
+                        [float(point.x), float(point.y), float(point.z)]
+                        for point in (
+                            obj.matrix_world @ obj.data.vertices[vertex_index].co
+                            for vertex_index in triangle.vertices
+                        )
+                    ]
+                    for triangle in obj.data.loop_triangles
+                ],
+            }
+        )
+    core_report = compare_glb_core_contract(
+        core_objects,
+        job["dimensions_mm"],
+        float(job["glb_tolerance_mm"]),
+    )
+    if not core_report["ok"]:
+        raise RuntimeError(
+            "GLB verification failed: paperboard core geometry mismatch="
+            + json.dumps(core_report, ensure_ascii=False, sort_keys=True)
+        )
     mins = [min(point[i] for point in points) for i in range(3)]
     maxs = [max(point[i] for point in points) for i in range(3)]
     report = compare_glb_dimensions(
@@ -434,7 +503,12 @@ def verify_glb(job):
             f"measured={report['measured_mm']}, expected={report['expected_mm']}, "
             f"tolerance={report['tolerance_mm']}"
         )
-    return {**report, "material_contract": material_report}
+    return {
+        **report,
+        "material_contract": material_report,
+        "surface_contract": surface_report,
+        "core_contract": core_report,
+    }
 
 
 def main():

@@ -179,7 +179,9 @@ def test_blender_uses_the_artwork_alpha_as_a_binary_mask_over_the_opaque_core():
     assert 'material.blend_method = "CLIP"' in source
     assert 'core.data.materials.append(make_core_material(substrate_rgba))' in source
     assert "compare_glb_material_contract(" in source
-    assert "load_glb_json(" in source
+    assert "load_glb_artifact(" in source
+    assert "compare_glb_surface_contract(" in source
+    assert "compare_glb_core_contract(" in source
 
 
 def test_legacy_resolved_contract_is_rejected_for_recomputation(tmp_path: Path):
