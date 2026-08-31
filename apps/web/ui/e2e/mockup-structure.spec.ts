@@ -16,6 +16,33 @@ function face(
   };
 }
 
+type NetProposal = NonNullable<SyntheticMockup["structure_preview"]>["net_proposals"][number];
+
+function netProposal(input: Omit<NetProposal, "schema" | "face_ids" | "closure_assemblies">): NetProposal {
+  const top = input.cap_face_ids[0];
+  const bottom = input.cap_face_ids[1];
+  const attached = input.body_face_ids[0];
+  const closure = (primary_face_id: string, side: -1 | 1): NetProposal["closure_assemblies"][number] => ({
+    primary_face_id,
+    side,
+    extent: "full",
+    closure_kind: "full",
+    coverage_ratio: 1,
+    members: [{
+      face_id: primary_face_id,
+      attached_body_face_id: attached,
+      extent: "full",
+      coverage_ratio: 1,
+    }],
+  });
+  return {
+    ...input,
+    schema: "box-net-proposal/3",
+    face_ids: [...input.body_face_ids, ...input.cap_face_ids],
+    closure_assemblies: [closure(top, -1), closure(bottom, 1)],
+  };
+}
+
 test("完整盒型只让管理员确认正面和方向，并显示服务端版本", async ({ page, syntheticApi }) => {
   await page.setViewportSize({ width: 1366, height: 700 });
   const mockup: SyntheticMockup = {
@@ -39,14 +66,13 @@ test("完整盒型只让管理员确认正面和方向，并显示服务端版�
         face("cap-bottom", [10, 75, 40, 95]),
         face("nested-dimension-box", [14, 40, 24, 55]),
       ],
-      net_proposals: [{
+      net_proposals: [netProposal({
         id: "box-net-0001",
-        face_ids: ["body-a", "body-b", "body-c", "body-d", "cap-top", "cap-bottom"],
         body_face_ids: ["body-a", "body-b", "body-c", "body-d"],
         cap_face_ids: ["cap-top", "cap-bottom"],
         strip_axis: "x",
         bounds_mm: [10, 5, 110, 95],
-      }],
+      })],
     },
   };
   syntheticApi.mockups.push(mockup);
@@ -101,13 +127,12 @@ test("结构确认失败留在原位给出可重试原因，不产生未处理 P
         face("cap-top", [10, 5, 40, 25]),
         face("cap-bottom", [10, 75, 40, 95]),
       ],
-      net_proposals: [{
+      net_proposals: [netProposal({
         id: "box-net-0001",
-        face_ids: ["body-a", "body-b", "body-c", "body-d", "cap-top", "cap-bottom"],
         body_face_ids: ["body-a", "body-b", "body-c", "body-d"],
         cap_face_ids: ["cap-top", "cap-bottom"],
         strip_axis: "x",
-      }],
+      })],
     },
   };
   syntheticApi.mockups.push(mockup);
@@ -163,9 +188,8 @@ test("切换完整盒型时清空上一方案的正面和方向", async ({ page,
         face("cap-bottom", [10, 75, 40, 95]),
       ],
       net_proposals: [
-        {
+        netProposal({
           id: "box-net-0001",
-          face_ids: ["body-a", "body-b", "body-c", "body-d", "cap-top", "cap-bottom"],
           body_face_ids: ["body-a", "body-b", "body-c", "body-d"],
           cap_face_ids: ["cap-top", "cap-bottom"],
           strip_axis: "x",
@@ -176,10 +200,9 @@ test("切换完整盒型时清空上一方案的正面和方向", async ({ page,
             { front_face_id: "body-c", quarter_turns: [0, 1] },
             { front_face_id: "body-d", quarter_turns: [0, 1] },
           ],
-        },
-        {
+        }),
+        netProposal({
           id: "box-net-0002",
-          face_ids: ["body-d", "body-c", "body-b", "body-a", "cap-top", "cap-bottom"],
           body_face_ids: ["body-d", "body-c", "body-b", "body-a"],
           cap_face_ids: ["cap-top", "cap-bottom"],
           strip_axis: "x",
@@ -190,7 +213,7 @@ test("切换完整盒型时清空上一方案的正面和方向", async ({ page,
             { front_face_id: "body-b", quarter_turns: [0, 2] },
             { front_face_id: "body-a", quarter_turns: [0, 2] },
           ],
-        },
+        }),
       ],
     },
   };
@@ -229,13 +252,12 @@ test("非法结构锚点被拒绝且待确认任务保持原状", async ({ page,
         face("cap-top", [10, 5, 40, 25]),
         face("cap-bottom", [10, 75, 40, 95]),
       ],
-      net_proposals: [{
+      net_proposals: [netProposal({
         id: "box-net-0001",
-        face_ids: ["body-a", "body-b", "body-c", "body-d", "cap-top", "cap-bottom"],
         body_face_ids: ["body-a", "body-b", "body-c", "body-d"],
         cap_face_ids: ["cap-top", "cap-bottom"],
         strip_axis: "x",
-      }],
+      })],
     },
   };
   syntheticApi.mockups.push(mockup);
@@ -314,13 +336,12 @@ test("没有原稿预览时完整盒型也不能盲选正面", async ({ page, sy
         face(capIds[0], [10, 5, 40, 25]),
         face(capIds[1], [10, 75, 40, 95]),
       ],
-      net_proposals: [{
+      net_proposals: [netProposal({
         id: "box-net-0001",
-        face_ids: [...bodyIds, ...capIds],
         body_face_ids: bodyIds,
         cap_face_ids: capIds,
         strip_axis: "x",
-      }],
+      })],
     },
   };
   syntheticApi.mockups.push(mockup);

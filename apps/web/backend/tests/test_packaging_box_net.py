@@ -195,7 +195,7 @@ def test_three_sided_frames_can_only_be_closure_faces_never_body_panels():
     assert derive_box_net_proposals(candidates) == []
 
 
-def test_accepts_a_substantial_main_flap_only_with_multi_panel_closure_evidence():
+def test_rejects_orthogonal_flaps_that_do_not_cover_one_closure_footprint():
     isolated = horizontal_net("isolated-assembly")
     isolated[4] = rectangle(
         "isolated-assembly-cap-top",
@@ -218,18 +218,50 @@ def test_accepts_a_substantial_main_flap_only_with_multi_panel_closure_evidence(
         )
     )
 
-    proposals = derive_box_net_proposals(assembled)
+    assert derive_box_net_proposals(assembled) == []
+
+
+def test_accepts_a_standard_fefco_0201_pair_as_one_closure_assembly():
+    candidates = horizontal_net("fefco-0201")
+    candidates[4] = rectangle(
+        "fefco-0201-top-front",
+        (0.0, 10.0, 30.0, 20.0),
+    )
+    candidates.append(
+        rectangle(
+            "fefco-0201-top-back",
+            (50.0, 10.0, 80.0, 20.0),
+        )
+    )
+
+    proposals = derive_box_net_proposals(candidates)
 
     assert len(proposals) == 1
-    assert proposals[0]["schema"] == "box-net-proposal/2"
-    top = next(item for item in proposals[0]["closure_assemblies"] if item["side"] == -1)
-    assert top == {
-        "face_id": "assembled-cap-top",
-        "attached_body_face_id": "assembled-body-1",
-        "side": -1,
-        "extent": "partial",
-        "closure_kind": "assembly",
-        "coverage_ratio": 0.7,
+    proposal = proposals[0]
+    assert proposal["schema"] == "box-net-proposal/3"
+    top = next(item for item in proposal["closure_assemblies"] if item["side"] == -1)
+    assert top["closure_kind"] == "assembly"
+    assert top["coverage_ratio"] == 1.0
+    assert top["primary_face_id"] == "fefco-0201-top-back"
+    assert top["members"] == [
+        {
+            "face_id": "fefco-0201-top-back",
+            "attached_body_face_id": "fefco-0201-body-3",
+            "coverage_ratio": 0.5,
+            "extent": "partial",
+        },
+        {
+            "face_id": "fefco-0201-top-front",
+            "attached_body_face_id": "fefco-0201-body-1",
+            "coverage_ratio": 0.5,
+            "extent": "partial",
+        },
+    ]
+    assert set(proposal["face_ids"]) == {
+        *(f"fefco-0201-body-{index}" for index in range(1, 5)),
+        "fefco-0201-top-front",
+        "fefco-0201-top-back",
+        "fefco-0201-cap-bottom",
     }
 
 
@@ -272,8 +304,9 @@ def test_prefers_a_closed_main_cap_over_an_open_annotation_frame():
 
     assert proposal["cap_face_ids"][0] == "closed-wins-cap-top"
     assert all(
-        closure["face_id"] != "closed-wins-open-top"
+        member["face_id"] != "closed-wins-open-top"
         for closure in proposal["closure_assemblies"]
+        for member in closure["members"]
     )
 
 

@@ -12,10 +12,14 @@ from typing import Any, Mapping
 from .adapters import AdaptationResult, adapt_structure
 from .dimensions import (
     DimensionPolicy,
+    MAX_CLOSURE_ASSEMBLY_MEMBER_SUM_RATIO,
+    MIN_CLOSURE_ASSEMBLY_UNION_RATIO,
     fit_closure_dimensions,
+    fit_closure_member_dimensions,
     geometry_policy_for_source,
     is_stroke_proposal_source,
     normalized_mm,
+    rectangular_coverage_ratio,
     solve_body_dimensions,
 )
 from .model import StructureContractError, canonicalize_structure, structure_cache_key
@@ -29,6 +33,10 @@ from .topology import (
 
 
 BOX_ROLES = ("front", "right", "back", "left", "top", "bottom")
+OPPOSITE_BODY_ROLE_PAIRS = {
+    frozenset(("front", "back")),
+    frozenset(("left", "right")),
+}
 ROLE_DIMENSIONS = {
     "front": ("width", "height"),
     "back": ("width", "height"),
@@ -37,8 +45,8 @@ ROLE_DIMENSIONS = {
     "top": ("width", "depth"),
     "bottom": ("width", "depth"),
 }
-CACHE_SCHEMA = "packaging-structure-cache/5"
-RESOLVED_SCHEMA = "resolved-packaging-job/2"
+CACHE_SCHEMA = "packaging-structure-cache/6"
+RESOLVED_SCHEMA = "resolved-packaging-job/3"
 PROPOSAL_EXPECTED_VALIDATION_ERRORS = {
     "structure_face_mapping_incomplete",
     "structure_proposal_requires_confirmation",
@@ -287,34 +295,199 @@ def _solve_dimensions(
     )
 
 
+def _artwork_layer_contracts(
+    structure: Mapping[str, Any],
+    role_faces: Mapping[str, Mapping[str, Any]],
+) -> dict[str, list[dict[str, Any]]] | None:
+    """Resolve physical source panels into one or more artwork layers per role."""
+    layers = {
+        role: [
+            {
+                "face_id": str(face["id"]),
+                "attached_body_face_id": None,
+                "closure_kind": None,
+                "coverage_ratio": 1.0,
+                "closure_coverage_ratio": 1.0,
+                "z_index": 0,
+            }
+        ]
+        for role, face in role_faces.items()
+    }
+    contract = structure.get("artwork_assemblies")
+    if contract is None:
+        return layers
+    if not isinstance(contract, Mapping) or contract.get("schema") != "packaging-artwork-assemblies/1":
+        return None
+    raw_closures = contract.get("closures")
+    if not isinstance(raw_closures, list) or len(raw_closures) != 2:
+        return None
+    closures_by_role = {
+        str(item.get("role")): item
+        for item in raw_closures
+        if isinstance(item, Mapping)
+    }
+    if set(closures_by_role) != {"top", "bottom"}:
+        return None
+    for role, closure in closures_by_role.items():
+        primary = role_faces[role]
+        if closure.get("primary_face_id") != primary.get("id"):
+            return None
+        closure_kind = str(closure.get("closure_kind") or "")
+        coverage_ratio = closure.get("coverage_ratio")
+        raw_members = closure.get("members")
+        if (
+            closure_kind not in {"full", "clearance", "assembly"}
+            or isinstance(coverage_ratio, bool)
+            or not isinstance(coverage_ratio, (int, float))
+            or not isinstance(raw_members, list)
+        ):
+            return None
+        normalized_layers: list[dict[str, Any]] = []
+        for member in raw_members:
+            if not isinstance(member, Mapping):
+                return None
+            member_ratio = member.get("coverage_ratio")
+            z_index = member.get("z_index")
+            if (
+                isinstance(member_ratio, bool)
+                or not isinstance(member_ratio, (int, float))
+                or isinstance(z_index, bool)
+                or not isinstance(z_index, int)
+            ):
+                return None
+            normalized_layers.append(
+                {
+                    "face_id": str(member.get("face_id") or ""),
+                    "attached_body_face_id": str(member.get("attached_body_face_id") or ""),
+                    "closure_kind": closure_kind,
+                    "coverage_ratio": float(member_ratio),
+                    "closure_coverage_ratio": float(coverage_ratio),
+                    "z_index": z_index,
+                }
+            )
+        layers[role] = normalized_layers
+        if (
+            len(layers[role]) != len(raw_members)
+            or not layers[role]
+            or float(coverage_ratio) <= 0
+            or [layer["z_index"] for layer in layers[role]] != list(range(len(layers[role])))
+        ):
+            return None
+    return layers
+
+
+def _artwork_assembly_connections_valid(
+    structure: Mapping[str, Any],
+    role_faces: Mapping[str, Mapping[str, Any]],
+    layer_contracts: Mapping[str, list[dict[str, Any]]],
+) -> bool:
+    """Verify closure members against physical fold edges, not sidecar claims."""
+    body_roles_by_id = {
+        str(role_faces[role]["id"]): role
+        for role in ("front", "right", "back", "left")
+    }
+    boundaries = {
+        str(face["id"]): set(str(edge_id) for edge_id in face["boundary"])
+        for face in structure["faces"]
+    }
+    physical_folds: set[tuple[frozenset[str], str]] = set()
+    for fold in structure["folds"]:
+        left = str(fold["left_face"])
+        right = str(fold["right_face"])
+        edge = str(fold["edge"])
+        if edge in boundaries.get(left, set()) and edge in boundaries.get(right, set()):
+            physical_folds.add((frozenset((left, right)), edge))
+
+    for role in ("top", "bottom"):
+        layers = layer_contracts[role]
+        closure_kind = layers[0]["closure_kind"]
+        if closure_kind is None:
+            continue
+        attached_roles: list[str] = []
+        for layer in layers:
+            member_id = str(layer["face_id"])
+            attached_id = str(layer["attached_body_face_id"])
+            attached_role = body_roles_by_id.get(attached_id)
+            if attached_role is None or not any(
+                pair == frozenset((member_id, attached_id))
+                for pair, _edge in physical_folds
+            ):
+                return False
+            attached_roles.append(attached_role)
+        if closure_kind == "assembly":
+            member_ratio_sum = sum(float(layer["coverage_ratio"]) for layer in layers)
+            declared_coverage = float(layers[0]["closure_coverage_ratio"])
+            if (
+                frozenset(attached_roles) not in OPPOSITE_BODY_ROLE_PAIRS
+                or member_ratio_sum > MAX_CLOSURE_ASSEMBLY_MEMBER_SUM_RATIO + 1e-6
+                or declared_coverage > min(1.0, member_ratio_sum) + 1e-6
+            ):
+                return False
+        elif (
+            len(layers) != 1
+            or abs(float(layers[0]["coverage_ratio"]) - float(layers[0]["closure_coverage_ratio"])) > 1e-6
+        ):
+            return False
+    return True
+
+
 def _artwork_orientations_valid(
     structure: Mapping[str, Any],
     role_faces: Mapping[str, Mapping[str, Any]],
     dimensions: Mapping[str, float],
     policy: DimensionPolicy,
 ) -> bool:
-    allow_assembled_closure = bool(
-        is_stroke_proposal_source(structure.get("source"))
-        and "closure_assembly_partial" in structure.get("validation", {}).get("warnings", [])
-    )
+    faces_by_id = {str(face["id"]): face for face in structure["faces"]}
+    layer_contracts = _artwork_layer_contracts(structure, role_faces)
+    if layer_contracts is None:
+        return False
+    if not _artwork_assembly_connections_valid(structure, role_faces, layer_contracts):
+        return False
     for role, face in role_faces.items():
-        actual = _mapped_face_size(structure, face)
-        if actual is None:
-            return False
         keys = ROLE_DIMENSIONS[role]
         expected = [float(dimensions[keys[0]]), float(dimensions[keys[1]])]
-        if role in {"top", "bottom"}:
-            if fit_closure_dimensions(
-                actual,
-                expected,
-                policy,
-                allow_assembled=allow_assembled_closure,
-            ) is None:
+        coverage_bounds: list[list[float]] = []
+        for layer in layer_contracts[role]:
+            layer_face = faces_by_id.get(str(layer["face_id"]))
+            if layer_face is None:
                 return False
-        elif not all(policy.close(left, right) for left, right in zip(actual, expected)):
-            return False
-        if _artwork_coverage_bounds(structure, face, expected, policy) is None:
-            return False
+            actual = _mapped_face_size(structure, layer_face)
+            if actual is None:
+                return False
+            if role in {"top", "bottom"}:
+                fit = (
+                    fit_closure_member_dimensions(actual, expected, policy)
+                    if layer["closure_kind"] == "assembly"
+                    else fit_closure_dimensions(actual, expected, policy)
+                )
+                if (
+                    fit is None
+                    or (
+                        layer["closure_kind"] is not None
+                        and fit.kind != layer["closure_kind"]
+                    )
+                    or (
+                        fit is not None
+                        and fit.coverage_ratio + 1e-6 < float(layer["coverage_ratio"])
+                    )
+                ):
+                    return False
+            elif not all(policy.close(left, right) for left, right in zip(actual, expected)):
+                return False
+            bounds = _artwork_coverage_bounds(structure, layer_face, expected, policy)
+            if bounds is None:
+                return False
+            coverage_bounds.append(bounds)
+        if role in {"top", "bottom"}:
+            declared_coverage = float(layer_contracts[role][0]["closure_coverage_ratio"])
+            required_coverage = max(
+                declared_coverage,
+                MIN_CLOSURE_ASSEMBLY_UNION_RATIO
+                if layer_contracts[role][0]["closure_kind"] == "assembly"
+                else 0.0,
+            )
+            if rectangular_coverage_ratio(coverage_bounds, expected) + 1e-6 < required_coverage:
+                return False
     return True
 
 
@@ -530,6 +703,10 @@ def resolve_structure_payload(
     if not _fold_graph_valid(structure, role_faces, dimensions, dimensions_policy):
         return _review("structure_fold_graph_invalid", "六面折叠邻接不完整。", structure=structure, topology=topology)
 
+    layer_contracts = _artwork_layer_contracts(structure, role_faces)
+    if layer_contracts is None:
+        return _review("artwork_transform_invalid", "贴图组合合同无效。", structure=structure, topology=topology)
+    faces_by_id = {str(face["id"]): face for face in structure["faces"]}
     resolved_faces: dict[str, dict[str, Any]] = {}
     for role, face in role_faces.items():
         dimension_keys = ROLE_DIMENSIONS[role]
@@ -537,24 +714,36 @@ def resolve_structure_payload(
             float(dimensions[dimension_keys[0]]),
             float(dimensions[dimension_keys[1]]),
         ]
-        coverage_bounds = _artwork_coverage_bounds(
-            structure,
-            face,
-            expected_size,
-            dimensions_policy,
-        )
-        if coverage_bounds is None:  # Kept defensive beside the validation gate above.
-            return _review(
-                "artwork_transform_invalid",
-                "六面贴图范围不能落入对应盒面。",
-                structure=structure,
-                topology=topology,
+        artwork_layers: list[dict[str, Any]] = []
+        for layer in layer_contracts[role]:
+            layer_face = faces_by_id.get(str(layer["face_id"]))
+            if layer_face is None:
+                return _review("artwork_transform_invalid", "贴图成员已经失效。", structure=structure, topology=topology)
+            coverage_bounds = _artwork_coverage_bounds(
+                structure,
+                layer_face,
+                expected_size,
+                dimensions_policy,
+            )
+            if coverage_bounds is None:  # Kept defensive beside the validation gate above.
+                return _review(
+                    "artwork_transform_invalid",
+                    "六面贴图范围不能落入对应盒面。",
+                    structure=structure,
+                    topology=topology,
+                )
+            artwork_layers.append(
+                {
+                    "face_id": layer_face["id"],
+                    "artwork_transform": layer_face["artwork_transform"],
+                    "artwork_coverage_bounds_mm": coverage_bounds,
+                    "z_index": int(layer["z_index"]),
+                }
             )
         resolved_faces[role] = {
             "face_id": face["id"],
             "boundary": face["boundary"],
-            "artwork_transform": face["artwork_transform"],
-            "artwork_coverage_bounds_mm": coverage_bounds,
+            "artwork_layers": artwork_layers,
             **metrics[face["id"]],
         }
     resolved = {

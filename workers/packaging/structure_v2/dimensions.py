@@ -15,7 +15,14 @@ from typing import Any
 
 STROKE_PROPOSAL_ADAPTER = "illustrator-stroke-proposal/1"
 MEASUREMENT_DECIMALS = 3
-MIN_ASSEMBLED_CLOSURE_RATIO = 0.60
+# Regular slotted containers (FEFCO 0201 / RSC) commonly close with two
+# opposing major flaps.  Each flap reaches roughly half of the opening; the
+# physical closure is the union of both flaps, not either flap stretched to a
+# full face.  Keep the member and assembled-footprint contracts separate.
+MIN_CLOSURE_ASSEMBLY_MEMBER_RATIO = 0.45
+MAX_CLOSURE_ASSEMBLY_MEMBER_RATIO = 0.55
+MIN_CLOSURE_ASSEMBLY_UNION_RATIO = 0.94
+MAX_CLOSURE_ASSEMBLY_MEMBER_SUM_RATIO = 1.02
 
 
 def normalized_mm(value: float) -> float:
@@ -81,16 +88,8 @@ def fit_closure_dimensions(
     actual: Sequence[float],
     expected: Sequence[float],
     policy: DimensionPolicy,
-    *,
-    allow_assembled: bool = False,
 ) -> ClosureDimensionFit | None:
-    """Classify a main closure without stretching it into a full box face.
-
-    Exact and normal-clearance panels remain the default. A shorter main flap
-    is accepted only when its fold dimension matches, its perpendicular reach
-    covers at least 60% of the erected face, and the caller has independently
-    proved that other flaps form the same closure assembly.
-    """
+    """Classify one closure that independently covers an erected box face."""
     if len(actual) != 2 or len(expected) != 2:
         return None
     actual_values = [float(value) for value in actual]
@@ -115,24 +114,97 @@ def fit_closure_dimensions(
             kind="full" if exact else "clearance",
             coverage_ratio=round(min(1.0, min(ratios)), 6),
         )
-    if not allow_assembled or sum(close) != 1:
-        return None
+    return None
 
-    partial_index = 0 if not close[0] else 1
-    actual_partial = actual_values[partial_index]
-    expected_partial = expected_values[partial_index]
-    ratio = actual_partial / expected_partial
-    if actual_partial >= expected_partial or ratio < MIN_ASSEMBLED_CLOSURE_RATIO:
+
+def fit_closure_member_dimensions(
+    actual: Sequence[float],
+    expected: Sequence[float],
+    policy: DimensionPolicy,
+) -> ClosureDimensionFit | None:
+    """Classify one member of a symmetric opposing-flap closure.
+
+    This deliberately does not accept the member as a complete closure.  The
+    caller must still prove that members attach to opposite body panels and
+    that their clipped union covers the erected footprint.
+    """
+    if len(actual) != 2 or len(expected) != 2:
         return None
-    # A dimensional tolerance may describe a small overshoot on the fold axis,
-    # but a real closure assembly cannot extend materially past its footprint.
-    matched_index = 1 - partial_index
+    actual_values = [float(value) for value in actual]
+    expected_values = [float(value) for value in expected]
+    if any(value <= 0 for value in (*actual_values, *expected_values)):
+        return None
+    close = [
+        policy.close(actual_value, expected_value)
+        for actual_value, expected_value in zip(actual_values, expected_values)
+    ]
+    if sum(close) != 1:
+        return None
+    reach_index = 0 if not close[0] else 1
+    fold_index = 1 - reach_index
+    if actual_values[reach_index] >= expected_values[reach_index]:
+        return None
     if (
-        actual_values[matched_index] > expected_values[matched_index]
-        and not policy.close(actual_values[matched_index], expected_values[matched_index])
+        actual_values[fold_index] > expected_values[fold_index]
+        and not policy.close(actual_values[fold_index], expected_values[fold_index])
+    ):
+        return None
+    ratio = actual_values[reach_index] / expected_values[reach_index]
+    if not (
+        MIN_CLOSURE_ASSEMBLY_MEMBER_RATIO
+        <= ratio
+        <= MAX_CLOSURE_ASSEMBLY_MEMBER_RATIO
     ):
         return None
     return ClosureDimensionFit(kind="assembly", coverage_ratio=round(ratio, 6))
+
+
+def rectangular_coverage_ratio(
+    bounds: Sequence[Sequence[float]],
+    footprint: Sequence[float],
+) -> float:
+    """Return the clipped union area of axis-aligned layers over a footprint."""
+    if len(footprint) != 2:
+        return 0.0
+    width, height = (float(value) for value in footprint)
+    if width <= 0 or height <= 0:
+        return 0.0
+    clipped: list[tuple[float, float, float, float]] = []
+    for raw in bounds:
+        if len(raw) != 4:
+            continue
+        left, top, right, bottom = (float(value) for value in raw)
+        left, top = max(0.0, left), max(0.0, top)
+        right, bottom = min(width, right), min(height, bottom)
+        if right > left and bottom > top:
+            clipped.append((left, top, right, bottom))
+    if not clipped:
+        return 0.0
+    x_values = sorted({0.0, width, *(value for item in clipped for value in (item[0], item[2]))})
+    union_area = 0.0
+    for x0, x1 in zip(x_values, x_values[1:]):
+        if x1 <= x0:
+            continue
+        intervals = sorted(
+            (top, bottom)
+            for left, top, right, bottom in clipped
+            if left < x1 and right > x0
+        )
+        covered_y = 0.0
+        current_top: float | None = None
+        current_bottom: float | None = None
+        for top, bottom in intervals:
+            if current_top is None:
+                current_top, current_bottom = top, bottom
+            elif top <= float(current_bottom):
+                current_bottom = max(float(current_bottom), bottom)
+            else:
+                covered_y += float(current_bottom) - current_top
+                current_top, current_bottom = top, bottom
+        if current_top is not None:
+            covered_y += float(current_bottom) - current_top
+        union_area += (x1 - x0) * covered_y
+    return round(min(1.0, union_area / (width * height)), 6)
 
 
 def solve_body_dimensions(

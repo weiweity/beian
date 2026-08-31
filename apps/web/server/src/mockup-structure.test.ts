@@ -20,7 +20,7 @@ const {
 } = await import("./mockup.js");
 
 function previewFaceIds(): string[] {
-  return Array.from({ length: 6 }, (_, index) => `proposal-face-${String(index + 1).padStart(4, "0")}`);
+  return Array.from({ length: 7 }, (_, index) => `proposal-face-${String(index + 1).padStart(4, "0")}`);
 }
 
 function reviewJob() {
@@ -35,7 +35,7 @@ function reviewJob() {
   writeFileSync(source, "source");
   writeFileSync(artwork, "%PDF");
   writeFileSync(artworkPreview, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
-  const previewFaces = Array.from({ length: 6 }, (_, index) => ({
+  const previewFaces = Array.from({ length: 7 }, (_, index) => ({
     id: `proposal-face-${String(index + 1).padStart(4, "0")}`,
     bounds_mm: [index * 30, 0, index * 30 + 30, 50],
     centroid_mm: [index * 30 + 15, 25],
@@ -51,31 +51,49 @@ function reviewJob() {
       topology: {
         face_proposal: previewFaces,
         net_proposals: [{
-          schema: "box-net-proposal/2",
+          schema: "box-net-proposal/3",
           id: "box-net-0123456789abcdef",
           face_ids: previewFaces.map((face) => face.id),
           body_face_ids: previewFaces.slice(0, 4).map((face) => face.id),
-          cap_face_ids: previewFaces.slice(4).map((face) => face.id),
+          cap_face_ids: [previewFaces[4].id, previewFaces[6].id],
           strip_axis: "x",
           bounds_mm: [0, 0, 180, 50],
           dimensions_mm: { width: 30, depth: 20, height: 50 },
           valid_anchors: [{ front_face_id: previewFaces[1].id, quarter_turns: [0, 2] }],
           closure_assemblies: [
             {
-              face_id: previewFaces[4].id,
-              attached_body_face_id: previewFaces[0].id,
+              primary_face_id: previewFaces[4].id,
               side: -1,
-              extent: "partial",
+              extent: "full",
               closure_kind: "assembly",
-              coverage_ratio: 0.6,
+              coverage_ratio: 1,
+              members: [
+                {
+                  face_id: previewFaces[4].id,
+                  attached_body_face_id: previewFaces[0].id,
+                  extent: "partial",
+                  coverage_ratio: 0.5,
+                },
+                {
+                  face_id: previewFaces[5].id,
+                  attached_body_face_id: previewFaces[2].id,
+                  extent: "partial",
+                  coverage_ratio: 0.5,
+                },
+              ],
             },
             {
-              face_id: previewFaces[5].id,
-              attached_body_face_id: previewFaces[0].id,
+              primary_face_id: previewFaces[6].id,
               side: 1,
               extent: "full",
               closure_kind: "full",
               coverage_ratio: 1,
+              members: [{
+                face_id: previewFaces[6].id,
+                attached_body_face_id: previewFaces[0].id,
+                extent: "full",
+                coverage_ratio: 1,
+              }],
             },
           ],
           secret: "/never/expose-net",
@@ -131,30 +149,49 @@ describe("mockup structure confirmation persistence", () => {
     assert.equal(JSON.stringify(view).includes("/never/expose"), false);
     assert.equal(JSON.stringify(view).includes(DATA_DIR), false);
     assert.deepEqual(view.structure_preview?.net_proposals, [{
+      schema: "box-net-proposal/3",
       id: "box-net-0123456789abcdef",
       face_ids: previewFaceIds(),
       body_face_ids: previewFaceIds().slice(0, 4),
-      cap_face_ids: previewFaceIds().slice(4),
+      cap_face_ids: ["proposal-face-0005", "proposal-face-0007"],
       strip_axis: "x",
       bounds_mm: [0, 0, 180, 50],
       dimensions_mm: { width: 30, depth: 20, height: 50 },
       valid_anchors: [{ front_face_id: "proposal-face-0002", quarter_turns: [0, 2] }],
       closure_assemblies: [
         {
-          face_id: "proposal-face-0005",
-          attached_body_face_id: "proposal-face-0001",
+          primary_face_id: "proposal-face-0005",
           side: -1,
-          extent: "partial",
+          extent: "full",
           closure_kind: "assembly",
-          coverage_ratio: 0.6,
+          coverage_ratio: 1,
+          members: [
+            {
+              face_id: "proposal-face-0005",
+              attached_body_face_id: "proposal-face-0001",
+              extent: "partial",
+              coverage_ratio: 0.5,
+            },
+            {
+              face_id: "proposal-face-0006",
+              attached_body_face_id: "proposal-face-0003",
+              extent: "partial",
+              coverage_ratio: 0.5,
+            },
+          ],
         },
         {
-          face_id: "proposal-face-0006",
-          attached_body_face_id: "proposal-face-0001",
+          primary_face_id: "proposal-face-0007",
           side: 1,
           extent: "full",
           closure_kind: "full",
           coverage_ratio: 1,
+          members: [{
+            face_id: "proposal-face-0007",
+            attached_body_face_id: "proposal-face-0001",
+            extent: "full",
+            coverage_ratio: 1,
+          }],
         },
       ],
     }]);
@@ -162,39 +199,20 @@ describe("mockup structure confirmation persistence", () => {
     assert.equal(view.structure_preview?.image_url, `/api/mockups/${job.id}/structure-preview`);
   });
 
-  it("keeps legacy full and clearance closures without a proposal schema or closure kind", () => {
+  it("drops legacy closure contracts instead of silently upgrading their semantics", () => {
     const { job } = reviewJob();
     const resolutionPath = job.structure_resolution_path || "";
     const resolution = JSON.parse(readFileSync(resolutionPath, "utf8"));
     const proposal = resolution.topology.net_proposals[0];
     delete proposal.schema;
-    proposal.closure_assemblies = proposal.closure_assemblies.map(
-      (closure: Record<string, unknown>, index: number) => {
-        const legacy = { ...closure };
-        delete legacy.closure_kind;
-        return index === 0
-          ? { ...legacy, extent: "partial", coverage_ratio: 0.94 }
-          : { ...legacy, extent: "full", coverage_ratio: 1 };
-      },
-    );
+    proposal.closure_assemblies = proposal.closure_assemblies.map((closure: Record<string, unknown>) => {
+      const legacy = { ...closure };
+      delete legacy.members;
+      return legacy;
+    });
     writeFileSync(resolutionPath, JSON.stringify(resolution));
 
-    assert.deepEqual(publicMockup(job).structure_preview?.net_proposals[0]?.closure_assemblies, [
-      {
-        face_id: "proposal-face-0005",
-        attached_body_face_id: "proposal-face-0001",
-        side: -1,
-        extent: "partial",
-        coverage_ratio: 0.94,
-      },
-      {
-        face_id: "proposal-face-0006",
-        attached_body_face_id: "proposal-face-0001",
-        side: 1,
-        extent: "full",
-        coverage_ratio: 1,
-      },
-    ]);
+    assert.deepEqual(publicMockup(job).structure_preview?.net_proposals, []);
   });
 
   it("drops malformed or unbounded whole-net proposals instead of exposing raw guesses", () => {
@@ -239,7 +257,76 @@ describe("mockup structure confirmation persistence", () => {
       {
         ...valid,
         closure_assemblies: valid.closure_assemblies.map((closure: Record<string, unknown>, index: number) => (
-          index === 0 ? { ...closure, extent: "full" } : closure
+          index === 0
+            ? {
+                ...closure,
+                members: (closure.members as Array<Record<string, unknown>>).map((member, memberIndex) => (
+                  memberIndex === 0 ? { ...member, coverage_ratio: 0.4 } : member
+                )),
+              }
+            : closure
+        )),
+      },
+      {
+        ...valid,
+        closure_assemblies: valid.closure_assemblies.map((closure: Record<string, unknown>, index: number) => (
+          index === 0
+            ? {
+                ...closure,
+                members: (closure.members as Array<Record<string, unknown>>).map((member, memberIndex) => (
+                  memberIndex === 1 ? { ...member, attached_body_face_id: valid.body_face_ids[1] } : member
+                )),
+              }
+            : closure
+        )),
+      },
+      {
+        ...valid,
+        closure_assemblies: valid.closure_assemblies.map((closure: Record<string, unknown>, index: number) => (
+          index === 0
+            ? {
+                ...closure,
+                coverage_ratio: 1,
+                members: (closure.members as Array<Record<string, unknown>>).map((member) => ({
+                  ...member,
+                  coverage_ratio: 0.45,
+                })),
+              }
+            : closure
+        )),
+      },
+      {
+        ...valid,
+        closure_assemblies: valid.closure_assemblies.map((closure: Record<string, unknown>, index: number) => (
+          index === 0 ? { ...closure, coverage_ratio: true } : closure
+        )),
+      },
+      {
+        ...valid,
+        closure_assemblies: valid.closure_assemblies.map((closure: Record<string, unknown>) => (
+          closure.closure_kind === "full"
+            ? {
+                ...closure,
+                coverage_ratio: 0.99,
+                members: (closure.members as Array<Record<string, unknown>>).map((member) => ({
+                  ...member,
+                  coverage_ratio: 0.99,
+                })),
+              }
+            : closure
+        )),
+      },
+      {
+        ...valid,
+        closure_assemblies: valid.closure_assemblies.map((closure: Record<string, unknown>, index: number) => (
+          index === 0
+            ? {
+                ...closure,
+                members: (closure.members as Array<Record<string, unknown>>).map((member, memberIndex) => (
+                  memberIndex === 0 ? { ...member, coverage_ratio: "0.5" } : member
+                )),
+              }
+            : closure
         )),
       },
     ];

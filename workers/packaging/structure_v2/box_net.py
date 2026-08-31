@@ -10,22 +10,26 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 import hashlib
+from itertools import combinations
 import json
 from typing import Any
 
 from .dimensions import (
     DimensionPolicy,
     GeometryPolicy,
+    MAX_CLOSURE_ASSEMBLY_MEMBER_SUM_RATIO,
+    MIN_CLOSURE_ASSEMBLY_UNION_RATIO,
     STROKE_PROPOSAL_GEOMETRY,
     fit_closure_dimensions,
+    fit_closure_member_dimensions,
+    rectangular_coverage_ratio,
     solve_body_dimensions,
 )
 
 
 MAX_BOX_NET_PROPOSALS = 24
 MAX_BOX_NET_SEARCH_STATES = 4096
-MIN_CLOSURE_EVIDENCE_MM = 2.0
-BOX_NET_PROPOSAL_SCHEMA = "box-net-proposal/2"
+BOX_NET_PROPOSAL_SCHEMA = "box-net-proposal/3"
 
 
 class BoxNetProposalLimitError(RuntimeError):
@@ -181,7 +185,7 @@ def _closure_options(
     for candidate in candidates:
         if str(candidate["id"]) in body_ids:
             continue
-        for body in body_path:
+        for body_index, body in enumerate(body_path):
             side = _cap_side(candidate, body, axis, tolerance)
             if side is None:
                 continue
@@ -199,6 +203,7 @@ def _closure_options(
             attached_candidates[side].append(
                 {
                     "face": candidate,
+                    "body_index": body_index,
                     "attached_body_face_id": str(body["id"]),
                     "attached_along": attached,
                     "cross": cross,
@@ -210,24 +215,7 @@ def _closure_options(
     options: dict[int, list[dict[str, Any]]] = {-1: [], 1: []}
     for side in options:
         records = attached_candidates[side]
-        evidence_body_ids = {
-            str(item["attached_body_face_id"])
-            for item in records
-            if (
-                float(item["cross"])
-                >= max(
-                    MIN_CLOSURE_EVIDENCE_MM,
-                    min(5.0, float(item["expected_cross"]) * 0.2),
-                )
-                and (
-                    float(item["cross"]) <= float(item["expected_cross"])
-                    or dimensions.close(
-                        float(item["cross"]),
-                        float(item["expected_cross"]),
-                    )
-                )
-            )
-        }
+        single_options: list[dict[str, Any]] = []
         for item in records:
             cross = float(item["cross"])
             expected_cross = float(item["expected_cross"])
@@ -235,17 +223,105 @@ def _closure_options(
                 (_along_size(item["face"], axis), cross),
                 (float(item["attached_along"]), expected_cross),
                 dimensions,
-                allow_assembled=len(evidence_body_ids) >= 2,
             )
             if fit is None:
                 continue
-            options[side].append(
+            member = {
+                "face": item["face"],
+                "face_id": str(item["face"]["id"]),
+                "attached_body_face_id": str(item["attached_body_face_id"]),
+                "coverage_ratio": fit.coverage_ratio,
+                "extent": "full" if not fit.padded else "partial",
+            }
+            single_options.append(
                 {
-                    "face": item["face"],
-                    "attached_body_face_id": str(item["attached_body_face_id"]),
+                    "primary_face": item["face"],
+                    "primary_face_id": str(item["face"]["id"]),
+                    "members": [member],
                     "coverage_ratio": fit.coverage_ratio,
                     "extent": "full" if not fit.padded else "partial",
                     "closure_kind": fit.kind,
+                }
+            )
+
+        assembly_options: list[dict[str, Any]] = []
+        for left, right in combinations(records, 2):
+            left_index = int(left["body_index"])
+            right_index = int(right["body_index"])
+            if (left_index - right_index) % 4 != 2:
+                continue
+            member_items: list[tuple[dict[str, Any], Any]] = []
+            for item in (left, right):
+                fit = fit_closure_member_dimensions(
+                    (_along_size(item["face"], axis), float(item["cross"])),
+                    (float(item["attached_along"]), float(item["expected_cross"])),
+                    dimensions,
+                )
+                if fit is None:
+                    break
+                member_items.append((item, fit))
+            if len(member_items) != 2:
+                continue
+            member_ratio_sum = sum(float(fit.coverage_ratio) for _item, fit in member_items)
+            if not (
+                MIN_CLOSURE_ASSEMBLY_UNION_RATIO
+                <= member_ratio_sum
+                <= MAX_CLOSURE_ASSEMBLY_MEMBER_SUM_RATIO
+            ):
+                # A material overlap needs an explicit stacking-order decision;
+                # do not manufacture one from Illustrator enumeration order.
+                continue
+            coverage_bounds: list[list[float]] = []
+            for item, _fit in member_items:
+                body_index = int(item["body_index"])
+                reach = min(float(item["cross"]), float(item["expected_cross"]))
+                if body_index in (0, 2):
+                    top = 0.0 if body_index == 0 else second - reach
+                    coverage_bounds.append([0.0, top, first, top + reach])
+                else:
+                    left_edge = 0.0 if body_index == 1 else first - reach
+                    coverage_bounds.append([left_edge, 0.0, left_edge + reach, second])
+            union_ratio = rectangular_coverage_ratio(coverage_bounds, (first, second))
+            if union_ratio < MIN_CLOSURE_ASSEMBLY_UNION_RATIO:
+                continue
+            members = sorted(
+                (
+                    {
+                        "face": item["face"],
+                        "face_id": str(item["face"]["id"]),
+                        "attached_body_face_id": str(item["attached_body_face_id"]),
+                        "coverage_ratio": fit.coverage_ratio,
+                        "extent": "partial",
+                    }
+                    for item, fit in member_items
+                ),
+                key=lambda member: str(member["face_id"]),
+            )
+            # Equal-area members use lexical order so proposal identities stay
+            # stable across Illustrator enumeration order.
+            largest_area = max(
+                _along_size(member["face"], axis) * _cross_size(member["face"], axis)
+                for member in members
+            )
+            primary = min(
+                (
+                    member
+                    for member in members
+                    if abs(
+                        _along_size(member["face"], axis) * _cross_size(member["face"], axis)
+                        - largest_area
+                    ) <= 1e-6
+                ),
+                key=lambda member: str(member["face_id"]),
+            )
+            assembly_options.append(
+                {
+                    "primary_face": primary["face"],
+                    "primary_face_id": str(primary["face_id"]),
+                    "members": members,
+                    "coverage_ratio": union_ratio,
+                    "extent": "full" if union_ratio == 1.0 else "partial",
+                    "closure_kind": "assembly",
                 }
             )
 
@@ -254,22 +330,24 @@ def _closure_options(
         # open-frame path exists only for real multi-flap closure assemblies.
         closed_full = [
             option
-            for option in options[side]
-            if not _open_sides(option["face"])
+            for option in single_options
+            if not _open_sides(option["primary_face"])
             and dimensions.close(
-                _cross_size(option["face"], axis),
+                _cross_size(option["primary_face"], axis),
                 second
-                if dimensions.close(_along_size(option["face"], axis), first)
+                if dimensions.close(_along_size(option["primary_face"], axis), first)
                 else first,
             )
         ]
-        if closed_full:
-            options[side] = closed_full
+        options[side] = closed_full if closed_full else assembly_options
         options[side].sort(
             key=lambda item: (
                 -float(item["coverage_ratio"]),
-                -_along_size(item["face"], axis) * _cross_size(item["face"], axis),
-                str(item["face"]["id"]),
+                -sum(
+                    _along_size(member["face"], axis) * _cross_size(member["face"], axis)
+                    for member in item["members"]
+                ),
+                str(item["primary_face_id"]),
             )
         )
     return options
@@ -310,8 +388,11 @@ def _stable_proposal_id(
         "basis_transform": [round(float(value), 9) for value in basis_transform],
         "body_bounds": [[round(value, 6) for value in _bounds(item)] for item in body_path],
         "closure_bounds": [
-            [round(value, 6) for value in _bounds(item["face"])]
-            for item in closures
+            [
+                [round(value, 6) for value in _bounds(member["face"])]
+                for member in closure["members"]
+            ]
+            for closure in closures
         ],
     }
     encoded = json.dumps(material, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -344,11 +425,15 @@ def derive_box_net_proposals(
             closures = _closure_options(unique_candidates, body_path, axis, tolerance_mm, dimensions)
             for negative in closures[-1]:
                 for positive in closures[1]:
-                    negative_face = negative["face"]
-                    positive_face = positive["face"]
-                    face_items = [*body_path, negative_face, positive_face]
+                    negative_face = negative["primary_face"]
+                    positive_face = positive["primary_face"]
+                    face_items = [
+                        *body_path,
+                        *(member["face"] for member in negative["members"]),
+                        *(member["face"] for member in positive["members"]),
+                    ]
                     face_ids = tuple(sorted(str(item["id"]) for item in face_items))
-                    if len(set(face_ids)) != 6:
+                    if len(set(face_ids)) < 6:
                         continue
                     area = sum(_along_size(item, axis) * _cross_size(item, axis) for item in face_items)
                     body_along = [_along_size(item, axis) for item in body_path]
@@ -378,12 +463,20 @@ def derive_box_net_proposals(
                         "cap_face_ids": [str(negative_face["id"]), str(positive_face["id"])],
                         "closure_assemblies": [
                             {
-                                "face_id": str(option["face"]["id"]),
-                                "attached_body_face_id": str(option["attached_body_face_id"]),
+                                "primary_face_id": str(option["primary_face_id"]),
                                 "side": side,
                                 "extent": str(option["extent"]),
                                 "closure_kind": str(option["closure_kind"]),
                                 "coverage_ratio": float(option["coverage_ratio"]),
+                                "members": [
+                                    {
+                                        "face_id": str(member["face_id"]),
+                                        "attached_body_face_id": str(member["attached_body_face_id"]),
+                                        "coverage_ratio": float(member["coverage_ratio"]),
+                                        "extent": str(member["extent"]),
+                                    }
+                                    for member in option["members"]
+                                ],
                             }
                             for side, option in ((-1, negative), (1, positive))
                         ],

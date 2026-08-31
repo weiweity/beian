@@ -95,7 +95,6 @@ export function structureClosureNote(proposal: StructureNetProposal): string {
   }
   if (closures.some((item) => (
     item.closure_kind === "clearance"
-    || (item.closure_kind === undefined && item.extent === "partial")
   ))) {
     return " · 主盖片有正常让位";
   }

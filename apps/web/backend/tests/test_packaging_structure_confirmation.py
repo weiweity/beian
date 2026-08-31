@@ -17,6 +17,7 @@ if str(PACKAGING) not in sys.path:
 from packaging_structure_fixture import semantic_box  # noqa: E402
 from structure_v2 import (  # noqa: E402
     StructureConfirmationError,
+    StructureContractError,
     canonicalize_structure,
     confirm_structure,
     resolve_structure_payload,
@@ -60,7 +61,13 @@ def anchor_proposal_files(
             for item in payload["vertices"]
         }
         edges_by_id = {item["id"]: item for item in payload["edges"]}
-        support_body = next(face for face in payload["faces"] if face["role"] == "left")
+        opposite_role = {
+            "front": "back",
+            "right": "left",
+            "back": "front",
+            "left": "right",
+        }[cap_body_role]
+        support_body = next(face for face in payload["faces"] if face["role"] == opposite_role)
         support_points = {
             vertices_by_id[vertex_id]
             for edge_id in support_body["boundary"]
@@ -506,7 +513,7 @@ def test_anchor_confirmation_accepts_common_closure_flap_clearance(tmp_path: Pat
     # clearance must not shrink the erected carton.
     assert result["dimensions_mm"] == {"width": 30.0, "depth": 20.0, "height": 50.0}
     approved = json.loads(output.read_text(encoding="utf-8"))
-    assert approved["validation"]["warnings"] == ["closure_clearance_padded"]
+    assert approved["validation"]["warnings"] == ["closure_clearance_masked"]
     cap_transforms = [
         face["artwork_transform"][:4]
         for face in approved["faces"]
@@ -519,7 +526,7 @@ def test_anchor_confirmation_accepts_common_closure_flap_clearance(tmp_path: Pat
     resolved = resolve_structure_payload(approved)
     assert resolved.status == "ready"
     for role in ("top", "bottom"):
-        coverage = resolved.resolved["faces"][role]["artwork_coverage_bounds_mm"]
+        coverage = resolved.resolved["faces"][role]["artwork_layers"][0]["artwork_coverage_bounds_mm"]
         assert round((coverage[2] - coverage[0]) * (coverage[3] - coverage[1]), 3) == 564.0
         assert coverage[0] == 0.0
         assert coverage[2] == 30.0
@@ -529,8 +536,8 @@ def test_anchor_confirmation_accepts_common_closure_flap_clearance(tmp_path: Pat
 def test_anchor_confirmation_accepts_a_verified_multi_flap_closure_without_stretching(tmp_path: Path):
     source, resolution, _proposed, net, front = anchor_proposal_files(
         tmp_path,
-        top_cap_depth=14.0,
-        top_support_depth=6.0,
+        top_cap_depth=10.0,
+        top_support_depth=10.0,
     )
     output = tmp_path / "assembled-closure.structure.json"
 
@@ -539,25 +546,25 @@ def test_anchor_confirmation_accepts_a_verified_multi_flap_closure_without_stret
     assert result["ok"] is True
     assert result["dimensions_mm"] == {"width": 30.0, "depth": 20.0, "height": 50.0}
     approved = json.loads(output.read_text(encoding="utf-8"))
-    assert approved["validation"]["warnings"] == ["closure_assembly_partial"]
+    assert approved["validation"]["warnings"] == ["closure_assembly_composited"]
+    assert sorted(
+        len(closure["members"])
+        for closure in approved["artwork_assemblies"]["closures"]
+    ) == [1, 2]
     resolved = resolve_structure_payload(approved)
     assert resolved.status == "ready"
-    cap_areas = {
-        role: round(
-            (bounds[2] - bounds[0]) * (bounds[3] - bounds[1]),
-            3,
-        )
+    layer_counts = {
+        role: len(resolved.resolved["faces"][role]["artwork_layers"])
         for role in ("top", "bottom")
-        for bounds in [resolved.resolved["faces"][role]["artwork_coverage_bounds_mm"]]
     }
-    assert sorted(cap_areas.values()) == [420.0, 600.0]
+    assert sorted(layer_counts.values()) == [1, 2]
 
 
 def test_anchor_confirmation_accepts_the_exact_multi_flap_coverage_boundary(tmp_path: Path):
     source, resolution, proposed, net, front = anchor_proposal_files(
         tmp_path,
-        top_cap_depth=12.0,
-        top_support_depth=8.0,
+        top_cap_depth=9.4,
+        top_support_depth=9.4,
     )
     assembly = next(
         closure
@@ -565,7 +572,7 @@ def test_anchor_confirmation_accepts_the_exact_multi_flap_coverage_boundary(tmp_
         if closure["closure_kind"] == "assembly"
     )
 
-    assert assembly["coverage_ratio"] == 0.6
+    assert assembly["coverage_ratio"] == 0.94
     result = confirm_anchor(
         source,
         resolution,
@@ -578,6 +585,91 @@ def test_anchor_confirmation_accepts_the_exact_multi_flap_coverage_boundary(tmp_
     assert result["ok"] is True
 
 
+def confirmed_assembly_structure(tmp_path: Path) -> dict:
+    source, resolution, _proposed, net, front = anchor_proposal_files(
+        tmp_path,
+        top_cap_depth=10.0,
+        top_support_depth=10.0,
+    )
+    output = tmp_path / "confirmed-assembly.structure.json"
+    confirm_anchor(source, resolution, net["id"], front["id"], 0, output)
+    approved = json.loads(output.read_text(encoding="utf-8"))
+    approved.pop("structure_hash", None)
+    return approved
+
+
+def test_artwork_assembly_contract_rejects_non_contiguous_layer_order(tmp_path: Path):
+    approved = confirmed_assembly_structure(tmp_path)
+    assembly = next(
+        closure
+        for closure in approved["artwork_assemblies"]["closures"]
+        if closure["closure_kind"] == "assembly"
+    )
+    assembly["members"][1]["z_index"] = 2
+
+    with pytest.raises(StructureContractError) as raised:
+        canonicalize_structure(approved)
+
+    assert raised.value.code == "structure_contract_invalid"
+
+
+def test_artwork_assembly_contract_rejects_untrusted_overlap_above_two_percent(tmp_path: Path):
+    approved = confirmed_assembly_structure(tmp_path)
+    assembly = next(
+        closure
+        for closure in approved["artwork_assemblies"]["closures"]
+        if closure["closure_kind"] == "assembly"
+    )
+    for member in assembly["members"]:
+        member["coverage_ratio"] = 0.55
+    assembly["coverage_ratio"] = 1.0
+
+    with pytest.raises(StructureContractError) as raised:
+        canonicalize_structure(approved)
+
+    assert raised.value.code == "structure_contract_invalid"
+
+
+@pytest.mark.parametrize("case", ["wrong_body", "overclaimed_member", "wrong_kind"])
+def test_resolver_revalidates_artwork_assembly_claims_against_geometry(
+    tmp_path: Path,
+    case: str,
+):
+    approved = confirmed_assembly_structure(tmp_path)
+    assembly = next(
+        closure
+        for closure in approved["artwork_assemblies"]["closures"]
+        if closure["closure_kind"] == "assembly"
+    )
+    if case == "wrong_body":
+        member = assembly["members"][0]
+        member["attached_body_face_id"] = next(
+            face["id"]
+            for face in approved["faces"]
+            if face["role"] in {"front", "right", "back", "left"}
+            and face["id"] != member["attached_body_face_id"]
+        )
+    elif case == "overclaimed_member":
+        # Keep the declared sum at the 102% contract boundary so the canonical
+        # model accepts it; the resolver must still reject the 52% claim
+        # against this member's actual 50% geometry.
+        assembly["members"][0]["coverage_ratio"] = 0.52
+    elif case == "wrong_kind":
+        full = next(
+            closure
+            for closure in approved["artwork_assemblies"]["closures"]
+            if closure["closure_kind"] == "full"
+        )
+        full["closure_kind"] = "clearance"
+    else:  # pragma: no cover - parametrization is exhaustive
+        raise AssertionError(case)
+
+    result = resolve_structure_payload(approved)
+
+    assert result.status == "review_required"
+    assert result.code == "artwork_transform_invalid"
+
+
 @pytest.mark.parametrize(
     "case",
     [
@@ -586,15 +678,16 @@ def test_anchor_confirmation_accepts_the_exact_multi_flap_coverage_boundary(tmp_
         "malformed_closure",
         "invalid_kind",
         "assembly_missing_schema",
-        "assembly_wrong_extent",
+        "assembly_missing_member",
         "assembly_below_threshold",
+        "assembly_excessive_overlap",
         "attached_body_mismatch",
     ],
 )
 def test_anchor_confirmation_rejects_tampered_closure_contracts(tmp_path: Path, case: str):
     fixture = {
-        "top_cap_depth": 14.0,
-        "top_support_depth": 6.0,
+        "top_cap_depth": 10.0,
+        "top_support_depth": 10.0,
     } if case.startswith("assembly_") else {}
     source, resolution, proposed, net, front = anchor_proposal_files(tmp_path, **fixture)
     tampered = deepcopy(proposed)
@@ -604,23 +697,28 @@ def test_anchor_confirmation_rejects_tampered_closure_contracts(tmp_path: Path, 
     if case == "missing_closures":
         proposal.pop("closure_assemblies")
     elif case == "duplicate_cap":
-        closures[1]["face_id"] = closures[0]["face_id"]
+        closures[1]["primary_face_id"] = closures[0]["primary_face_id"]
     elif case == "malformed_closure":
         closures[0] = "not-a-closure"
     elif case == "invalid_kind":
         closures[0]["closure_kind"] = "guessed"
     elif case == "assembly_missing_schema":
         proposal.pop("schema")
-    elif case == "assembly_wrong_extent":
-        next(item for item in closures if item["closure_kind"] == "assembly")["extent"] = "full"
+    elif case == "assembly_missing_member":
+        next(item for item in closures if item["closure_kind"] == "assembly")["members"].pop()
     elif case == "assembly_below_threshold":
-        next(item for item in closures if item["closure_kind"] == "assembly")["coverage_ratio"] = 0.599
+        next(item for item in closures if item["closure_kind"] == "assembly")["coverage_ratio"] = 0.939
+    elif case == "assembly_excessive_overlap":
+        assembly = next(item for item in closures if item["closure_kind"] == "assembly")
+        assembly["coverage_ratio"] = 1.0
+        for member in assembly["members"]:
+            member["coverage_ratio"] = 0.55
     elif case == "attached_body_mismatch":
-        closure = closures[0]
-        closure["attached_body_face_id"] = next(
+        member = closures[0]["members"][0]
+        member["attached_body_face_id"] = next(
             face_id
             for face_id in proposal["body_face_ids"]
-            if face_id != closure["attached_body_face_id"]
+            if face_id != member["attached_body_face_id"]
         )
     else:  # pragma: no cover - parametrization is exhaustive
         raise AssertionError(case)
@@ -633,7 +731,7 @@ def test_anchor_confirmation_rejects_tampered_closure_contracts(tmp_path: Path, 
 
 
 @pytest.mark.parametrize("cap_clearance", [0.0, 1.2])
-def test_anchor_confirmation_keeps_legacy_closure_kind_compatibility(
+def test_anchor_confirmation_rejects_legacy_closure_contracts(
     tmp_path: Path,
     cap_clearance: float,
 ):
@@ -648,16 +746,16 @@ def test_anchor_confirmation_keeps_legacy_closure_kind_compatibility(
         closure.pop("closure_kind")
     write_resolution(resolution, legacy)
 
-    result = confirm_anchor(
-        source,
-        resolution,
-        net["id"],
-        front["id"],
-        0,
-        tmp_path / "legacy-closure.structure.json",
-    )
-
-    assert result["ok"] is True
+    with pytest.raises(StructureConfirmationError) as raised:
+        confirm_anchor(
+            source,
+            resolution,
+            net["id"],
+            front["id"],
+            0,
+            tmp_path / "legacy-closure.structure.json",
+        )
+    assert raised.value.code == "structure_confirmation_invalid"
 
 
 def test_short_flap_cannot_be_promoted_to_a_top_face_or_swap_width_and_depth():
@@ -723,8 +821,9 @@ def test_anchor_confirmation_rejects_caps_on_the_same_side_of_the_body(tmp_path:
         for face_id in same_side_net["face_ids"]
     ]
     for closure in same_side_net["closure_assemblies"]:
-        if closure["face_id"] == second_cap_id:
-            closure["face_id"] = duplicate_cap["id"]
+        if closure["primary_face_id"] == second_cap_id:
+            closure["primary_face_id"] = duplicate_cap["id"]
+            closure["members"][0]["face_id"] = duplicate_cap["id"]
     write_resolution(resolution, same_side)
 
     with pytest.raises(StructureConfirmationError) as raised:

@@ -138,8 +138,8 @@ def test_only_ready_results_enter_atomic_cache(tmp_path: Path):
     cache_files = list(tmp_path.glob("*.json"))
     assert len(cache_files) == 1
     cached = json.loads(cache_files[0].read_text(encoding="utf-8"))
-    assert cached["schema"] == "packaging-structure-cache/5"
-    assert cached["resolved"]["schema"] == "resolved-packaging-job/2"
+    assert cached["schema"] == "packaging-structure-cache/6"
+    assert cached["resolved"]["schema"] == "resolved-packaging-job/3"
 
     bad = semantic_box(source_hash="e" * 64)
     bad["edges"] = bad["edges"][:-1]
@@ -165,8 +165,8 @@ def test_legacy_dimension_cache_is_rebuilt_under_current_contract(tmp_path: Path
     assert rebuilt.cache_hit is False
     assert rebuilt.resolved["dimensions_mm"] == {"width": 30.0, "depth": 20.0, "height": 50.0}
     migrated = json.loads(cache_file.read_text(encoding="utf-8"))
-    assert migrated["schema"] == "packaging-structure-cache/5"
-    assert migrated["resolved"]["schema"] == "resolved-packaging-job/2"
+    assert migrated["schema"] == "packaging-structure-cache/6"
+    assert migrated["resolved"]["schema"] == "resolved-packaging-job/3"
 
 
 def test_geometry_tolerance_is_owned_by_adapter_policy():

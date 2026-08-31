@@ -15,8 +15,16 @@ from pathlib import Path
 import re
 from typing import Any, Mapping
 
+from .dimensions import (
+    MAX_CLOSURE_ASSEMBLY_MEMBER_RATIO,
+    MAX_CLOSURE_ASSEMBLY_MEMBER_SUM_RATIO,
+    MIN_CLOSURE_ASSEMBLY_MEMBER_RATIO,
+    MIN_CLOSURE_ASSEMBLY_UNION_RATIO,
+)
+
 
 SCHEMA = "packaging-structure/1"
+ARTWORK_ASSEMBLIES_SCHEMA = "packaging-artwork-assemblies/1"
 EDGE_ASSIGNMENTS = frozenset({"cut", "crease", "perforation", "glue", "ignore", "unknown"})
 FACE_ROLES = frozenset(
     {
@@ -263,10 +271,168 @@ def _normalized_validation(value: Any) -> dict[str, Any]:
     return result
 
 
+def _normalized_artwork_assemblies(
+    value: Any,
+    faces: list[dict[str, Any]],
+) -> dict[str, Any]:
+    contract = _mapping(value, "artwork_assemblies")
+    _known_keys(contract, {"schema", "closures"}, "artwork_assemblies")
+    if contract.get("schema") != ARTWORK_ASSEMBLIES_SCHEMA:
+        _fail(
+            "structure_schema_unsupported",
+            f"不支持的贴图组合版本：{contract.get('schema')}",
+            supported=ARTWORK_ASSEMBLIES_SCHEMA,
+        )
+    raw_closures = _sequence(contract.get("closures"), "artwork_assemblies.closures")
+    if len(raw_closures) != 2:
+        _fail("structure_contract_invalid", "贴图组合必须同时声明顶部和底部", field="artwork_assemblies.closures")
+    roles_by_face = {str(face["id"]): str(face["role"]) for face in faces}
+    normalized: list[dict[str, Any]] = []
+    seen_roles: set[str] = set()
+    seen_members: set[str] = set()
+    for index, raw in enumerate(raw_closures):
+        label = f"artwork_assemblies.closures[{index}]"
+        closure = _mapping(raw, label)
+        _known_keys(
+            closure,
+            {"role", "primary_face_id", "closure_kind", "coverage_ratio", "members"},
+            label,
+        )
+        role = str(closure.get("role") or "")
+        if role not in {"top", "bottom"} or role in seen_roles:
+            _fail("structure_contract_invalid", f"{label}.role 必须唯一为 top/bottom", field=f"{label}.role")
+        seen_roles.add(role)
+        primary_face_id = _identifier(closure.get("primary_face_id"), f"{label}.primary_face_id")
+        if roles_by_face.get(primary_face_id) != role:
+            _fail("structure_contract_invalid", f"{label}.primary_face_id 未声明为 {role}", field=f"{label}.primary_face_id")
+        closure_kind = str(closure.get("closure_kind") or "")
+        if closure_kind not in {"full", "clearance", "assembly"}:
+            _fail("structure_contract_invalid", f"{label}.closure_kind 无效", field=f"{label}.closure_kind")
+        coverage_ratio = _rounded(
+            _number(closure.get("coverage_ratio"), f"{label}.coverage_ratio", lower=1e-9, upper=1.0)
+        )
+        raw_members = _sequence(closure.get("members"), f"{label}.members")
+        expected_count = 2 if closure_kind == "assembly" else 1
+        if len(raw_members) != expected_count:
+            _fail(
+                "structure_contract_invalid",
+                f"{label}.members 与 closure_kind 不一致",
+                field=f"{label}.members",
+            )
+        members: list[dict[str, Any]] = []
+        closure_member_ids: set[str] = set()
+        z_indexes: set[int] = set()
+        for member_index, raw_member in enumerate(raw_members):
+            member_label = f"{label}.members[{member_index}]"
+            member = _mapping(raw_member, member_label)
+            _known_keys(
+                member,
+                {"face_id", "attached_body_face_id", "coverage_ratio", "z_index"},
+                member_label,
+            )
+            face_id = _identifier(member.get("face_id"), f"{member_label}.face_id")
+            attached_id = _identifier(
+                member.get("attached_body_face_id"),
+                f"{member_label}.attached_body_face_id",
+            )
+            if face_id in closure_member_ids or face_id in seen_members:
+                _fail("structure_contract_invalid", f"贴图成员重复：{face_id}", field=f"{member_label}.face_id")
+            if roles_by_face.get(face_id) not in {role, "flap"}:
+                _fail("structure_contract_invalid", f"贴图成员 {face_id} 角色无效", field=f"{member_label}.face_id")
+            if roles_by_face.get(attached_id) not in {"front", "right", "back", "left"}:
+                _fail("structure_contract_invalid", f"贴图成员 {face_id} 未连接盒身", field=f"{member_label}.attached_body_face_id")
+            z_index = _integer(member.get("z_index"), f"{member_label}.z_index", upper=10)
+            if z_index in z_indexes:
+                _fail("structure_contract_invalid", f"{label}.members z_index 重复", field=f"{member_label}.z_index")
+            z_indexes.add(z_index)
+            closure_member_ids.add(face_id)
+            seen_members.add(face_id)
+            members.append(
+                {
+                    "face_id": face_id,
+                    "attached_body_face_id": attached_id,
+                    "coverage_ratio": _rounded(
+                        _number(
+                            member.get("coverage_ratio"),
+                            f"{member_label}.coverage_ratio",
+                            lower=1e-9,
+                            upper=1.0,
+                        )
+                    ),
+                    "z_index": z_index,
+                }
+            )
+        if primary_face_id not in closure_member_ids:
+            _fail("structure_contract_invalid", f"{label}.primary_face_id 不在 members 中", field=f"{label}.primary_face_id")
+        if z_indexes != set(range(expected_count)):
+            _fail(
+                "structure_contract_invalid",
+                f"{label}.members z_index 必须从 0 连续递增",
+                field=f"{label}.members",
+            )
+        member_ratios = [float(member["coverage_ratio"]) for member in members]
+        if closure_kind == "assembly":
+            if coverage_ratio < MIN_CLOSURE_ASSEMBLY_UNION_RATIO:
+                _fail(
+                    "structure_contract_invalid",
+                    f"{label}.coverage_ratio 未达到组合封口下限",
+                    field=f"{label}.coverage_ratio",
+                )
+            if any(
+                ratio < MIN_CLOSURE_ASSEMBLY_MEMBER_RATIO
+                or ratio > MAX_CLOSURE_ASSEMBLY_MEMBER_RATIO
+                for ratio in member_ratios
+            ):
+                _fail(
+                    "structure_contract_invalid",
+                    f"{label}.members 单翼覆盖率不属于对开封口范围",
+                    field=f"{label}.members",
+                )
+            if coverage_ratio > min(1.0, sum(member_ratios)) + 1e-6:
+                _fail(
+                    "structure_contract_invalid",
+                    f"{label}.coverage_ratio 不能超过成员覆盖率总和",
+                    field=f"{label}.coverage_ratio",
+                )
+            if sum(member_ratios) > MAX_CLOSURE_ASSEMBLY_MEMBER_SUM_RATIO + 1e-6:
+                _fail(
+                    "structure_contract_invalid",
+                    f"{label}.members 组合覆盖率超过可信重叠上限",
+                    field=f"{label}.members",
+                )
+        elif abs(member_ratios[0] - coverage_ratio) > 1e-6:
+            _fail(
+                "structure_contract_invalid",
+                f"{label}.coverage_ratio 必须与单片封口成员一致",
+                field=f"{label}.coverage_ratio",
+            )
+        if closure_kind == "full" and abs(coverage_ratio - 1.0) > 1e-6:
+            _fail(
+                "structure_contract_invalid",
+                f"{label}.coverage_ratio 与 full 封口不一致",
+                field=f"{label}.coverage_ratio",
+            )
+        normalized.append(
+            {
+                "role": role,
+                "primary_face_id": primary_face_id,
+                "closure_kind": closure_kind,
+                "coverage_ratio": coverage_ratio,
+                "members": sorted(members, key=lambda item: (item["z_index"], item["face_id"])),
+            }
+        )
+    if seen_roles != {"top", "bottom"}:
+        _fail("structure_contract_invalid", "贴图组合缺少顶部或底部", field="artwork_assemblies.closures")
+    return {
+        "schema": ARTWORK_ASSEMBLIES_SCHEMA,
+        "closures": sorted(normalized, key=lambda item: item["role"]),
+    }
+
+
 def _normalize(payload: Mapping[str, Any], limits: Mapping[str, int] | None = None) -> dict[str, Any]:
     _known_keys(
         payload,
-        {"schema", "units", "source", "vertices", "edges", "faces", "folds", "root_face", "structure_hash", "validation"},
+        {"schema", "units", "source", "vertices", "edges", "faces", "folds", "root_face", "structure_hash", "validation", "artwork_assemblies"},
         "structure",
     )
     if payload.get("schema") != SCHEMA:
@@ -400,7 +566,7 @@ def _normalize(payload: Mapping[str, Any], limits: Mapping[str, int] | None = No
         if root_face not in face_ids:
             _fail("structure_contract_invalid", "root_face 引用了不存在的面", root_face=root_face)
 
-    return {
+    normalized_structure = {
         "schema": SCHEMA,
         "units": "mm",
         "source": source,
@@ -411,6 +577,12 @@ def _normalize(payload: Mapping[str, Any], limits: Mapping[str, int] | None = No
         "root_face": root_face,
         "validation": _normalized_validation(payload.get("validation")),
     }
+    if payload.get("artwork_assemblies") is not None:
+        normalized_structure["artwork_assemblies"] = _normalized_artwork_assemblies(
+            payload["artwork_assemblies"],
+            faces,
+        )
+    return normalized_structure
 
 
 def _stable_json(value: Any) -> str:
@@ -455,7 +627,7 @@ def _hash_material(normalized: Mapping[str, Any]) -> dict[str, Any]:
             signature["artwork_transform"] = face["artwork_transform"]
         face_by_id[face["id"]] = signature
 
-    return {
+    result = {
         "schema": normalized["schema"],
         "units": normalized["units"],
         "vertices": sorted(vertex_by_id.values()),
@@ -480,6 +652,30 @@ def _hash_material(normalized: Mapping[str, Any]) -> dict[str, Any]:
             "geometry": normalized["source"].get("geometry"),
         },
     }
+    assemblies = normalized.get("artwork_assemblies")
+    if isinstance(assemblies, Mapping):
+        result["artwork_assemblies"] = {
+            "schema": assemblies["schema"],
+            "closures": [
+                {
+                    "role": closure["role"],
+                    "primary_face": face_by_id[closure["primary_face_id"]],
+                    "closure_kind": closure["closure_kind"],
+                    "coverage_ratio": closure["coverage_ratio"],
+                    "members": [
+                        {
+                            "face": face_by_id[member["face_id"]],
+                            "attached_body_face": face_by_id[member["attached_body_face_id"]],
+                            "coverage_ratio": member["coverage_ratio"],
+                            "z_index": member["z_index"],
+                        }
+                        for member in closure["members"]
+                    ],
+                }
+                for closure in assemblies["closures"]
+            ],
+        }
+    return result
 
 
 def _digest(value: Mapping[str, Any]) -> str:
