@@ -232,6 +232,34 @@ describe("review http", () => {
     assert.equal(body.complete_kind, "signed");
   });
 
+  it("blocks sign-off when persisted hit data has an unknown status or decision", async () => {
+    const tid = seed({
+      id: "dededededede",
+      title: "异常审核数据",
+      product_name: "异常审核数据",
+      type: "excel_pdf",
+      status: "pending_review",
+      hits: [hit({ status: "疑点", decision: "confirmed" })],
+    });
+    const res = await app.request(`/api/tasks/${tid}/complete`, {
+      method: "POST",
+      headers: { ...authHeader(), "content-type": "application/json" },
+      body: JSON.stringify({ conclusion: "不应签字" }),
+    });
+    assert.equal(res.status, 400);
+    assert.match(String(((await res.json()) as { detail?: string }).detail || ""), /审核数据状态异常/);
+
+    const task = loadTask(tid);
+    task.hits = [hit({ status: "新状态", decision: "pending" })];
+    saveTask(task);
+    const statusRes = await app.request(`/api/tasks/${tid}/complete`, {
+      method: "POST",
+      headers: { ...authHeader(), "content-type": "application/json" },
+      body: JSON.stringify({ conclusion: "仍不应签字" }),
+    });
+    assert.equal(statusRes.status, 400);
+  });
+
   it("rejects a decision on a compare_failed task", async () => {
     const tid = seed({
       id: "ffffffffffff",

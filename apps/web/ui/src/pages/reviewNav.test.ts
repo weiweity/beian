@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   firstPendingIssueIndex,
+  isPendingDecision,
   issueOrdinal,
   pageIndexForHit,
   reviewProgress,
@@ -45,5 +46,15 @@ describe("reviewNav", () => {
     assert.equal(reviewProgress(rows, 2, 3).jobPending, 1);
     assert.equal(firstPendingIssueIndex(rows.slice(0, 3)), null);
     assert.equal(firstPendingIssueIndex([]), null);
+  });
+
+  it("fails closed for an unknown persisted decision", () => {
+    assert.equal(isPendingDecision("confirmed"), true);
+    assert.equal(firstPendingIssueIndex([{ status: "疑点", decision: "confirmed" }]), 0);
+  });
+
+  it("navigates to a QR-only location page", () => {
+    const hit = { page: 1, bboxes: [], qrcode_boxes: [{ page: 2, left: 10, top: 20, width: 30, height: 30 }] };
+    assert.equal(pageIndexForHit([{ page: 1 }, { page: 2 }], hit), 1);
   });
 });

@@ -579,7 +579,23 @@ export type FieldHit = {
     ratio?: number;
     matched?: number;
     total?: number;
-    parts?: { net?: Record<string, unknown>; barcode?: Record<string, unknown> };
+    parts?: {
+      net?: {
+        coverage?: number;
+        matched?: number;
+        total?: number;
+        hit_phrases?: string[];
+        miss_phrases?: string[];
+      };
+      barcode?: {
+        coverage?: number;
+        matched?: number;
+        total?: number;
+        hit_phrases?: string[];
+        miss_phrases?: string[];
+        ignored_codes?: string[];
+      };
+    };
   };
   evidence?: string;
   sequence_diff?: { only_in_excel?: string[] };
@@ -781,6 +797,7 @@ export type MockupJob = {
     page_size_mm?: [number, number];
     image_url?: string;
     net_proposals: Array<{
+      schema: "box-net-proposal/3";
       id: string;
       face_ids: string[];
       body_face_ids: [string, string, string, string];
@@ -789,12 +806,18 @@ export type MockupJob = {
       bounds_mm?: [number, number, number, number];
       dimensions_mm?: { width: number; depth: number; height: number };
       valid_anchors?: Array<{ front_face_id: string; quarter_turns: Array<0 | 1 | 2 | 3> }>;
-      closure_assemblies?: Array<{
-        face_id: string;
-        attached_body_face_id: string;
+      closure_assemblies: Array<{
+        primary_face_id: string;
         side: -1 | 1;
         extent: "full" | "partial";
+        closure_kind: "full" | "clearance" | "assembly";
         coverage_ratio: number;
+        members: Array<{
+          face_id: string;
+          attached_body_face_id: string;
+          extent: "full" | "partial";
+          coverage_ratio: number;
+        }>;
       }>;
     }>;
     faces: Array<{

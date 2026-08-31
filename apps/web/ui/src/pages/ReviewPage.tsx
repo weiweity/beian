@@ -5,7 +5,7 @@ import { ApiError, api, type Decision, type FieldHit, type TaskDetail, type Task
 import { WaitCard } from "../chrome/WaitCard";
 import { forgetReviewHandoff, reviewHandoffFor } from "../jobHandoff";
 import { fittedPage, panBy, resetZoom, zoomAt, zoomCss, zoomToBox } from "./canvasZoom";
-import { locateBoxesForHit, overlayFromBox, overlaysForHit, pickHitBox, pinHitGroupsForPage, resolvePageMetrics, visiblePinGroups } from "./pinBox";
+import { locateBoxesForHit, locationPageForHit, overlayFromBox, overlaysForHit, pickHitBox, pinHitGroupsForPage, resolvePageMetrics, visiblePinGroups } from "./pinBox";
 import {
   enterElementFullscreen,
   exitElementFullscreen,
@@ -134,6 +134,12 @@ export function ReviewPage({ taskId, onBack }: Props) {
   const decisionQueueRef = useRef<Promise<boolean>>(Promise.resolve(true));
   const seededTaskId = useRef(taskId);
   const reviewMediaLoad = useRef<AbortController | null>(null);
+  const taskIdRef = useRef(taskId);
+  const useV2Ref = useRef(useV2);
+  const pageIdxRef = useRef(pageIdx);
+  taskIdRef.current = taskId;
+  useV2Ref.current = useV2;
+  pageIdxRef.current = pageIdx;
   const waiting = shouldShowWaitCard(task);
   const loadState = detailLoadState(task, error);
 
@@ -430,7 +436,12 @@ export function ReviewPage({ taskId, onBack }: Props) {
     const key = `${task.id}:${phase}:${useV2 ? "v2" : "v1"}:${hits.length}`;
     if (seededNav.current === key) return;
     seededNav.current = key;
-    const i = firstPendingIssueIndex(hits) ?? 0;
+    const i = firstPendingIssueIndex(hits);
+    if (i == null) {
+      pendingFit.current = null;
+      setActive(0);
+      return;
+    }
     pendingFit.current = i;
     const idx = pageIndexForHit(pages, hits[i]);
     if (idx != null) setPageIdx(idx);
@@ -445,7 +456,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
     return visiblePinGroups(pinHitGroupsForPage(hits, pageNo), signed ? -1 : active);
   }, [hits, pageNo, active, signed]);
   const currentBox = current
-    ? pickHitBox(locateBoxesForHit(current), Number(current.page) || pageNo, metrics)
+    ? pickHitBox(locateBoxesForHit(current), pageNo, metrics)
     : null;
   const currentHasBox = Boolean(currentBox);
 
@@ -587,13 +598,16 @@ export function ReviewPage({ taskId, onBack }: Props) {
           note,
         });
         setTask((currentTask) => (currentTask?.id === targetTaskId ? next : currentTask));
+        if (taskIdRef.current !== targetTaskId) return true;
         if (decision === "confirm" || decision === "ignore") {
-          const nextHits = reviewHits(next, useV2).filter((h) => !skipPackSheetField(h.field));
+          const nextUseV2 = useV2Ref.current;
+          const nextHits = reviewHits(next, nextUseV2).filter((h) => !skipPackSheetField(h.field));
+          const nextPages = pageList(nextUseV2 ? { ...next, pages: next.pages_v2 } : next);
           const nextPending = firstPendingIssueIndex(nextHits);
           if (nextPending != null) {
             setActive(nextPending);
-            const pIdx = pageIndexForHit(pages, nextHits[nextPending]);
-            if (pIdx != null && pIdx !== pageIdx) {
+            const pIdx = pageIndexForHit(nextPages, nextHits[nextPending]);
+            if (pIdx != null && pIdx !== pageIdxRef.current) {
               pendingFit.current = nextPending;
               setPageIdx(pIdx);
             } else {
@@ -619,6 +633,14 @@ export function ReviewPage({ taskId, onBack }: Props) {
     const { text, count } = buildRevisionList(
       task.product_name || task.title,
       withLocalNotes(hits, notes),
+      {
+        located: (hit) => {
+          const hitPage = locationPageForHit(hit);
+          const hitPageMeta = pages.find((candidate) => Number(candidate.page) === hitPage);
+          const hitMetrics = resolvePageMetrics(hitPageMeta, hitPage === pageNo ? nat : null);
+          return Boolean(pickHitBox(locateBoxesForHit(hit), hitPage, hitMetrics));
+        },
+      },
     );
     try {
       await navigator.clipboard.writeText(text);
@@ -683,7 +705,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
     const h = hits[i];
     const el = viewRef.current;
     if (!h || !metrics || !el) return;
-    const box = pickHitBox(locateBoxesForHit(h), Number(h.page) || pageNo, metrics);
+    const box = pickHitBox(locateBoxesForHit(h), pageNo, metrics);
     if (!box) {
       commitZoom(resetZoom());
       return;
@@ -770,6 +792,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
             <button
               type="button"
               className="btn-ghost"
+              disabled={busy}
               onClick={() => {
                 setUseV2((v) => !v);
                 setPageIdx(0);
@@ -804,6 +827,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
                   key={p.url || i}
                   type="button"
                   className={i === pageIdx ? "btn-primary" : "btn-ghost"}
+                  disabled={busy}
                   onClick={() => setPageIdx(i)}
                 >
                   第 {p.page || i + 1} 页
@@ -910,7 +934,7 @@ export function ReviewPage({ taskId, onBack }: Props) {
                   const preferred = pickHitBox(locateBoxes, pageNo, metrics);
                   const pin = preferred && metrics ? overlayFromBox(preferred, metrics) : null;
                   const pairActive = indices.includes(active);
-                  const pinNo = issueOrdinal(hits, i) || i + 1;
+                  const pinNo = issueOrdinal(hits, pairActive ? active : i) || i + 1;
                   return (
                     <Fragment key={h.id || i}>
                       {boxesOn

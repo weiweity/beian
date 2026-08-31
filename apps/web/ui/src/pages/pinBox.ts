@@ -33,8 +33,34 @@ export function resolvePageMetrics(
   return { width: w, height: h };
 }
 
-export function hitOnPage(hit: { page?: number | string }, pageNo: number): boolean {
-  const p = Number(hit.page);
+type LocatedHit = {
+  page?: number | string;
+  bboxes?: unknown;
+  qrcode_boxes?: unknown;
+};
+
+function recordBoxes(value: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(value)) return [];
+  return value.filter(
+    (box): box is Record<string, unknown> => Boolean(box) && typeof box === "object" && !Array.isArray(box),
+  );
+}
+
+/** 普通文字框决定主页面；没有文字框时，二维码几何框可提供页面定位。 */
+export function locationPageForHit(hit: LocatedHit): number {
+  const declared = Number(hit.page);
+  const textBoxes = recordBoxes(hit.bboxes);
+  const qrBoxes = recordBoxes(hit.qrcode_boxes);
+  const firstTextPage = Number(textBoxes.find((box) => Number(box.page) > 0)?.page || 0);
+  const firstQrPage = Number(qrBoxes.find((box) => Number(box.page) > 0)?.page || 0);
+  if (textBoxes.length && Number.isFinite(declared) && declared > 0) return declared;
+  if (firstTextPage > 0) return firstTextPage;
+  if (firstQrPage > 0) return firstQrPage;
+  return Number.isFinite(declared) && declared > 0 ? declared : 0;
+}
+
+export function hitOnPage(hit: LocatedHit, pageNo: number): boolean {
+  const p = locationPageForHit(hit);
   const n = Number(pageNo);
   if (!Number.isFinite(p) || p <= 0) return false;
   if (!Number.isFinite(n) || n <= 0) return false;
@@ -68,7 +94,7 @@ function pct(n: number): string {
 
 /** 中英文品名可共享同一个联合框；保留两条审核字段，只在画布上画一个钉。 */
 export function pinHitGroupsForPage<
-  T extends { page?: number | string; bilingual_pair_id?: string },
+  T extends LocatedHit & { bilingual_pair_id?: string },
 >(hits: T[], pageNo: number): Array<PinHitGroup<T>> {
   const out: Array<PinHitGroup<T>> = [];
   const pairIndex = new Map<string, number>();
@@ -153,11 +179,11 @@ export function overlayFromBox(box: PixelBox, page: PageMetrics): OverlayBox | n
 
 /** 引导语框 + 码图框。码图只作定位，不改结论。 */
 export function locateBoxesForHit(hit: {
-  bboxes?: Array<Record<string, unknown>>;
-  qrcode_boxes?: Array<Record<string, unknown>>;
+  bboxes?: unknown;
+  qrcode_boxes?: unknown;
 }): Array<Record<string, unknown>> {
-  const extra = (hit.qrcode_boxes || []).map((box) => ({ ...box, role: box.role || "hit" }));
-  return [...(hit.bboxes || []), ...extra];
+  const extra = recordBoxes(hit.qrcode_boxes).map((box) => ({ ...box, role: box.role || "hit" }));
+  return [...recordBoxes(hit.bboxes), ...extra];
 }
 
 export function overlaysForHit(

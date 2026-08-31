@@ -172,6 +172,8 @@ def _apply_qrcode_to_hits(
         h["qrcode_meta"] = qr_meta
         if boxes:
             h["qrcode_boxes"] = boxes
+            if not (h.get("bboxes") or []):
+                h["page"] = boxes[0]["page"]
         if qr_texts:
             joined = " | ".join(qr_texts[:5])
             h["qrcode_values"] = qr_texts

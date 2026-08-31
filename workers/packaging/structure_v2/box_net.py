@@ -10,20 +10,26 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 import hashlib
+from itertools import combinations
 import json
 from typing import Any
 
 from .dimensions import (
     DimensionPolicy,
     GeometryPolicy,
+    MAX_CLOSURE_ASSEMBLY_MEMBER_SUM_RATIO,
+    MIN_CLOSURE_ASSEMBLY_UNION_RATIO,
     STROKE_PROPOSAL_GEOMETRY,
-    normalized_mm,
+    fit_closure_dimensions,
+    fit_closure_member_dimensions,
+    rectangular_coverage_ratio,
     solve_body_dimensions,
 )
 
 
 MAX_BOX_NET_PROPOSALS = 24
 MAX_BOX_NET_SEARCH_STATES = 4096
+BOX_NET_PROPOSAL_SCHEMA = "box-net-proposal/3"
 
 
 class BoxNetProposalLimitError(RuntimeError):
@@ -37,6 +43,27 @@ def _boundary_close(left: float, right: float, tolerance: float) -> bool:
 def _bounds(candidate: Mapping[str, Any]) -> tuple[float, float, float, float]:
     raw = candidate["local_bounds"]
     return tuple(float(value) for value in raw)  # type: ignore[return-value]
+
+
+def _open_sides(candidate: Mapping[str, Any]) -> tuple[int, ...]:
+    raw = candidate.get("open_sides", [])
+    if not isinstance(raw, list):
+        return ()
+    values = sorted(
+        {
+            int(value)
+            for value in raw
+            if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 3
+        }
+    )
+    return tuple(values)
+
+
+def _outer_side_index(axis: str, side: int) -> int:
+    # Candidate side order is top, right, bottom, left.
+    if axis == "x":
+        return 0 if side < 0 else 2
+    return 3 if side < 0 else 1
 
 
 def _along_size(candidate: Mapping[str, Any], axis: str) -> float:
@@ -75,7 +102,13 @@ def _body_paths(
     dimensions: DimensionPolicy,
     search_state: list[int],
 ) -> list[list[Mapping[str, Any]]]:
-    ordered = sorted(candidates, key=lambda item: (_bounds(item)[0 if axis == "x" else 1], str(item["id"])))
+    # Three-sided rectification is reserved for closure flaps.  Letting one of
+    # those candidates into the body strip would manufacture a side wall that
+    # is not bounded by source linework.
+    ordered = sorted(
+        (candidate for candidate in candidates if not _open_sides(candidate)),
+        key=lambda item: (_bounds(item)[0 if axis == "x" else 1], str(item["id"])),
+    )
     followers = {
         str(candidate["id"]): [other for other in ordered if _follows(candidate, other, axis, tolerance)]
         for candidate in ordered
@@ -148,11 +181,11 @@ def _closure_options(
     body_ids = {str(item["id"]) for item in body_path}
     body_along = [_along_size(item, axis) for item in body_path]
     first, second = body_along[0], body_along[1]
-    options: dict[int, list[dict[str, Any]]] = {-1: [], 1: []}
+    attached_candidates: dict[int, list[dict[str, Any]]] = {-1: [], 1: []}
     for candidate in candidates:
         if str(candidate["id"]) in body_ids:
             continue
-        for body in body_path:
+        for body_index, body in enumerate(body_path):
             side = _cap_side(candidate, body, axis, tolerance)
             if side is None:
                 continue
@@ -160,31 +193,161 @@ def _closure_options(
             cross = _cross_size(candidate, axis)
             attached = _along_size(body, axis)
             expected_cross = second if dimensions.close(attached, first) else first
+            open_sides = _open_sides(candidate)
             if (
-                dimensions.close(along, attached)
-                and dimensions.close(cross, expected_cross)
+                not dimensions.close(along, attached)
+                or expected_cross <= 0
+                or (open_sides and open_sides != (_outer_side_index(axis, side),))
             ):
-                clearance = abs(normalized_mm(cross) - normalized_mm(expected_cross))
-                options[side].append(
-                    {
-                        "face": candidate,
-                        "attached_body_face_id": str(body["id"]),
-                        "coverage_ratio": round(min(1.0, cross / expected_cross), 6),
-                        # A top/bottom texture may only come from the main
-                        # closure panel.  Short dust/tuck flaps are not a
-                        # substitute for the erected footprint.  The stroke
-                        # adapter still permits normal manufacturing clearance
-                        # through its single dimensional policy.
-                        "extent": "full" if clearance == 0 else "partial",
-                    }
-                )
-                break
+                continue
+            attached_candidates[side].append(
+                {
+                    "face": candidate,
+                    "body_index": body_index,
+                    "attached_body_face_id": str(body["id"]),
+                    "attached_along": attached,
+                    "cross": cross,
+                    "expected_cross": expected_cross,
+                }
+            )
+            break
+
+    options: dict[int, list[dict[str, Any]]] = {-1: [], 1: []}
     for side in options:
+        records = attached_candidates[side]
+        single_options: list[dict[str, Any]] = []
+        for item in records:
+            cross = float(item["cross"])
+            expected_cross = float(item["expected_cross"])
+            fit = fit_closure_dimensions(
+                (_along_size(item["face"], axis), cross),
+                (float(item["attached_along"]), expected_cross),
+                dimensions,
+            )
+            if fit is None:
+                continue
+            member = {
+                "face": item["face"],
+                "face_id": str(item["face"]["id"]),
+                "attached_body_face_id": str(item["attached_body_face_id"]),
+                "coverage_ratio": fit.coverage_ratio,
+                "extent": "full" if not fit.padded else "partial",
+            }
+            single_options.append(
+                {
+                    "primary_face": item["face"],
+                    "primary_face_id": str(item["face"]["id"]),
+                    "members": [member],
+                    "coverage_ratio": fit.coverage_ratio,
+                    "extent": "full" if not fit.padded else "partial",
+                    "closure_kind": fit.kind,
+                }
+            )
+
+        assembly_options: list[dict[str, Any]] = []
+        for left, right in combinations(records, 2):
+            left_index = int(left["body_index"])
+            right_index = int(right["body_index"])
+            if (left_index - right_index) % 4 != 2:
+                continue
+            member_items: list[tuple[dict[str, Any], Any]] = []
+            for item in (left, right):
+                fit = fit_closure_member_dimensions(
+                    (_along_size(item["face"], axis), float(item["cross"])),
+                    (float(item["attached_along"]), float(item["expected_cross"])),
+                    dimensions,
+                )
+                if fit is None:
+                    break
+                member_items.append((item, fit))
+            if len(member_items) != 2:
+                continue
+            member_ratio_sum = sum(float(fit.coverage_ratio) for _item, fit in member_items)
+            if not (
+                MIN_CLOSURE_ASSEMBLY_UNION_RATIO
+                <= member_ratio_sum
+                <= MAX_CLOSURE_ASSEMBLY_MEMBER_SUM_RATIO
+            ):
+                # A material overlap needs an explicit stacking-order decision;
+                # do not manufacture one from Illustrator enumeration order.
+                continue
+            coverage_bounds: list[list[float]] = []
+            for item, _fit in member_items:
+                body_index = int(item["body_index"])
+                reach = min(float(item["cross"]), float(item["expected_cross"]))
+                if body_index in (0, 2):
+                    top = 0.0 if body_index == 0 else second - reach
+                    coverage_bounds.append([0.0, top, first, top + reach])
+                else:
+                    left_edge = 0.0 if body_index == 1 else first - reach
+                    coverage_bounds.append([left_edge, 0.0, left_edge + reach, second])
+            union_ratio = rectangular_coverage_ratio(coverage_bounds, (first, second))
+            if union_ratio < MIN_CLOSURE_ASSEMBLY_UNION_RATIO:
+                continue
+            members = sorted(
+                (
+                    {
+                        "face": item["face"],
+                        "face_id": str(item["face"]["id"]),
+                        "attached_body_face_id": str(item["attached_body_face_id"]),
+                        "coverage_ratio": fit.coverage_ratio,
+                        "extent": "partial",
+                    }
+                    for item, fit in member_items
+                ),
+                key=lambda member: str(member["face_id"]),
+            )
+            # Equal-area members use lexical order so proposal identities stay
+            # stable across Illustrator enumeration order.
+            largest_area = max(
+                _along_size(member["face"], axis) * _cross_size(member["face"], axis)
+                for member in members
+            )
+            primary = min(
+                (
+                    member
+                    for member in members
+                    if abs(
+                        _along_size(member["face"], axis) * _cross_size(member["face"], axis)
+                        - largest_area
+                    ) <= 1e-6
+                ),
+                key=lambda member: str(member["face_id"]),
+            )
+            assembly_options.append(
+                {
+                    "primary_face": primary["face"],
+                    "primary_face_id": str(primary["face_id"]),
+                    "members": members,
+                    "coverage_ratio": union_ratio,
+                    "extent": "full" if union_ratio == 1.0 else "partial",
+                    "closure_kind": "assembly",
+                }
+            )
+
+        # If source linework contains a fully bounded main cap, do not expose
+        # a larger three-sided frame built from crossing annotation lines.  The
+        # open-frame path exists only for real multi-flap closure assemblies.
+        closed_full = [
+            option
+            for option in single_options
+            if not _open_sides(option["primary_face"])
+            and dimensions.close(
+                _cross_size(option["primary_face"], axis),
+                second
+                if dimensions.close(_along_size(option["primary_face"], axis), first)
+                else first,
+            )
+        ]
+        options[side] = closed_full if closed_full else assembly_options
         options[side].sort(
             key=lambda item: (
                 -float(item["coverage_ratio"]),
-                -_along_size(item["face"], axis) * _cross_size(item["face"], axis),
-                str(item["face"]["id"]),
+                -sum(
+                    _along_size(member["face"], axis) * _cross_size(member["face"], axis)
+                    for member in item["members"]
+                ),
+                str(item["primary_face_id"]),
             )
         )
     return options
@@ -219,13 +382,17 @@ def _stable_proposal_id(
     basis_transform: Sequence[float],
 ) -> str:
     material = {
+        "proposal_schema": BOX_NET_PROPOSAL_SCHEMA,
         "binding_seed": binding_seed,
         "axis": axis,
         "basis_transform": [round(float(value), 9) for value in basis_transform],
         "body_bounds": [[round(value, 6) for value in _bounds(item)] for item in body_path],
         "closure_bounds": [
-            [round(value, 6) for value in _bounds(item["face"])]
-            for item in closures
+            [
+                [round(value, 6) for value in _bounds(member["face"])]
+                for member in closure["members"]
+            ]
+            for closure in closures
         ],
     }
     encoded = json.dumps(material, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -258,11 +425,15 @@ def derive_box_net_proposals(
             closures = _closure_options(unique_candidates, body_path, axis, tolerance_mm, dimensions)
             for negative in closures[-1]:
                 for positive in closures[1]:
-                    negative_face = negative["face"]
-                    positive_face = positive["face"]
-                    face_items = [*body_path, negative_face, positive_face]
+                    negative_face = negative["primary_face"]
+                    positive_face = positive["primary_face"]
+                    face_items = [
+                        *body_path,
+                        *(member["face"] for member in negative["members"]),
+                        *(member["face"] for member in positive["members"]),
+                    ]
                     face_ids = tuple(sorted(str(item["id"]) for item in face_items))
-                    if len(set(face_ids)) != 6:
+                    if len(set(face_ids)) < 6:
                         continue
                     area = sum(_along_size(item, axis) * _cross_size(item, axis) for item in face_items)
                     body_along = [_along_size(item, axis) for item in body_path]
@@ -279,6 +450,7 @@ def derive_box_net_proposals(
                     if solved_dimensions is None:
                         continue
                     candidate = {
+                        "schema": BOX_NET_PROPOSAL_SCHEMA,
                         "id": _stable_proposal_id(
                             binding_seed=binding_seed,
                             axis=axis,
@@ -291,11 +463,20 @@ def derive_box_net_proposals(
                         "cap_face_ids": [str(negative_face["id"]), str(positive_face["id"])],
                         "closure_assemblies": [
                             {
-                                "face_id": str(option["face"]["id"]),
-                                "attached_body_face_id": str(option["attached_body_face_id"]),
+                                "primary_face_id": str(option["primary_face_id"]),
                                 "side": side,
                                 "extent": str(option["extent"]),
+                                "closure_kind": str(option["closure_kind"]),
                                 "coverage_ratio": float(option["coverage_ratio"]),
+                                "members": [
+                                    {
+                                        "face_id": str(member["face_id"]),
+                                        "attached_body_face_id": str(member["attached_body_face_id"]),
+                                        "coverage_ratio": float(member["coverage_ratio"]),
+                                        "extent": str(member["extent"]),
+                                    }
+                                    for member in option["members"]
+                                ],
                             }
                             for side, option in ((-1, negative), (1, positive))
                         ],

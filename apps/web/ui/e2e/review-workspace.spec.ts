@@ -84,7 +84,8 @@ test("核对 Dock 脱离工作区置顶，全屏时进入全屏根，处理疑�
     page.locator(".review-sign-layer").first().evaluate((node) => Number.parseInt(getComputedStyle(node).zIndex, 10)),
   ]);
   expect(dockZ).toBeGreaterThan(signZ);
-  await expect(page.locator(".canvas-zoom")).toHaveCSS("transform", "none");
+  await expect.poll(() => page.locator(".canvas-zoom").evaluate((node) => getComputedStyle(node).transform))
+    .not.toBe("none");
   expect(
     await dock.locator(".review-evidence-grid").evaluate((node) => getComputedStyle(node).gridTemplateColumns.split(" ").length),
   ).toBe(2);
@@ -125,6 +126,86 @@ test("核对 Dock 脱离工作区置顶，全屏时进入全屏根，处理疑�
   expect(completeCall?.body).toEqual({ conclusion: "中文品名需要设计改稿" });
 });
 
+test("同页只亮当前疑点，确认后依次前进并跨页定位", async ({ page, syntheticApi }) => {
+  const task = reviewTask("e5969b58cd53");
+  const pageOne = task.pages?.[0];
+  if (!pageOne) throw new Error("合成核对单缺少页面");
+  task.pages = [pageOne, { ...pageOne, url: `${pageOne.url}#page-2`, name: "synthetic-page-2.svg", page: 2 }];
+  task.hits = [
+    {
+      id: "hit_one",
+      field: "中文品名",
+      status: "疑点",
+      page: 1,
+      decision: "pending",
+      bilingual_pair_id: "name-pair",
+      bboxes: [{ page: 1, left: 40, top: 50, width: 120, height: 40, role: "check" }],
+    },
+    {
+      id: "hit_two",
+      field: "英文品名",
+      status: "缺失",
+      page: 1,
+      decision: "pending",
+      bilingual_pair_id: "name-pair",
+      bboxes: [{ page: 1, left: 280, top: 90, width: 150, height: 45, role: "check" }],
+    },
+    {
+      id: "hit_three",
+      field: "净含量",
+      status: "疑点",
+      page: 2,
+      decision: "pending",
+      bboxes: [{ page: 2, left: 90, top: 180, width: 100, height: 35, role: "check" }],
+    },
+  ];
+  syntheticApi.tasks.push(task);
+  await page.goto(`/review/${task.id}`);
+
+  const dock = page.getByTestId("review-dock");
+  const canvasPins = page.locator(".canvas-zoom .pin");
+  const canvasBoxes = page.locator(".canvas-zoom .hit-box");
+  await expect(canvasPins).toHaveCount(1);
+  await expect(canvasBoxes).toHaveCount(1);
+  await expect(canvasPins).toHaveText("1");
+
+  await page.getByLabel("核对结论").click();
+  await page.locator(".ant-select-dropdown:not(.ant-select-dropdown-hidden)").getByText("一致", { exact: true }).click();
+  await expect(dock.getByRole("button", { name: /英文品名/ })).toHaveAttribute("aria-current", "true");
+  await expect(canvasPins).toHaveCount(1);
+  await expect(canvasPins).toHaveText("2");
+
+  await page.getByLabel("核对结论").click();
+  await page.locator(".ant-select-dropdown:not(.ant-select-dropdown-hidden)").getByText("一致", { exact: true }).click();
+  await expect(dock.getByRole("button", { name: /净含量/ })).toHaveAttribute("aria-current", "true");
+  await expect(page.getByRole("button", { name: "第 2 页" })).toHaveClass(/btn-primary/);
+  await expect(canvasPins).toHaveCount(1);
+  await expect(canvasPins).toHaveText("3");
+});
+
+test("记录结论失败时保留当前疑点和页面", async ({ page, syntheticApi }) => {
+  const task = reviewTask("e5969b58cd54");
+  task.hits?.push({
+    id: "hit_next",
+    field: "净含量",
+    status: "疑点",
+    page: 1,
+    decision: "pending",
+    bboxes: [{ page: 1, left: 300, top: 200, width: 80, height: 30, role: "check" }],
+  });
+  syntheticApi.tasks.push(task);
+  syntheticApi.failNextDecision = true;
+  await page.goto(`/review/${task.id}`);
+
+  const current = page.getByTestId("review-dock").getByRole("button", { name: /中文品名/ });
+  await expect(current).toHaveAttribute("aria-current", "true");
+  await page.getByLabel("核对结论").click();
+  await page.locator(".ant-select-dropdown:not(.ant-select-dropdown-hidden)").getByText("一致", { exact: true }).click();
+  await expect(page.getByText("合成记录失败")).toBeVisible();
+  await expect(current).toHaveAttribute("aria-current", "true");
+  await expect(page.locator(".canvas-zoom .pin")).toHaveText("1");
+});
+
 test("浏览器拒绝核对全屏时显示可执行中文提示", async ({ page, syntheticApi }) => {
   const task = reviewTask();
   syntheticApi.tasks.push(task);
@@ -160,6 +241,7 @@ test("一致字段没有疑点时只显示 Excel 应印与稿上读到两列", a
   await expect(grid.getByText("Excel 应印", { exact: true })).toBeVisible();
   await expect(grid.getByText("稿上读到", { exact: true })).toBeVisible();
   expect(await grid.evaluate((node) => getComputedStyle(node).gridTemplateColumns.split(" ").length)).toBe(2);
+  await expect(page.locator(".canvas-zoom")).toHaveCSS("transform", "none");
 });
 
 test("矢量核对页加载失败时自动切回高清 PNG", async ({ page, syntheticApi }) => {

@@ -1,8 +1,9 @@
 import type { FieldHit } from "../api";
+import { locationPageForHit } from "./pinBox";
 import { partitionReviewHits } from "./reviewEvidence";
 
-function isPendingDecision(decision?: string): boolean {
-  return !decision || decision === "pending";
+export function isPendingDecision(decision?: string): boolean {
+  return decision !== "confirm" && decision !== "issue" && decision !== "ignore";
 }
 
 export function firstPendingIssueIndex(hits: FieldHit[]): number | null {
@@ -12,9 +13,9 @@ export function firstPendingIssueIndex(hits: FieldHit[]): number | null {
 
 export function pageIndexForHit(
   pages: Array<{ page?: number }>,
-  hit?: { page?: number | string },
+  hit?: Pick<FieldHit, "page" | "bboxes" | "qrcode_boxes">,
 ): number | null {
-  const p = Number(hit?.page || 0);
+  const p = hit ? locationPageForHit(hit) : 0;
   if (!Number.isFinite(p) || p <= 0) return null;
   const idx = pages.findIndex((pg) => Number(pg.page) === p);
   return idx >= 0 ? idx : null;

@@ -10,6 +10,7 @@ import {
   resolvePageMetrics,
   visiblePinGroups,
   locateBoxesForHit,
+  locationPageForHit,
 } from "./pinBox.js";
 
 describe("pinHitGroupsForPage", () => {
@@ -70,6 +71,13 @@ describe("hitOnPage", () => {
     assert.equal(hitOnPage({ page: 2 }, 2), true);
     assert.equal(hitOnPage({ page: "2" }, 2), true);
     assert.equal(hitOnPage({ page: "x" }, 1), false);
+  });
+
+  it("uses a QR box page when guide text has no box", () => {
+    const hit = { page: 1, bboxes: [], qrcode_boxes: [{ page: 2, left: 10, top: 20, width: 30, height: 30 }] };
+    assert.equal(locationPageForHit(hit), 2);
+    assert.equal(hitOnPage(hit, 1), false);
+    assert.equal(hitOnPage(hit, 2), true);
   });
 });
 
@@ -172,6 +180,12 @@ describe("overlaysForHit", () => {
     );
     assert.equal(boxTooLarge({ left: 0, top: 0, width: 900, height: 900, role: "hit", page: 1 }, page), true);
   });
+
+  it("filters exactly 30 percent but retains a box just below the boundary", () => {
+    const page = { width: 1000, height: 1000 };
+    assert.equal(boxTooLarge({ left: 0, top: 0, width: 300, height: 1000, role: "hit", page: 1 }, page), true);
+    assert.equal(boxTooLarge({ left: 0, top: 0, width: 299, height: 1000, role: "hit", page: 1 }, page), false);
+  });
 });
 
 describe("locateBoxesForHit", () => {
@@ -184,5 +198,8 @@ describe("locateBoxesForHit", () => {
     assert.equal(boxes[1]?.role, "hit");
     assert.equal(boxes[1]?.left, 800);
   });
-});
 
+  it("ignores malformed persisted box collections instead of crashing the page", () => {
+    assert.deepEqual(locateBoxesForHit({ bboxes: "broken", qrcode_boxes: { left: 1 } }), []);
+  });
+});

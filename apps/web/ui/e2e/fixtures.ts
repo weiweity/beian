@@ -18,6 +18,8 @@ type SyntheticHit = {
   evidence?: string;
   coverage?: { hit?: string[]; miss?: string[]; matched?: number; total?: number };
   bboxes?: Array<Record<string, unknown>>;
+  qrcode_boxes?: Array<Record<string, unknown>>;
+  bilingual_pair_id?: string;
 };
 
 export type SyntheticTask = {
@@ -62,6 +64,7 @@ export type SyntheticMockup = {
     page_size_mm?: [number, number];
     image_url?: string;
     net_proposals: Array<{
+      schema: "box-net-proposal/3";
       id: string;
       face_ids: string[];
       body_face_ids: [string, string, string, string];
@@ -70,12 +73,18 @@ export type SyntheticMockup = {
       bounds_mm?: [number, number, number, number];
       dimensions_mm?: { width: number; depth: number; height: number };
       valid_anchors?: Array<{ front_face_id: string; quarter_turns: Array<0 | 1 | 2 | 3> }>;
-      closure_assemblies?: Array<{
-        face_id: string;
-        attached_body_face_id: string;
+      closure_assemblies: Array<{
+        primary_face_id: string;
         side: -1 | 1;
         extent: "full" | "partial";
+        closure_kind: "full" | "clearance" | "assembly";
         coverage_ratio: number;
+        members: Array<{
+          face_id: string;
+          attached_body_face_id: string;
+          extent: "full" | "partial";
+          coverage_ratio: number;
+        }>;
       }>;
     }>;
     faces: Array<{
@@ -125,6 +134,7 @@ export type SyntheticApi = {
   uploads: SyntheticUploadSession[];
   calls: ApiCall[];
   failDeletes: Set<string>;
+  failNextDecision: boolean;
   loseNextUploadResponse: boolean;
   holdNextUploadComplete: boolean;
   expireNextTaskStart: boolean;
@@ -198,7 +208,7 @@ export function reviewTask(id = "e5969b58cd47"): SyntheticTask {
         pdf: "合成核对",
         page: 1,
         decision: "pending",
-        bboxes: [{ page: 1, x0: 40, y0: 50, x1: 260, y1: 95, kind: "miss" }],
+        bboxes: [{ page: 1, left: 40, top: 50, width: 220, height: 45, role: "check" }],
       },
     ],
   };
@@ -467,6 +477,10 @@ async function installSyntheticApi(page: Page, state: SyntheticApi) {
 
       const decision = path.match(/^\/api\/tasks\/([0-9a-f]{12})\/decision$/);
       if (method === "POST" && decision) {
+        if (state.failNextDecision) {
+          state.failNextDecision = false;
+          return json(route, { detail: "合成记录失败" }, 500);
+        }
         const task = state.tasks.find((item) => item.id === decision[1]);
         if (!task) return json(route, { detail: "合成任务不存在" }, 404);
         const data = (body || {}) as Record<string, unknown>;
@@ -567,6 +581,7 @@ export const test = base.extend<{ syntheticApi: SyntheticApi }>({
       uploads: [],
       calls: [],
       failDeletes: new Set(),
+      failNextDecision: false,
       loseNextUploadResponse: false,
       holdNextUploadComplete: false,
       expireNextTaskStart: false,

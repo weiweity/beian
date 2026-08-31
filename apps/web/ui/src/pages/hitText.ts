@@ -20,7 +20,10 @@ export type HitText = {
     ratio?: number;
     matched?: number;
     total?: number;
-    parts?: { net?: { hit?: string[]; miss?: string[] }; barcode?: { hit?: string[]; miss?: string[] } };
+    parts?: {
+      net?: { coverage?: number; matched?: number; total?: number; hit_phrases?: string[]; miss_phrases?: string[] };
+      barcode?: { coverage?: number; matched?: number; total?: number; hit_phrases?: string[]; miss_phrases?: string[] };
+    };
   };
   sequence_diff?: { only_in_excel?: string[] };
 };
@@ -54,9 +57,18 @@ function hitIsLocated(h: HitText, located?: boolean): boolean {
   return true;
 }
 
+function isFlaggedReviewHit(h: HitText): boolean {
+  return h.decision === "issue" || /待人工|不清|疑|缺|误/.test(h.status || "");
+}
+
+export function humanMissLines(h: HitText): string[] {
+  return (h.coverage?.miss || [])
+    .map((s) => String(s).trim())
+    .filter((s) => s && !isAccountingCopy(s));
+}
+
 export function spokenLines(h: HitText, field?: string, located?: boolean): string[] {
-  const st = h.status || "";
-  const flagged = h.decision === "issue" || /待人工|不清|疑|缺|误/.test(st);
+  const flagged = isFlaggedReviewHit(h);
   if (!flagged) return [];
   if (!hitIsLocated(h, located)) {
     return notLocatedLines(h);
@@ -89,9 +101,8 @@ export function spokenLines(h: HitText, field?: string, located?: boolean): stri
 /** 核对窗 16px 嘱咐：lead / because / ask。无嘱咐时返回 null。 */
 export function spokenAsk(h: HitText, field?: string, located?: boolean): SpokenAsk | null {
   const lines = spokenLines(h, field, located);
-  const misses = (h.coverage?.miss || []).map((s) => String(s).trim()).filter((s) => s && !isAccountingCopy(s));
-  const st = h.status || "";
-  const flagged = h.decision === "issue" || /待人工|不清|疑|缺|误/.test(st);
+  const misses = humanMissLines(h);
+  const flagged = isFlaggedReviewHit(h);
   if (lines.length >= 3) return { lead: lines[0], because: lines[1], ask: lines[2] };
   if (lines.length) {
     return {
@@ -120,9 +131,8 @@ export function spokenAsk(h: HitText, field?: string, located?: boolean): Spoken
 export function doubtLines(h: HitText): string[] {
   const spoken = spokenLines(h, h.field);
   if (spoken.length) return spoken;
-  const misses = (h.coverage?.miss || []).map((s) => String(s).trim()).filter((s) => s && !isAccountingCopy(s));
-  const st = h.status || "";
-  const flagged = h.decision === "issue" || /待人工|不清|疑|缺|误/.test(st);
+  const misses = humanMissLines(h);
+  const flagged = isFlaggedReviewHit(h);
   const excelOnly = flagged
     ? (h.sequence_diff?.only_in_excel || []).map((s) => String(s).trim()).filter(Boolean)
     : [];

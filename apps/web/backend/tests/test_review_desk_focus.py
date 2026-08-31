@@ -1,9 +1,11 @@
+from app import baidu_ocr
 from app.compare_core import _apply_qrcode_to_hits
 from app.fields import assign_doubt_bucket, field_group, match_field, _primary_compare_text
 
 
 def test_field_group_mixed_net_barcode():
     assert field_group("净含量&条形码") == "净含量&条形码"
+    assert field_group("净含量/条码") == "净含量&条形码"
     assert field_group("条形码") == "条形码"
     assert field_group("净含量") == "净含量"
 
@@ -63,6 +65,58 @@ def test_qr_boxes_kept_without_payload_and_do_not_overwrite_guide_bbox():
     assert result["status"] == "疑点"
     assert result["bboxes"] == [original]
     assert result["qrcode_boxes"][0]["left"] == 800
+
+
+def test_qr_only_box_moves_hit_to_the_detected_page():
+    result = _apply_qrcode_to_hits(
+        [{"field": "二维码", "field_group": "二维码", "status": "疑点", "bboxes": [], "page": 1}],
+        [{"text": "", "page": 2, "location": {"left": 80, "top": 30, "width": 18, "height": 18}}],
+        {"status": "empty"},
+    )[0]
+    assert result["page"] == 2
+    assert result["qrcode_boxes"][0]["page"] == 2
+
+
+def test_baidu_qr_parser_keeps_vertex_box_without_decoded_text(monkeypatch):
+    body = {
+        "codes_result": [
+            {
+                "text": "",
+                "vertexes_location": [
+                    {"x": 10, "y": 20},
+                    {"x": 50, "y": 20},
+                    {"x": 50, "y": 70},
+                    {"x": 10, "y": 70},
+                ],
+            }
+        ]
+    }
+
+    class Response:
+        content = b"{}"
+
+        def json(self):
+            return body
+
+    class Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def post(self, *args, **kwargs):
+            return Response()
+
+    monkeypatch.setattr(baidu_ocr, "load_baidu_env", lambda: {"BAIDU_OCR_API_KEY": "ak", "BAIDU_OCR_SECRET_KEY": "sk"})
+    monkeypatch.setattr(baidu_ocr, "get_access_token", lambda *_args, **_kwargs: "token")
+    monkeypatch.setattr(baidu_ocr.httpx, "Client", Client)
+
+    codes, _meta = baidu_ocr.qrcode_image_bytes(b"synthetic")
+    assert codes == [{"text": "", "location": {"left": 10, "top": 20, "width": 40, "height": 50}}]
 
 
 def test_mixed_net_barcode_partial_or_empty_stays_doubt():

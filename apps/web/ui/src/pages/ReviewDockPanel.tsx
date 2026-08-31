@@ -89,6 +89,8 @@ export function ReviewDockPanel({
               key={hit.id || index}
               type="button"
               className={index === active ? "hit-card is-on" : "hit-card"}
+              aria-current={index === active ? "true" : undefined}
+              disabled={busy}
               onClick={() => onPick(index)}
             >
               <span className="hit-no">{ordinal + 1}</span>
@@ -106,6 +108,8 @@ export function ReviewDockPanel({
                   key={hit.id || index}
                   type="button"
                   className={index === active ? "hit-card is-on" : "hit-card"}
+                  aria-current={index === active ? "true" : undefined}
+                  disabled={busy}
                   onClick={() => onPick(index)}
                 >
                   <span className="hit-no">{index + 1}</span>
@@ -129,6 +133,7 @@ export function ReviewDockPanel({
           ) : null}
           <div className="review-evidence-actions">
             <Select<Decision>
+              key={current.id || "review-decision"}
               aria-label="核对结论"
               className="review-decision-select"
               placeholder="选择结论"
@@ -165,8 +170,8 @@ export function ReviewDockPanel({
                 : "这条我钉不住，请整面看"}
             </strong>
           </div>
-          <p className="review-progress">
-            这单还剩 {progress.jobPending} 条 · 本页还有 {progress.pageLeft} 条
+          <p className="review-progress" aria-live="polite">
+            当前：{current.field || "字段"} · 这单还剩 {progress.jobPending} 条 · 本页还有 {progress.pageLeft} 条
           </p>
           <Input
             className="review-evidence-note"
