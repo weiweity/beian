@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 import hashlib
 import json
+import math
 from pathlib import Path
 import sys
 
@@ -14,6 +15,66 @@ if str(PACKAGING) not in sys.path:
 from structure_v2 import adapt_structure, resolve_structure, resolve_structure_payload  # noqa: E402
 from structure_v2.dimensions import STRICT_GEOMETRY, STROKE_PROPOSAL_GEOMETRY  # noqa: E402
 from packaging_structure_fixture import semantic_box  # noqa: E402
+
+
+REGRESSION_CASES = Path(__file__).with_name("fixtures") / "packaging_structure_v2_1_cases.json"
+
+
+def regression_case(name: str) -> dict:
+    payload = json.loads(REGRESSION_CASES.read_text(encoding="utf-8"))
+    assert payload["privacy"] == "synthetic-only"
+    return payload["cases"][name]
+
+
+def stroke_payload(**kwargs) -> dict:
+    payload = semantic_box(**kwargs)
+    payload["source"]["adapter"] = "illustrator-stroke-proposal/1"
+    payload["faces"] = []
+    payload["folds"] = []
+    payload["root_face"] = None
+    payload["validation"] = {
+        "status": "review_required",
+        "errors": ["structure_proposal_requires_confirmation"],
+        "warnings": [],
+    }
+    return payload
+
+
+def append_linework(
+    target: dict,
+    source: dict,
+    *,
+    prefix: str,
+    offset_x: float = 0.0,
+    offset_y: float = 0.0,
+    rotation_degrees: float = 0.0,
+) -> None:
+    angle = math.radians(rotation_degrees)
+    cosine = math.cos(angle)
+    sine = math.sin(angle)
+    vertex_ids: dict[str, str] = {}
+    for vertex in source["vertices"]:
+        identity = f"{prefix}-{vertex['id']}"
+        vertex_ids[vertex["id"]] = identity
+        x = float(vertex["x"])
+        y = float(vertex["y"])
+        target["vertices"].append(
+            {
+                "id": identity,
+                "x": x * cosine - y * sine + offset_x,
+                "y": x * sine + y * cosine + offset_y,
+            }
+        )
+    for edge in source["edges"]:
+        target["edges"].append(
+            {
+                **edge,
+                "id": f"{prefix}-{edge['id']}",
+                "start": vertex_ids[edge["start"]],
+                "end": vertex_ids[edge["end"]],
+                "source_refs": [f"synthetic:{prefix}:{edge['id']}"],
+            }
+        )
 
 
 def test_resolver_builds_explicit_dimensions_and_six_faces():
@@ -77,7 +138,7 @@ def test_only_ready_results_enter_atomic_cache(tmp_path: Path):
     cache_files = list(tmp_path.glob("*.json"))
     assert len(cache_files) == 1
     cached = json.loads(cache_files[0].read_text(encoding="utf-8"))
-    assert cached["schema"] == "packaging-structure-cache/3"
+    assert cached["schema"] == "packaging-structure-cache/4"
     assert cached["resolved"]["schema"] == "resolved-packaging-job/2"
 
     bad = semantic_box(source_hash="e" * 64)
@@ -93,7 +154,7 @@ def test_legacy_dimension_cache_is_rebuilt_under_current_contract(tmp_path: Path
     assert primed.status == "ready"
     cache_file = next(tmp_path.glob("*.json"))
     cached = json.loads(cache_file.read_text(encoding="utf-8"))
-    cached["schema"] = "packaging-structure-cache/2"
+    cached["schema"] = "packaging-structure-cache/3"
     cached["resolved"]["schema"] = "resolved-packaging-job/1"
     cached["resolved"]["dimensions_mm"]["depth"] = 49.4
     cache_file.write_text(json.dumps(cached), encoding="utf-8")
@@ -104,7 +165,7 @@ def test_legacy_dimension_cache_is_rebuilt_under_current_contract(tmp_path: Path
     assert rebuilt.cache_hit is False
     assert rebuilt.resolved["dimensions_mm"] == {"width": 30.0, "depth": 20.0, "height": 50.0}
     migrated = json.loads(cache_file.read_text(encoding="utf-8"))
-    assert migrated["schema"] == "packaging-structure-cache/3"
+    assert migrated["schema"] == "packaging-structure-cache/4"
     assert migrated["resolved"]["schema"] == "resolved-packaging-job/2"
 
 
@@ -425,3 +486,193 @@ def test_ready_cache_never_bypasses_current_approval_status(tmp_path: Path):
     assert result.code == "structure_approval_required"
     assert result.resolved is None
     assert result.cache_hit is False
+
+
+def test_sanitized_white_carton_fixture_keeps_outer_and_insert_choices_without_color_guessing():
+    case = regression_case("white_outer_with_insert")
+    outer = stroke_payload(
+        width=case["outer"]["width"],
+        depth=case["outer"]["depth"],
+        height=case["outer"]["height"],
+        top_cap_depth=case["outer"]["top_closure_depth"],
+    )
+    insert = stroke_payload(
+        width=case["insert"]["width"],
+        depth=case["insert"]["depth"],
+        height=case["insert"]["height"],
+    )
+    append_linework(outer, insert, prefix="insert", offset_x=250.0)
+
+    proposed = resolve_structure_payload(outer)
+
+    assert proposed.status == "review_required"
+    assert proposed.code == "structure_face_mapping_incomplete"
+    nets = proposed.topology["net_proposals"]
+    assert len(nets) == case["expected"]["proposal_count"]
+    assert nets[0]["dimensions_mm"] == {"width": 30.0, "depth": 20.0, "height": 50.0}
+    assert nets[1]["dimensions_mm"] == {"width": 10.0, "depth": 8.0, "height": 18.0}
+    assert any(item["extent"] == "partial" for item in nets[0]["closure_assemblies"])
+    assert all(net["valid_anchors"] for net in nets)
+    assert "color" not in json.dumps(proposed.as_dict()).lower()
+
+
+def test_annotation_heavy_fixture_partitions_noise_before_candidate_search():
+    case = regression_case("annotation_heavy_carton")
+    payload = stroke_payload()
+    for index in range(case["detached_annotation_components"]):
+        start = f"annotation-{index}-a"
+        end = f"annotation-{index}-b"
+        x = 500.0 + index * 3.0
+        payload["vertices"].extend(
+            [
+                {"id": start, "x": x, "y": 500.0},
+                {"id": end, "x": x + 1.0, "y": 500.0},
+            ]
+        )
+        payload["edges"].append(
+            {
+                "id": f"annotation-{index}",
+                "start": start,
+                "end": end,
+                "assignment": "crease",
+                "source_refs": [f"synthetic:annotation:{index}"],
+            }
+        )
+
+    proposed = resolve_structure_payload(payload)
+
+    assert proposed.status == "review_required"
+    assert len(proposed.topology["net_proposals"]) == case["expected"]["proposal_count"]
+    diagnostics = proposed.topology["proposal_diagnostics"]
+    assert diagnostics["components_seen"] > 100
+    assert diagnostics["candidate_components"] == 1
+    assert diagnostics["work_units"] < 50_000
+
+
+def test_stroke_proposal_never_confirms_residual_lines_after_export_budget_failure():
+    payload = stroke_payload()
+    payload["validation"]["errors"].append("structure_curve_complexity_exceeded")
+
+    result = resolve_structure_payload(payload)
+
+    assert result.status == "unsupported"
+    assert result.code == "structure_curve_complexity_exceeded"
+    assert result.resolved is None
+    assert not (result.topology or {}).get("net_proposals")
+
+
+def test_detached_annotation_components_do_not_exhaust_the_global_topology_limit():
+    payload = stroke_payload()
+    for index in range(4_100):
+        start = f"noise-{index}-a"
+        end = f"noise-{index}-b"
+        x = 1_000.0 + index * 3.0
+        payload["vertices"].extend(
+            [
+                {"id": start, "x": x, "y": 1_000.0},
+                {"id": end, "x": x + 1.0, "y": 1_000.0},
+            ]
+        )
+        payload["edges"].append(
+            {
+                "id": f"noise-{index}",
+                "start": start,
+                "end": end,
+                "assignment": "crease",
+                "source_refs": [f"synthetic:noise:{index}"],
+            }
+        )
+
+    result = resolve_structure_payload(payload)
+
+    assert result.status == "review_required"
+    assert result.code == "structure_face_mapping_incomplete"
+    assert result.resolved is None
+    assert len(result.topology["net_proposals"]) == 1
+    assert result.topology["proposal_diagnostics"]["components_seen"] > 4_096
+    assert result.topology["proposal_diagnostics"]["candidate_components"] == 1
+
+
+def test_axis_budget_cannot_hide_the_outer_carton_and_promote_a_smaller_insert():
+    payload = stroke_payload(width=30, depth=20, height=50)
+    insert = stroke_payload(width=10, depth=8, height=18, source_hash="e" * 64)
+    append_linework(payload, insert, prefix="insert", offset_x=700)
+    payload["vertices"].extend(
+        [
+            {"id": "comb-base-a", "x": 0.0, "y": 20.0},
+            {"id": "comb-base-b", "x": 500.0, "y": 20.0},
+        ]
+    )
+    payload["edges"].append(
+        {
+            "id": "comb-base",
+            "start": "comb-base-a",
+            "end": "comb-base-b",
+            "assignment": "crease",
+            "source_refs": ["synthetic:comb"],
+        }
+    )
+    for index in range(41):
+        start = f"comb-{index}-a"
+        end = f"comb-{index}-b"
+        x = 200.0 + index * 5.0
+        payload["vertices"].extend(
+            [
+                {"id": start, "x": x, "y": 20.0},
+                {"id": end, "x": x, "y": 25.0},
+            ]
+        )
+        payload["edges"].append(
+            {
+                "id": f"comb-{index}",
+                "start": start,
+                "end": end,
+                "assignment": "crease",
+                "source_refs": [f"synthetic:comb:{index}"],
+            }
+        )
+
+    result = resolve_structure_payload(payload)
+
+    assert result.status == "unsupported"
+    assert result.code == "structure_limit_exceeded"
+    assert result.resolved is None
+    assert not (result.topology or {}).get("net_proposals")
+
+
+def test_rotated_fixture_uses_one_explicit_basis_and_exposes_only_confirmable_anchors():
+    case = regression_case("rotated_carton")
+    payload = stroke_payload()
+    rotated = stroke_payload(source_hash="e" * 64)
+    payload["vertices"] = []
+    payload["edges"] = []
+    append_linework(
+        payload,
+        rotated,
+        prefix="rotated",
+        rotation_degrees=case["rotation_degrees"],
+    )
+
+    proposed = resolve_structure_payload(payload)
+
+    assert proposed.status == "review_required"
+    assert len(proposed.topology["net_proposals"]) == case["expected"]["proposal_count"]
+    net = proposed.topology["net_proposals"][0]
+    assert net["basis_transform"] != [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+    assert net["valid_anchors"]
+    assert all(item["quarter_turns"] for item in net["valid_anchors"])
+
+
+def test_proposal_preflight_is_repeatable_and_never_mutates_the_source_contract():
+    payload = stroke_payload()
+    original = deepcopy(payload)
+
+    first = resolve_structure_payload(payload)
+    after_first = deepcopy(payload)
+    second = resolve_structure_payload(payload)
+
+    assert payload == after_first == original
+    assert first.status == second.status == "review_required"
+    assert first.structure == second.structure
+    assert first.topology["net_proposals"] == second.topology["net_proposals"]
+    assert first.topology["net_proposals"][0]["id"].startswith("box-net-")

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from copy import deepcopy
 from pathlib import Path
 import sys
@@ -16,6 +17,7 @@ if str(PACKAGING) not in sys.path:
 from packaging_structure_fixture import semantic_box  # noqa: E402
 from structure_v2 import (  # noqa: E402
     StructureConfirmationError,
+    canonicalize_structure,
     confirm_structure,
     resolve_structure_payload,
 )
@@ -30,6 +32,10 @@ def anchor_proposal_files(
     depth: float = 20.0,
     height: float = 50.0,
     cap_clearance: float = 0.0,
+    top_cap_depth: float | None = None,
+    bottom_cap_depth: float | None = None,
+    rotation_degrees: float = 0.0,
+    body_width_overrides: dict[str, float] | None = None,
 ):
     source = tmp_path / "source.ai"
     source.write_bytes(b"semantic-anchor-confirmation-fixture")
@@ -41,7 +47,19 @@ def anchor_proposal_files(
         depth=depth,
         height=height,
         cap_clearance=cap_clearance,
+        top_cap_depth=top_cap_depth,
+        bottom_cap_depth=bottom_cap_depth,
+        body_width_overrides=body_width_overrides,
     )
+    if rotation_degrees:
+        angle = math.radians(rotation_degrees)
+        cosine = math.cos(angle)
+        sine = math.sin(angle)
+        for vertex in payload["vertices"]:
+            x = float(vertex["x"])
+            y = float(vertex["y"])
+            vertex["x"] = x * cosine - y * sine
+            vertex["y"] = x * sine + y * cosine
     vertices = {item["id"]: (item["x"], item["y"]) for item in payload["vertices"]}
     edges = {item["id"]: item for item in payload["edges"]}
     declared_front = next(face for face in payload["faces"] if face["role"] == "front")
@@ -51,10 +69,10 @@ def anchor_proposal_files(
         for vertex_id in (edges[edge_id]["start"], edges[edge_id]["end"])
     }
     expected_front_bounds = (
-        min(point[0] for point in front_points),
-        min(point[1] for point in front_points),
-        max(point[0] for point in front_points),
-        max(point[1] for point in front_points),
+        round(min(point[0] for point in front_points), 6),
+        round(min(point[1] for point in front_points), 6),
+        round(max(point[0] for point in front_points), 6),
+        round(max(point[1] for point in front_points), 6),
     )
     payload["source"]["adapter"] = "illustrator-stroke-proposal/1"
     payload["faces"] = []
@@ -79,6 +97,12 @@ def anchor_proposal_files(
 
 def write_resolution(path: Path, payload: dict) -> None:
     payload["structure"].pop("structure_hash", None)
+    payload["structure"] = canonicalize_structure(payload["structure"])
+    topology = payload.get("topology")
+    if isinstance(topology, dict):
+        for proposal in topology.get("net_proposals", []):
+            if isinstance(proposal, dict) and "structure_hash" in proposal:
+                proposal["structure_hash"] = payload["structure"]["structure_hash"]
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
@@ -121,6 +145,63 @@ def test_confirmation_binds_source_and_writes_an_accepted_sidecar(tmp_path: Path
         "bottom",
     }
     assert resolve_structure_payload(approved).status == "ready"
+
+
+def test_confirmation_and_proposal_share_opposite_panel_dimension_averages(tmp_path: Path):
+    source, resolution, _proposed, net, front = anchor_proposal_files(
+        tmp_path,
+        top_cap_depth=19.5,
+        bottom_cap_depth=19.5,
+        body_width_overrides={"back": 29.0, "left": 19.0, "front": 30.0, "right": 20.0},
+    )
+
+    result = confirm_anchor(source, resolution, net["id"], front["id"], 0, tmp_path / "drift.json")
+
+    assert net["dimensions_mm"] == {"width": 29.5, "depth": 19.5, "height": 50.0}
+    assert result["dimensions_mm"] == net["dimensions_mm"]
+
+
+def test_final_resolver_preflight_hides_every_anchor_that_dimension_averaging_would_reject(tmp_path: Path):
+    source = tmp_path / "source.ai"
+    source.write_bytes(b"final-resolver-preflight")
+    payload = semantic_box(
+        source_hash=hashlib.sha256(source.read_bytes()).hexdigest(),
+        top_cap_depth=18.6,
+        bottom_cap_depth=18.6,
+        body_width_overrides={"back": 29.0, "left": 21.0, "front": 30.0, "right": 20.0},
+    )
+    payload["source"]["adapter"] = "illustrator-stroke-proposal/1"
+    payload["faces"] = []
+    payload["folds"] = []
+    payload["root_face"] = None
+    payload["validation"] = {
+        "status": "review_required",
+        "errors": ["structure_proposal_requires_confirmation"],
+        "warnings": [],
+    }
+
+    proposed = resolve_structure_payload(payload)
+
+    assert proposed.status == "review_required"
+    assert proposed.code == "structure_box_net_missing"
+    assert not (proposed.topology or {}).get("net_proposals")
+
+
+def test_corrupt_confirmation_storage_is_not_reported_as_a_user_semantic_error(tmp_path: Path):
+    source = tmp_path / "source.ai"
+    source.write_bytes(b"corrupt-confirmation-storage")
+    resolution = tmp_path / "structure_resolution.json"
+    resolution.write_text("{truncated", encoding="utf-8")
+
+    with pytest.raises(StructureConfirmationError) as raised:
+        confirm_structure(
+            source=source,
+            resolution_path=resolution,
+            decisions={"anchor": {}},
+            output_path=tmp_path / "never.json",
+        )
+
+    assert raised.value.code == "structure_confirmation_storage_invalid"
 
 
 def test_confirmation_derives_all_six_roles_from_front_anchor(tmp_path: Path):
@@ -183,6 +264,29 @@ def test_anchor_confirmation_rejects_old_or_expired_net_choices(tmp_path: Path):
     assert missing_choice.value.code == "structure_confirmation_stale"
 
 
+def test_anchor_confirmation_rejects_a_proposal_bound_to_another_structure(tmp_path: Path):
+    source, resolution, proposed, net, front = anchor_proposal_files(tmp_path)
+    stale = deepcopy(proposed)
+    stale["topology"]["net_proposals"][0]["structure_hash"] = "f" * 64
+    resolution.write_text(json.dumps(stale), encoding="utf-8")
+
+    with pytest.raises(StructureConfirmationError) as raised:
+        confirm_anchor(source, resolution, net["id"], front["id"], 0, tmp_path / "never.json")
+
+    assert raised.value.code == "structure_confirmation_stale"
+
+
+def test_anchor_confirmation_keeps_legacy_proposal_basis_compatibility(tmp_path: Path):
+    source, resolution, proposed, net, front = anchor_proposal_files(tmp_path)
+    legacy = deepcopy(proposed)
+    legacy["topology"]["net_proposals"][0].pop("basis_transform", None)
+    write_resolution(resolution, legacy)
+
+    result = confirm_anchor(source, resolution, net["id"], front["id"], 0, tmp_path / "legacy.json")
+
+    assert result["ok"] is True
+
+
 def test_anchor_confirmation_rejects_a_cap_or_malformed_net_as_the_front(tmp_path: Path):
     source, resolution, proposed, net, _front = anchor_proposal_files(tmp_path)
 
@@ -236,8 +340,8 @@ def test_anchor_confirmation_requires_the_reading_direction_to_follow_the_body_s
     with pytest.raises(StructureConfirmationError) as raised:
         confirm_anchor(source, resolution, net["id"], front["id"], 1, tmp_path / "never.json")
 
-    assert raised.value.code == "artwork_transform_invalid"
-    assert "旋转 90" in str(raised.value)
+    assert raised.value.code == "structure_confirmation_invalid"
+    assert "预检" in str(raised.value)
 
 
 def test_anchor_confirmation_supports_the_reverse_body_reading_direction(tmp_path: Path):
@@ -268,6 +372,28 @@ def test_anchor_confirmation_supports_a_vertical_carton_net(tmp_path: Path):
     assert result["dimensions_mm"] == {"width": 30.0, "depth": 20.0, "height": 50.0}
     approved = json.loads(output.read_text(encoding="utf-8"))
     assert resolve_structure_payload(approved).status == "ready"
+
+
+def test_anchor_confirmation_is_invariant_to_a_rotated_source_coordinate_frame(tmp_path: Path):
+    source, resolution, _proposed, net, front = anchor_proposal_files(
+        tmp_path,
+        rotation_degrees=17.0,
+    )
+    valid = next(item for item in net["valid_anchors"] if item["front_face_id"] == front["id"])
+    output = tmp_path / "rotated.structure.json"
+
+    result = confirm_anchor(
+        source,
+        resolution,
+        net["id"],
+        front["id"],
+        valid["quarter_turns"][0],
+        output,
+    )
+
+    assert result["ok"] is True
+    assert result["dimensions_mm"] == {"width": 30.0, "depth": 20.0, "height": 50.0}
+    assert resolve_structure_payload(json.loads(output.read_text(encoding="utf-8"))).status == "ready"
 
 
 @pytest.mark.parametrize(
@@ -332,11 +458,47 @@ def test_anchor_confirmation_accepts_common_closure_flap_clearance(tmp_path: Pat
     result = confirm_anchor(source, resolution, net["id"], front["id"], 0, output)
 
     assert result["ok"] is True
-    # Physical box dimensions come from the four body panels. A deliberately
-    # shorter closure flap must not shrink the erected carton.
+    # Physical box dimensions come from the four body panels. Normal main-panel
+    # clearance must not shrink the erected carton.
     assert result["dimensions_mm"] == {"width": 30.0, "depth": 20.0, "height": 50.0}
     approved = json.loads(output.read_text(encoding="utf-8"))
-    assert resolve_structure_payload(approved).status == "ready"
+    assert approved["validation"]["warnings"] == ["closure_clearance_padded"]
+    cap_transforms = [
+        face["artwork_transform"][:4]
+        for face in approved["faces"]
+        if face["role"] in {"top", "bottom"}
+    ]
+    assert all(
+        sorted(abs(value) for value in transform) == [0.0, 0.0, 1.0, 1.0]
+        for transform in cap_transforms
+    )
+    resolved = resolve_structure_payload(approved)
+    assert resolved.status == "ready"
+    for role in ("top", "bottom"):
+        coverage = resolved.resolved["faces"][role]["artwork_coverage_bounds_mm"]
+        assert round((coverage[2] - coverage[0]) * (coverage[3] - coverage[1]), 3) == 564.0
+        assert coverage[0] == 0.0
+        assert coverage[2] == 30.0
+        assert coverage[1] == 0.0 or coverage[3] == 20.0
+
+
+def test_short_flap_cannot_be_promoted_to_a_top_face_or_swap_width_and_depth():
+    payload = semantic_box(cap_body_role="right", top_cap_depth=8.0)
+    payload["source"]["adapter"] = "illustrator-stroke-proposal/1"
+    payload["faces"] = []
+    payload["folds"] = []
+    payload["root_face"] = None
+    payload["validation"] = {
+        "status": "review_required",
+        "errors": ["structure_proposal_requires_confirmation"],
+        "warnings": [],
+    }
+
+    proposed = resolve_structure_payload(payload)
+
+    assert proposed.status == "review_required"
+    assert proposed.code == "structure_box_net_missing"
+    assert not (proposed.topology or {}).get("net_proposals")
 
 
 def test_anchor_confirmation_rejects_a_tampered_strip_axis(tmp_path: Path):

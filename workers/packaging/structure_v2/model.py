@@ -93,9 +93,34 @@ def _number(value: Any, label: str, *, lower: float | None = None, upper: float 
     return result
 
 
+def _integer(value: Any, label: str, *, lower: int = 0, upper: int = 1_000_000) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < lower or value > upper:
+        _fail("structure_contract_invalid", f"{label} 必须是 {lower}–{upper} 的整数", field=label)
+    return value
+
+
 def _rounded(value: float) -> float:
     result = round(float(value), 6)
     return 0.0 if result == -0.0 else result
+
+
+def _normalized_geometry_resolution(
+    value: Any,
+    label: str,
+    factor: float,
+    *,
+    allow_zero: bool,
+) -> float:
+    lower = 0.0 if allow_zero else 1e-9
+    converted = _number(value, label, lower=lower) * factor
+    if converted > 10.0:
+        _fail("structure_contract_invalid", f"{label} 不能大于 10.0 mm", field=label)
+    rounded = round(converted, 9)
+    if allow_zero:
+        return 0.0 if rounded == -0.0 else rounded
+    # A legal source-unit resolution can convert below one nanometre. Preserve
+    # a positive normalized floor so canonicalization remains idempotent.
+    return max(1e-9, rounded)
 
 
 def _known_keys(value: Mapping[str, Any], allowed: set[str], label: str) -> None:
@@ -115,11 +140,78 @@ def _unique_id(value: str, seen: set[str], label: str) -> None:
     seen.add(value)
 
 
+def _normalized_geometry(value: Any, factor: float) -> dict[str, Any]:
+    geometry = _mapping(value, "source.geometry")
+    _known_keys(
+        geometry,
+        {
+            "coordinate_frame",
+            "precision",
+            "curve_tolerance",
+            "curved_source_segments",
+            "generated_line_segments",
+            "repairs",
+        },
+        "source.geometry",
+    )
+    if geometry.get("coordinate_frame") != "artboard-top-left":
+        _fail(
+            "structure_contract_invalid",
+            "source.geometry.coordinate_frame 必须是 artboard-top-left",
+            field="source.geometry.coordinate_frame",
+        )
+    normalized: dict[str, Any] = {
+        "coordinate_frame": "artboard-top-left",
+        "precision": _normalized_geometry_resolution(
+            geometry.get("precision"),
+            "source.geometry.precision",
+            factor,
+            allow_zero=False,
+        ),
+        "curve_tolerance": _normalized_geometry_resolution(
+            geometry.get("curve_tolerance", 0.0),
+            "source.geometry.curve_tolerance",
+            factor,
+            allow_zero=True,
+        ),
+        "curved_source_segments": _integer(
+            geometry.get("curved_source_segments", 0),
+            "source.geometry.curved_source_segments",
+        ),
+        "generated_line_segments": _integer(
+            geometry.get("generated_line_segments", 0),
+            "source.geometry.generated_line_segments",
+        ),
+    }
+    repairs = _sequence(geometry.get("repairs", []), "source.geometry.repairs")
+    if len(repairs) > 100:
+        _fail("structure_limit_exceeded", "source.geometry.repairs 条目过多", count=len(repairs), limit=100)
+    normalized_repairs = []
+    for index, raw in enumerate(repairs):
+        item = _mapping(raw, f"source.geometry.repairs[{index}]")
+        _known_keys(item, {"kind", "source_ref", "output_segments"}, f"source.geometry.repairs[{index}]")
+        if item.get("kind") != "bezier_flatten":
+            _fail("structure_contract_invalid", "只允许记录 bezier_flatten 修复", field=f"source.geometry.repairs[{index}].kind")
+        normalized_repairs.append(
+            {
+                "kind": "bezier_flatten",
+                "source_ref": _identifier(item.get("source_ref"), f"source.geometry.repairs[{index}].source_ref"),
+                "output_segments": _integer(
+                    item.get("output_segments"),
+                    f"source.geometry.repairs[{index}].output_segments",
+                    lower=1,
+                ),
+            }
+        )
+    normalized["repairs"] = normalized_repairs
+    return normalized
+
+
 def _normalized_source(value: Any, factor: float) -> dict[str, Any]:
     source = _mapping(value, "source")
     _known_keys(
         source,
-        {"sha256", "adapter", "adapter_version", "document_ref", "coordinate_space", "page_size"},
+        {"sha256", "adapter", "adapter_version", "document_ref", "coordinate_space", "page_size", "geometry"},
         "source",
     )
     source_hash = str(source.get("sha256") or "").lower()
@@ -149,6 +241,8 @@ def _normalized_source(value: Any, factor: float) -> dict[str, Any]:
             _rounded(_number(page_size[0], "source.page_size[0]", lower=1e-9) * factor),
             _rounded(_number(page_size[1], "source.page_size[1]", lower=1e-9) * factor),
         ]
+    if source.get("geometry") is not None:
+        normalized["geometry"] = _normalized_geometry(source["geometry"], factor)
     return normalized
 
 
@@ -383,6 +477,7 @@ def _hash_material(normalized: Mapping[str, Any]) -> dict[str, Any]:
         "artwork_space": {
             "coordinate_space": normalized["source"].get("coordinate_space"),
             "page_size": normalized["source"].get("page_size"),
+            "geometry": normalized["source"].get("geometry"),
         },
     }
 

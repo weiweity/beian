@@ -1,0 +1,23 @@
+{
+  "schema": "packaging-structure-regression/1",
+  "privacy": "synthetic-only",
+  "cases": {
+    "white_outer_with_insert": {
+      "outer": { "width": 30, "depth": 20, "height": 50, "top_closure_depth": 18.8 },
+      "insert": { "width": 10, "depth": 8, "height": 18 },
+      "expected": { "proposal_count": 2, "first": "outer", "color_is_not_an_input": true }
+    },
+    "annotation_heavy_carton": {
+      "detached_annotation_components": 127,
+      "expected": { "proposal_count": 1, "partition_before_search": true }
+    },
+    "rotated_carton": {
+      "rotation_degrees": 17,
+      "expected": { "proposal_count": 1, "confirmable": true }
+    },
+    "curved_closed_path": {
+      "curve_tolerance_points": 0.25,
+      "expected": { "closed": true, "repair_kind": "bezier_flatten" }
+    }
+  }
+}

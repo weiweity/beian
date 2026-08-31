@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 import sys
 
 import pytest
@@ -76,7 +77,7 @@ def test_groups_a_horizontal_carton_and_excludes_unrelated_rectangles():
 
     assert len(proposals) == 1
     proposal = proposals[0]
-    assert proposal["id"] == "box-net-0001"
+    assert re.fullmatch(r"box-net-[0-9a-f]{16}", proposal["id"])
     assert proposal["strip_axis"] == "x"
     assert proposal["body_face_ids"] == [f"main-body-{index}" for index in range(1, 5)]
     assert proposal["cap_face_ids"] == ["main-cap-top", "main-cap-bottom"]
@@ -139,9 +140,65 @@ def test_ranks_larger_complete_nets_first_with_stable_public_ids():
 
     proposals = derive_box_net_proposals([*small, *large])
 
-    assert [proposal["id"] for proposal in proposals] == ["box-net-0001", "box-net-0002"]
+    repeated = derive_box_net_proposals([*small, *large])
+
+    assert [proposal["id"] for proposal in proposals] == [proposal["id"] for proposal in repeated]
+    assert len({proposal["id"] for proposal in proposals}) == 2
+    assert all(re.fullmatch(r"box-net-[0-9a-f]{16}", proposal["id"]) for proposal in proposals)
     assert all(face_id.startswith("large-") for face_id in proposals[0]["face_ids"])
     assert all(face_id.startswith("small-") for face_id in proposals[1]["face_ids"])
+
+
+def test_binds_public_ids_to_source_and_coordinate_basis():
+    candidates = horizontal_net("bound")
+
+    original = derive_box_net_proposals(candidates, binding_seed="source-a")[0]["id"]
+    changed_source = derive_box_net_proposals(candidates, binding_seed="source-b")[0]["id"]
+    changed_basis = derive_box_net_proposals(
+        candidates,
+        binding_seed="source-a",
+        basis_transform=(0.0, -1.0, 1.0, 0.0, 0.0, 0.0),
+    )[0]["id"]
+
+    assert len({original, changed_source, changed_basis}) == 3
+
+
+def test_accepts_normal_main_panel_clearance_but_rejects_a_short_flap():
+    clearance = horizontal_net("closure-clearance")
+    clearance[4]["local_bounds"] = (0.0, 1.2, 30.0, 20.0)
+
+    proposals = derive_box_net_proposals(clearance)
+
+    assert len(proposals) == 1
+    closures = proposals[0]["closure_assemblies"]
+    assert [closure["extent"] for closure in closures] == ["partial", "full"]
+    assert closures[0]["coverage_ratio"] == 0.94
+
+    short = horizontal_net("short-flap")
+    short[4]["local_bounds"] = (0.0, 12.0, 30.0, 20.0)
+    assert derive_box_net_proposals(short) == []
+
+
+def test_proposal_dimensions_use_the_same_opposite_panel_averages_as_final_resolution():
+    candidates = [
+        rectangle("drift-body-1", (0.0, 20.0, 30.0, 70.0)),
+        rectangle("drift-body-2", (30.0, 20.0, 50.0, 70.0)),
+        rectangle("drift-body-3", (50.0, 20.0, 79.0, 70.0)),
+        rectangle("drift-body-4", (79.0, 20.0, 98.0, 70.0)),
+        rectangle("drift-cap-top", (0.0, 0.0, 30.0, 20.0)),
+        rectangle("drift-cap-bottom", (0.0, 70.0, 30.0, 90.0)),
+    ]
+
+    proposal = derive_box_net_proposals(candidates)[0]
+
+    assert proposal["dimensions_mm"] == {"width": 29.5, "depth": 19.5, "height": 50.0}
+
+
+def test_dust_flap_attached_to_a_side_panel_cannot_swap_width_and_depth():
+    candidates = horizontal_net("side-dust")
+    candidates[4] = rectangle("side-dust-cap-top", (30.0, 12.0, 50.0, 20.0))
+
+    assert derive_box_net_proposals(candidates) == []
 
 
 def test_fails_closed_when_whole_net_choices_exceed_the_review_limit():

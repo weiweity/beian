@@ -1,4 +1,4 @@
-import type { MockupJob } from "../api";
+import { ApiError, type MockupJob } from "../api";
 
 export type StructureNetProposal = NonNullable<MockupJob["structure_preview"]>["net_proposals"][number];
 export type StructureAnchor = {
@@ -23,12 +23,37 @@ export function structureIssueCopy(job: Pick<MockupJob, "structure_code" | "stru
     return "刀线或折线存在断口，闭合后重新识别；系统不会自动补线。";
   }
   if (job.structure_code === "structure_multiple_components") {
-    return "稿件里检测到多套结构，请只保留本次要打样的一套刀版。";
+    return "稿件里检测到多套可成盒结构，请选择需要打样的完整盒型；若列表中没有外盒，请只保留正确刀版后重新上传。";
   }
   if (job.structure_code === "structure_units_ambiguous") {
     return "结构单位不明确，请确认使用 mm、pt 或 inch 后重新导出。";
   }
+  if (job.structure_code === "structure_box_net_missing") {
+    return "当前结构线还不能组成连续盒身和上下封口。请检查真实刀线/折线语义后重新上传；系统不会按颜色或白色区域猜外盒。";
+  }
+  if (job.structure_code === "structure_limit_exceeded" || job.structure_code === "structure_curve_complexity_exceeded") {
+    return "结构线数量或曲线复杂度超过安全上限。请在 Illustrator 中只保留本次刀版的结构线并简化异常路径后重新上传。";
+  }
+  if (job.structure_code === "structure_confirmation_stale" || job.structure_code === "structure_source_mismatch") {
+    return "结构候选已随源稿或识别版本更新，请刷新本单后重新选择。";
+  }
   return message || "包装结构需要人工确认后才能进入 Blender。";
+}
+
+export function structureConfirmationErrorCopy(error: unknown): string {
+  if (!(error instanceof ApiError)) {
+    return error instanceof Error ? error.message : "结构确认失败，请检查后重试";
+  }
+  if (error.code === "structure_confirmation_stale" || error.code === "structure_source_mismatch") {
+    return "结构候选已更新，请刷新本单后重新选择正面。";
+  }
+  if (error.code === "structure_fold_graph_invalid") {
+    return "这套盒型不能形成连续折叠关系，请整理真实刀线和折线后重新上传。";
+  }
+  if (error.code === "artwork_transform_invalid" || error.code === "structure_confirmation_invalid") {
+    return "当前正面或朝向未通过六面贴图预检，请选择页面仍可用的正面和方向。";
+  }
+  return error.message || "结构确认失败，请检查后重试";
 }
 
 export function selectedStructureAnchor(
@@ -37,11 +62,33 @@ export function selectedStructureAnchor(
   quarterTurns: 0 | 1 | 2 | 3,
 ): StructureAnchor | null {
   if (!proposal || !proposal.body_face_ids.includes(frontFaceId)) return null;
+  const valid = validTurnsForFace(proposal, frontFaceId);
+  if (!valid.includes(quarterTurns)) return null;
   return {
     proposal_id: proposal.id,
     front_face_id: frontFaceId,
     quarter_turns: quarterTurns,
   };
+}
+
+export function validTurnsForFace(
+  proposal: StructureNetProposal | undefined,
+  frontFaceId: string,
+): Array<0 | 1 | 2 | 3> {
+  if (!proposal || !proposal.body_face_ids.includes(frontFaceId)) return [];
+  if (!proposal.valid_anchors) return [0, 1, 2, 3];
+  return proposal.valid_anchors.find((item) => item.front_face_id === frontFaceId)?.quarter_turns || [];
+}
+
+export function structureProposalLabel(proposal: StructureNetProposal, index: number): string {
+  const dimensions = proposal.dimensions_mm;
+  const size = dimensions
+    ? ` · 底面 ${dimensions.width}×${dimensions.depth} · 高 ${dimensions.height} mm`
+    : "";
+  const partial = proposal.closure_assemblies?.some((item) => item.extent === "partial")
+    ? " · 主盖片有正常让位"
+    : "";
+  return `盒型方案 ${index + 1}${size}${partial}`;
 }
 
 export function structureViewBox(

@@ -1,17 +1,25 @@
-"""Find complete rectangular-carton nets inside untrusted face candidates.
+"""Find confirmable rectangular-carton nets inside untrusted face candidates.
 
 The input rectangles are still only geometry.  This module does not assign
-cut/crease semantics or accept a structure.  It groups four alternating body
-panels plus two opposite caps so the UI can ask for one front-face anchor
-instead of exposing every nested or partial rectangle.
+cut/crease semantics or accept a structure. It groups four alternating body
+panels plus two opposite closure assemblies so the UI can ask for one
+front-face anchor instead of exposing every nested or partial rectangle.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+import hashlib
+import json
 from typing import Any
 
-from .dimensions import DimensionPolicy, GeometryPolicy, STROKE_PROPOSAL_GEOMETRY
+from .dimensions import (
+    DimensionPolicy,
+    GeometryPolicy,
+    STROKE_PROPOSAL_GEOMETRY,
+    normalized_mm,
+    solve_body_dimensions,
+)
 
 
 MAX_BOX_NET_PROPOSALS = 24
@@ -130,17 +138,17 @@ def _cap_side(
     return None
 
 
-def _cap_options(
+def _closure_options(
     candidates: Sequence[Mapping[str, Any]],
     body_path: Sequence[Mapping[str, Any]],
     axis: str,
     tolerance: float,
     dimensions: DimensionPolicy,
-) -> dict[int, list[Mapping[str, Any]]]:
+) -> dict[int, list[dict[str, Any]]]:
     body_ids = {str(item["id"]) for item in body_path}
     body_along = [_along_size(item, axis) for item in body_path]
     first, second = body_along[0], body_along[1]
-    options: dict[int, list[Mapping[str, Any]]] = {-1: [], 1: []}
+    options: dict[int, list[dict[str, Any]]] = {-1: [], 1: []}
     for candidate in candidates:
         if str(candidate["id"]) in body_ids:
             continue
@@ -152,11 +160,33 @@ def _cap_options(
             cross = _cross_size(candidate, axis)
             attached = _along_size(body, axis)
             expected_cross = second if dimensions.close(attached, first) else first
-            if dimensions.close(along, attached) and dimensions.close(cross, expected_cross):
-                options[side].append(candidate)
+            if (
+                dimensions.close(along, attached)
+                and dimensions.close(cross, expected_cross)
+            ):
+                clearance = abs(normalized_mm(cross) - normalized_mm(expected_cross))
+                options[side].append(
+                    {
+                        "face": candidate,
+                        "attached_body_face_id": str(body["id"]),
+                        "coverage_ratio": round(min(1.0, cross / expected_cross), 6),
+                        # A top/bottom texture may only come from the main
+                        # closure panel.  Short dust/tuck flaps are not a
+                        # substitute for the erected footprint.  The stroke
+                        # adapter still permits normal manufacturing clearance
+                        # through its single dimensional policy.
+                        "extent": "full" if clearance == 0 else "partial",
+                    }
+                )
                 break
     for side in options:
-        options[side].sort(key=lambda item: (-_along_size(item, axis) * _cross_size(item, axis), str(item["id"])))
+        options[side].sort(
+            key=lambda item: (
+                -float(item["coverage_ratio"]),
+                -_along_size(item["face"], axis) * _cross_size(item["face"], axis),
+                str(item["face"]["id"]),
+            )
+        )
     return options
 
 
@@ -180,10 +210,34 @@ def _deduplicated_candidates(
     return list(unique.values())
 
 
+def _stable_proposal_id(
+    *,
+    binding_seed: str,
+    axis: str,
+    body_path: Sequence[Mapping[str, Any]],
+    closures: Sequence[Mapping[str, Any]],
+    basis_transform: Sequence[float],
+) -> str:
+    material = {
+        "binding_seed": binding_seed,
+        "axis": axis,
+        "basis_transform": [round(float(value), 9) for value in basis_transform],
+        "body_bounds": [[round(value, 6) for value in _bounds(item)] for item in body_path],
+        "closure_bounds": [
+            [round(value, 6) for value in _bounds(item["face"])]
+            for item in closures
+        ],
+    }
+    encoded = json.dumps(material, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return "box-net-" + hashlib.sha256(encoded).hexdigest()[:16]
+
+
 def derive_box_net_proposals(
     candidates: Sequence[Mapping[str, Any]],
     *,
     policy: GeometryPolicy = STROKE_PROPOSAL_GEOMETRY,
+    binding_seed: str = "geometry-only",
+    basis_transform: Sequence[float] = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0),
 ) -> list[dict[str, Any]]:
     """Return bounded whole-net proposals; never return raw rectangle guesses."""
     if policy.boundary_mm is None:
@@ -201,19 +255,53 @@ def derive_box_net_proposals(
             dimensions,
             search_state,
         ):
-            caps = _cap_options(unique_candidates, body_path, axis, tolerance_mm, dimensions)
-            for negative in caps[-1]:
-                for positive in caps[1]:
-                    face_items = [*body_path, negative, positive]
+            closures = _closure_options(unique_candidates, body_path, axis, tolerance_mm, dimensions)
+            for negative in closures[-1]:
+                for positive in closures[1]:
+                    negative_face = negative["face"]
+                    positive_face = positive["face"]
+                    face_items = [*body_path, negative_face, positive_face]
                     face_ids = tuple(sorted(str(item["id"]) for item in face_items))
                     if len(set(face_ids)) != 6:
                         continue
                     area = sum(_along_size(item, axis) * _cross_size(item, axis) for item in face_items)
+                    body_along = [_along_size(item, axis) for item in body_path]
+                    body_cross = [_cross_size(item, axis) for item in body_path]
+                    solved_dimensions = solve_body_dimensions(
+                        {
+                            "front": (body_along[0], body_cross[0]),
+                            "right": (body_along[1], body_cross[1]),
+                            "back": (body_along[2], body_cross[2]),
+                            "left": (body_along[3], body_cross[3]),
+                        },
+                        dimensions,
+                    )
+                    if solved_dimensions is None:
+                        continue
                     candidate = {
+                        "id": _stable_proposal_id(
+                            binding_seed=binding_seed,
+                            axis=axis,
+                            body_path=body_path,
+                            closures=(negative, positive),
+                            basis_transform=basis_transform,
+                        ),
                         "face_ids": list(face_ids),
                         "body_face_ids": [str(item["id"]) for item in body_path],
-                        "cap_face_ids": [str(negative["id"]), str(positive["id"])],
+                        "cap_face_ids": [str(negative_face["id"]), str(positive_face["id"])],
+                        "closure_assemblies": [
+                            {
+                                "face_id": str(option["face"]["id"]),
+                                "attached_body_face_id": str(option["attached_body_face_id"]),
+                                "side": side,
+                                "extent": str(option["extent"]),
+                                "coverage_ratio": float(option["coverage_ratio"]),
+                            }
+                            for side, option in ((-1, negative), (1, positive))
+                        ],
                         "strip_axis": axis,
+                        "basis_transform": [round(float(value), 9) for value in basis_transform],
+                        "dimensions_mm": solved_dimensions,
                         "bounds_mm": _proposal_bounds(face_items),
                         "_rank": round(area, 6),
                     }
@@ -228,7 +316,6 @@ def derive_box_net_proposals(
         proposals.values(),
         key=lambda item: (-float(item["_rank"]), tuple(item["face_ids"])),
     )
-    for index, proposal in enumerate(ordered, start=1):
-        proposal["id"] = f"box-net-{index:04d}"
+    for proposal in ordered:
         proposal.pop("_rank", None)
     return ordered

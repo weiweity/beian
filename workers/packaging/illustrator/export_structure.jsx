@@ -1,3 +1,5 @@
+#include "curve_flatten.js"
+
 function readUtf8(pathValue) {
     var file = new File(pathValue);
     file.encoding = "UTF-8";
@@ -184,38 +186,104 @@ function uniquePush(values, value) {
     values.push(value);
 }
 
+function hasFatalStructureError(errors) {
+    for (var index = 0; index < errors.length; index += 1) {
+        if (errors[index] === "structure_curve_complexity_exceeded" || errors[index] === "structure_limit_exceeded") {
+            return true;
+        }
+    }
+    return false;
+}
+
+function structurePoint(raw, artboardLeft, artboardTop) {
+    return [raw[0] - artboardLeft, artboardTop - raw[1]];
+}
+
 function exportSemanticPath(item, pathIndex, assignment, structure, errors, artboardLeft, artboardTop) {
     var points = item.pathPoints;
     if (!points || points.length < 2) {
         uniquePush(errors, "structure_path_too_short");
         return 0;
     }
-    var pointIndex;
-    for (pointIndex = 0; pointIndex < points.length; pointIndex += 1) {
-        structure.vertices.push({
-            id: "v-" + pathIndex + "-" + pointIndex,
-            x: points[pointIndex].anchor[0] - artboardLeft,
-            y: artboardTop - points[pointIndex].anchor[1]
-        });
-    }
     var segmentCount = item.closed ? points.length : points.length - 1;
-    var exported = 0;
+    var localVertices = [];
+    var localEdges = [];
+    var localRepairs = [];
+    var firstVertexId = null;
+    var previousVertexId = null;
+    var vertexIndex = 0;
+    var pointIndex;
     for (pointIndex = 0; pointIndex < segmentCount; pointIndex += 1) {
         var nextIndex = (pointIndex + 1) % points.length;
-        if (hasCurve(points[pointIndex], points[nextIndex])) {
-            uniquePush(errors, "structure_curve_requires_adapter");
-            continue;
+        var curved = hasCurve(points[pointIndex], points[nextIndex]);
+        var flattened = curved ? flattenCubicSegment(
+            points[pointIndex].anchor,
+            points[pointIndex].rightDirection,
+            points[nextIndex].leftDirection,
+            points[nextIndex].anchor,
+            structure.source.geometry.curve_tolerance,
+            12
+        ) : [points[pointIndex].anchor, points[nextIndex].anchor];
+        if (flattened === null || flattened.length - 1 > 256 || localEdges.length + flattened.length - 1 > 4096) {
+            uniquePush(errors, "structure_curve_complexity_exceeded");
+            return 0;
         }
-        structure.edges.push({
-            id: "e-" + pathIndex + "-" + pointIndex,
-            start: "v-" + pathIndex + "-" + pointIndex,
-            end: "v-" + pathIndex + "-" + nextIndex,
-            assignment: assignment,
-            source_refs: ["path:" + pathIndex + "/segment:" + pointIndex]
-        });
-        exported += 1;
+        if (curved) {
+            localRepairs.push({
+                kind: "bezier_flatten",
+                source_ref: "path:" + pathIndex + "/segment:" + pointIndex,
+                output_segments: flattened.length - 1
+            });
+        }
+        var currentVertexId = previousVertexId;
+        if (currentVertexId === null) {
+            currentVertexId = "v-" + pathIndex + "-" + vertexIndex;
+            vertexIndex += 1;
+            var firstPoint = structurePoint(flattened[0], artboardLeft, artboardTop);
+            localVertices.push({id: currentVertexId, x: firstPoint[0], y: firstPoint[1]});
+            firstVertexId = currentVertexId;
+        }
+        for (var pieceIndex = 1; pieceIndex < flattened.length; pieceIndex += 1) {
+            var closesPath = item.closed && pointIndex === segmentCount - 1 && pieceIndex === flattened.length - 1;
+            var nextVertexId = closesPath ? firstVertexId : "v-" + pathIndex + "-" + vertexIndex;
+            if (!closesPath) {
+                vertexIndex += 1;
+                var converted = structurePoint(flattened[pieceIndex], artboardLeft, artboardTop);
+                localVertices.push({id: nextVertexId, x: converted[0], y: converted[1]});
+            }
+            localEdges.push({
+                id: "e-" + pathIndex + "-" + pointIndex + "-" + (pieceIndex - 1),
+                start: currentVertexId,
+                end: nextVertexId,
+                assignment: assignment,
+                source_refs: ["path:" + pathIndex + "/segment:" + pointIndex]
+            });
+            currentVertexId = nextVertexId;
+        }
+        previousVertexId = currentVertexId;
     }
-    return exported;
+    if (structure.edges.length + localEdges.length > 20000) {
+        uniquePush(errors, "structure_limit_exceeded");
+        return 0;
+    }
+    for (pointIndex = 0; pointIndex < localVertices.length; pointIndex += 1) {
+        structure.vertices.push(localVertices[pointIndex]);
+    }
+    for (pointIndex = 0; pointIndex < localEdges.length; pointIndex += 1) {
+        structure.edges.push(localEdges[pointIndex]);
+    }
+    structure.source.geometry.generated_line_segments += localEdges.length;
+    structure.source.geometry.curved_source_segments += localRepairs.length;
+    for (pointIndex = 0; pointIndex < localRepairs.length && structure.source.geometry.repairs.length < 100; pointIndex += 1) {
+        structure.source.geometry.repairs.push(localRepairs[pointIndex]);
+    }
+    if (localRepairs.length > 0) {
+        uniquePush(structure.validation.warnings, "structure_curve_flattened");
+        if (structure.source.geometry.repairs.length < structure.source.geometry.curved_source_segments) {
+            uniquePush(structure.validation.warnings, "structure_repair_ledger_truncated");
+        }
+    }
+    return localEdges.length;
 }
 
 function hideSemanticItems(items) {
@@ -295,10 +363,18 @@ try {
         source: {
             sha256: String(config.source_sha256).toLowerCase(),
             adapter: "illustrator-semantic/1",
-            adapter_version: "1.0.0",
+            adapter_version: "1.1.0",
             document_ref: String(config.source_ai),
             coordinate_space: "artboard-top-left",
-            page_size: result.page_size_points
+            page_size: result.page_size_points,
+            geometry: {
+                coordinate_frame: "artboard-top-left",
+                precision: 0.001,
+                curve_tolerance: 0.25,
+                curved_source_segments: 0,
+                generated_line_segments: 0,
+                repairs: []
+            }
         },
         vertices: [],
         edges: [],
@@ -326,10 +402,13 @@ try {
     var proposalMode = explicitRecords.length === 0 && proposalRecords.length > 0;
     if (proposalMode) {
         structure.source.adapter = "illustrator-stroke-proposal/1";
-        structure.source.adapter_version = "1.0.0";
+        structure.source.adapter_version = "1.1.0";
         uniquePush(structure.validation.errors, "structure_proposal_requires_confirmation");
     }
-    for (var recordIndex = 0; recordIndex < chosenRecords.length; recordIndex += 1) {
+    if (chosenRecords.length > 5000) {
+        uniquePush(structure.validation.errors, "structure_limit_exceeded");
+    }
+    for (var recordIndex = 0; recordIndex < chosenRecords.length && !hasFatalStructureError(structure.validation.errors); recordIndex += 1) {
         var record = chosenRecords[recordIndex];
         semanticItems.push(record.item);
         result.semantic_path_count += 1;
