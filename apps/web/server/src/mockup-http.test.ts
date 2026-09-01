@@ -133,69 +133,80 @@ describe("mockup get", () => {
     assert.equal(allowed.status, 200);
   });
 
-  it("lets every logged-in worker read and list another owner's mockup", async () => {
+  it("lets every logged-in role read and list another owner's mockup without leaking worker paths", async () => {
     saveMockup({
       id: "aaaaaaaaaaaa",
       status: "done",
       created_at: "2026-08-20T00:00:00Z",
       files: [{ key: "glb", path: "/secret/box.glb", name: "box.glb" }],
       owner: "籽烨",
+      error: String.raw`找不到AI文件：C:\supply\data\客户新品.ai`,
+      job_error: "包装源文件不存在：/Users/operator/Desktop/客户新品.ai",
       job_kind: "mockup",
       job_status: "succeeded",
     });
-    const sess = issueSessionForTest("路人", "reviewer", "ou_mockup_acl_xx");
-    const res = await app.request("/api/mockups/aaaaaaaaaaaa", {
-      headers: { authorization: `Bearer ${sess.token}` },
-    });
-    assert.equal(res.status, 200);
-    const list = await app.request("/api/mockups", {
-      headers: { authorization: `Bearer ${sess.token}` },
-    });
-    assert.equal(list.status, 200);
-    const body = (await list.json()) as { id?: string }[];
-    assert.equal(body.some((j) => j.id === "aaaaaaaaaaaa"), true);
+    for (const [index, role] of (["admin", "reviewer", "viewer"] as const).entries()) {
+      const sess = issueSessionForTest("路人", role, `ou_mockup_acl_${index}`);
+      const res = await app.request("/api/mockups/aaaaaaaaaaaa", {
+        headers: { authorization: `Bearer ${sess.token}` },
+      });
+      assert.equal(res.status, 200);
+      const detailText = await res.text();
+      assert.doesNotMatch(detailText, /C:\\|\/Users\/|客户新品\.ai/);
+
+      const list = await app.request("/api/mockups", {
+        headers: { authorization: `Bearer ${sess.token}` },
+      });
+      assert.equal(list.status, 200);
+      const listText = await list.text();
+      assert.match(listText, /aaaaaaaaaaaa/);
+      assert.doesNotMatch(listText, /C:\\|\/Users\/|客户新品\.ai/);
+    }
   });
 
   it("keeps structure previews out of the list while returning them from the detail endpoint", async () => {
     const id = "abababababab";
     seedStructurePreviewJob(id, "ou_preview_summary_owner");
-    const sess = issueSessionForTest("路人", "reviewer", "ou_preview_summary_reader");
+    for (const [index, role] of (["admin", "reviewer", "viewer"] as const).entries()) {
+      const sess = issueSessionForTest("路人", role, `ou_preview_summary_reader_${index}`);
+      const list = await app.request("/api/mockups", {
+        headers: { authorization: `Bearer ${sess.token}` },
+      });
+      assert.equal(list.status, 200);
+      const rows = (await list.json()) as Array<Record<string, unknown>>;
+      const row = rows.find((item) => item.id === id);
+      assert.ok(row);
+      assert.equal(Object.hasOwn(row, "structure_preview"), false);
 
-    const list = await app.request("/api/mockups", {
-      headers: { authorization: `Bearer ${sess.token}` },
-    });
-    assert.equal(list.status, 200);
-    const rows = (await list.json()) as Array<Record<string, unknown>>;
-    const row = rows.find((item) => item.id === id);
-    assert.ok(row);
-    assert.equal(Object.hasOwn(row, "structure_preview"), false);
-
-    const detail = await app.request(`/api/mockups/${id}`, {
-      headers: { authorization: `Bearer ${sess.token}` },
-    });
-    assert.equal(detail.status, 200);
-    const body = (await detail.json()) as Record<string, unknown>;
-    assert.equal(Object.hasOwn(body, "structure_preview"), true);
-    assert.deepEqual(body.structure_preview, {
-      faces: [{
-        id: "proposal-face-0001",
-        bounds_mm: [0, 0, 30, 50],
-        centroid_mm: [15, 25],
-        rectangular: true,
-      }],
-      net_proposals: [],
-      page_size_mm: [210, 297],
-    });
+      const detail = await app.request(`/api/mockups/${id}`, {
+        headers: { authorization: `Bearer ${sess.token}` },
+      });
+      assert.equal(detail.status, 200);
+      const body = (await detail.json()) as Record<string, unknown>;
+      assert.equal(Object.hasOwn(body, "structure_preview"), true);
+      assert.deepEqual(body.structure_preview, {
+        faces: [{
+          id: "proposal-face-0001",
+          bounds_mm: [0, 0, 30, 50],
+          centroid_mm: [15, 25],
+          rectangular: true,
+        }],
+        net_proposals: [],
+        page_size_mm: [210, 297],
+      });
+    }
   });
 
-  it("lets every logged-in worker read another owner's mockup result file", async () => {
+  it("lets every logged-in role read another owner's mockup result file", async () => {
     seedOwnedFile("bbbbbbbbbbbb", "glb", "box.glb", Buffer.from("glTF"), "ou_mockup_file_owner");
-    const sess = issueSessionForTest("路人", "reviewer", "ou_mockup_file_acl");
-    const res = await app.request("/api/mockups/bbbbbbbbbbbb/files/glb", {
-      headers: { authorization: `Bearer ${sess.token}` },
-    });
-    assert.equal(res.status, 200);
-    assert.equal(Buffer.from(await res.arrayBuffer()).toString(), "glTF");
+    for (const [index, role] of (["admin", "reviewer", "viewer"] as const).entries()) {
+      const sess = issueSessionForTest("路人", role, `ou_mockup_file_acl_${index}`);
+      const res = await app.request("/api/mockups/bbbbbbbbbbbb/files/glb", {
+        headers: { authorization: `Bearer ${sess.token}` },
+      });
+      assert.equal(res.status, 200);
+      assert.equal(Buffer.from(await res.arrayBuffer()).toString(), "glTF");
+    }
   });
 
   it("GET mockup id that is not a tid is 400", async () => {

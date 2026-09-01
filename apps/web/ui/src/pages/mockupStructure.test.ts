@@ -7,6 +7,7 @@ import {
   structureConfirmationErrorCopy,
   structureIssueCopy,
   structurePolygonPoints,
+  structureProposalHasRealPolygons,
   structureStatusLabel,
   structureViewBox,
   validTurnsForFace,
@@ -182,5 +183,34 @@ describe("mockup V2 structure UX", () => {
     };
     assert.equal(structurePolygonPoints(outlined), "0,5 5,0 10,5 5,10");
     assert.equal(structurePolygonPoints(faces[1]), null);
+  });
+
+  it("fails a proposed net closed unless every displayed face has its real polygon", () => {
+    const polygonFaces = faces.map((face) => ({
+      ...face,
+      points_mm: [[
+        face.bounds_mm[0],
+        face.bounds_mm[1],
+      ], [
+        face.bounds_mm[2],
+        face.bounds_mm[1],
+      ], [
+        face.bounds_mm[2],
+        face.bounds_mm[3],
+      ]] as Array<[number, number]>,
+    }));
+    const proposal = {
+      schema: "box-net-proposal/3" as const,
+      id: "box-net-0001",
+      face_ids: polygonFaces.map((face) => face.id),
+      body_face_ids: polygonFaces.slice(0, 4).map((face) => face.id) as [string, string, string, string],
+      cap_face_ids: polygonFaces.slice(4, 6).map((face) => face.id) as [string, string],
+      strip_axis: "x" as const,
+      closure_assemblies: [],
+    };
+
+    assert.equal(structureProposalHasRealPolygons(proposal, polygonFaces), true);
+    assert.equal(structureProposalHasRealPolygons(proposal, polygonFaces.slice(1)), false);
+    assert.equal(structureProposalHasRealPolygons(proposal, faces), false);
   });
 });

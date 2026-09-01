@@ -290,12 +290,35 @@ export function listJobs(): MockupJob[] {
   return loadAllMockups().sort((a, b) => b.created_at.localeCompare(a.created_at));
 }
 
+const PUBLIC_MOCKUP_ERROR_FALLBACK = "打样失败，请让管理员在本机检查详细原因";
+
+/**
+ * 打样列表现在是团队共享读取边界；旧任务可能持久化过 worker 原文。
+ * 在序列化时再次脱敏，避免绝对路径和客户稿件名随历史记录扩散。
+ */
+function publicMockupError(value: unknown): string | undefined {
+  const raw = typeof value === "string" ? value.trim() : "";
+  if (!raw) return undefined;
+  if (/https?:\/\/|file:\/\/|Bearer\s+|access_token|client_secret|api[_-]?key|authorization|cookie/i.test(raw)) {
+    return PUBLIC_MOCKUP_ERROR_FALLBACK;
+  }
+  const safe = raw
+    .replace(/[A-Za-z]:\\[^\s,，。;；"'）)\r\n]*/g, "本机稿件")
+    .replace(/\\\\[^\s,，。;；"'）)\r\n]*/g, "本机稿件")
+    .replace(/(^|[\s=:：("'（])\/[^\s,，。;；"'）)\r\n]*/g, "$1本机稿件")
+    .replace(/[^\s/\\:："'（）()]+\.(?:ai|pdf|png|glb|json|blend|pptx)(?=$|[\s,，。;；:："'）)])/giu, "稿件文件")
+    .trim();
+  return (safe || PUBLIC_MOCKUP_ERROR_FALLBACK).slice(0, 80);
+}
+
 function publicMockupSummaryFields(job: MockupJob) {
+  const legacyError = publicMockupError(job.error);
+  const jobError = publicMockupError(job.job_error);
   return {
     id: job.id,
     status: job.status,
     title: job.title || "",
-    error: job.error || job.job_error,
+    error: legacyError || jobError,
     created_at: job.created_at,
     owner: job.created_by || job.owner,
     files: (job.files || []).map((f) => ({ key: f.key, name: f.name })),
@@ -304,7 +327,7 @@ function publicMockupSummaryFields(job: MockupJob) {
     job_stage: job.job_stage,
     job_stage_label: job.job_stage_label,
     job_eta_s: job.job_eta_s,
-    job_error: job.job_error,
+    job_error: jobError,
     job_started_at: job.job_started_at,
     job_finished_at: job.job_finished_at,
     structure_engine: job.structure_engine,
@@ -405,6 +428,9 @@ export function loadStructurePreview(job: MockupJob): {
     }
     if (!faces.length) return undefined;
     const faceIds = new Set(faces.map((face) => face.id));
+    const polygonFaceIds = new Set(
+      faces.filter((face) => Boolean(face.points_mm)).map((face) => face.id),
+    );
     const netProposals: StructureNetProposal[] = [];
     const rawNets = resolution.topology?.net_proposals;
     if (Array.isArray(rawNets) && rawNets.length <= 24) {
@@ -434,7 +460,8 @@ export function loadStructurePreview(job: MockupJob): {
           !stripAxis ||
           bodyIds.some((faceId) => !faceIdsRaw.includes(faceId)) ||
           capIds.some((faceId) => !faceIdsRaw.includes(faceId)) ||
-          faceIdsRaw.some((faceId) => !faceIds.has(faceId))
+          faceIdsRaw.some((faceId) => !faceIds.has(faceId)) ||
+          faceIdsRaw.some((faceId) => !polygonFaceIds.has(faceId))
         ) {
           continue;
         }

@@ -7,6 +7,7 @@ import {
   structureConfirmationErrorCopy,
   structureIssueCopy,
   structurePolygonPoints,
+  structureProposalHasRealPolygons,
   structureViewBox,
   validTurnsForFace,
 } from "./mockupStructure";
@@ -21,7 +22,10 @@ export function StructureConfirmPanel({ job, canConfirmStructure, onConfirmed }:
   const { message } = App.useApp();
   const preview = job.structure_preview;
   const faces = preview?.faces || [];
-  const proposals = preview?.net_proposals || [];
+  const proposals = useMemo(
+    () => (preview?.net_proposals || []).filter((item) => structureProposalHasRealPolygons(item, faces)),
+    [faces, preview?.net_proposals],
+  );
   const [proposalId, setProposalId] = useState("");
   const [frontFaceId, setFrontFaceId] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -134,7 +138,6 @@ export function StructureConfirmPanel({ job, canConfirmStructure, onConfirmed }:
               />
             ) : null}
             {proposalFaces.map((face) => {
-              const [left, top, right, bottom] = face.bounds_mm;
               const candidateIndex = bodyIndex.get(face.id);
               const isBody = candidateIndex !== undefined;
               const isConfirmable = validTurnsForFace(proposal, face.id).length > 0;
@@ -159,17 +162,7 @@ export function StructureConfirmPanel({ job, canConfirmStructure, onConfirmed }:
                     }
                   } : undefined}
                 >
-                  {outline ? (
-                    <polygon points={outline} />
-                  ) : (
-                    <rect
-                      x={left}
-                      y={top}
-                      width={right - left}
-                      height={bottom - top}
-                      rx={0.8}
-                    />
-                  )}
+                  {outline ? <polygon points={outline} /> : null}
                   {label ? (
                     <text x={face.centroid_mm[0]} y={face.centroid_mm[1]} dominantBaseline="central">
                       {label}

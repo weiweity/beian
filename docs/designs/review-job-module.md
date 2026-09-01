@@ -106,9 +106,9 @@ Python `cli.py` **不再** `save_task`。对照/对红 CLI 只把结果 JSON 打
 
 ### 权限与团队协作
 
-`users.json` 只配置 `admin/reviewer/viewer`，不存页面级权限数组。Hono 把权限拆为三层：所有已登录角色都可读取、下载团队打样单和结构预览；结构确认必须具备独立 `confirm_structure` 能力，当前只授予 `admin`；删除继续经过对象所有权校验，`reviewer` 只能删本人已结束打样单，`admin` 可删全部，`viewer` 无删除能力。审稿单仍保持原有所有者隔离。UI 只消费 `/api/auth/me.perms` 控制动作可用性，服务端继续作为最终授权边界。
+`users.json` 只配置 `admin/reviewer/viewer`，不存页面级权限数组。Hono 把权限拆为三层：所有已登录角色都可读取、下载团队打样单和结构预览；结构确认必须具备独立 `confirm_structure` 能力，当前只授予 `admin`；删除继续经过对象所有权校验，`reviewer` 只能删本人已结束打样单，`admin` 可删全部，`viewer` 无删除能力。审稿单仍保持原有所有者隔离。团队共享序列化必须再次脱敏旧 worker 错误里的本机绝对路径、客户稿件名和疑似凭据，只返回短摘要；列表不得为轮询读取完整结构预览。UI 只消费 `/api/auth/me.perms` 控制动作可用性，服务端继续作为最终授权边界。
 
-打样写回：`runPackaging` 退出码 0 → 现有 `collectOutputs` 填 `files`（只公开 key/name；白底只收 `front_right` / `back_left`，不要把 `ai-raster` 或 PPT 质检 PNG 算进去；另收 `glb` / `ppt` / `sheet`），`status=done`，`job_status=succeeded`。非 0 或超时 → `status=failed`，`job_status=failed`，`job_error` 截 800 字。不读 packaging 的内部目录当 HTTP 合同。
+打样写回：`runPackaging` 退出码 0 → 现有 `collectOutputs` 填 `files`（只公开 key/name；白底只收 `front_right` / `back_left`，不要把 `ai-raster` 或 PPT 质检 PNG 算进去；另收 `glb` / `ppt` / `sheet`），`status=done`，`job_status=succeeded`。非 0 或超时 → `status=failed`，`job_status=failed`，内部 `job_error` 截 800 字；对外读取必须再走团队共享脱敏和摘要边界。不读 packaging 的内部目录当 HTTP 合同。
 
 ### HTTP 合同（不新增 `/api/jobs`）
 
@@ -123,7 +123,7 @@ GET 必须走 `publicTask` / `publicMockup`，剥掉 `job_pid`、磁盘 `path`�
 | POST | `/api/tasks/:tid/rework` | kind=`rework`。对红门不变。已有 `job_status` 为 queued/running → 409「对红还在排队或正在跑」。 |
 | GET | `/api/tasks` / `/api/tasks/:tid` | 多返回公开作业字段。`board` 仍只看 `task.status`。 |
 | POST | `/api/mockups/start` | 领取 `.ai` 回执前先确认 Blender、Illustrator 路径，以及 Windows Session 1 Agent 的协议/Session/心跳；缺失或 Agent 离线 → **412 当场失败且不消耗回执**（不入队、不事后飞书）。接单后按 durable claim 事务写打样单，Agent 再按需启动并验证同会话可见窗口与文档列表。依赖齐全则入队，忙时仍是 `queued`；同一 `source_receipt` 的并发或重试返回原打样单。 |
-| GET | `/api/mockups` / `/:id` | 读 `job.json`。无 `path`。mockup `status` 仍用现有 `queued\|running\|done\|failed`，不要改成 succeeded。 |
+| GET | `/api/mockups` / `/:id` | 读 `job.json`。无 `path`；旧错误只返回脱敏短摘要，列表只返回摘要字段，不加载完整结构预览。mockup `status` 仍用现有 `queued\|running\|done\|failed`，不要改成 succeeded。 |
 | GET | `/api/mockups/:id/files/:key` | 只给白底 `front_right`/`back_left`、GLB、PPT、打样单 PDF（`sheet`）。预览 inline，`?download=1` 才附件。`ai-raster`/PPT 质检图或坏 PNG → 415。流式读盘，不一次塞进内存。缺 PPT 或 PDF 时 404，不要假装能下。 |
 | GET | `/api/health` / `/api/status` | 公网 health 只给发版探活所需字段；本机或登录后的 status 才给准确作业槽、Illustrator Agent 摘要和飞书状态。Agent 摘要不得暴露路径或稿名。 |
 

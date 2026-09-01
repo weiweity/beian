@@ -212,6 +212,28 @@ describe("mockup structure confirmation persistence", () => {
     assert.equal("structure_preview" in publicMockupSummary(job), false);
   });
 
+  it("redacts persisted worker paths and customer filenames at the shared read boundary", () => {
+    const { job } = reviewJob();
+    const failedJob = job as typeof job & { error?: string; job_error?: string };
+    failedJob.error = String.raw`找不到AI文件：C:\supply\data\mockups\abc123abc123\客户新品.ai`;
+    failedJob.job_error = "包装源文件不存在：/Users/operator/Desktop/客户新品.ai";
+
+    const view = publicMockupSummary(failedJob);
+    assert.equal(view.error, "找不到AI文件：本机稿件");
+    assert.equal(view.job_error, "包装源文件不存在：本机稿件");
+    assert.doesNotMatch(JSON.stringify(view), /C:\\|\/Users\/|客户新品\.ai/);
+  });
+
+  it("does not publish a confirmable net when any face lacks its real polygon", () => {
+    const { job } = reviewJob();
+    const resolutionPath = job.structure_resolution_path || "";
+    const resolution = JSON.parse(readFileSync(resolutionPath, "utf8"));
+    delete resolution.topology.face_proposal[0].points_mm;
+    writeFileSync(resolutionPath, JSON.stringify(resolution));
+
+    assert.deepEqual(publicMockup(job).structure_preview?.net_proposals, []);
+  });
+
   it("drops a whole-net proposal when its preferred turn is malformed", () => {
     for (const preferred of ["0", 0.5, 1]) {
       const { job } = reviewJob();

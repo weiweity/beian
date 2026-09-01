@@ -12,6 +12,12 @@ function face(
     bounds_mm: bounds,
     centroid_mm: [(bounds[0] + bounds[2]) / 2, (bounds[1] + bounds[3]) / 2],
     size_mm: [bounds[2] - bounds[0], bounds[3] - bounds[1]],
+    points_mm: [
+      [bounds[0], bounds[1]],
+      [bounds[2], bounds[1]],
+      [bounds[2], bounds[3]],
+      [bounds[0], bounds[3]],
+    ],
     rectangular: true,
   };
 }

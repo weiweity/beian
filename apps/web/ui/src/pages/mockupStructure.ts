@@ -92,6 +92,22 @@ export function preferredStructureTurn(
   return preferred !== undefined && valid.includes(preferred) ? preferred : null;
 }
 
+export function structureProposalHasRealPolygons(
+  proposal: StructureNetProposal,
+  faces: NonNullable<MockupJob["structure_preview"]>["faces"],
+): boolean {
+  const polygonFaceIds = new Set(
+    faces
+      .filter((face) => (
+        Array.isArray(face.points_mm)
+        && face.points_mm.length >= 3
+        && face.points_mm.every((point) => point.every(Number.isFinite))
+      ))
+      .map((face) => face.id),
+  );
+  return proposal.face_ids.every((faceId) => polygonFaceIds.has(faceId));
+}
+
 export function structureViewBox(
   faces: NonNullable<MockupJob["structure_preview"]>["faces"],
 ): [number, number, number, number] {
