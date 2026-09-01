@@ -86,6 +86,7 @@ import {
   publicMockup,
   publicMockupSummary,
   prepareStructureConfirmation,
+  prepareStructureInputSelection,
   queueMockup,
   finishStructureConfirmation,
   structureConfirmationFailureStatus,
@@ -151,6 +152,7 @@ type Env = { Bindings: NodeBindings; Variables: { session: Session } };
 
 const app = new Hono<Env>();
 const VERSION = "0.21.8.0";
+const STRUCTURE_INPUT_BODY_BYTES = 16 * 1024;
 
 class ApiProblem extends Error {
   constructor(
@@ -812,6 +814,91 @@ app.post("/api/mockups/start", async (c) => {
   });
 });
 
+app.post(
+  "/api/mockups/:id/structure/input",
+  async (c, next) => {
+    need(c, "confirm_structure", "只有管理员可以选择包装结构层");
+    await next();
+  },
+  bodyLimit({
+    maxSize: STRUCTURE_INPUT_BODY_BYTES,
+    onError: (c) => c.json({
+      code: "packaging_structure_selection_too_large",
+      detail: "结构层选择请求过大",
+    }, 413),
+  }),
+  async (c) => {
+    const id = assertTid(c.req.param("id"));
+    const body = (await c.req.json().catch(() => ({}))) as { candidate_ids?: unknown };
+    const candidateIds = body.candidate_ids;
+    if (
+      !Array.isArray(candidateIds)
+      || candidateIds.length < 1
+      || candidateIds.length > 16
+      || candidateIds.some((value) => typeof value !== "string" || !/^proposal-layer-[0-9a-f]{16}$/.test(value))
+      || new Set(candidateIds).size !== candidateIds.length
+    ) {
+      throw new ApiProblem(
+        400,
+        "packaging_structure_selection_invalid",
+        "请选择 1–16 个当前稿件列出的结构图层",
+      );
+    }
+    const job = getJob(id);
+    if (!job) throw new HTTPException(404, { message: "没有这单打样" });
+    const currentSelection = job.structure_input_selection_ids;
+    const sameSelection = Array.isArray(currentSelection)
+      && currentSelection.length === candidateIds.length
+      && currentSelection.every((value) => candidateIds.includes(value));
+    if (job.structure_status !== "review_required" || job.job_status !== "waiting_input") {
+      if (sameSelection) return c.json(decorateQueueAhead([publicMockup(job)])[0]);
+      throw new ApiProblem(
+        409,
+        "packaging_structure_selection_stale",
+        "这单当前没有待选择的包装结构层",
+      );
+    }
+    beginStructureConfirmation(job);
+    try {
+      let selection: ReturnType<typeof prepareStructureInputSelection>;
+      try {
+        selection = prepareStructureInputSelection(job, candidateIds);
+      } catch (error) {
+        const status = Number((error as { status?: number }).status);
+        if (status === 400 || status === 409) {
+          throw new ApiProblem(
+            status,
+            status === 400 ? "packaging_structure_selection_invalid" : "packaging_structure_selection_stale",
+            status === 400
+              ? "请选择当前稿件列出的结构图层"
+              : "结构层选择已失效，请刷新后重试",
+          );
+        }
+        console.error("prepare packaging structure input failed", {
+          problem: "管理员已提交候选结构层，但源稿绑定清单没有安全写成",
+          cause: safeLogCause(error),
+          fix: "保留待选择状态，检查任务目录后原位重试",
+        });
+        throw new ApiProblem(
+          500,
+          "packaging_structure_selection_failed",
+          "结构层处理失败，请稍后重试",
+        );
+      }
+      if (selection.changed) {
+        try {
+          enqueue({ kind: "mockup", id });
+        } catch (error) {
+          console.warn("enqueue selected structure input failed:", error instanceof Error ? error.message : error);
+        }
+      }
+      return c.json(decorateQueueAhead([publicMockup(getJob(id) || selection.job)])[0]);
+    } finally {
+      finishStructureConfirmation(id);
+    }
+  },
+);
+
 app.post("/api/mockups/:id/structure", async (c) => {
   need(c, "confirm_structure", "只有管理员可以确认包装结构");
   const id = assertTid(c.req.param("id"));
@@ -1247,6 +1334,24 @@ app.get("/api/mockups/:id/structure-preview", (c) => {
   const path = job.structure_artwork_preview_path;
   if (!isMockupJobFile(job.id, path) || !pngMagicAt(path)) {
     throw new HTTPException(404, { message: "结构原稿预览还没有" });
+  }
+  return new Response(Readable.toWeb(createReadStream(path)) as ReadableStream, {
+    headers: {
+      "Content-Type": "image/png",
+      "X-Content-Type-Options": "nosniff",
+      "Cache-Control": "private, no-store",
+      "Content-Disposition": "inline",
+    },
+  });
+});
+
+app.get("/api/mockups/:id/structure-input-preview", (c) => {
+  need(c, "read");
+  const job = getJob(assertTid(c.req.param("id")));
+  if (!job) throw new HTTPException(404, { message: "没有这单打样" });
+  const path = job.structure_input_preview_path || job.structure_artwork_preview_path;
+  if (!isMockupJobFile(job.id, path) || !pngMagicAt(path)) {
+    throw new HTTPException(404, { message: "结构层原稿预览还没有" });
   }
   return new Response(Readable.toWeb(createReadStream(path)) as ReadableStream, {
     headers: {

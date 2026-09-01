@@ -54,6 +54,51 @@ function netProposal(input: Omit<NetProposal, "schema" | "face_ids" | "closure_a
   };
 }
 
+test("无显式语义时管理员可多选本稿候选层并重跑同一打样单", async ({ page, syntheticApi }) => {
+  await page.setViewportSize({ width: 1366, height: 700 });
+  const cutId = "proposal-layer-1111111111111111";
+  const creaseId = "proposal-layer-2222222222222222";
+  const mockup: SyntheticMockup = {
+    id: "abcdef123455",
+    title: "旧稿候选层",
+    status: "review_required",
+    job_status: "waiting_input",
+    structure_status: "review_required",
+    structure_code: "structure_semantics_missing",
+    files: [],
+    structure_input: {
+      schema: "packaging-structure-input-candidates/2",
+      image_url: ARTWORK,
+      proposal_layers: [
+        { id: cutId, name: "刀线", stroke_only_path_count: 24 },
+        { id: creaseId, name: "折线", stroke_only_path_count: 12 },
+      ],
+      selected_ids: [],
+      truncated: false,
+    },
+  };
+  syntheticApi.mockups.push(mockup);
+
+  await page.goto(`/mockup/${mockup.id}`);
+
+  await expect(page.getByText("请选择真实结构线所在图层")).toBeVisible();
+  await expect(page.getByText("系统不会按颜色、白色区域或图层名称自动判断结构。")).toBeVisible();
+  await expect(page.getByRole("checkbox")).toHaveCount(2);
+  const submit = page.getByRole("button", { name: "用所选图层重新识别" });
+  await expect(submit).toBeDisabled();
+  await page.getByText("刀线", { exact: true }).click();
+  await page.getByText("折线", { exact: true }).click();
+  await expect(submit).toBeEnabled();
+  await expect(submit).toBeInViewport({ ratio: 1 });
+  await submit.click();
+
+  await expect(page.getByText("打样中", { exact: true }).first()).toBeVisible();
+  const selection = syntheticApi.calls.find(
+    (call) => call.method === "POST" && call.path === `/api/mockups/${mockup.id}/structure/input`,
+  );
+  expect(selection?.body).toEqual({ candidate_ids: [cutId, creaseId] });
+});
+
 test("管理员只需看展开图、选择正面并生成，朝向由系统决定", async ({ page, syntheticApi }) => {
   await page.setViewportSize({ width: 1366, height: 700 });
   const mockup: SyntheticMockup = {

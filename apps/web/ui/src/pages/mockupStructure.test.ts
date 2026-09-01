@@ -3,6 +3,8 @@ import { describe, it } from "node:test";
 import { ApiError } from "../api.js";
 import {
   preferredStructureTurn,
+  sameStructureLayerSelection,
+  selectedStructureLayerIds,
   selectedStructureAnchor,
   structureConfirmationErrorCopy,
   structureIssueCopy,
@@ -22,6 +24,27 @@ const faces = ["front", "right", "back", "left", "top", "bottom"].map((_role, in
 }));
 
 describe("mockup V2 structure UX", () => {
+  it("keeps only current candidate ids in server order and caps one selection at sixteen", () => {
+    const proposalLayers = Array.from({ length: 18 }, (_, index) => ({
+      id: `proposal-layer-${index.toString(16).padStart(16, "0")}`,
+      name: `结构层 ${index + 1}`,
+      stroke_only_path_count: index + 1,
+    }));
+    const input = {
+      schema: "packaging-structure-input-candidates/2" as const,
+      proposal_layers: proposalLayers,
+      selected_ids: [proposalLayers[0].id],
+      truncated: false,
+    };
+    const selected = selectedStructureLayerIds(input, [
+      "proposal-layer-ffffffffffffffff",
+      ...proposalLayers.slice().reverse().map((candidate) => candidate.id),
+    ]);
+    assert.deepEqual(selected, proposalLayers.slice(0, 16).map((candidate) => candidate.id));
+    assert.equal(sameStructureLayerSelection(input, [proposalLayers[0].id]), true);
+    assert.equal(sameStructureLayerSelection(input, [proposalLayers[1].id]), false);
+  });
+
   it("distinguishes a human confirmation from a failed mockup", () => {
     assert.equal(structureStatusLabel({ structure_status: "review_required" }), "待确认结构");
     assert.equal(structureStatusLabel({ structure_status: "unsupported" }), "结构暂不支持");

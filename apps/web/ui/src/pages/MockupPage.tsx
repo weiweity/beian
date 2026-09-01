@@ -861,7 +861,9 @@ export function MockupJobPage({ jobId, canConfirmStructure, onBack }: JobProps &
           <div>
             <h1 className="page-title">{mockTitle(job)}</h1>
             <p className="page-lead">
-              {structureStatusLabel(job)}。看一下包装展开图，选择产品正面后即可生成。
+              {job.structure_input?.proposal_layers.length
+                ? `${structureStatusLabel(job)}。先选择真实结构线所在图层，再识别完整盒型。`
+                : `${structureStatusLabel(job)}。看一下包装展开图，选择产品正面后即可生成。`}
             </p>
           </div>
           <button type="button" className="btn-ghost" onClick={onBack}>

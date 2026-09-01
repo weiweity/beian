@@ -3000,6 +3000,24 @@ html[data-theme="dark"] .notes.is-float {
   overflow: hidden;
 }
 
+.structure-input-preview img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  object-fit: contain;
+  background: #ffffff;
+}
+
+.structure-input-preview-empty {
+  display: grid;
+  min-height: 280px;
+  place-items: center;
+  padding: 24px;
+  color: #6b6572;
+  text-align: center;
+}
+
 .structure-map-caption {
   display: flex;
   align-items: center;
@@ -3151,6 +3169,64 @@ html[data-theme="dark"] .notes.is-float {
   height: auto;
   padding-block: 8px;
   white-space: normal;
+}
+
+.structure-layer-list {
+  display: grid;
+  gap: 8px;
+  min-height: 0;
+  max-height: 320px;
+  overflow: auto;
+  padding: 2px 4px 2px 44px;
+}
+
+.structure-layer-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  min-height: 52px;
+  padding: 8px 12px;
+  border: 1px solid rgba(128, 88, 152, 0.16);
+  border-radius: 14px;
+  background: rgba(246, 241, 248, 0.34);
+  cursor: pointer;
+}
+
+.structure-layer-option:not(.ant-checkbox-wrapper-disabled):hover {
+  border-color: rgba(128, 88, 152, 0.42);
+  background: rgba(246, 241, 248, 0.7);
+}
+
+.structure-layer-option.ant-checkbox-wrapper-disabled {
+  background: rgba(246, 241, 248, 0.22);
+  cursor: not-allowed;
+}
+
+.structure-layer-option > span:last-child {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.structure-layer-option strong {
+  color: #1c1a1f;
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.structure-layer-option small,
+.structure-input-truncated {
+  color: #6b6572;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.structure-input-truncated {
+  margin: 0 0 0 44px;
 }
 
 .structure-proposal-nav {
@@ -3463,6 +3539,15 @@ html[data-theme="dark"] .notes.is-float {
 
   .structure-front-choices {
     padding-left: 0;
+  }
+
+  .structure-layer-list {
+    max-height: none;
+    padding-left: 0;
+  }
+
+  .structure-input-truncated {
+    margin-left: 0;
   }
 
   .structure-confirm-actions {

@@ -32,7 +32,7 @@ PIPELINE_VERSION = "1.4.0"
 MAX_RASTER_PIXELS = 32_000_000
 MAX_EXPLICIT_PROPOSAL_LAYERS = 16
 MAX_PROPOSAL_LAYER_CANDIDATES = 128
-STRUCTURE_INPUT_CANDIDATES_SCHEMA = "packaging-structure-input-candidates/1"
+STRUCTURE_INPUT_CANDIDATES_SCHEMA = "packaging-structure-input-candidates/2"
 ROOT = Path(__file__).resolve().parent
 BLENDER_SCRIPT = ROOT / "blender" / "render_job.py"
 PPT_SCRIPT = ROOT / "ppt" / "build_product_ppt.mjs"
@@ -169,16 +169,17 @@ def explicit_proposal_layers(
         )
     normalized: list[str] = []
     for item in value:
-        name = item.strip()
-        if len(name) > 160:
+        if len(item) > 160:
             raise PipelineError(
                 "结构层选择无效，请重新选择",
                 code="packaging_structure_selection_invalid",
                 cause="proposal layer name exceeds 160 characters",
                 fix="从当前稿件列出的候选层中重新选择，不要手填或沿用旧稿选择",
             )
-        if name not in normalized:
-            normalized.append(name)
+        # Illustrator selects layers by exact name. Whitespace is part of that
+        # identity; strip is only an emptiness check at the manifest boundary.
+        if item not in normalized:
+            normalized.append(item)
     return normalized
 
 
@@ -193,26 +194,35 @@ def structure_input_candidates(
     )
     if not isinstance(raw_candidates, list):
         return None
-    proposal_layers: list[dict[str, Any]] = []
-    seen: set[str] = set()
+    validated: list[tuple[str, str, int]] = []
+    display_counts: dict[str, int] = {}
     for raw in raw_candidates[:MAX_PROPOSAL_LAYER_CANDIDATES]:
         if not isinstance(raw, dict):
             continue
         raw_name = raw.get("name")
         if not isinstance(raw_name, str):
             continue
-        name = raw_name.strip()
+        display_name = raw_name.strip()
         count = raw.get("stroke_only_path_count")
         if (
-            not name
-            or len(name) > 160
-            or name in seen
+            not display_name
+            or len(raw_name) > 160
+            or raw.get("ambiguous_name", False) is not False
             or not isinstance(count, int)
             or isinstance(count, bool)
             or count < 1
         ):
             continue
-        seen.add(name)
+        validated.append((raw_name, display_name, min(count, 1_000_000)))
+        display_counts[display_name] = display_counts.get(display_name, 0) + 1
+
+    proposal_layers: list[dict[str, Any]] = []
+    for name, display_name, count in validated:
+        # Two physically different layers can have identical or whitespace-
+        # equivalent names. A name-only selector cannot distinguish them, so
+        # omit the whole ambiguous group instead of selecting multiple layers.
+        if display_counts[display_name] != 1:
+            continue
         candidate_hash = hashlib.sha256(
             (source_sha256 + "\0" + name).encode("utf-8")
         ).hexdigest()[:16]
@@ -220,7 +230,7 @@ def structure_input_candidates(
             {
                 "id": f"proposal-layer-{candidate_hash}",
                 "name": name,
-                "stroke_only_path_count": min(count, 1_000_000),
+                "stroke_only_path_count": count,
             }
         )
     if not proposal_layers:
