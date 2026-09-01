@@ -46,8 +46,14 @@ function Get-AgentHeartbeatPid([string]$Path) {
 function Stop-AgentTaskAndWait([string]$Name, [string]$HeartbeatPath) {
   $task = Get-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue
   $heartbeatPid = Get-AgentHeartbeatPid $HeartbeatPath
-  if ($task -and $task.State -eq "Running") {
-    Stop-ScheduledTask -TaskName $Name -ErrorAction Stop
+  if ($task) {
+    # The InteractiveToken keep-alive trigger would otherwise start a new
+    # Agent during release/recovery while this checkout identity is switching.
+    Disable-ScheduledTask -TaskName $Name -ErrorAction Stop
+    $task = Get-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue
+    if ($task -and $task.State -eq "Running") {
+      Stop-ScheduledTask -TaskName $Name -ErrorAction Stop
+    }
   }
   for ($attempt = 0; $attempt -lt 20; $attempt++) {
     $state = (Get-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue).State
@@ -207,6 +213,8 @@ function Quote-TaskArgument([string]$Value) {
 $powershell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
 $arguments = @(
   "-NoProfile",
+  "-NonInteractive",
+  "-WindowStyle", "Hidden",
   "-ExecutionPolicy", "Bypass",
   "-File", (Quote-TaskArgument $agent),
   "-Root", (Quote-TaskArgument $Root),
@@ -238,12 +246,22 @@ if ($ClearFaultFence) {
 }
 
 $action = New-ScheduledTaskAction -Execute $powershell -Argument $arguments
-$trigger = New-ScheduledTaskTrigger -AtLogOn -User $InteractiveUser
+$logonTrigger = New-ScheduledTaskTrigger -AtLogOn -User $InteractiveUser
+$taskTriggers = @($logonTrigger)
 if ($ExpiresAt -ne [DateTime]::MinValue) {
   if ($ExpiresAt -le (Get-Date)) { throw "Illustrator agent task expiry must be in the future" }
   # Task Scheduler removes abandoned L1 bootstrap tasks even when Actions is
   # cancelled or the machine loses power before the smoke script's finally block.
-  $trigger.EndBoundary = $ExpiresAt.ToString("yyyy-MM-ddTHH:mm:ss")
+  $logonTrigger.EndBoundary = $ExpiresAt.ToString("yyyy-MM-ddTHH:mm:ss")
+} else {
+  # InteractiveToken keep-alive. Task Scheduler can only start this process
+  # while the registered administrator still has a logged-on session.
+  # IgnoreNew keeps a live Agent unique. Logout still cannot be repaired from
+  # Session 0. Temporary L1 tasks keep AtLogOn only so expiry is not raced.
+  $taskTriggers += New-ScheduledTaskTrigger `
+    -Once `
+    -At (Get-Date).AddMinutes(1) `
+    -RepetitionInterval (New-TimeSpan -Minutes 1)
 }
 # ScheduledTasks calls this Interactive; Task Scheduler persists it as InteractiveToken.
 $principal = New-ScheduledTaskPrincipal -UserId $InteractiveUser -LogonType Interactive -RunLevel Highest
@@ -271,12 +289,12 @@ if ($ExpiresAt -ne [DateTime]::MinValue) {
   $settingsArguments.ExecutionTimeLimit = $temporaryLimit
   $settingsArguments.DeleteExpiredTaskAfter = New-TimeSpan -Minutes 10
 }
-$settings = New-ScheduledTaskSettingsSet @settingsArguments
+$settings = New-ScheduledTaskSettingsSet @settingsArguments -Hidden
 
 Register-ScheduledTask `
   -TaskName $TaskName `
   -Action $action `
-  -Trigger $trigger `
+  -Trigger $taskTriggers `
   -Principal $principal `
   -Settings $settings `
   -Description "Beian Session 1 Illustrator named-pipe agent" `

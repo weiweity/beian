@@ -16,6 +16,8 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 5
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
       - name: Verify Windows PowerShell 5.1 atomic replace contract
         shell: powershell
         run: |
@@ -48,6 +50,14 @@ jobs:
               Remove-Item -LiteralPath $testRoot -Recurse -Force
             }
           }
+      - name: Verify Illustrator agent scheduled-task contract
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ($PSVersionTable.PSEdition -ne "Desktop" -or $PSVersionTable.PSVersion.Major -ne 5) {
+            throw "Expected Windows PowerShell 5.1 Desktop, got $($PSVersionTable.PSEdition) $($PSVersionTable.PSVersion)"
+          }
+          & (Join-Path $env:GITHUB_WORKSPACE "scripts\windows\illustrator-agent-task.contract.ps1")
 
   quality:
     runs-on: ubuntu-latest

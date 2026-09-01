@@ -850,6 +850,7 @@ function Sync-IllustratorAgentTaskToCurrentTree {
   $prior = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
   if ($prior) {
     Write-Host "restored tree has no Illustrator agent; remove the task created by this upgrade"
+    Disable-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
     Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
     Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
   }

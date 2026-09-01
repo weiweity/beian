@@ -28,9 +28,17 @@ cmd.exe 才用 `set WB_DATA_DIR=...`。PowerShell 里写 `set` 不会进子进�
 
 ## Illustrator 登录桌面 Agent
 
-`beian-server-8787` 与 Actions runner 是 LocalSystem / Session 0；Illustrator 是带 GUI 的桌面程序，两者不能在同一会话内直接自动化。`release.ps1` 会同步计划任务 `beian-illustrator-agent`：它使用 `InteractiveToken`，只在当前管理员已登录的交互会话启动 `scripts\windows\illustrator-agent.ps1`。锁屏或 UU 断开不会注销；真正注销后 Agent 停止，打样入口返回可重试的 412，不会从服务进程补拉隐藏 Illustrator。
+`beian-server-8787` 与 Actions runner 是 LocalSystem / Session 0；Illustrator 是带 GUI 的桌面程序，两者不能在同一会话内直接自动化。`release.ps1` 会同步计划任务 `beian-illustrator-agent`：它使用 `InteractiveToken`，只在当前管理员已登录的交互会话启动 `scripts\windows\illustrator-agent.ps1`。任务本身 Hidden，进程用 `-WindowStyle Hidden -NonInteractive`，避免桌面弹出可被误关的 PowerShell 窗口。锁屏或 UU 断开不会注销；真正注销后 Agent 停止，打样入口返回可重试的 412，不会从服务进程补拉隐藏 Illustrator。
 
-Agent 空闲、读请求、等待执行锁和执行 cscript/COM 时都最多每 5 秒刷新一次心跳；Hono 与 Python 客户端统一在心跳停止超过 30 秒后拒绝接单。持久登录任务对异常进程退出每分钟重试，最多 60 次；临时 L1 任务仍只重试 3 次。此重试不跨越注销，也不把 Adobe 拉到 Session 0。
+Agent 空闲、读请求、等待执行锁和执行 cscript/COM 时都最多每 5 秒刷新一次心跳；Hono 与 Python 客户端统一在心跳停止超过 30 秒后拒绝接单。持久登录任务在 InteractiveToken 会话内每分钟存活触发一次，已运行实例由 `IgnoreNew` 跳过；异常退出另有每分钟 RestartOnFailure，最多 60 次。临时 L1 任务仍只有 AtLogOn，且只重试 3 次。发版/维护必须先 `Disable-ScheduledTask` 再停止，避免存活触发器与升版身份切换竞争。此恢复不跨越注销，也不把 Adobe 拉到 Session 0。
+
+心跳已停止但交互会话仍在（任务 `Ready`、`LastTaskResult=0xC000013A`）时，不要发版、不要清 fault fence、不要重新上传稿件。管理员确认桌面 Illustrator 无客户稿后关闭，然后：
+
+```powershell
+Start-ScheduledTask -TaskName "beian-illustrator-agent"
+```
+
+等 10 秒，确认任务变为 `Running`、心跳 PID 已更新且进程仍活，再跑只读 probe。永久修复不能只靠这一次手工启动。
 
 Agent 只做会话桥：UTF-8 JSON 命名管道 `beian.illustrator.v1` → 现有 `cscript run_export.vbs` → 唯一 `export_structure.jsx`。结构 exporter 引用的固定 `curve_flatten.js` 会由 Agent 在 job 目录生成 runtime JSX 时确定性内联；不依赖 cscript 当前目录，也不维护 Windows 专用曲线实现。COM 仍留在 VBS；PowerShell 不加载 `Illustrator.Application`。管道 ACL 只允许 LocalSystem 与注册的管理员，心跳绑定 SID、脚本哈希、版本、checkout、管道和 PID；客户端再核对实际管道服务 PID。协议只接受固定的 `probe` / `run` / `smoke`，不执行调用方传来的任意命令或脚本。PS5/cscript 的 GBK 输出由 Agent 在边界内按系统代码页解码，再编码为 UTF-8 JSON。
 

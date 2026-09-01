@@ -635,12 +635,64 @@ describe("windows release.ps1 contract", () => {
     assert.match(script, /beian-illustrator-agent/);
     assert.match(script, /Unregister-ScheduledTask/);
     assert.match(script, /restored tree has no Illustrator agent/);
+    assert.match(script, /Disable-ScheduledTask -TaskName \$taskName -ErrorAction SilentlyContinue/);
+    const releaseDisableIdx = script.indexOf(
+      "Disable-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue",
+    );
+    const releaseStopIdx = script.indexOf(
+      "Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue",
+    );
+    assert.ok(releaseDisableIdx >= 0 && releaseStopIdx > releaseDisableIdx);
     assert.ok(indexOf(/Set-ReleaseJournalStage "ui_build"/) < indexOf(/^  Sync-IllustratorAgentTaskToCurrentTree$/m));
     assert.ok(indexOf(/^  Sync-IllustratorAgentTaskToCurrentTree$/m) < indexOf(/start beian-server/));
     assert.match(recovery, /treeInstaller/);
     assert.match(recovery, /runtimeInstaller/);
     assert.match(recovery, /-Uninstall/);
     assert.match(recovery, /runtime Illustrator installer hash does not match/);
+  });
+
+  it("hides the InteractiveToken Agent and keeps it alive without racing release stops", () => {
+    const installer = windowsNativeGitScripts.get("scripts/windows/install-illustrator-agent.ps1") ?? "";
+    const qualityWorkflow = readFileSync(join(repoRoot, ".github/workflows/quality.yml"), "utf8");
+    const contract = readFileSync(
+      join(repoRoot, "scripts/windows/illustrator-agent-task.contract.ps1"),
+      "utf8",
+    );
+
+    const nonInteractiveIdx = installer.indexOf('"-NonInteractive"');
+    const windowStyleIdx = installer.indexOf('"-WindowStyle", "Hidden"');
+    const fileIdx = installer.indexOf('"-File"');
+    assert.ok(nonInteractiveIdx >= 0);
+    assert.ok(windowStyleIdx >= 0);
+    assert.ok(fileIdx > nonInteractiveIdx && fileIdx > windowStyleIdx);
+
+    assert.match(installer, /New-ScheduledTaskSettingsSet @settingsArguments -Hidden/);
+    assert.match(installer, /MultipleInstances = "IgnoreNew"/);
+    assert.match(installer, /New-ScheduledTaskTrigger -AtLogOn -User \$InteractiveUser/);
+    assert.match(installer, /Temporary L1 tasks keep AtLogOn only/);
+    assert.match(
+      installer,
+      /New-ScheduledTaskTrigger `\s+-Once `\s+-At \(Get-Date\)\.AddMinutes\(1\) `\s+-RepetitionInterval \(New-TimeSpan -Minutes 1\)/,
+    );
+    const expiresBranchIdx = installer.indexOf("if ($ExpiresAt -ne [DateTime]::MinValue)");
+    const keepAliveIdx = installer.indexOf("-RepetitionInterval (New-TimeSpan -Minutes 1)");
+    assert.ok(expiresBranchIdx >= 0 && keepAliveIdx > expiresBranchIdx);
+
+    const disableIdx = installer.indexOf("Disable-ScheduledTask -TaskName $Name -ErrorAction Stop");
+    const stopIdx = installer.indexOf("Stop-ScheduledTask -TaskName $Name -ErrorAction Stop");
+    assert.ok(disableIdx >= 0 && stopIdx > disableIdx);
+    assert.match(installer, /checkout identity is switching/);
+
+    assert.match(contract, /ILLUSTRATOR_AGENT_TASK_CONTRACT ok/);
+    assert.match(contract, /Does not register, start, stop, or disable any production task/);
+    assert.match(contract, /New-ScheduledTaskSettingsSet/);
+    const windowsJobStart = qualityWorkflow.indexOf("windows-powershell-contract:");
+    const windowsJobEnd = qualityWorkflow.indexOf("\n  quality:", windowsJobStart);
+    assert.ok(windowsJobStart >= 0 && windowsJobEnd > windowsJobStart);
+    const windowsJob = qualityWorkflow.slice(windowsJobStart, windowsJobEnd);
+    assert.match(windowsJob, /actions\/checkout@v4/);
+    assert.match(windowsJob, /illustrator-agent-task\.contract\.ps1/);
+    assert.doesNotMatch(windowsJob, /self-hosted/);
   });
 
   it("Actions runner downloads an exact-commit bootstrap without mutating the production index", () => {
