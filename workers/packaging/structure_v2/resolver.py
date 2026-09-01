@@ -49,6 +49,11 @@ CACHE_SCHEMA = "packaging-structure-cache/7"
 RESOLVED_SCHEMA = "resolved-packaging-job/3"
 PROPOSAL_EXPECTED_VALIDATION_ERRORS = {
     "structure_face_mapping_incomplete",
+    # Illustrator can preserve a zero- or one-anchor PathItem even though it
+    # contributes no segment to the exported linework.  Keep the diagnostic
+    # for audit, but let topology decide whether the remaining component is a
+    # complete carton net.  Export-budget and contract failures stay blocking.
+    "structure_path_too_short",
     "structure_proposal_requires_confirmation",
 }
 UNSUPPORTED_STRUCTURE_ERRORS = {

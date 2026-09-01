@@ -168,6 +168,29 @@ function configuredProposalLayer(item, config) {
     return false;
 }
 
+function recordProposalLayerCandidate(candidates, item) {
+    if (!item.layer || !item.stroked || item.filled) {
+        return false;
+    }
+    var layerName = String(item.layer.name || "");
+    if (layerName.length === 0) {
+        return false;
+    }
+    for (var index = 0; index < candidates.length; index += 1) {
+        if (candidates[index].name === layerName) {
+            candidates[index].stroke_only_path_count += 1;
+            return false;
+        }
+    }
+    // Layer inventory is only a bounded menu for a later human decision.  It
+    // never selects structure and never changes the exported edge set.
+    if (candidates.length >= 128) {
+        return true;
+    }
+    candidates.push({name: layerName, stroke_only_path_count: 1});
+    return false;
+}
+
 function samePoint(left, right) {
     return Math.abs(left[0] - right[0]) <= 0.001 && Math.abs(left[1] - right[1]) <= 0.001;
 }
@@ -632,6 +655,8 @@ var result = {
     print_pdf: config.print_pdf,
     structure_json: config.structure_json,
     layers: [],
+    proposal_layer_candidates: [],
+    proposal_layer_candidates_truncated: false,
     page_size_points: [],
     semantic_path_count: 0,
     semantic_edge_count: 0,
@@ -703,7 +728,15 @@ try {
             explicitRecords.push({item: item, pathIndex: pathIndex, assignment: assignment});
         } else if (configuredProposalLayer(item, config)) {
             proposalRecords.push({item: item, pathIndex: pathIndex, assignment: "crease"});
+        } else if (recordProposalLayerCandidate(result.proposal_layer_candidates, item)) {
+            result.proposal_layer_candidates_truncated = true;
         }
+    }
+    if (explicitRecords.length > 0) {
+        // Exact object semantics always win as one indivisible structure input.
+        // Do not offer a layer fallback that this export deliberately ignored.
+        result.proposal_layer_candidates = [];
+        result.proposal_layer_candidates_truncated = false;
     }
     var chosenRecords = explicitRecords.length > 0 ? explicitRecords : proposalRecords;
     var proposalMode = explicitRecords.length === 0 && proposalRecords.length > 0;
