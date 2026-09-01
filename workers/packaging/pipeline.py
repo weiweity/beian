@@ -633,6 +633,21 @@ def illustrator_export_failure(
             cause=cause,
             fix="确认桌面代理在线，且 Illustrator 没有许可、恢复或模态弹窗",
         )
+    if operation == "structure" and any(
+        marker in lowered
+        for marker in (
+            "print_layers must",
+            "configured artwork layer not found",
+            "cannot set artwork layer visibility",
+            "cannot fully restore artwork layers",
+        )
+    ):
+        return PipelineError(
+            "Illustrator 无法按模板隔离印刷图层，请检查稿件图层后重试",
+            code="illustrator_artwork_layers_invalid",
+            cause=cause,
+            fix="确认模板声明的顶层印刷层与稿件名称完全一致，且图层可修改",
+        )
     if returncode == 5 or result.get("missing_outputs"):
         return PipelineError(
             "Illustrator 导出结果不完整，请重新打样",
@@ -670,6 +685,7 @@ def run_illustrator_structure_export(
     illustrator_config: dict[str, Any],
     semantic_assignments: dict[str, Any] | None = None,
     proposal_layers: list[str] | None = None,
+    print_layers: list[str] | None = None,
 ) -> dict[str, Any]:
     """V2 exporter is explicit and object-level; legacy fallback stays unchanged."""
     app_path = Path(
@@ -681,6 +697,23 @@ def run_illustrator_structure_export(
             code="illustrator_not_found",
             cause=f"configured Illustrator path does not exist: {app_path}",
             fix="在杭州电脑设置页重新扫描 Illustrator 后再打样",
+        )
+    if not isinstance(print_layers, list):
+        raise PipelineError(
+            "渲染配置没有声明印刷图层，无法安全生成贴图",
+            code="packaging_print_layers_missing",
+            cause="print_layers must be a non-empty list",
+            fix="在对应包装模板中声明稿件现有的顶层印刷图层，再重新打样",
+        )
+    normalized_print_layers = [
+        str(value) for value in print_layers if str(value).strip()
+    ]
+    if not normalized_print_layers:
+        raise PipelineError(
+            "渲染配置没有声明印刷图层，无法安全生成贴图",
+            code="packaging_print_layers_missing",
+            cause="print_layers must be a non-empty list",
+            fix="在对应包装模板中声明稿件现有的顶层印刷图层，再重新打样",
         )
     normalized_dir = project_dir / "illustrator_semantic"
     normalized_dir.mkdir(parents=True, exist_ok=True)
@@ -698,6 +731,7 @@ def run_illustrator_structure_export(
         "debug_log": str(normalized_dir / "jsx_debug.log"),
         "semantic_assignments": semantic_assignments or {},
         "proposal_layers": [str(value) for value in (proposal_layers or []) if str(value).strip()],
+        "print_layers": normalized_print_layers,
     }
     save_json(config_path, worker_config)
     timeout_seconds = int(illustrator_config.get("timeout_seconds", 420))
@@ -792,8 +826,9 @@ def preflight_product_v2(
             source,
             project_dir,
             illustrator_config,
-            product.get("semantic_assignments"),
-            proposal_layers,
+            semantic_assignments=product.get("semantic_assignments"),
+            proposal_layers=proposal_layers,
+            print_layers=template.get("print_layers"),
         )
         artwork_pdf = Path(illustrator_result["print_pdf"])
         if structure_sidecar is None:

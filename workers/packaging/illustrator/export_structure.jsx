@@ -499,6 +499,127 @@ function withHiddenSemanticItems(items, callback) {
     }
 }
 
+function normalizedPrintLayerNames(values) {
+    if (!(values instanceof Array)) {
+        throw new Error("print_layers must be an array");
+    }
+    var names = [];
+    for (var index = 0; index < values.length; index += 1) {
+        var name = String(values[index] || "");
+        if (name.length < 1) {
+            continue;
+        }
+        var duplicate = false;
+        for (var prior = 0; prior < names.length; prior += 1) {
+            if (names[prior] === name) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (!duplicate) {
+            names.push(name);
+        }
+    }
+    if (names.length < 1) {
+        throw new Error("print_layers must name at least one explicit artwork layer");
+    }
+    return names;
+}
+
+function containsExactLayerName(names, name) {
+    for (var index = 0; index < names.length; index += 1) {
+        if (names[index] === name) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function restorePrintLayers(state) {
+    var failures = [];
+    for (var index = state.length - 1; index >= 0; index -= 1) {
+        try {
+            state[index].layer.visible = state[index].visible;
+            if (Boolean(state[index].layer.visible) !== state[index].visible) {
+                throw new Error("visibility did not change");
+            }
+        } catch (error) {
+            failures.push(state[index].name + ":" + error.message);
+        }
+    }
+    if (failures.length > 0) {
+        throw new Error("Cannot fully restore artwork layers: " + failures.join(" | "));
+    }
+}
+
+function isolateConfiguredPrintLayers(documentRef, configuredNames) {
+    var names = normalizedPrintLayerNames(configuredNames);
+    var state = [];
+    var found = [];
+    var failure = null;
+    try {
+        for (var index = 0; index < documentRef.layers.length; index += 1) {
+            var layer = documentRef.layers[index];
+            var layerName = String(layer.name || "");
+            var visible = Boolean(layer.visible);
+            state.push({layer: layer, name: layerName, visible: visible});
+            var shouldShow = containsExactLayerName(names, layerName);
+            layer.visible = shouldShow;
+            if (Boolean(layer.visible) !== shouldShow) {
+                throw new Error("Cannot set artwork layer visibility: " + layerName);
+            }
+            if (shouldShow) {
+                found.push(layerName);
+            }
+        }
+        for (var nameIndex = 0; nameIndex < names.length; nameIndex += 1) {
+            if (!containsExactLayerName(found, names[nameIndex])) {
+                throw new Error("Configured artwork layer not found: " + names[nameIndex]);
+            }
+        }
+    } catch (error) {
+        failure = error;
+    }
+    if (failure !== null) {
+        var restoreError = null;
+        try {
+            restorePrintLayers(state);
+        } catch (error) {
+            restoreError = error;
+        }
+        if (restoreError !== null) {
+            throw new Error(failure.message + " | " + restoreError.message);
+        }
+        throw failure;
+    }
+    return state;
+}
+
+function withConfiguredPrintLayers(documentRef, configuredNames, callback) {
+    var state = isolateConfiguredPrintLayers(documentRef, configuredNames);
+    var callbackError = null;
+    try {
+        callback();
+    } catch (error) {
+        callbackError = error;
+    }
+    var restoreError = null;
+    try {
+        restorePrintLayers(state);
+    } catch (error) {
+        restoreError = error;
+    }
+    if (callbackError !== null && restoreError !== null) {
+        throw new Error(callbackError.message + " | " + restoreError.message);
+    }
+    if (callbackError !== null) {
+        throw callbackError;
+    }
+    if (restoreError !== null) {
+        throw restoreError;
+    }
+}
+
 var configPath = PIPELINE_CONFIG_PATH;
 var config = eval("(" + readUtf8(configPath) + ")");
 var debugPath = config.debug_log;
@@ -621,8 +742,10 @@ try {
     appendUtf8(debugPath, "v2 02 saving full pdf");
     savePdf(documentRef, config.full_pdf);
     withHiddenSemanticItems(semanticItems, function () {
-        appendUtf8(debugPath, "v2 03 saving object-clean artwork pdf");
-        savePdf(documentRef, config.print_pdf);
+        withConfiguredPrintLayers(documentRef, config.print_layers, function () {
+            appendUtf8(debugPath, "v2 03 saving isolated artwork pdf");
+            savePdf(documentRef, config.print_pdf);
+        });
     });
     writeUtf8(config.structure_json, jsonStringify(structure));
     result.semantic_errors = structure.validation.errors;
