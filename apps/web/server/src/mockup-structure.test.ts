@@ -15,6 +15,7 @@ const {
   finishStructureConfirmation,
   prepareStructureConfirmation,
   publicMockup,
+  publicMockupSummary,
   saveMockup,
   structureConfirmationFailureStatus,
 } = await import("./mockup.js");
@@ -32,6 +33,8 @@ function reviewJob() {
   const artwork = join(root, "artwork.pdf");
   const artworkPreview = join(root, "structure_preview.png");
   const manifest = join(root, "manifest.json");
+  const sourceHash = "a".repeat(64);
+  const structureHash = `sha256:${"b".repeat(64)}`;
   writeFileSync(source, "source");
   writeFileSync(artwork, "%PDF");
   writeFileSync(artworkPreview, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
@@ -47,11 +50,12 @@ function reviewJob() {
   writeFileSync(
     resolution,
     JSON.stringify({
-      structure: { source: { page_size: [210, 297] } },
+      structure: { structure_hash: structureHash, source: { page_size: [210, 297], sha256: sourceHash } },
       topology: {
         face_proposal: previewFaces,
         net_proposals: [{
           schema: "box-net-proposal/3",
+          structure_hash: structureHash,
           id: "box-net-0123456789abcdef",
           face_ids: previewFaces.map((face) => face.id),
           body_face_ids: previewFaces.slice(0, 4).map((face) => face.id),
@@ -59,7 +63,11 @@ function reviewJob() {
           strip_axis: "x",
           bounds_mm: [0, 0, 180, 50],
           dimensions_mm: { width: 30, depth: 20, height: 50 },
-          valid_anchors: [{ front_face_id: previewFaces[1].id, quarter_turns: [0, 2] }],
+          valid_anchors: [{
+            front_face_id: previewFaces[1].id,
+            quarter_turns: [0, 2],
+            preferred_quarter_turns: 0,
+          }],
           closure_assemblies: [
             {
               primary_face_id: previewFaces[4].id,
@@ -119,7 +127,7 @@ function reviewJob() {
     structure_resolution_path: resolution,
     structure_artwork_path: artwork,
     structure_artwork_preview_path: artworkPreview,
-    structure_source_sha256: "a".repeat(64),
+    structure_source_sha256: sourceHash,
   };
   saveMockup(job);
   return { job, root };
@@ -157,7 +165,11 @@ describe("mockup structure confirmation persistence", () => {
       strip_axis: "x",
       bounds_mm: [0, 0, 180, 50],
       dimensions_mm: { width: 30, depth: 20, height: 50 },
-      valid_anchors: [{ front_face_id: "proposal-face-0002", quarter_turns: [0, 2] }],
+      valid_anchors: [{
+        front_face_id: "proposal-face-0002",
+        quarter_turns: [0, 2],
+        preferred_quarter_turns: 0,
+      }],
       closure_assemblies: [
         {
           primary_face_id: "proposal-face-0005",
@@ -197,6 +209,72 @@ describe("mockup structure confirmation persistence", () => {
     }]);
     assert.deepEqual(view.structure_preview?.page_size_mm, [210, 297]);
     assert.equal(view.structure_preview?.image_url, `/api/mockups/${job.id}/structure-preview`);
+    assert.equal("structure_preview" in publicMockupSummary(job), false);
+  });
+
+  it("redacts persisted worker paths and customer filenames at the shared read boundary", () => {
+    const { job } = reviewJob();
+    const failedJob = job as typeof job & { error?: string; job_error?: string };
+    failedJob.error = String.raw`找不到AI文件：C:\supply\data\mockups\abc123abc123\客户新品.ai`;
+    failedJob.job_error = "包装源文件不存在：/Users/operator/Desktop/客户新品.ai";
+
+    const view = publicMockupSummary(failedJob);
+    assert.equal(view.error, "找不到AI文件：本机稿件");
+    assert.equal(view.job_error, "包装源文件不存在：本机稿件");
+    assert.doesNotMatch(JSON.stringify(view), /C:\\|\/Users\/|客户新品\.ai/);
+  });
+
+  it("does not publish a confirmable net when any face lacks its real polygon", () => {
+    const { job } = reviewJob();
+    const resolutionPath = job.structure_resolution_path || "";
+    const resolution = JSON.parse(readFileSync(resolutionPath, "utf8"));
+    delete resolution.topology.face_proposal[0].points_mm;
+    writeFileSync(resolutionPath, JSON.stringify(resolution));
+
+    assert.deepEqual(publicMockup(job).structure_preview?.net_proposals, []);
+  });
+
+  it("drops a whole-net proposal when its preferred turn is malformed", () => {
+    for (const preferred of ["0", 0.5, 1]) {
+      const { job } = reviewJob();
+      const resolutionPath = job.structure_resolution_path || "";
+      const resolution = JSON.parse(readFileSync(resolutionPath, "utf8"));
+      resolution.topology.net_proposals[0].valid_anchors[0].preferred_quarter_turns = preferred;
+      writeFileSync(resolutionPath, JSON.stringify(resolution));
+
+      assert.deepEqual(publicMockup(job).structure_preview?.net_proposals, []);
+    }
+  });
+
+  it("requires a canonical current structure hash before publishing whole-net proposals", () => {
+    for (const structureHash of [undefined, "a".repeat(64), "sha256:short", `sha256:${"g".repeat(64)}`]) {
+      const { job } = reviewJob();
+      const resolutionPath = job.structure_resolution_path || "";
+      const resolution = JSON.parse(readFileSync(resolutionPath, "utf8"));
+      if (structureHash === undefined) delete resolution.structure.structure_hash;
+      else resolution.structure.structure_hash = structureHash;
+      writeFileSync(resolutionPath, JSON.stringify(resolution));
+
+      assert.deepEqual(publicMockup(job).structure_preview?.net_proposals, []);
+    }
+  });
+
+  it("binds published whole-net proposals to the task source sha256", () => {
+    for (const variant of ["missing-resolution", "invalid-resolution", "mismatch", "missing-job", "invalid-job"] as const) {
+      const { job } = reviewJob();
+      const resolutionPath = job.structure_resolution_path || "";
+      const resolution = JSON.parse(readFileSync(resolutionPath, "utf8"));
+      if (variant === "missing-resolution") delete resolution.structure.source.sha256;
+      if (variant === "invalid-resolution") resolution.structure.source.sha256 = "sha256:bad";
+      if (variant === "mismatch") resolution.structure.source.sha256 = "c".repeat(64);
+      if (variant === "missing-job") {
+        delete (job as { structure_source_sha256?: string }).structure_source_sha256;
+      }
+      if (variant === "invalid-job") job.structure_source_sha256 = "sha256:bad";
+      writeFileSync(resolutionPath, JSON.stringify(resolution));
+
+      assert.deepEqual(publicMockup(job).structure_preview?.net_proposals, []);
+    }
   });
 
   it("drops legacy closure contracts instead of silently upgrading their semantics", () => {
@@ -237,9 +315,43 @@ describe("mockup structure confirmation persistence", () => {
       { ...valid, body_face_ids: valid.body_face_ids.slice(0, 3) },
       { ...valid, cap_face_ids: [valid.cap_face_ids[0], valid.body_face_ids[0]] },
       { ...valid, strip_axis: "diagonal" },
+      { ...valid, structure_hash: undefined },
+      { ...valid, structure_hash: `sha256:${"f".repeat(64)}` },
       { ...valid, face_ids: [...valid.face_ids.slice(0, 5), "missing-face"] },
       { ...valid, dimensions_mm: { width: -1, depth: 20, height: 50 } },
+      { ...valid, valid_anchors: undefined },
+      { ...valid, valid_anchors: [] },
+      { ...valid, valid_anchors: Array.from({ length: 5 }, () => valid.valid_anchors[0]) },
+      { ...valid, valid_anchors: [valid.valid_anchors[0], valid.valid_anchors[0]] },
+      {
+        ...valid,
+        valid_anchors: [{ front_face_id: valid.body_face_ids[0], quarter_turns: [0] }],
+      },
       { ...valid, valid_anchors: [{ front_face_id: valid.cap_face_ids[0], quarter_turns: [0] }] },
+      {
+        ...valid,
+        valid_anchors: [{
+          ...valid.valid_anchors[0],
+          quarter_turns: ["0"],
+          preferred_quarter_turns: 0,
+        }],
+      },
+      {
+        ...valid,
+        valid_anchors: [{
+          ...valid.valid_anchors[0],
+          quarter_turns: [true],
+          preferred_quarter_turns: 0,
+        }],
+      },
+      {
+        ...valid,
+        valid_anchors: [{
+          ...valid.valid_anchors[0],
+          quarter_turns: [0, null],
+          preferred_quarter_turns: 0,
+        }],
+      },
       { ...valid, closure_assemblies: [{ face_id: valid.cap_face_ids[0] }] },
       {
         ...valid,

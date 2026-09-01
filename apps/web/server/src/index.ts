@@ -73,7 +73,7 @@ import {
 import {
   assertBlenderReady,
   acceptStructureConfirmation,
-  assertCanAccessMockup,
+  assertCanManageMockup,
   beginStructureConfirmation,
   deleteMockup,
   fileOf,
@@ -82,8 +82,9 @@ import {
   isMockupJobFile,
   isStructureProposalId,
   isWhiteFile,
-  listJobsFor,
+  listJobs,
   publicMockup,
+  publicMockupSummary,
   prepareStructureConfirmation,
   queueMockup,
   finishStructureConfirmation,
@@ -149,7 +150,7 @@ type NodeBindings = HttpBindings | Http2Bindings;
 type Env = { Bindings: NodeBindings; Variables: { session: Session } };
 
 const app = new Hono<Env>();
-const VERSION = "0.21.6.0";
+const VERSION = "0.21.7.0";
 
 class ApiProblem extends Error {
   constructor(
@@ -195,10 +196,14 @@ app.use("*", async (c, next) => {
 // 压缩属于应用内部实现；发布生命周期由外层 Node ServerResponse 决定。
 app.use(compress());
 
-function need(c: { get: (k: "session") => Session | undefined }, perm: string): Session {
+function need(
+  c: { get: (k: "session") => Session | undefined },
+  perm: string,
+  deniedMessage = "没有权限",
+): Session {
   const s = c.get("session");
   if (!s) throw new HTTPException(401, { message: "未登录" });
-  if (!hasPerm(s.role as Role, perm)) throw new HTTPException(403, { message: "没有权限" });
+  if (!hasPerm(s.role as Role, perm)) throw new HTTPException(403, { message: deniedMessage });
   return s;
 }
 
@@ -808,14 +813,10 @@ app.post("/api/mockups/start", async (c) => {
 });
 
 app.post("/api/mockups/:id/structure", async (c) => {
-  const session = need(c, "create");
-  if (session.role !== "admin") {
-    throw new HTTPException(403, { message: "确认包装结构需要管理员" });
-  }
+  need(c, "confirm_structure", "只有管理员可以确认包装结构");
   const id = assertTid(c.req.param("id"));
   const job = getJob(id);
   if (!job) throw new HTTPException(404, { message: "没有这单打样" });
-  assertCanAccessMockup(job, viewerFromSession(session));
   if (job.structure_status === "ready") {
     // 首次确认可能已经落盘，只是响应在 Tunnel / 浏览器链路丢失。重复提交应
     // 收敛到同一打样单，不能让用户误以为确认失败或再次执行结构 worker。
@@ -881,7 +882,6 @@ app.post("/api/mockups/:id/structure", async (c) => {
     }
     const fresh = getJob(id);
     if (!fresh) throw new HTTPException(404, { message: "打样单已删除" });
-    assertCanAccessMockup(fresh, viewerFromSession(session));
     if (
       fresh.structure_status !== "review_required" ||
       fresh.structure_resolution_path !== job.structure_resolution_path ||
@@ -1179,15 +1179,14 @@ app.post("/api/settings/billing/refresh", async (c) => {
 });
 
 app.get("/api/mockups", (c) => {
-  const s = need(c, "read");
-  return c.json(decorateQueueAhead(listJobsFor(viewerFromSession(s)).map(publicMockup)));
+  need(c, "read");
+  return c.json(decorateQueueAhead(listJobs().map(publicMockupSummary)));
 });
 
 app.get("/api/mockups/:id", (c) => {
-  const s = need(c, "read");
+  need(c, "read");
   const job = getJob(assertTid(c.req.param("id")));
   if (!job) throw new HTTPException(404, { message: "没有这单打样" });
-  assertCanAccessMockup(job, viewerFromSession(s));
   return c.json(decorateQueueAhead([publicMockup(job)])[0]);
 });
 
@@ -1197,7 +1196,7 @@ app.delete("/api/mockups/:id", (c) => {
     const id = assertTid(c.req.param("id"));
     const job = getJob(id);
     if (!job) return c.json({ ok: true, already_deleted: true });
-    assertCanAccessMockup(job, viewerFromSession(s));
+    assertCanManageMockup(job, viewerFromSession(s));
     deleteMockup(job.id);
     return c.json({ ok: true });
   } catch (e) {
@@ -1206,10 +1205,9 @@ app.delete("/api/mockups/:id", (c) => {
 });
 
 app.get("/api/mockups/:id/files/:key", (c) => {
-  const s = need(c, "read");
+  need(c, "read");
   const job = getJob(assertTid(c.req.param("id")));
   if (!job) throw new HTTPException(404, { message: "没有这单打样" });
-  assertCanAccessMockup(job, viewerFromSession(s));
   const key = c.req.param("key");
   const f = fileOf(job, key);
   if (!f?.path || !existsSync(f.path)) throw new HTTPException(404, { message: "文件还没有" });
@@ -1243,10 +1241,9 @@ app.get("/api/mockups/:id/files/:key", (c) => {
 });
 
 app.get("/api/mockups/:id/structure-preview", (c) => {
-  const session = need(c, "read");
+  need(c, "read");
   const job = getJob(assertTid(c.req.param("id")));
   if (!job) throw new HTTPException(404, { message: "没有这单打样" });
-  assertCanAccessMockup(job, viewerFromSession(session));
   const path = job.structure_artwork_preview_path;
   if (!isMockupJobFile(job.id, path) || !pngMagicAt(path)) {
     throw new HTTPException(404, { message: "结构原稿预览还没有" });

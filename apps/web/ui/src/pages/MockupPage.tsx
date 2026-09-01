@@ -82,7 +82,7 @@ export function MockupDesk({
   composing,
   receiptId,
   canCreate,
-  canAdmin,
+  canConfirmStructure,
   onOpenJob,
   onBack,
   onCompose,
@@ -92,7 +92,7 @@ export function MockupDesk({
   composing?: boolean;
   receiptId?: string | null;
   canCreate: boolean;
-  canAdmin: boolean;
+  canConfirmStructure: boolean;
   onOpenJob: (id: string) => void;
   onBack: () => void;
   onCompose?: () => void;
@@ -100,7 +100,7 @@ export function MockupDesk({
 }) {
   let content: ReactNode;
   if (openId) {
-    content = <MockupJobPage jobId={openId} canAdmin={canAdmin} onBack={onBack} />;
+    content = <MockupJobPage jobId={openId} canConfirmStructure={canConfirmStructure} onBack={onBack} />;
   } else if (composing) {
     content = <MockupNewPage key={receiptId || "active"} canCreate={canCreate} receiptId={receiptId} onCreated={onOpenJob} onBack={onBack} />;
   } else {
@@ -695,7 +695,7 @@ export function MockupNewPage({
   );
 }
 
-export function MockupJobPage({ jobId, canAdmin, onBack }: JobProps & { canAdmin: boolean }) {
+export function MockupJobPage({ jobId, canConfirmStructure, onBack }: JobProps & { canConfirmStructure: boolean }) {
   const { message } = App.useApp();
   const [job, setJob] = useState<MockupJob | null>(() => mockupHandoffFor(jobId));
   const [error, setError] = useState<string | null>(null);
@@ -861,7 +861,7 @@ export function MockupJobPage({ jobId, canAdmin, onBack }: JobProps & { canAdmin
           <div>
             <h1 className="page-title">{mockTitle(job)}</h1>
             <p className="page-lead">
-              {structureStatusLabel(job)}。结构确认前不会启动 Blender，也不会把这单记成上传失败。
+              {structureStatusLabel(job)}。看一下包装展开图，选择产品正面后即可生成。
             </p>
           </div>
           <button type="button" className="btn-ghost" onClick={onBack}>
@@ -871,7 +871,7 @@ export function MockupJobPage({ jobId, canAdmin, onBack }: JobProps & { canAdmin
         <StructureConfirmPanel
           key={job.id}
           job={job}
-          canAdmin={canAdmin}
+          canConfirmStructure={canConfirmStructure}
           onConfirmed={setJob}
         />
       </section>

@@ -198,6 +198,29 @@ def test_confirmation_binds_source_and_writes_an_accepted_sidecar(tmp_path: Path
     assert resolve_structure_payload(approved).status == "ready"
 
 
+@pytest.mark.parametrize("net_axis", ["x", "y"])
+def test_preflight_recommends_one_geometry_derived_turn_for_each_front(tmp_path: Path, net_axis: str):
+    source, resolution, _proposed, net, front = anchor_proposal_files(tmp_path, net_axis=net_axis)
+    valid = next(item for item in net["valid_anchors"] if item["front_face_id"] == front["id"])
+
+    assert valid["preferred_quarter_turns"] in valid["quarter_turns"]
+    output = tmp_path / f"preferred-{net_axis}.structure.json"
+    result = confirm_anchor(
+        source,
+        resolution,
+        net["id"],
+        front["id"],
+        valid["preferred_quarter_turns"],
+        output,
+    )
+
+    assert result["ok"] is True
+    approved = json.loads(output.read_text(encoding="utf-8"))
+    role_ids = {face["role"]: face["id"] for face in approved["faces"]}
+    front_index = net["body_face_ids"].index(front["id"])
+    assert role_ids["right"] == net["body_face_ids"][(front_index + 1) % 4]
+
+
 def test_confirmation_and_proposal_share_opposite_panel_dimension_averages(tmp_path: Path):
     source, resolution, _proposed, net, front = anchor_proposal_files(
         tmp_path,
@@ -320,6 +343,18 @@ def test_anchor_confirmation_rejects_a_proposal_bound_to_another_structure(tmp_p
     stale = deepcopy(proposed)
     stale["topology"]["net_proposals"][0]["structure_hash"] = "f" * 64
     resolution.write_text(json.dumps(stale), encoding="utf-8")
+
+    with pytest.raises(StructureConfirmationError) as raised:
+        confirm_anchor(source, resolution, net["id"], front["id"], 0, tmp_path / "never.json")
+
+    assert raised.value.code == "structure_confirmation_stale"
+
+
+def test_anchor_confirmation_rejects_a_proposal_without_a_structure_hash(tmp_path: Path):
+    source, resolution, proposed, net, front = anchor_proposal_files(tmp_path)
+    legacy = deepcopy(proposed)
+    legacy["topology"]["net_proposals"][0].pop("structure_hash", None)
+    write_resolution(resolution, legacy)
 
     with pytest.raises(StructureConfirmationError) as raised:
         confirm_anchor(source, resolution, net["id"], front["id"], 0, tmp_path / "never.json")

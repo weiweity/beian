@@ -72,7 +72,11 @@ export type SyntheticMockup = {
       strip_axis: "x" | "y";
       bounds_mm?: [number, number, number, number];
       dimensions_mm?: { width: number; depth: number; height: number };
-      valid_anchors?: Array<{ front_face_id: string; quarter_turns: Array<0 | 1 | 2 | 3> }>;
+      valid_anchors?: Array<{
+        front_face_id: string;
+        quarter_turns: Array<0 | 1 | 2 | 3>;
+        preferred_quarter_turns?: 0 | 1 | 2 | 3;
+      }>;
       closure_assemblies: Array<{
         primary_face_id: string;
         side: -1 | 1;
@@ -290,7 +294,7 @@ async function installSyntheticApi(page: Page, state: SyntheticApi) {
           avatar_url: null,
           open_id: "ou_e2e_synthetic",
           role: "admin",
-          perms: ["read", "create", "delete"],
+          perms: ["read", "create", "delete", "confirm_structure"],
         });
       }
       if (method === "GET" && (path === "/api/status" || path === "/api/health")) {
@@ -534,12 +538,14 @@ async function installSyntheticApi(page: Page, state: SyntheticApi) {
         const frontFaceId = typeof data.anchor?.front_face_id === "string" ? data.anchor.front_face_id : "";
         const quarterTurns = data.anchor?.quarter_turns;
         const proposal = mockup.structure_preview?.net_proposals.find((item) => item.id === proposalId);
+        const validAnchor = proposal?.valid_anchors?.find((item) => item.front_face_id === frontFaceId);
         if (
           !proposal
           || !proposal.body_face_ids.includes(frontFaceId)
           || !Number.isInteger(quarterTurns)
           || Number(quarterTurns) < 0
           || Number(quarterTurns) > 3
+          || (validAnchor && !validAnchor.quarter_turns.includes(Number(quarterTurns) as 0 | 1 | 2 | 3))
         ) {
           return json(route, { detail: "合成结构锚点不完整" }, 400);
         }

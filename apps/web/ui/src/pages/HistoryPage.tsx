@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Alert, App, Button, Checkbox, DatePicker, Empty, Segmented, Select, Table, Tag } from "antd";
+import { Alert, App, Button, Checkbox, DatePicker, Empty, Pagination, Segmented, Select, Table, Tag } from "antd";
 import type { Dayjs } from "dayjs";
 import { api, ApiError, transientApiFailure, type MockupJob, type PendingUploadReceipt, type TaskSummary } from "../api";
 import { uploadStore, useUploadSnapshot, type UploadKind } from "../uploadStore";
@@ -9,6 +9,8 @@ import {
   historyCanDelete,
   historyHasLive,
   historyMockRow,
+  HISTORY_PAGE_SIZE,
+  paginateHistoryRows,
   historyRowKey,
   historySelectionState,
   historyTaskRow,
@@ -62,6 +64,7 @@ export function HistoryPage({ canCreate, canDelete, onOpenTask, onOpenMockup, on
   const [time, setTime] = useState<HistoryTimeFilter>("全部");
   const [actor, setActor] = useState("");
   const [range, setRange] = useState<[Dayjs, Dayjs] | null>(null);
+  const [page, setPage] = useState(1);
   const loadGen = useRef(0);
 
   function load() {
@@ -125,10 +128,18 @@ export function HistoryPage({ canCreate, canDelete, onOpenTask, onOpenMockup, on
       }),
     [actor, kind, range, rows, time],
   );
-  const selection = useMemo(() => historySelectionState(visibleRows, selected), [selected, visibleRows]);
+  const paged = useMemo(() => paginateHistoryRows(visibleRows, page), [page, visibleRows]);
+  const selection = useMemo(() => historySelectionState(paged.rows, selected), [paged.rows, selected]);
 
   useEffect(() => {
-    if (actor && !actors.includes(actor)) setActor("");
+    setPage((current) => (current === paged.page ? current : Math.min(current, paged.page)));
+  }, [paged.page]);
+
+  useEffect(() => {
+    if (actor && !actors.includes(actor)) {
+      setActor("");
+      setPage(1);
+    }
   }, [actor, actors]);
 
   useEffect(() => {
@@ -143,7 +154,10 @@ export function HistoryPage({ canCreate, canDelete, onOpenTask, onOpenMockup, on
   }
 
   function toggleAll(checked: boolean) {
-    setSelected(checked ? selection.keys : []);
+    const pageKeys = new Set(selection.keys);
+    setSelected((keys) => checked
+      ? [...new Set([...keys, ...selection.keys])]
+      : keys.filter((key) => !pageKeys.has(key)));
   }
 
   function activateRow(row: Row) {
@@ -273,7 +287,10 @@ export function HistoryPage({ canCreate, canDelete, onOpenTask, onOpenMockup, on
               aria-label="类型"
               options={["全部", "审稿台", "打样台"]}
               value={kind}
-              onChange={setKind}
+              onChange={(value) => {
+                setKind(value);
+                setPage(1);
+              }}
             />
             <Segmented<HistoryTimeFilter>
               aria-label="时间"
@@ -282,6 +299,7 @@ export function HistoryPage({ canCreate, canDelete, onOpenTask, onOpenMockup, on
               onChange={(value) => {
                 setTime(value);
                 setRange(null);
+                setPage(1);
               }}
             />
             <DatePicker.RangePicker
@@ -292,6 +310,7 @@ export function HistoryPage({ canCreate, canDelete, onOpenTask, onOpenMockup, on
               onChange={(value) => {
                 setRange(value?.[0] && value[1] ? [value[0], value[1]] : null);
                 if (value?.[0] && value[1]) setTime("全部");
+                setPage(1);
               }}
             />
             {actors.length > 1 ? (
@@ -302,7 +321,10 @@ export function HistoryPage({ canCreate, canDelete, onOpenTask, onOpenMockup, on
                 placeholder="全部生成人"
                 allowClear
                 options={actors.map((name) => ({ label: name, value: name }))}
-                onChange={(value) => setActor(value || "")}
+                onChange={(value) => {
+                  setActor(value || "");
+                  setPage(1);
+                }}
               />
             ) : null}
             <span className="history-filter-count" aria-live="polite">
@@ -312,7 +334,7 @@ export function HistoryPage({ canCreate, canDelete, onOpenTask, onOpenMockup, on
           <div className="history-table-shell">
             <Table<Row>
               rowKey={historyRowKey}
-              dataSource={visibleRows}
+              dataSource={paged.rows}
               pagination={false}
               scroll={{ x: 760 }}
               locale={{ emptyText: "没有符合筛选的记录" }}
@@ -327,13 +349,13 @@ export function HistoryPage({ canCreate, canDelete, onOpenTask, onOpenMockup, on
                       {
                         title: (
                           <Checkbox
-                            aria-label="全选可删除记录"
+                            aria-label="全选本页可删除记录"
                             checked={selection.all}
                             indeterminate={selection.some}
                             disabled={!selection.keys.length}
                             onChange={(event) => toggleAll(event.target.checked)}
                           >
-                            全选
+                            全选本页
                           </Checkbox>
                         ),
                         key: "select",
@@ -391,6 +413,17 @@ export function HistoryPage({ canCreate, canDelete, onOpenTask, onOpenMockup, on
               ]}
             />
           </div>
+          {visibleRows.length > HISTORY_PAGE_SIZE ? (
+            <Pagination
+              className="history-pagination"
+              aria-label="历史记录翻页"
+              current={paged.page}
+              pageSize={HISTORY_PAGE_SIZE}
+              total={visibleRows.length}
+              showSizeChanger={false}
+              onChange={setPage}
+            />
+          ) : null}
           {editing ? (
             <div className="history-bulkbar" role="toolbar" aria-label="批量删除记录">
               <Checkbox
@@ -399,7 +432,7 @@ export function HistoryPage({ canCreate, canDelete, onOpenTask, onOpenMockup, on
                 disabled={!selection.keys.length}
                 onChange={(event) => toggleAll(event.target.checked)}
               >
-                全选
+                全选本页
               </Checkbox>
               <strong>已选 {selected.length} 条</strong>
               <span>进行中的记录不会被选中</span>
