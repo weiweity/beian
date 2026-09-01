@@ -101,6 +101,6 @@
 
 ## Completed
 
-- [x] **打样 GET owner 校验**  
-  `list` / `get` / `files` 非 admin 只读自己的。已在 `feat/review-job-module`：`assertCanAccessMockup` + `listJobsFor`。  
-  **Completed:** v0.11.0.0 (2026-08-21)
+- [x] **打样读取与写动作分权**
+  `list` / `get` / `files` / 结构预览已在 2026-09-01 顺延为团队可读；确认结构由独立 `confirm_structure` 能力保护且当前只授予 `admin`，删除仍按本人或管理员。旧 `assertCanAccessMockup` / `listJobsFor` 所有者读取模型不再作为当前合同。
+  **Completed:** v0.11.0.0（初版）；v0.21.7.0（团队读取与独立确认能力，2026-09-01）
