@@ -650,6 +650,11 @@ export const api = {
     request<TaskDetail>("/api/tasks/start", { method: "POST", body: JSON.stringify(body) }),
   startMockup: (body: { receipt: string; title?: string; product_name?: string }) =>
     request<MockupJob>("/api/mockups/start", { method: "POST", body: JSON.stringify(body) }),
+  selectMockupStructureInput: (id: string, candidateIds: string[]) =>
+    request<MockupJob>(`/api/mockups/${id}/structure/input`, {
+      method: "POST",
+      body: JSON.stringify({ candidate_ids: candidateIds }),
+    }),
   confirmMockupStructure: (
     id: string,
     anchor: {
@@ -793,6 +798,17 @@ export type MockupJob = {
   structure_status?: "analyzing" | "review_required" | "unsupported" | "ready";
   structure_code?: string;
   structure_message?: string;
+  structure_input?: {
+    schema: "packaging-structure-input-candidates/2";
+    proposal_layers: Array<{
+      id: string;
+      name: string;
+      stroke_only_path_count: number;
+    }>;
+    selected_ids: string[];
+    truncated: boolean;
+    image_url?: string;
+  };
   structure_preview?: {
     page_size_mm?: [number, number];
     image_url?: string;

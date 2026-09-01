@@ -60,6 +60,17 @@ export type SyntheticMockup = {
   structure_status?: "analyzing" | "review_required" | "unsupported" | "ready";
   structure_code?: string;
   structure_message?: string;
+  structure_input?: {
+    schema: "packaging-structure-input-candidates/2";
+    proposal_layers: Array<{
+      id: string;
+      name: string;
+      stroke_only_path_count: number;
+    }>;
+    selected_ids: string[];
+    truncated: boolean;
+    image_url?: string;
+  };
   structure_preview?: {
     page_size_mm?: [number, number];
     image_url?: string;
@@ -529,7 +540,28 @@ async function installSyntheticApi(page: Page, state: SyntheticApi) {
       }
 
       const mockupPath = path.match(/^\/api\/mockups\/([0-9a-f]{12})$/);
+      const structureInputPath = path.match(/^\/api\/mockups\/([0-9a-f]{12})\/structure\/input$/);
       const structurePath = path.match(/^\/api\/mockups\/([0-9a-f]{12})\/structure$/);
+      if (structureInputPath && method === "POST") {
+        const mockup = state.mockups.find((item) => item.id === structureInputPath[1]);
+        if (!mockup) return json(route, { detail: "合成打样不存在" }, 404);
+        const data = (body || {}) as { candidate_ids?: unknown };
+        const candidateIds = data.candidate_ids;
+        const allowed = new Set(mockup.structure_input?.proposal_layers.map((item) => item.id) || []);
+        if (
+          !Array.isArray(candidateIds)
+          || candidateIds.length < 1
+          || candidateIds.length > 16
+          || candidateIds.some((id) => typeof id !== "string" || !allowed.has(id))
+        ) {
+          return json(route, { detail: "合成结构层选择无效" }, 400);
+        }
+        mockup.status = "queued";
+        mockup.job_status = "queued";
+        mockup.structure_status = "analyzing";
+        mockup.structure_input = undefined;
+        return json(route, mockup);
+      }
       if (structurePath && method === "POST") {
         const mockup = state.mockups.find((item) => item.id === structurePath[1]);
         if (!mockup) return json(route, { detail: "合成打样不存在" }, 404);

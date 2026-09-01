@@ -1,8 +1,10 @@
 import { useMemo, useRef, useState } from "react";
-import { Alert, App, Button } from "antd";
+import { Alert, App, Button, Checkbox } from "antd";
 import { api, type MockupJob } from "../api";
 import {
   preferredStructureTurn,
+  sameStructureLayerSelection,
+  selectedStructureLayerIds,
   selectedStructureAnchor,
   structureConfirmationErrorCopy,
   structureIssueCopy,
@@ -21,6 +23,7 @@ type Props = {
 export function StructureConfirmPanel({ job, canConfirmStructure, onConfirmed }: Props) {
   const { message } = App.useApp();
   const preview = job.structure_preview;
+  const structureInput = job.structure_input;
   const faces = preview?.faces || [];
   const proposals = useMemo(
     () => (preview?.net_proposals || []).filter((item) => structureProposalHasRealPolygons(item, faces)),
@@ -28,6 +31,11 @@ export function StructureConfirmPanel({ job, canConfirmStructure, onConfirmed }:
   );
   const [proposalId, setProposalId] = useState("");
   const [frontFaceId, setFrontFaceId] = useState("");
+  const [selectedLayerIds, setSelectedLayerIds] = useState<string[]>(
+    () => structureInput?.selected_ids || [],
+  );
+  const [selectingLayers, setSelectingLayers] = useState(false);
+  const [layerSelectionError, setLayerSelectionError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const submitLock = useRef(false);
@@ -55,6 +63,14 @@ export function StructureConfirmPanel({ job, canConfirmStructure, onConfirmed }:
   const artworkImage = preview?.image_url;
   const hasArtwork = Boolean(artworkImage && pageSize);
   const confirmedAnchor = hasArtwork ? anchor : null;
+  const selectedLayerSet = new Set(selectedLayerIds);
+  const normalizedLayerIds = structureInput
+    ? selectedStructureLayerIds(structureInput, selectedLayerIds)
+    : [];
+  const currentLayerIds = structureInput?.selected_ids || [];
+  const sameLayerSelection = structureInput
+    ? sameStructureLayerSelection(structureInput, selectedLayerIds)
+    : false;
 
   function selectProposal(nextId: string) {
     setProposalId(nextId);
@@ -85,7 +101,135 @@ export function StructureConfirmPanel({ job, canConfirmStructure, onConfirmed }:
     }
   }
 
+  function toggleLayer(candidateId: string, checked: boolean) {
+    setLayerSelectionError(null);
+    if (checked && !selectedLayerIds.includes(candidateId) && selectedLayerIds.length >= 16) {
+      setLayerSelectionError("一次最多选择 16 个结构图层。");
+      return;
+    }
+    setSelectedLayerIds((current) => {
+      if (!checked) return current.filter((id) => id !== candidateId);
+      if (current.includes(candidateId)) return current;
+      return [...current, candidateId];
+    });
+  }
+
+  async function submitLayers() {
+    if (!canConfirmStructure || selectingLayers || !normalizedLayerIds.length || sameLayerSelection) return;
+    setSelectingLayers(true);
+    setLayerSelectionError(null);
+    try {
+      const next = await api.selectMockupStructureInput(job.id, normalizedLayerIds);
+      onConfirmed(next);
+      message.success("已提交结构层，正在重新识别完整盒型。");
+    } catch (error) {
+      setLayerSelectionError(error instanceof Error ? error.message : "结构层选择失败，请刷新后重试");
+    } finally {
+      setSelectingLayers(false);
+    }
+  }
+
   const issue = structureIssueCopy(job);
+  if (job.structure_status === "review_required" && structureInput?.proposal_layers.length && !proposals.length) {
+    const hadSelection = currentLayerIds.length > 0;
+    return (
+      <div className="structure-confirm structure-input-confirm">
+        <Alert
+          type={hadSelection ? "warning" : "info"}
+          showIcon
+          title={hadSelection ? "这组结构层还不能组成完整盒型" : "请选择真实结构线所在图层"}
+          description={hadSelection
+            ? `${issue} 可以增删下方图层后重新识别；系统仍会检查连续盒身和上下封口。`
+            : "系统已盘点本稿中的纯描边图层。请由管理员选择真实刀线、折线所在的一层或多层，再交给拓扑引擎验证。"}
+        />
+        <div className="structure-confirm-layout structure-input-layout">
+          <div className="structure-map-shell structure-input-preview">
+            {structureInput.image_url ? (
+              <img src={structureInput.image_url} alt="当前 Illustrator 稿件预览" />
+            ) : (
+              <div className="structure-input-preview-empty">原稿预览暂不可用，请按 Illustrator 中的图层核对。</div>
+            )}
+            <div className="structure-map-caption">
+              <p>只展示原稿帮助核对；系统不会按颜色、白色区域或图层名称自动判断结构。</p>
+            </div>
+          </div>
+
+          <div className="structure-guide-card">
+            <div className="structure-guide">
+              <div className="structure-guide-step">
+                <span className="structure-step-index">1</span>
+                <div>
+                  <strong>在 Illustrator 里核对图层</strong>
+                  <span>选择实际承载刀线、折线的纯描边层；分开放在多层时可以一起选。</span>
+                </div>
+              </div>
+              <div className="structure-guide-step">
+                <span className="structure-step-index">2</span>
+                <div>
+                  <strong>重新识别完整盒型</strong>
+                  <span>所选线条还要通过闭合盒身、上下封口和最终正面确认，不会直接进入 Blender。</span>
+                </div>
+              </div>
+              <div className="structure-layer-list" role="group" aria-label="选择结构图层">
+                {structureInput.proposal_layers.map((candidate) => (
+                  <Checkbox
+                    aria-disabled={!canConfirmStructure || selectingLayers}
+                    checked={selectedLayerSet.has(candidate.id)}
+                    className="structure-layer-option"
+                    disabled={!canConfirmStructure || selectingLayers}
+                    key={candidate.id}
+                    onChange={(event) => toggleLayer(candidate.id, event.target.checked)}
+                  >
+                    <strong>{candidate.name}</strong>
+                    <small>{candidate.stroke_only_path_count} 条纯描边路径</small>
+                  </Checkbox>
+                ))}
+              </div>
+              {structureInput.truncated ? (
+                <p className="structure-input-truncated">
+                  候选图层超过安全展示上限。若正确图层不在列表里，请先在 Illustrator 整理图层后重新上传。
+                </p>
+              ) : null}
+            </div>
+            <div className="structure-confirm-actions">
+              {layerSelectionError ? (
+                <Alert
+                  className="structure-confirm-error"
+                  type="error"
+                  showIcon
+                  title={layerSelectionError}
+                />
+              ) : (
+                <span>
+                  {canConfirmStructure
+                    ? sameLayerSelection && currentLayerIds.length
+                      ? "请增删至少一个图层后再试。"
+                      : normalizedLayerIds.length
+                        ? `已选 ${normalizedLayerIds.length} 个图层，可以重新识别。`
+                        : "请至少选择一个真实结构图层。"
+                    : "你可以查看候选；等待管理员选择结构图层。"}
+                </span>
+              )}
+              <Button
+                type="primary"
+                disabled={
+                  !canConfirmStructure
+                  || !normalizedLayerIds.length
+                  || sameLayerSelection
+                  || selectingLayers
+                }
+                loading={selectingLayers}
+                onClick={() => void submitLayers()}
+              >
+                用所选图层重新识别
+              </Button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (job.structure_status === "unsupported" || !faces.length) {
     return (
       <div className="structure-confirm">

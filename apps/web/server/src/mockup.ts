@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -42,6 +42,25 @@ export type MockupJob = {
   structure_artwork_path?: string;
   structure_artwork_preview_path?: string;
   structure_source_sha256?: string;
+  /** 服务端保留首次盘点结果，便于失败后重选；公开响应会去掉源稿哈希。 */
+  structure_input_candidates?: StructureInputCandidates;
+  /** 仅保存当前候选 ID，不接受图层名或客户端自造语义。 */
+  structure_input_selection_ids?: string[];
+  /** 首次选层前的原稿预览；重跑会隐藏所选结构线，不能覆盖这份核对依据。 */
+  structure_input_preview_path?: string;
+};
+
+export type StructureInputLayerCandidate = {
+  id: string;
+  name: string;
+  stroke_only_path_count: number;
+};
+
+type StructureInputCandidates = {
+  schema: "packaging-structure-input-candidates/2";
+  source_sha256: string;
+  proposal_layers: StructureInputLayerCandidate[];
+  truncated: boolean;
 };
 
 export type StructurePreviewFace = {
@@ -91,6 +110,10 @@ export type StructureAnchorDecision = {
 export type StructureConfirmationDecision = { anchor: StructureAnchorDecision };
 
 const BOX_NET_PROPOSAL_SCHEMA = "box-net-proposal/3";
+const STRUCTURE_INPUT_CANDIDATES_SCHEMA = "packaging-structure-input-candidates/2";
+const MAX_STRUCTURE_INPUT_CANDIDATES = 128;
+const MAX_STRUCTURE_INPUT_SELECTIONS = 16;
+const MAX_STRUCTURE_RESOLUTION_BYTES = 25 * 1024 * 1024;
 const MIN_ASSEMBLY_MEMBER_RATIO = 0.45;
 const MAX_ASSEMBLY_MEMBER_RATIO = 0.55;
 const MIN_ASSEMBLY_UNION_RATIO = 0.94;
@@ -342,10 +365,247 @@ export function publicMockupSummary(job: MockupJob) {
 }
 
 export function publicMockup(job: MockupJob) {
+  const resolution = readStructureResolution(job);
   return {
     ...publicMockupSummaryFields(job),
-    structure_preview: loadStructurePreview(job),
+    structure_preview: structurePreviewFromResolution(job, resolution),
+    structure_input: publicStructureInput(job, resolution),
   };
+}
+
+type StructureResolution = {
+  topology?: { face_proposal?: unknown[]; net_proposals?: unknown[] };
+  structure?: {
+    structure_hash?: unknown;
+    source?: { page_size?: unknown; sha256?: unknown };
+  };
+  input_candidates?: unknown;
+};
+
+function readStructureResolution(job: MockupJob): StructureResolution | undefined {
+  const path = job.structure_resolution_path;
+  if (!path || !existsSync(path) || !underJobDir(job.id, path)) return undefined;
+  try {
+    const stat = statSync(path);
+    if (!stat.isFile() || stat.size > MAX_STRUCTURE_RESOLUTION_BYTES) return undefined;
+    const contents = readFileSync(path);
+    if (contents.byteLength > MAX_STRUCTURE_RESOLUTION_BYTES) return undefined;
+    const resolution = JSON.parse(contents.toString("utf8"));
+    return resolution && typeof resolution === "object" && !Array.isArray(resolution)
+      ? resolution as StructureResolution
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function canonicalSourceHash(value: unknown): string | null {
+  return typeof value === "string" && /^[0-9a-f]{64}$/.test(value) ? value : null;
+}
+
+function normalizeStructureInputCandidates(
+  value: unknown,
+  expectedSourceHash: string,
+): StructureInputCandidates | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const input = value as Record<string, unknown>;
+  const sourceHash = canonicalSourceHash(input.source_sha256);
+  const rawLayers = input.proposal_layers;
+  if (
+    input.schema !== STRUCTURE_INPUT_CANDIDATES_SCHEMA
+    || !sourceHash
+    || sourceHash !== expectedSourceHash
+    || !Array.isArray(rawLayers)
+    || rawLayers.length < 1
+    || rawLayers.length > MAX_STRUCTURE_INPUT_CANDIDATES
+    || typeof input.truncated !== "boolean"
+  ) return undefined;
+  const layers: StructureInputLayerCandidate[] = [];
+  const ids = new Set<string>();
+  const displayNames = new Set<string>();
+  for (const raw of rawLayers) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+    const candidate = raw as Record<string, unknown>;
+    const id = typeof candidate.id === "string" ? candidate.id : "";
+    const name = typeof candidate.name === "string" ? candidate.name : "";
+    const displayName = name.trim();
+    const count = candidate.stroke_only_path_count;
+    const expectedId = displayName
+      ? `proposal-layer-${createHash("sha256").update(`${sourceHash}\0${name}`).digest("hex").slice(0, 16)}`
+      : "";
+    if (
+      id !== expectedId
+      || !displayName
+      || name.length > 160
+      || ids.has(id)
+      || displayNames.has(displayName)
+      || typeof count !== "number"
+      || !Number.isSafeInteger(count)
+      || count < 1
+      || count > 1_000_000
+    ) return undefined;
+    ids.add(id);
+    displayNames.add(displayName);
+    layers.push({ id, name, stroke_only_path_count: count });
+  }
+  return {
+    schema: STRUCTURE_INPUT_CANDIDATES_SCHEMA,
+    source_sha256: sourceHash,
+    proposal_layers: layers,
+    truncated: input.truncated,
+  };
+}
+
+function loadStructureInputCandidates(
+  job: MockupJob,
+  resolution: StructureResolution | undefined,
+): StructureInputCandidates | undefined {
+  const expectedSourceHash = canonicalSourceHash(job.structure_source_sha256);
+  if (!expectedSourceHash) return undefined;
+  const stored = normalizeStructureInputCandidates(job.structure_input_candidates, expectedSourceHash);
+  if (stored) return stored;
+  if (canonicalSourceHash(resolution?.structure?.source?.sha256) !== expectedSourceHash) return undefined;
+  return normalizeStructureInputCandidates(resolution?.input_candidates, expectedSourceHash);
+}
+
+function publicStructureInput(job: MockupJob, resolution: StructureResolution | undefined): {
+  schema: "packaging-structure-input-candidates/2";
+  proposal_layers: StructureInputLayerCandidate[];
+  selected_ids: string[];
+  truncated: boolean;
+  image_url?: string;
+} | undefined {
+  if (job.structure_status !== "review_required") return undefined;
+  const candidates = loadStructureInputCandidates(job, resolution);
+  if (!candidates) return undefined;
+  const candidateIds = new Set(candidates.proposal_layers.map((candidate) => candidate.id));
+  const selected = new Set(
+    Array.isArray(job.structure_input_selection_ids)
+      ? job.structure_input_selection_ids.filter((id) => candidateIds.has(id))
+      : [],
+  );
+  const preview = job.structure_input_preview_path || job.structure_artwork_preview_path;
+  return {
+    schema: STRUCTURE_INPUT_CANDIDATES_SCHEMA,
+    proposal_layers: candidates.proposal_layers,
+    selected_ids: candidates.proposal_layers
+      .map((candidate) => candidate.id)
+      .filter((id) => selected.has(id)),
+    truncated: candidates.truncated,
+    ...(preview && existsSync(preview) && underJobDir(job.id, preview)
+      ? { image_url: `/api/mockups/${job.id}/structure-input-preview` }
+      : {}),
+  };
+}
+
+export function prepareStructureInputSelection(
+  job: MockupJob,
+  candidateIds: unknown,
+): { job: MockupJob; changed: boolean } {
+  if (job.structure_status !== "review_required" || job.job_status !== "waiting_input") {
+    throw Object.assign(new Error("这单当前没有待选择的包装结构层"), { status: 409 });
+  }
+  if (
+    !Array.isArray(candidateIds)
+    || candidateIds.length < 1
+    || candidateIds.length > MAX_STRUCTURE_INPUT_SELECTIONS
+    || candidateIds.some((id) => typeof id !== "string" || !/^proposal-layer-[0-9a-f]{16}$/.test(id))
+    || new Set(candidateIds).size !== candidateIds.length
+  ) {
+    throw Object.assign(new Error("请选择 1–16 个当前稿件列出的结构图层"), { status: 400 });
+  }
+  const candidates = loadStructureInputCandidates(job, readStructureResolution(job));
+  if (!candidates) {
+    throw Object.assign(new Error("结构层候选已失效，请刷新或重新识别"), { status: 409 });
+  }
+  const requested = new Set(candidateIds as string[]);
+  const selected = candidates.proposal_layers.filter((candidate) => requested.has(candidate.id));
+  if (selected.length !== requested.size) {
+    throw Object.assign(new Error("结构层候选已变化，请刷新后重新选择"), { status: 400 });
+  }
+  const normalizedIds = selected.map((candidate) => candidate.id);
+  if (
+    Array.isArray(job.structure_input_selection_ids)
+    && job.structure_input_selection_ids.length === normalizedIds.length
+    && job.structure_input_selection_ids.every((id, index) => id === normalizedIds[index])
+  ) {
+    return { job, changed: false };
+  }
+  const source = job.source_path;
+  const manifestPath = job.manifest_path;
+  if (
+    !source
+    || !existsSync(source)
+    || !underJobDir(job.id, source)
+    || !manifestPath
+    || !existsSync(manifestPath)
+    || !underJobDir(job.id, manifestPath)
+  ) {
+    throw Object.assign(new Error("打样任务文件已变化，请重新上传"), { status: 409 });
+  }
+  let manifest: { products?: Array<Record<string, unknown>> };
+  try {
+    manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as typeof manifest;
+  } catch {
+    throw Object.assign(new Error("打样任务清单已损坏，请重新上传"), { status: 409 });
+  }
+  if (!Array.isArray(manifest.products) || manifest.products.length !== 1) {
+    throw Object.assign(new Error("打样任务清单已变化，请重新上传"), { status: 409 });
+  }
+  const product = manifest.products[0];
+  if (typeof product.source_ai !== "string" || resolve(product.source_ai) !== resolve(source)) {
+    throw Object.assign(new Error("打样源稿已变化，请重新上传"), { status: 409 });
+  }
+  const nextProduct: Record<string, unknown> = {
+    ...product,
+    structure_engine: "v2",
+    proposal_layers: selected.map((candidate) => candidate.name),
+    proposal_source_sha256: candidates.source_sha256,
+  };
+  delete nextProduct.structure_sidecar;
+  delete nextProduct.artwork_pdf;
+  manifest.products[0] = nextProduct;
+  const selectionId = createHash("sha256")
+    .update(`${candidates.source_sha256}\0${normalizedIds.join("\0")}`)
+    .digest("hex")
+    .slice(0, 16);
+  const selectedManifest = join(mockupRoot(), job.id, `structure-input-${selectionId}.json`);
+  replaceFile(selectedManifest, JSON.stringify(manifest, null, 2));
+
+  const nextJob: MockupJob = {
+    ...job,
+    structure_input_candidates: candidates,
+    structure_input_selection_ids: normalizedIds,
+    manifest_path: selectedManifest,
+    structure_status: "analyzing",
+    status: "queued",
+    job_status: "queued",
+    reclaim_count: 0,
+  };
+  if (
+    !job.structure_input_preview_path
+    && job.structure_artwork_preview_path
+    && existsSync(job.structure_artwork_preview_path)
+    && underJobDir(job.id, job.structure_artwork_preview_path)
+  ) {
+    const inputPreview = join(mockupRoot(), job.id, "structure-input-preview.png");
+    copyFileSync(job.structure_artwork_preview_path, inputPreview);
+    nextJob.structure_input_preview_path = inputPreview;
+  }
+  delete nextJob.structure_code;
+  delete nextJob.structure_message;
+  delete nextJob.structure_resolution_path;
+  delete nextJob.structure_sidecar_path;
+  delete nextJob.structure_artwork_path;
+  delete nextJob.structure_artwork_preview_path;
+  delete nextJob.job_stage;
+  delete nextJob.job_stage_label;
+  delete nextJob.job_eta_s;
+  delete nextJob.job_error;
+  delete nextJob.error;
+  delete nextJob.job_finished_at;
+  saveMockup(nextJob);
+  return { job: nextJob, changed: true };
 }
 
 function finiteNumbers(value: unknown, count: number): number[] | null {
@@ -381,15 +641,20 @@ export function loadStructurePreview(job: MockupJob): {
   page_size_mm?: [number, number];
   image_url?: string;
 } | undefined {
-  const path = job.structure_resolution_path;
-  if (!path || !existsSync(path) || !underJobDir(job.id, path)) return undefined;
+  return structurePreviewFromResolution(job, readStructureResolution(job));
+}
+
+function structurePreviewFromResolution(
+  job: MockupJob,
+  resolution: StructureResolution | undefined,
+): {
+  faces: StructurePreviewFace[];
+  net_proposals: StructureNetProposal[];
+  page_size_mm?: [number, number];
+  image_url?: string;
+} | undefined {
+  if (!resolution) return undefined;
   try {
-    const contents = readFileSync(path);
-    if (contents.byteLength > 25 * 1024 * 1024) return undefined;
-    const resolution = JSON.parse(contents.toString("utf8")) as {
-      topology?: { face_proposal?: unknown[]; net_proposals?: unknown[] };
-      structure?: { structure_hash?: unknown; source?: { page_size?: unknown; sha256?: unknown } };
-    };
     const currentStructureHash = typeof resolution.structure?.structure_hash === "string"
       && /^sha256:[0-9a-f]{64}$/.test(resolution.structure.structure_hash)
       ? resolution.structure.structure_hash

@@ -755,12 +755,13 @@ def test_unassigned_stroke_only_layers_are_listed_without_becoming_structure():
     helpers = source[helper_start:helper_end]
     program = helpers + r"""
 var candidates = [];
-recordProposalLayerCandidate(candidates, {stroked: true, filled: false, layer: {name: "结构-A"}});
-recordProposalLayerCandidate(candidates, {stroked: true, filled: false, layer: {name: "结构-A"}});
-recordProposalLayerCandidate(candidates, {stroked: true, filled: true, layer: {name: "填色稿"}});
-recordProposalLayerCandidate(candidates, {stroked: false, filled: false, layer: {name: "无描边"}});
-recordProposalLayerCandidate(candidates, {stroked: true, filled: false, layer: {name: "结构-B"}});
-recordProposalLayerCandidate(candidates, {stroked: true, filled: false, layer: {name: ""}});
+var layerKeys = [];
+recordProposalLayerCandidate(candidates, layerKeys, {stroked: true, filled: false, layer: {name: "结构-A", zOrderPosition: 0}});
+recordProposalLayerCandidate(candidates, layerKeys, {stroked: true, filled: false, layer: {name: "结构-A", zOrderPosition: 0}});
+recordProposalLayerCandidate(candidates, layerKeys, {stroked: true, filled: true, layer: {name: "填色稿", zOrderPosition: 1}});
+recordProposalLayerCandidate(candidates, layerKeys, {stroked: false, filled: false, layer: {name: "无描边", zOrderPosition: 2}});
+recordProposalLayerCandidate(candidates, layerKeys, {stroked: true, filled: false, layer: {name: "结构-B", zOrderPosition: 3}});
+recordProposalLayerCandidate(candidates, layerKeys, {stroked: true, filled: false, layer: {name: "", zOrderPosition: 4}});
 process.stdout.write(JSON.stringify(candidates));
 """
     completed = subprocess.run(
@@ -778,6 +779,31 @@ process.stdout.write(JSON.stringify(candidates));
     assert "proposalRecords.push" in source
 
 
+def test_duplicate_physical_layer_names_are_marked_ambiguous():
+    source = EXPORTER.read_text(encoding="utf-8")
+    helper_start = source.index("function exactAssignment")
+    helper_end = source.index("var configPath", helper_start)
+    helpers = source[helper_start:helper_end]
+    program = helpers + r"""
+var candidates = [];
+var layerKeys = [];
+recordProposalLayerCandidate(candidates, layerKeys, {stroked: true, filled: false, layer: {name: "结构-A", zOrderPosition: 0}});
+recordProposalLayerCandidate(candidates, layerKeys, {stroked: true, filled: false, layer: {name: "结构-A", zOrderPosition: 1}});
+process.stdout.write(JSON.stringify(candidates));
+"""
+    completed = subprocess.run(
+        ["node", "-e", program],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert json.loads(completed.stdout) == [
+        {"name": "结构-A", "stroke_only_path_count": 1, "ambiguous_name": True},
+        {"name": "结构-A", "stroke_only_path_count": 1, "ambiguous_name": True},
+    ]
+
+
 def test_unassigned_layer_inventory_is_bounded_and_reports_truncation():
     source = EXPORTER.read_text(encoding="utf-8")
     helper_start = source.index("function exactAssignment")
@@ -785,12 +811,13 @@ def test_unassigned_layer_inventory_is_bounded_and_reports_truncation():
     helpers = source[helper_start:helper_end]
     program = helpers + r"""
 var candidates = [];
+var layerKeys = [];
 var truncated = false;
 for (var index = 0; index < 129; index += 1) {
-    if (recordProposalLayerCandidate(candidates, {
+    if (recordProposalLayerCandidate(candidates, layerKeys, {
         stroked: true,
         filled: false,
-        layer: {name: "结构-" + index}
+        layer: {name: "结构-" + index, zOrderPosition: index}
     })) {
         truncated = true;
     }
@@ -1249,7 +1276,7 @@ def test_v2_hold_persists_source_bound_legacy_layer_candidates(
 
     saved = json.loads(caught.value.resolution_path.read_text(encoding="utf-8"))
     candidates = saved["input_candidates"]
-    assert candidates["schema"] == "packaging-structure-input-candidates/1"
+    assert candidates["schema"] == "packaging-structure-input-candidates/2"
     assert candidates["source_sha256"] == pipeline.file_sha256(source)
     assert candidates["proposal_layers"] == [
         {
@@ -1268,15 +1295,15 @@ def test_v2_hold_persists_source_bound_legacy_layer_candidates(
     assert candidates["proposal_layers"][0]["id"] != candidates["proposal_layers"][1]["id"]
 
 
-def test_explicit_proposal_layers_trim_and_deduplicate_names():
+def test_explicit_proposal_layers_preserve_exact_names_and_deduplicate_exact_values():
     pipeline = load_pipeline()
     source_sha256 = "a" * 64
 
     assert pipeline.explicit_proposal_layers(
-        [" 结构-A ", "结构-A", "结构-B"],
+        [" 结构-A ", " 结构-A ", "结构-B"],
         source_sha256.upper(),
         source_sha256,
-    ) == ["结构-A", "结构-B"]
+    ) == [" 结构-A ", "结构-B"]
 
 
 def test_structure_input_candidates_filter_untrusted_entries_and_cap_counts():
@@ -1291,9 +1318,11 @@ def test_structure_input_candidates_filter_untrusted_entries_and_cap_counts():
                 {"name": "布尔计数", "stroke_only_path_count": True},
                 {"name": "浮点计数", "stroke_only_path_count": 1.5},
                 {"name": "零计数", "stroke_only_path_count": 0},
+                {"name": "重名", "stroke_only_path_count": 2, "ambiguous_name": True},
                 {"name": " 结构-A ", "stroke_only_path_count": 2_000_000},
                 {"name": "结构-A", "stroke_only_path_count": 9},
                 {"name": "结构-B", "stroke_only_path_count": 3},
+                {"name": " 结构-C ", "stroke_only_path_count": 2_000_000},
             ],
             "proposal_layer_candidates_truncated": True,
         },
@@ -1303,11 +1332,11 @@ def test_structure_input_candidates_filter_untrusted_entries_and_cap_counts():
     assert payload is not None
     assert payload["truncated"] is True
     assert [candidate["name"] for candidate in payload["proposal_layers"]] == [
-        "结构-A",
         "结构-B",
+        " 结构-C ",
     ]
-    assert payload["proposal_layers"][0]["stroke_only_path_count"] == 1_000_000
-    assert payload["proposal_layers"][1]["stroke_only_path_count"] == 3
+    assert payload["proposal_layers"][0]["stroke_only_path_count"] == 3
+    assert payload["proposal_layers"][1]["stroke_only_path_count"] == 1_000_000
 
 
 def test_structure_input_candidates_return_none_when_every_entry_is_invalid():

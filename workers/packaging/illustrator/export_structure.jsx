@@ -168,18 +168,73 @@ function configuredProposalLayer(item, config) {
     return false;
 }
 
-function recordProposalLayerCandidate(candidates, item) {
+function proposalLayerKey(layer) {
+    if (!layer) {
+        return null;
+    }
+    var parts = [];
+    var current = layer;
+    var guard = 0;
+    while (current && guard < 32) {
+        var parent = null;
+        try {
+            parent = current.parent;
+        } catch (error) {
+            parent = null;
+        }
+        var position = -1;
+        try {
+            if (parent && parent.layers) {
+                for (var index = 0; index < parent.layers.length; index += 1) {
+                    if (parent.layers[index] === current) {
+                        position = index;
+                        break;
+                    }
+                }
+            }
+        } catch (error) {
+            position = -1;
+        }
+        if (position < 0) {
+            try {
+                position = Number(current.zOrderPosition);
+            } catch (error) {
+                position = -1;
+            }
+        }
+        if (!isFinite(position) || position < 0 || Math.floor(position) !== position) {
+            return null;
+        }
+        parts.unshift(String(position));
+        if (!parent || String(parent.typename || "") !== "Layer") {
+            break;
+        }
+        current = parent;
+        guard += 1;
+    }
+    return parts.length > 0 ? parts.join("/") : null;
+}
+
+function recordProposalLayerCandidate(candidates, layerKeys, item) {
     if (!item.layer || !item.stroked || item.filled) {
         return false;
     }
     var layerName = String(item.layer.name || "");
-    if (layerName.length === 0) {
+    var layerKey = proposalLayerKey(item.layer);
+    if (layerName.length === 0 || layerKey === null) {
         return false;
     }
+    for (var keyIndex = 0; keyIndex < layerKeys.length; keyIndex += 1) {
+        if (layerKeys[keyIndex] === layerKey) {
+            candidates[keyIndex].stroke_only_path_count += 1;
+            return false;
+        }
+    }
+    var ambiguousName = false;
     for (var index = 0; index < candidates.length; index += 1) {
         if (candidates[index].name === layerName) {
-            candidates[index].stroke_only_path_count += 1;
-            return false;
+            candidates[index].ambiguous_name = true;
+            ambiguousName = true;
         }
     }
     // Layer inventory is only a bounded menu for a later human decision.  It
@@ -187,7 +242,12 @@ function recordProposalLayerCandidate(candidates, item) {
     if (candidates.length >= 128) {
         return true;
     }
-    candidates.push({name: layerName, stroke_only_path_count: 1});
+    var candidate = {name: layerName, stroke_only_path_count: 1};
+    if (ambiguousName) {
+        candidate.ambiguous_name = true;
+    }
+    candidates.push(candidate);
+    layerKeys.push(layerKey);
     return false;
 }
 
@@ -718,6 +778,7 @@ try {
     var semanticItems = [];
     var explicitRecords = [];
     var proposalRecords = [];
+    var proposalLayerKeys = [];
     for (var pathIndex = 0; pathIndex < documentRef.pathItems.length; pathIndex += 1) {
         var item = documentRef.pathItems[pathIndex];
         if (item.clipping) {
@@ -728,7 +789,7 @@ try {
             explicitRecords.push({item: item, pathIndex: pathIndex, assignment: assignment});
         } else if (configuredProposalLayer(item, config)) {
             proposalRecords.push({item: item, pathIndex: pathIndex, assignment: "crease"});
-        } else if (recordProposalLayerCandidate(result.proposal_layer_candidates, item)) {
+        } else if (recordProposalLayerCandidate(result.proposal_layer_candidates, proposalLayerKeys, item)) {
             result.proposal_layer_candidates_truncated = true;
         }
     }
