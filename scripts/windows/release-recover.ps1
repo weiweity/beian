@@ -371,6 +371,29 @@ function Assert-PathUnder([string]$Candidate, [string]$Parent, [string]$Label) {
   return $full
 }
 
+function Get-VerifiedRuntimeInstallerForRecovery([object]$Journal, [string]$DataRoot) {
+  $runtimeInstaller = Assert-PathUnder ([string]$Journal.runtime_installer) $DataRoot "runtime installer"
+  if (-not (Test-Path -LiteralPath $runtimeInstaller -PathType Leaf)) {
+    throw "runtime Illustrator installer is missing"
+  }
+  $installerHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $runtimeInstaller).Hash.ToLowerInvariant()
+  if ($installerHash -ne [string]$Journal.runtime_installer_sha256) {
+    throw "runtime Illustrator installer hash does not match the journal"
+  }
+  return $runtimeInstaller
+}
+
+function Stop-IllustratorAgentTaskForRecovery([object]$Journal, [string]$DataRoot) {
+  # Use the immutable target installer before reset. Quiesce preserves the
+  # registered InteractiveToken principal for an older tree while disabling
+  # every keep-alive trigger before the checkout identity changes.
+  $runtimeInstaller = Get-VerifiedRuntimeInstallerForRecovery $Journal $DataRoot
+  & $runtimeInstaller `
+    -DataRoot $DataRoot `
+    -TaskName "beian-illustrator-agent" `
+    -Quiesce
+}
+
 function Restore-UiSnapshot(
   [string]$SnapshotPath,
   [string]$ExpectedFingerprint,
@@ -564,7 +587,7 @@ function Remove-StaleReleaseGitLocks([string]$Root, [object]$Journal) {
     [string](JournalProperty $Journal "git_transaction_protocol") -ne "beian.git-merge-locks.v1" -or
     [string](JournalProperty $Journal "git_transaction_operation") -ne "merge-ff-only-main" -or
     [string](JournalProperty $Journal "git_transaction_ref") -ne "refs/heads/main" -or
-    [string](JournalProperty $Journal "git_transaction_source_stage") -ne "stopped" -or
+    [string](JournalProperty $Journal "git_transaction_source_stage") -ne "agent_quiesce" -or
     [string](JournalProperty $Journal "git_transaction_baseline") -ne "all-absent" -or
     [string](JournalProperty $Journal "git_transaction_owner") -ne $expectedOwner -or
     [string](JournalProperty $Journal "git_transaction_lock_policy_sha256") -ne (Get-GitMergeLockPolicySha256)
@@ -832,6 +855,9 @@ try {
   $journal.updated_at = [DateTime]::UtcNow.ToString("o")
   Write-AtomicJournal $journal
   Stop-BeianService
+  if ([bool]$journal.agent_mutated) {
+    Stop-IllustratorAgentTaskForRecovery $journal $dataRoot
+  }
   Restore-UiSnapshot $uiSnapshot ([string]$journal.ui_snapshot_sha256) $root
   Invoke-GitChecked $root "git reset to the pre-release SHA failed" @(
     "reset", "--hard", $preSha
@@ -852,11 +878,7 @@ try {
     if (Test-Path -LiteralPath $treeInstaller -PathType Leaf) {
       & $treeInstaller -Root $root -DataRoot $dataRoot -TaskName "beian-illustrator-agent"
     } else {
-      $runtimeInstaller = Assert-PathUnder ([string]$journal.runtime_installer) $dataRoot "runtime installer"
-      $installerHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $runtimeInstaller).Hash.ToLowerInvariant()
-      if ($installerHash -ne [string]$journal.runtime_installer_sha256) {
-        throw "runtime Illustrator installer hash does not match the journal"
-      }
+      $runtimeInstaller = Get-VerifiedRuntimeInstallerForRecovery $journal $dataRoot
       & $runtimeInstaller -DataRoot $dataRoot -TaskName "beian-illustrator-agent" -Uninstall
     }
   }

@@ -352,7 +352,7 @@ describe("windows release.ps1 contract", () => {
     assert.match(recovery, /release recovery script hash does not match/);
     assert.match(script, /function Arm-GitMergeTransaction/);
     assert.match(script, /beian\.git-merge-locks\.v1/);
-    assert.match(script, /git_transaction_source_stage = "stopped"/);
+    assert.match(script, /git_transaction_source_stage = "agent_quiesce"/);
     assert.match(script, /git_transaction_baseline = "all-absent"/);
     assert.match(script, /git_transaction_target_sha = \$TargetSha/);
     assert.match(script, /git_transaction_lock_policy_sha256/);
@@ -633,14 +633,118 @@ describe("windows release.ps1 contract", () => {
     assert.match(script, /function Sync-IllustratorAgentTaskToCurrentTree/);
     assert.match(script, /install-illustrator-agent\.ps1/);
     assert.match(script, /beian-illustrator-agent/);
+    assert.match(script, /Set-ReleaseJournalStage "agent_quiesce"/);
+    assert.match(script, /\$ReleaseInstallerPath[\s\S]+-Quiesce/);
     assert.match(script, /Unregister-ScheduledTask/);
     assert.match(script, /restored tree has no Illustrator agent/);
+    assert.match(script, /Disable-ScheduledTask -TaskName \$taskName -ErrorAction SilentlyContinue/);
+    const releaseDisableIdx = script.indexOf(
+      "Disable-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue",
+    );
+    const releaseStopIdx = script.indexOf(
+      "Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue",
+    );
+    assert.ok(releaseDisableIdx >= 0 && releaseStopIdx > releaseDisableIdx);
     assert.ok(indexOf(/Set-ReleaseJournalStage "ui_build"/) < indexOf(/^  Sync-IllustratorAgentTaskToCurrentTree$/m));
     assert.ok(indexOf(/^  Sync-IllustratorAgentTaskToCurrentTree$/m) < indexOf(/start beian-server/));
+    const agentMutatedIdx = script.indexOf("$ReleaseJournalState.agent_mutated = $true");
+    const agentQuiesceStageIdx = script.indexOf('Set-ReleaseJournalStage "agent_quiesce"');
+    const agentQuiesceCallIdx = script.indexOf("-Quiesce", agentQuiesceStageIdx);
+    const armGitIdx = script.indexOf("\n  Arm-GitMergeTransaction\n");
+    assert.ok(
+      agentMutatedIdx >= 0 &&
+        agentQuiesceStageIdx > agentMutatedIdx &&
+        agentQuiesceCallIdx > agentQuiesceStageIdx &&
+        armGitIdx > agentQuiesceCallIdx,
+    );
     assert.match(recovery, /treeInstaller/);
     assert.match(recovery, /runtimeInstaller/);
     assert.match(recovery, /-Uninstall/);
     assert.match(recovery, /runtime Illustrator installer hash does not match/);
+    assert.match(recovery, /function Stop-IllustratorAgentTaskForRecovery/);
+    assert.match(recovery, /& \$runtimeInstaller[\s\S]+-Quiesce/);
+    const verifierIdx = recovery.indexOf("function Get-VerifiedRuntimeInstallerForRecovery");
+    const verifierHashIdx = recovery.indexOf("Get-FileHash", verifierIdx);
+    const verifierReturnIdx = recovery.indexOf("return $runtimeInstaller", verifierIdx);
+    const recoveryStopIdx = recovery.indexOf("-Quiesce");
+    const recoveryResetIdx = recovery.indexOf('"reset", "--hard", $preSha');
+    const restoredInstallerIdx = recovery.indexOf("$treeInstaller =", recoveryResetIdx);
+    assert.ok(
+      verifierIdx >= 0 &&
+        verifierHashIdx > verifierIdx &&
+        verifierReturnIdx > verifierHashIdx &&
+        recoveryStopIdx > verifierReturnIdx,
+    );
+    assert.ok(recoveryStopIdx >= 0 && recoveryResetIdx > recoveryStopIdx);
+    assert.ok(restoredInstallerIdx > recoveryResetIdx);
+  });
+
+  it("hides the InteractiveToken Agent and keeps it alive without racing release stops", () => {
+    const installer = windowsNativeGitScripts.get("scripts/windows/install-illustrator-agent.ps1") ?? "";
+    const qualityWorkflow = readFileSync(join(repoRoot, ".github/workflows/quality.yml"), "utf8");
+    const contract = readFileSync(
+      join(repoRoot, "scripts/windows/illustrator-agent-task.contract.ps1"),
+      "utf8",
+    );
+
+    const nonInteractiveIdx = installer.indexOf('"-NonInteractive"');
+    const windowStyleIdx = installer.indexOf('"-WindowStyle", "Hidden"');
+    const fileIdx = installer.indexOf('"-File"');
+    assert.ok(nonInteractiveIdx >= 0);
+    assert.ok(windowStyleIdx >= 0);
+    assert.ok(fileIdx > nonInteractiveIdx && fileIdx > windowStyleIdx);
+
+    assert.match(installer, /New-ScheduledTaskSettingsSet @settingsArguments -Hidden/);
+    assert.match(installer, /\[switch\]\$Quiesce/);
+    assert.match(
+      installer,
+      /\(\$ClearFaultFence -and \(\$Quiesce -or \$Uninstall\)\)[\s\S]+\(\$Quiesce -and \$Uninstall\)/,
+    );
+    assert.match(installer, /MultipleInstances = "IgnoreNew"/);
+    assert.match(installer, /New-ScheduledTaskTrigger -AtLogOn -User \$InteractiveUser/);
+    assert.match(installer, /-Trigger \$taskTriggers/);
+    assert.match(installer, /Temporary L1 tasks keep AtLogOn only/);
+    assert.match(
+      installer,
+      /New-ScheduledTaskTrigger `\s+-Once `\s+-At \(Get-Date\)\.AddMinutes\(1\) `\s+-RepetitionInterval \(New-TimeSpan -Minutes 1\)/,
+    );
+    const expiresBranchIdx = installer.indexOf("if ($ExpiresAt -ne [DateTime]::MinValue)");
+    const keepAliveIdx = installer.indexOf("-RepetitionInterval (New-TimeSpan -Minutes 1)");
+    assert.ok(expiresBranchIdx >= 0 && keepAliveIdx > expiresBranchIdx);
+
+    const disableIdx = installer.indexOf("Disable-ScheduledTask -TaskName $Name -ErrorAction Stop");
+    const stopIdx = installer.indexOf("Stop-ScheduledTask -TaskName $Name -ErrorAction Stop");
+    assert.ok(disableIdx >= 0 && stopIdx > disableIdx);
+    assert.match(installer, /checkout identity is switching/);
+    const lifecycleIdx = installer.indexOf("if ($Quiesce -or $Uninstall)");
+    const uninstallGuardIdx = installer.indexOf("if ($Uninstall)", lifecycleIdx);
+    const unregisterIdx = installer.indexOf("Unregister-ScheduledTask", lifecycleIdx);
+    const quiescedResultIdx = installer.indexOf("ILLUSTRATOR_AGENT_TASK quiesced", lifecycleIdx);
+    assert.ok(
+      lifecycleIdx >= 0 &&
+        uninstallGuardIdx > lifecycleIdx &&
+        unregisterIdx > uninstallGuardIdx &&
+        quiescedResultIdx > unregisterIdx,
+    );
+
+    assert.match(contract, /ILLUSTRATOR_AGENT_TASK_CONTRACT ok/);
+    assert.match(contract, /Does not register, start, stop, or disable any production task/);
+    assert.match(contract, /\.Replace\("`r`n", "`n"\)/);
+    assert.match(contract, /New-ScheduledTaskSettingsSet/);
+    assert.match(contract, /System\.Management\.Automation\.Language\.Parser/);
+    assert.match(contract, /System\.Management\.Automation\.Language\.CommandAst/);
+    assert.match(contract, /"Set-ScheduledTask"/);
+    assert.match(contract, /ConvertTo-WindowsPowerShell5Ast \$release "release"/);
+    assert.match(contract, /ConvertTo-WindowsPowerShell5Ast \$recovery "recovery"/);
+    assert.match(contract, /persistent task must have exactly two triggers/);
+    assert.match(contract, /temporary task must have exactly one AtLogOn trigger/);
+    const windowsJobStart = qualityWorkflow.indexOf("windows-powershell-contract:");
+    const windowsJobEnd = qualityWorkflow.indexOf("\n  quality:", windowsJobStart);
+    assert.ok(windowsJobStart >= 0 && windowsJobEnd > windowsJobStart);
+    const windowsJob = qualityWorkflow.slice(windowsJobStart, windowsJobEnd);
+    assert.match(windowsJob, /actions\/checkout@v4/);
+    assert.match(windowsJob, /illustrator-agent-task\.contract\.ps1/);
+    assert.doesNotMatch(windowsJob, /self-hosted/);
   });
 
   it("Actions runner downloads an exact-commit bootstrap without mutating the production index", () => {
