@@ -119,6 +119,8 @@ def test_pipeline_v2_uses_resolved_geometry_and_exact_artwork(tmp_path: Path):
     assert job["input_mode"] == "semantic_sidecar"
     assert job["illustrator_invoked"] is False
     assert all(Path(path).is_file() for path in job["assets"].values())
+    assert job["face_texture_sizes"]["front"] == [600, 1_000]
+    assert job["face_texture_sizes"]["right"] == [400, 1_000]
     expected_centers = {
         "front": (117, 35, 46),
         "right": (191, 145, 64),
