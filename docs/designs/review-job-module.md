@@ -124,6 +124,8 @@ GET 必须走 `publicTask` / `publicMockup`，剥掉 `job_pid`、磁盘 `path`�
 | GET | `/api/tasks` / `/api/tasks/:tid` | 多返回公开作业字段。`board` 仍只看 `task.status`。 |
 | POST | `/api/mockups/start` | 领取 `.ai` 回执前先确认 Blender、Illustrator 路径，以及 Windows Session 1 Agent 的协议/Session/心跳；缺失或 Agent 离线 → **412 当场失败且不消耗回执**（不入队、不事后飞书）。接单后按 durable claim 事务写打样单，Agent 再按需启动并验证同会话可见窗口与文档列表。依赖齐全则入队，忙时仍是 `queued`；同一 `source_receipt` 的并发或重试返回原打样单。 |
 | GET | `/api/mockups` / `/:id` | 读 `job.json`。无 `path`；旧错误只返回脱敏短摘要，列表只返回摘要字段，不加载完整结构预览。mockup `status` 仍用现有 `queued\|running\|done\|failed`，不要改成 succeeded。 |
+| POST | `/api/mockups/:id/structure/input` | 仅 `confirm_structure` 能提交当前详情返回的 1–16 个候选 ID。正文上限 16 KiB；服务端重读当前任务并复核源稿、`packaging-structure-input-candidates/2` 成员和单任务锁，先安全写成新清单与任务状态再入队。相同选择的响应丢失重试返回当前单；过期选择返回 409，准备失败保留待选择状态供原位重试。 |
+| GET | `/api/mockups/:id/structure-input-preview` | 已登录团队成员可查看当前稿件的结构选层预览；只从该打样目录流式返回已验证 PNG，响应为 `private, no-store`。预览只帮助人工核对，不授权按颜色、图层名或白色区域自动选层。 |
 | GET | `/api/mockups/:id/files/:key` | 只给白底 `front_right`/`back_left`、GLB、PPT、打样单 PDF（`sheet`）。预览 inline，`?download=1` 才附件。`ai-raster`/PPT 质检图或坏 PNG → 415。流式读盘，不一次塞进内存。缺 PPT 或 PDF 时 404，不要假装能下。 |
 | GET | `/api/health` / `/api/status` | 公网 health 只给发版探活所需字段；本机或登录后的 status 才给准确作业槽、Illustrator Agent 摘要和飞书状态。Agent 摘要不得暴露路径或稿名。 |
 
@@ -178,7 +180,7 @@ Windows 上 spawn 必须进 Job Object，Node 退出时杀掉子进程树。做�
 ### Worker
 
 - 对照 / 对红：`python -m app.cli compare|rework`，最后一行结果 JSON，过程中 `STAGE render_pdf|ingest|ocr|layout|match`。按 `compare-pdf-ingest-v2.md` 逐页选择 PDF 文字层或一次 OCR，再用版面区域收敛到真实单钉；不搬 `fields.py`。确认单底部工艺说明 / 颜色要求 / 版本号 / 更新内容走 `skip_sheet_field`（字段名开头），不进机审。
-- 打样：`workers/packaging`。POST 时已确认 Blender；Windows worker 不直接 COM 或启动 Illustrator，而是通过 `beian.illustrator.v1` 命名管道请求登录桌面 Agent → 现有 VBS → 唯一 JSX。所有 Agent 实例共用独占执行锁和持久故障围栏：围栏在 cscript/COM 前建立，只有成功或已证明清理完成的失败才能移除；Agent 消失、cscript 超时且退出未确认或稿件无法清空时保持 `faulted`，任何实例都不得接手，需交互管理员确认后显式恢复。错误按稳定码写清会话、窗口、未知稿件或超时原因，不统一伪装成“请关闭稿件”。stderr 打 `STAGE render_pdf|blender|export`（出图/打样/导出）。入队后 `job_stage` 从 `render_pdf` 开始，不是 `blender`。平面出图用 pymupdf（对照同一 Python），不靠 qlmanage。结构只认与源稿绑定的 `PackagingStructure` 显式语义；拓扑有歧义时只暴露经过最终确认引擎预检的完整候选，页面用真实展开图做视觉翻页，管理员只选择产品正面。预检引擎为正面生成确定性的 `preferred_quarter_turns`，内部锚点仍携带候选、正面和朝向，再由连通关系推导其余五面。无语义或不安全结构不得靠颜色、图层名、零散矩形、间距、bbox 或模板猜测进入 Blender。GLB 导出后验证轴向、毫米尺寸和六个已确认面的贴图来源、方向与镜像。PPT 先用两张白底写 OOXML，不依赖 Node；写不出才试演示文稿运行时（stderr `PPT 跳过`）。两张白底合成一页 PDF。缺 PPT/PDF 时白底图和 GLB 仍 `done`/`succeeded`，不要把整单判成「Node不存在」。
+- 打样：`workers/packaging`。POST 时已确认 Blender；Windows worker 不直接 COM 或启动 Illustrator，而是通过 `beian.illustrator.v1` 命名管道请求登录桌面 Agent → 现有 VBS → 唯一 JSX。所有 Agent 实例共用独占执行锁和持久故障围栏：围栏在 cscript/COM 前建立，只有成功或已证明清理完成的失败才能移除；Agent 消失、cscript 超时且退出未确认或稿件无法清空时保持 `faulted`，任何实例都不得接手，需交互管理员确认后显式恢复。错误按稳定码写清会话、窗口、未知稿件或超时原因，不统一伪装成“请关闭稿件”。stderr 打 `STAGE render_pdf|blender|export`（出图/打样/导出）。入队后 `job_stage` 从 `render_pdf` 开始，不是 `blender`。平面出图用 pymupdf（对照同一 Python），不靠 qlmanage。结构只认与源稿绑定的 `PackagingStructure` 显式语义；没有对象语义时先发布与当前源稿绑定的 `/2` 纯描边候选，管理员只提交候选 ID，Hono 复核后重跑同一 Illustrator/拓扑链。所选线稿仍是不可信输入，必须形成完整盒身环和上下封口。拓扑有歧义时只暴露经过最终确认引擎预检的完整候选，页面用真实展开图做视觉翻页，管理员只选择产品正面。预检引擎为正面生成确定性的 `preferred_quarter_turns`，内部锚点仍携带候选、正面和朝向，再由连通关系推导其余五面。无语义或不安全结构不得靠颜色、图层名、零散矩形、间距、bbox 或模板猜测进入 Blender。GLB 导出后验证轴向、毫米尺寸和六个已确认面的贴图来源、方向与镜像。PPT 先用两张白底写 OOXML，不依赖 Node；写不出才试演示文稿运行时（stderr `PPT 跳过`）。两张白底合成一页 PDF。缺 PPT/PDF 时白底图和 GLB 仍 `done`/`succeeded`，不要把整单判成「Node不存在」。
 - 超时：对照 180s、打样 420s（已有）。超时 = failed，回收槽。
 - 取消：不做。
 
@@ -224,6 +226,7 @@ Windows 上 spawn 必须进 Job Object，Node 退出时杀掉子进程树。做�
 - 无 Blender 的 mockup POST = 412
 - 有 Blender 时忙不 409，是 queued
 - 打样文件：白底只认 `front_right`/`back_left`；另收 `glb` / `ppt` / `sheet`；`ai-raster`/PPT 质检图或坏 PNG → 415；`?download=1` 才附件
+- 结构选层：候选成员与源稿绑定、管理员权限、1–16 层、16 KiB 正文上限、旧 `/1` 拒绝、相同选择幂等、慢正文竞态、准备失败原位重试和预览路径边界
 - saveTask 在目标文件已存在时 replace 成功（Windows 语义）
 
 杀进程的手工脚本可留 Windows；状态机必须单测。
