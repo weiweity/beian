@@ -216,9 +216,11 @@ def test_illustrator_structure_export_accepts_a_windows_executable_path(
         tmp_path / "project",
         {"application": str(illustrator)},
         proposal_layers=["供应商结构候选"],
+        print_layers=["印刷"],
     )
     assert result["success"] is True
     assert captured["proposal_layers"] == ["供应商结构候选"]
+    assert captured["print_layers"] == ["印刷"]
 
 
 def test_legacy_illustrator_fallback_accepts_a_windows_executable_path(

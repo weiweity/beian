@@ -96,10 +96,10 @@ def test_mac_worker_reports_runtime_jsx_binding_failure_without_traceback(
     assert "Traceback" not in stderr
 
 
-def test_structure_export_hides_objects_not_whole_layers():
+def test_structure_export_hides_structure_objects_and_isolates_declared_print_layers():
     source = EXPORTER.read_text(encoding="utf-8")
     assert "item.hidden = true" in source
-    assert "documentRef.layers[layerIndex].visible =" not in source
+    assert "withConfiguredPrintLayers(documentRef, config.print_layers" in source
     assert 'adapter: "illustrator-semantic/1"' in source
     assert 'structure_face_mapping_incomplete' in source
 
@@ -275,6 +275,199 @@ process.stdout.write(JSON.stringify({
             "alreadyHiddenLocked": False,
             "layerLocked": True,
         },
+    }
+
+
+def test_structure_export_restores_declared_print_layer_visibility_when_save_fails():
+    source = EXPORTER.read_text(encoding="utf-8")
+    helper_start = source.index("function findLockState")
+    helper_end = source.index("var configPath", helper_start)
+    helpers = source[helper_start:helper_end]
+    program = helpers + r"""
+var printLayer = {name: "印刷", visible: false};
+var codeLayer = {name: "码", visible: true};
+var annotationLayer = {name: "标注", visible: true};
+var documentRef = {layers: [printLayer, codeLayer, annotationLayer]};
+var observed = null;
+var message = null;
+try {
+    withConfiguredPrintLayers(documentRef, ["印刷"], function () {
+        observed = {
+            printLayer: printLayer.visible,
+            codeLayer: codeLayer.visible,
+            annotationLayer: annotationLayer.visible
+        };
+        throw new Error("artwork save failed");
+    });
+} catch (error) {
+    message = error.message;
+}
+process.stdout.write(JSON.stringify({
+    message: message,
+    observed: observed,
+    restored: {
+        printLayer: printLayer.visible,
+        codeLayer: codeLayer.visible,
+        annotationLayer: annotationLayer.visible
+    }
+}));
+"""
+    completed = subprocess.run(
+        ["node", "-e", program],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert json.loads(completed.stdout) == {
+        "message": "artwork save failed",
+        "observed": {
+            "printLayer": True,
+            "codeLayer": False,
+            "annotationLayer": False,
+        },
+        "restored": {
+            "printLayer": False,
+            "codeLayer": True,
+            "annotationLayer": True,
+        },
+    }
+
+
+def test_print_layer_isolation_fails_closed_and_restores_every_observed_state():
+    source = EXPORTER.read_text(encoding="utf-8")
+    helper_start = source.index("function findLockState")
+    helper_end = source.index("var configPath", helper_start)
+    helpers = source[helper_start:helper_end]
+    program = helpers + r"""
+function errorOf(callback) {
+    try {
+        callback();
+        return null;
+    } catch (error) {
+        return error.message;
+    }
+}
+
+var normalized = normalizedPrintLayerNames(["印刷", "", "印刷", "辅助印刷"]);
+var invalidConfigError = errorOf(function () {
+    normalizedPrintLayerNames("印刷");
+});
+var emptyConfigError = errorOf(function () {
+    normalizedPrintLayerNames([]);
+});
+
+var successPrint = {name: "印刷", visible: false};
+var successCode = {name: "码", visible: true};
+var successObserved = null;
+var successError = errorOf(function () {
+    withConfiguredPrintLayers(
+        {layers: [successPrint, successCode]},
+        ["印刷"],
+        function () {
+            successObserved = [successPrint.visible, successCode.visible];
+        }
+    );
+});
+
+var missingPrint = {name: "印刷", visible: false};
+var missingCode = {name: "码", visible: true};
+var missingError = errorOf(function () {
+    withConfiguredPrintLayers(
+        {layers: [missingPrint, missingCode]},
+        ["不存在"],
+        function () {}
+    );
+});
+
+var setPrint = {name: "印刷", visible: false};
+var codeVisible = true;
+var blockedCode = {name: "码"};
+Object.defineProperty(blockedCode, "visible", {
+    get: function () { return codeVisible; },
+    set: function (value) {
+        if (value === false) {
+            throw new Error("blocked hide");
+        }
+        codeVisible = value;
+    }
+});
+var settingError = errorOf(function () {
+    withConfiguredPrintLayers(
+        {layers: [setPrint, blockedCode]},
+        ["印刷"],
+        function () {}
+    );
+});
+
+function stickyLayer() {
+    var visible = false;
+    var layer = {name: "印刷"};
+    Object.defineProperty(layer, "visible", {
+        get: function () { return visible; },
+        set: function (value) {
+            if (value === false) {
+                throw new Error("cannot restore");
+            }
+            visible = value;
+        }
+    });
+    return layer;
+}
+var restoreOnly = stickyLayer();
+var restoreOnlyError = errorOf(function () {
+    withConfiguredPrintLayers(
+        {layers: [restoreOnly]},
+        ["印刷"],
+        function () {}
+    );
+});
+var restoreAndSave = stickyLayer();
+var doubleError = errorOf(function () {
+    withConfiguredPrintLayers(
+        {layers: [restoreAndSave]},
+        ["印刷"],
+        function () { throw new Error("save failed"); }
+    );
+});
+
+process.stdout.write(JSON.stringify({
+    normalized: normalized,
+    invalidConfigError: invalidConfigError,
+    emptyConfigError: emptyConfigError,
+    successError: successError,
+    successObserved: successObserved,
+    successRestored: [successPrint.visible, successCode.visible],
+    missingError: missingError,
+    missingRestored: [missingPrint.visible, missingCode.visible],
+    settingError: settingError,
+    settingRestored: [setPrint.visible, blockedCode.visible],
+    restoreOnlyError: restoreOnlyError,
+    doubleError: doubleError
+}));
+"""
+    completed = subprocess.run(
+        ["node", "-e", program],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert json.loads(completed.stdout) == {
+        "normalized": ["印刷", "辅助印刷"],
+        "invalidConfigError": "print_layers must be an array",
+        "emptyConfigError": "print_layers must name at least one explicit artwork layer",
+        "successError": None,
+        "successObserved": [True, False],
+        "successRestored": [False, True],
+        "missingError": "Configured artwork layer not found: 不存在",
+        "missingRestored": [False, True],
+        "settingError": "blocked hide",
+        "settingRestored": [False, True],
+        "restoreOnlyError": "Cannot fully restore artwork layers: 印刷:cannot restore",
+        "doubleError": (
+            "save failed | Cannot fully restore artwork layers: 印刷:cannot restore"
+        ),
     }
 
 
@@ -559,7 +752,144 @@ def test_proposal_paths_are_cleaned_from_artwork_without_hiding_the_whole_layer(
     source = EXPORTER.read_text(encoding="utf-8")
     assert "chosenRecords" in source
     assert "semanticItems.push(record.item)" in source
-    assert "documentRef.layers[layerIndex].visible =" not in source
+    assert "withHiddenSemanticItems(semanticItems" in source
+
+
+def test_structure_export_passes_explicit_print_layers_to_illustrator(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    pipeline = load_pipeline()
+    source = tmp_path / "source.ai"
+    source.write_bytes(b"ai")
+    illustrator = tmp_path / "Illustrator.app"
+    illustrator.mkdir()
+    captured: dict[str, object] = {}
+
+    def fake_run(command, capture_output, text):
+        config_path = Path(command[2])
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        captured.update(config)
+        for key in ("full_pdf", "print_pdf", "structure_json"):
+            Path(config[key]).write_bytes(b"output")
+        Path(config["result_json"]).write_text(
+            json.dumps(
+                {
+                    "success": True,
+                    "full_pdf": config["full_pdf"],
+                    "print_pdf": config["print_pdf"],
+                    "structure_json": config["structure_json"],
+                }
+            ),
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(command, 0, "ok", "")
+
+    monkeypatch.setattr(pipeline.subprocess, "run", fake_run)
+    result = pipeline.run_illustrator_structure_export(
+        source,
+        tmp_path / "project",
+        {"application": str(illustrator)},
+        proposal_layers=["供应商结构候选"],
+        print_layers=["印刷"],
+    )
+
+    assert result["success"] is True
+    assert captured["proposal_layers"] == ["供应商结构候选"]
+    assert captured["print_layers"] == ["印刷"]
+
+
+@pytest.mark.parametrize("print_layers", [None, [], "印刷"])
+def test_structure_export_rejects_missing_or_non_array_print_layers_before_worker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    print_layers,
+):
+    pipeline = load_pipeline()
+    source = tmp_path / "source.ai"
+    source.write_bytes(b"ai")
+    illustrator = tmp_path / "Illustrator.app"
+    illustrator.mkdir()
+    monkeypatch.setattr(
+        pipeline.subprocess,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail("invalid print layers must fail before Illustrator"),
+    )
+
+    with pytest.raises(pipeline.PipelineError) as caught:
+        pipeline.run_illustrator_structure_export(
+            source,
+            tmp_path / "project",
+            {"application": str(illustrator)},
+            print_layers=print_layers,
+        )
+
+    assert caught.value.as_dict() == {
+        "ok": False,
+        "code": "packaging_print_layers_missing",
+        "error": "渲染配置没有声明印刷图层，无法安全生成贴图",
+        "cause": "print_layers must be a non-empty list",
+        "fix": "在对应包装模板中声明稿件现有的顶层印刷图层，再重新打样",
+    }
+
+
+def test_v2_preflight_passes_template_print_layers_to_the_illustrator_exporter(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    pipeline = load_pipeline()
+    source = tmp_path / "source.ai"
+    source.write_bytes(b"native-ai")
+    template = tmp_path / "template.json"
+    template.write_text(json.dumps({"print_layers": ["印刷"]}), encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    def fake_export(*_args, **kwargs):
+        captured.update(kwargs)
+        export_dir = tmp_path / "export"
+        export_dir.mkdir()
+        artwork = export_dir / "artwork.pdf"
+        structure = export_dir / "structure.json"
+        artwork.write_bytes(b"artwork")
+        structure.write_text("{}", encoding="utf-8")
+        return {"print_pdf": str(artwork), "structure_json": str(structure)}
+
+    class ReachedResolver(RuntimeError):
+        pass
+
+    def stop_after_export(*_args, **_kwargs):
+        raise ReachedResolver("export contract observed")
+
+    monkeypatch.setattr(pipeline, "run_illustrator_structure_export", fake_export)
+    monkeypatch.setattr(pipeline, "resolve_structure", stop_after_export)
+
+    with pytest.raises(ReachedResolver, match="export contract observed"):
+        pipeline.preflight_product_v2(
+            {
+                "code": "PRINT-LAYERS",
+                "slug": "print-layers",
+                "display_name": "印刷层合同",
+                "source_ai": source.name,
+                "template": template.name,
+            },
+            tmp_path,
+            tmp_path / "output",
+            False,
+            {"enabled": True},
+        )
+
+    assert captured["print_layers"] == ["印刷"]
+
+
+def test_production_flower_box_outputs_zoomable_white_shots():
+    template = json.loads(
+        (PACKAGING / "templates" / "flower_box_47_5x47_5x177_5.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert template["render"]["resolution_x"] >= 3000
+    assert template["render"]["resolution_y"] >= 3600
 
 
 def test_windows_pipe_contract_is_utf8_json_and_request_correlated():
@@ -1176,6 +1506,31 @@ def test_structure_export_failure_keeps_private_cause_out_of_public_message():
     payload = error.as_dict()
     assert r"C:\supply" not in payload["error"]
     assert r"C:\supply" in payload["cause"]
+
+
+@pytest.mark.parametrize(
+    "diagnostic",
+    [
+        "Configured artwork layer not found: 印刷",
+        "Cannot set artwork layer visibility: 印刷",
+        "Cannot fully restore artwork layers: 印刷:visibility did not change",
+    ],
+)
+def test_structure_export_maps_artwork_layer_failures_without_blaming_structure_marks(
+    diagnostic: str,
+):
+    pipeline = load_pipeline()
+    error = pipeline.illustrator_export_failure(
+        operation="structure",
+        returncode=4,
+        result={"success": False, "error": diagnostic},
+    )
+
+    payload = error.as_dict()
+    assert payload["code"] == "illustrator_artwork_layers_invalid"
+    assert payload["error"] == "Illustrator 无法按模板隔离印刷图层，请检查稿件图层后重试"
+    assert "顶层印刷层" in payload["fix"]
+    assert "packaging:cut" not in payload["fix"]
 
 
 @pytest.mark.parametrize(
