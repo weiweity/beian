@@ -24,7 +24,19 @@ export function loginFailureCode(error: unknown): "forbidden" | "failed" {
 }
 
 const PERMS: Record<Role, string[]> = {
-  admin: ["read", "create", "decide", "complete", "delete", "export", "backup", "archive", "ai_review", "manage_users"],
+  admin: [
+    "read",
+    "create",
+    "decide",
+    "complete",
+    "delete",
+    "export",
+    "backup",
+    "archive",
+    "ai_review",
+    "confirm_structure",
+    "manage_users",
+  ],
   reviewer: ["read", "create", "decide", "complete", "delete", "export", "archive", "ai_review"],
   viewer: ["read", "export"],
 };

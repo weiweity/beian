@@ -72,7 +72,7 @@ test("窄屏可全选已结束记录，批量栏和删除提示保持视口居�
 
   await page.goto("/history");
   await page.getByRole("button", { name: /^编\s*辑$/ }).click();
-  const selectAll = page.getByRole("checkbox", { name: "全选可删除记录" });
+  const selectAll = page.getByRole("checkbox", { name: "全选本页可删除记录" });
   await selectAll.check();
   await expect(page.getByRole("checkbox", { name: "选择 可全选审稿" })).toBeChecked();
   await expect(page.getByRole("checkbox", { name: "选择 可全选打样" })).toBeChecked();
@@ -83,7 +83,7 @@ test("窄屏可全选已结束记录，批量栏和删除提示保持视口居�
   expect(toolbar).not.toBeNull();
   expect(Math.abs((toolbar!.x + toolbar!.width / 2) - 375 / 2)).toBeLessThan(3);
 
-  const bottomSelectAll = page.locator(".history-bulkbar").getByRole("checkbox", { name: "全选" });
+  const bottomSelectAll = page.locator(".history-bulkbar").getByRole("checkbox", { name: "全选本页" });
   await bottomSelectAll.uncheck();
   await expect(page.getByText("已选 0 条")).toBeVisible();
   await bottomSelectAll.check();
@@ -111,7 +111,69 @@ test("只有进行中记录时，页头和底部全选都不可用", async ({ pa
   await page.goto("/history");
   await page.getByRole("button", { name: /^编\s*辑$/ }).click();
 
-  await expect(page.getByRole("checkbox", { name: "全选可删除记录" })).toBeDisabled();
-  await expect(page.locator(".history-bulkbar").getByRole("checkbox", { name: "全选" })).toBeDisabled();
+  await expect(page.getByRole("checkbox", { name: "全选本页可删除记录" })).toBeDisabled();
+  await expect(page.locator(".history-bulkbar").getByRole("checkbox", { name: "全选本页" })).toBeDisabled();
   await expect(page.getByRole("button", { name: /^删\s*除$/ })).toBeDisabled();
+});
+
+test("历史记录每页固定十行并可翻到最后三行", async ({ page, syntheticApi }) => {
+  for (let index = 1; index <= 23; index += 1) {
+    syntheticApi.tasks.push(completedTask(index.toString(16).padStart(12, "0"), `分页记录 ${String(index).padStart(2, "0")}`));
+  }
+
+  await page.goto("/history");
+
+  const tableRows = page.locator(".history-table-shell .ant-table-tbody > tr.ant-table-row");
+  await expect(tableRows).toHaveCount(10);
+  await expect(page.getByText("分页记录 01", { exact: true })).toBeVisible();
+  await page.locator(".history-pagination .ant-pagination-item-2").click();
+  await expect(tableRows).toHaveCount(10);
+  await expect(page.getByText("分页记录 11", { exact: true })).toBeVisible();
+  await page.locator(".history-pagination .ant-pagination-item-3").click();
+  await expect(tableRows).toHaveCount(3);
+  await expect(page.getByText("分页记录 23", { exact: true })).toBeVisible();
+});
+
+test("筛选会在合并记录后执行并回到新的第一页", async ({ page, syntheticApi }) => {
+  for (let index = 1; index <= 12; index += 1) {
+    syntheticApi.tasks.push(completedTask(index.toString(16).padStart(12, "0"), `审稿筛选 ${String(index).padStart(2, "0")}`));
+  }
+  for (let index = 1; index <= 11; index += 1) {
+    syntheticApi.mockups.push(completedMockup((index + 32).toString(16).padStart(12, "0"), `打样筛选 ${String(index).padStart(2, "0")}`));
+  }
+
+  await page.goto("/history");
+  await page.locator(".history-pagination .ant-pagination-item-3").click();
+  await page.getByRole("radiogroup", { name: "类型" }).getByText("打样台", { exact: true }).click();
+
+  await expect(page.locator(".history-pagination .ant-pagination-item-active")).toHaveText("1");
+  await expect(page.locator(".history-table-shell .ant-table-tbody > tr.ant-table-row")).toHaveCount(10);
+  await expect(page.getByText("11 条", { exact: true })).toBeVisible();
+});
+
+test("跨页选择会保留，取消本页不会清除其他页，批删覆盖全部已选页", async ({ page, syntheticApi }) => {
+  for (let index = 1; index <= 12; index += 1) {
+    syntheticApi.tasks.push(completedTask(index.toString(16).padStart(12, "0"), `跨页记录 ${String(index).padStart(2, "0")}`));
+  }
+
+  await page.goto("/history");
+  await page.getByRole("button", { name: /^编\s*辑$/ }).click();
+  await page.getByRole("checkbox", { name: "选择 跨页记录 01" }).check();
+  await page.locator(".history-pagination .ant-pagination-item-2").click();
+
+  const pageSelectAll = page.locator(".history-bulkbar").getByRole("checkbox", { name: "全选本页" });
+  await pageSelectAll.check();
+  await expect(page.getByText("已选 3 条")).toBeVisible();
+  await pageSelectAll.uncheck();
+  await expect(page.getByText("已选 1 条")).toBeVisible();
+  await page.getByRole("checkbox", { name: "选择 跨页记录 11" }).check();
+  await page.locator(".history-pagination .ant-pagination-item-1").click();
+  await expect(page.getByRole("checkbox", { name: "选择 跨页记录 01" })).toBeChecked();
+  await expect(page.getByText("已选 2 条")).toBeVisible();
+
+  await page.getByRole("button", { name: /^删\s*除$/ }).click();
+  await page.getByRole("button", { name: "删除记录" }).click();
+  await expect(page.getByText("已删除 2 条记录")).toBeVisible();
+  expect(syntheticApi.tasks.map((item) => item.title)).not.toContain("跨页记录 01");
+  expect(syntheticApi.tasks.map((item) => item.title)).not.toContain("跨页记录 11");
 });

@@ -1,55 +1,54 @@
 import { useMemo, useRef, useState } from "react";
-import { Alert, App, Button, Segmented, Select } from "antd";
+import { Alert, App, Button } from "antd";
 import { api, type MockupJob } from "../api";
 import {
+  preferredStructureTurn,
   selectedStructureAnchor,
-  structureClosureNote,
   structureConfirmationErrorCopy,
   structureIssueCopy,
   structurePolygonPoints,
-  structureProposalLabel,
+  structureProposalHasRealPolygons,
   structureViewBox,
   validTurnsForFace,
 } from "./mockupStructure";
 
 type Props = {
   job: MockupJob;
-  canAdmin: boolean;
+  canConfirmStructure: boolean;
   onConfirmed: (job: MockupJob) => void;
 };
 
-type QuarterTurns = 0 | 1 | 2 | 3;
-
-function dimensions(size?: [number, number]): string {
-  return size ? ` · ${size[0]}×${size[1]} mm` : "";
-}
-
-export function StructureConfirmPanel({ job, canAdmin, onConfirmed }: Props) {
+export function StructureConfirmPanel({ job, canConfirmStructure, onConfirmed }: Props) {
   const { message } = App.useApp();
   const preview = job.structure_preview;
   const faces = preview?.faces || [];
-  const proposals = preview?.net_proposals || [];
+  const proposals = useMemo(
+    () => (preview?.net_proposals || []).filter((item) => structureProposalHasRealPolygons(item, faces)),
+    [faces, preview?.net_proposals],
+  );
   const [proposalId, setProposalId] = useState("");
   const [frontFaceId, setFrontFaceId] = useState("");
-  const [quarterTurns, setQuarterTurns] = useState<QuarterTurns>(0);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const submitLock = useRef(false);
   const proposal = proposals.find((item) => item.id === proposalId) || proposals[0];
+  const proposalIndex = Math.max(0, proposals.findIndex((item) => item.id === proposal?.id));
   const proposalFaceIds = useMemo(() => new Set(proposal?.face_ids || []), [proposal]);
   const proposalFaces = useMemo(
     () => faces.filter((face) => proposalFaceIds.has(face.id)),
     [faces, proposalFaceIds],
   );
-  const facesById = useMemo(() => new Map(faces.map((face) => [face.id, face])), [faces]);
   const bodyIndex = useMemo(
     () => new Map((proposal?.body_face_ids || []).map((faceId, index) => [faceId, index])),
     [proposal],
   );
   const effectiveFrontId = proposal?.body_face_ids.includes(frontFaceId) ? frontFaceId : "";
+  const preferredTurn = preferredStructureTurn(proposal, effectiveFrontId);
   const anchor = useMemo(
-    () => selectedStructureAnchor(proposal, effectiveFrontId, quarterTurns),
-    [effectiveFrontId, proposal, quarterTurns],
+    () => preferredTurn === null
+      ? null
+      : selectedStructureAnchor(proposal, effectiveFrontId, preferredTurn),
+    [effectiveFrontId, preferredTurn, proposal],
   );
   const viewBox = structureViewBox(proposalFaces.length ? proposalFaces : faces).join(" ");
   const pageSize = preview?.page_size_mm;
@@ -60,27 +59,24 @@ export function StructureConfirmPanel({ job, canAdmin, onConfirmed }: Props) {
   function selectProposal(nextId: string) {
     setProposalId(nextId);
     setFrontFaceId("");
-    setQuarterTurns(0);
     setSubmitError(null);
   }
 
   function selectFront(nextFaceId: string) {
-    const validTurns = validTurnsForFace(proposal, nextFaceId);
-    if (!validTurns.length) return;
+    if (preferredStructureTurn(proposal, nextFaceId) === null) return;
     setFrontFaceId(nextFaceId);
-    setQuarterTurns(validTurns.includes(quarterTurns) ? quarterTurns : validTurns[0]);
     setSubmitError(null);
   }
 
   async function submit() {
-    if (!confirmedAnchor || !canAdmin || submitLock.current) return;
+    if (!confirmedAnchor || !canConfirmStructure || submitLock.current) return;
     submitLock.current = true;
     setSubmitting(true);
     setSubmitError(null);
     try {
       const next = await api.confirmMockupStructure(job.id, confirmedAnchor);
       onConfirmed(next);
-      message.success("正面已确认，开始打样。");
+      message.success("已选择正面，开始生成打样图。");
     } catch (error) {
       setSubmitError(structureConfirmationErrorCopy(error));
     } finally {
@@ -121,12 +117,14 @@ export function StructureConfirmPanel({ job, canAdmin, onConfirmed }: Props) {
       <Alert
         type="info"
         showIcon
-        title="完整盒型已经找出，只需确认正面"
-        description="点击原稿上真正的产品正面，再确认文字朝向。其余五面由连通关系自动推导；推导不唯一或尺寸不闭合时会拒绝进入 Blender。"
+        title="先看展开图，再选产品正面"
+        description={canConfirmStructure
+          ? "确认左侧是这次要生成的包装，点击印有品名和主视觉的一面，最后点生成打样图。"
+          : "这单可以正常查看；只有管理员能选择产品正面并生成打样图。"}
       />
       <div className="structure-confirm-layout">
         <div className="structure-map-shell">
-          <svg className="structure-map" viewBox={viewBox} role="img" aria-label="完整包装展开结构预览">
+          <svg className="structure-map" viewBox={viewBox} role="img" aria-label="包装展开图">
             {hasArtwork && artworkImage && pageSize ? (
               // 原稿预览与结构面共用毫米坐标；保持逐点映射，避免自适应留白让点击面错位。
               <image
@@ -140,124 +138,104 @@ export function StructureConfirmPanel({ job, canAdmin, onConfirmed }: Props) {
               />
             ) : null}
             {proposalFaces.map((face) => {
-              const [left, top, right, bottom] = face.bounds_mm;
               const candidateIndex = bodyIndex.get(face.id);
               const isBody = candidateIndex !== undefined;
               const isConfirmable = validTurnsForFace(proposal, face.id).length > 0;
               const isFront = face.id === effectiveFrontId;
               const outline = structurePolygonPoints(face);
-              const label = isFront ? "正面" : isBody ? String.fromCharCode(65 + candidateIndex) : "封口";
+              const candidateLabel = isBody ? String.fromCharCode(65 + candidateIndex) : "";
+              const label = isFront ? "正面" : candidateLabel;
+              const interactive = Boolean(isBody && isConfirmable && canConfirmStructure && hasArtwork);
               return (
                 <g
                   key={face.id}
                   className={`${isBody ? "is-body" : "is-cap"}${isFront ? " is-selected" : ""}`}
-                  role={isBody ? "button" : undefined}
-                  aria-disabled={isBody && (!isConfirmable || !canAdmin || !hasArtwork) ? true : undefined}
-                  tabIndex={isBody ? 0 : undefined}
-                  aria-label={isBody ? `选择正面候选 ${label}` : "自动推导封口面"}
-                  onClick={isBody && isConfirmable && canAdmin && hasArtwork ? () => selectFront(face.id) : undefined}
-                  onKeyDown={isBody && isConfirmable && canAdmin && hasArtwork ? (event) => {
+                  role={interactive ? "button" : undefined}
+                  tabIndex={interactive ? 0 : undefined}
+                  aria-label={interactive ? `选择 ${candidateLabel} 面作为产品正面` : undefined}
+                  aria-pressed={interactive ? isFront : undefined}
+                  onClick={interactive ? () => selectFront(face.id) : undefined}
+                  onKeyDown={interactive ? (event) => {
                     if (event.key === "Enter" || event.key === " ") {
                       event.preventDefault();
                       selectFront(face.id);
                     }
                   } : undefined}
                 >
-                  {outline ? (
-                    <polygon points={outline} />
-                  ) : (
-                    <rect
-                      x={left}
-                      y={top}
-                      width={right - left}
-                      height={bottom - top}
-                      rx={0.8}
-                    />
-                  )}
-                  <text x={face.centroid_mm[0]} y={face.centroid_mm[1]} dominantBaseline="central">
-                    {label}
-                  </text>
+                  {outline ? <polygon points={outline} /> : null}
+                  {label ? (
+                    <text x={face.centroid_mm[0]} y={face.centroid_mm[1]} dominantBaseline="central">
+                      {label}
+                    </text>
+                  ) : null}
                 </g>
               );
             })}
           </svg>
-          <p>
-            {hasArtwork
-              ? "A–D 是四个连续盒身面；点击印有产品主视觉的那一面。封口面无需手工指定。"
-              : "原稿预览暂不可用，不能可靠判断正面；请重新识别后再确认。"}
-          </p>
+          <div className="structure-map-caption">
+            <p>
+              {hasArtwork
+                ? "A–D 对应四个可选面。找到印有品名和主视觉的一面。"
+                : "原稿预览暂不可用，不能可靠判断正面；请重新识别后再确认。"}
+            </p>
+            {proposals.length > 1 ? (
+              <div className="structure-proposal-nav" aria-label="切换展开图">
+                <Button
+                  size="small"
+                  disabled={proposalIndex === 0}
+                  onClick={() => selectProposal(proposals[proposalIndex - 1].id)}
+                >
+                  上一张
+                </Button>
+                <span>第 {proposalIndex + 1} 张，共 {proposals.length} 张</span>
+                <Button
+                  size="small"
+                  disabled={proposalIndex === proposals.length - 1}
+                  onClick={() => selectProposal(proposals[proposalIndex + 1].id)}
+                >
+                  下一张
+                </Button>
+              </div>
+            ) : null}
+          </div>
         </div>
 
-        <div className="structure-anchor-card">
-          <div className="structure-anchor-scroll">
-            {proposals.length > 1 ? (
-              <label className="structure-anchor-field">
-                <span>完整盒型</span>
-                <Select
-                  value={proposal.id}
-                  disabled={!canAdmin}
-                  options={proposals.map((item, index) => ({
-                    value: item.id,
-                    label: structureProposalLabel(item, index),
-                  }))}
-                  onChange={selectProposal}
-                />
-              </label>
-            ) : (
-              <div className="structure-net-found">
-                <span>完整盒型</span>
-                <strong>
-                  {proposal.dimensions_mm
-                    ? `底面 ${proposal.dimensions_mm.width}×${proposal.dimensions_mm.depth} · 高 ${proposal.dimensions_mm.height} mm${structureClosureNote(proposal)}`
-                    : `闭合盒型 · 已通过确认预检${structureClosureNote(proposal)}`}
-                </strong>
+        <div className="structure-guide-card">
+          <div className="structure-guide">
+            <div className="structure-guide-step">
+              <span className="structure-step-index">1</span>
+              <div>
+                <strong>看一下展开图</strong>
+                <span>确认左侧显示的是这次要生成的包装形状。</span>
               </div>
-            )}
+            </div>
+
+            <div className="structure-guide-step">
+              <span className="structure-step-index">2</span>
+              <div>
+                <strong>选择产品正面</strong>
+                <span>通常是印有品名、品牌和主视觉的那一面。</span>
+              </div>
+            </div>
 
             <div className="structure-front-choices" aria-label="选择产品正面">
-              <span>产品正面</span>
               <div>
                 {proposal.body_face_ids.map((faceId, index) => {
-                  const face = facesById.get(faceId);
                   const selected = faceId === effectiveFrontId;
                   const validTurns = validTurnsForFace(proposal, faceId);
                   return (
                     <Button
                       key={faceId}
                       type={selected ? "primary" : "default"}
-                      disabled={!canAdmin || !hasArtwork || !validTurns.length}
+                      aria-pressed={selected}
+                      disabled={!canConfirmStructure || !hasArtwork || !validTurns.length}
                       onClick={() => selectFront(faceId)}
                     >
-                      候选 {String.fromCharCode(65 + index)}{dimensions(face?.size_mm)}
+                      {String.fromCharCode(65 + index)} 面
                     </Button>
                   );
                 })}
               </div>
-            </div>
-
-            <label className="structure-anchor-field">
-              <span>文字朝向</span>
-              <Segmented
-                block
-                disabled={!effectiveFrontId || !canAdmin || !hasArtwork}
-                value={quarterTurns}
-                options={[
-                  { label: "不旋转", value: 0, disabled: !validTurnsForFace(proposal, effectiveFrontId).includes(0) },
-                  { label: "右转 90°", value: 1, disabled: !validTurnsForFace(proposal, effectiveFrontId).includes(1) },
-                  { label: "转 180°", value: 2, disabled: !validTurnsForFace(proposal, effectiveFrontId).includes(2) },
-                  { label: "左转 90°", value: 3, disabled: !validTurnsForFace(proposal, effectiveFrontId).includes(3) },
-                ]}
-                onChange={(value) => {
-                  setQuarterTurns(value as QuarterTurns);
-                  setSubmitError(null);
-                }}
-              />
-            </label>
-
-            <div className="structure-derived-copy">
-              <strong>系统随后自动完成</strong>
-              <span>右侧、反面、左侧、顶部、底部角色</span>
-              <span>相对面尺寸、折叠连通与六面贴图复核</span>
             </div>
           </div>
 
@@ -271,22 +249,22 @@ export function StructureConfirmPanel({ job, canAdmin, onConfirmed }: Props) {
               />
             ) : (
               <span>
-                {canAdmin
+                {canConfirmStructure
                   ? confirmedAnchor
-                    ? "正面和方向已确认，可以继续。"
+                    ? "正面已选，可以生成打样图。"
                     : hasArtwork
-                      ? "请在原稿或右侧候选中选择产品正面。"
+                      ? "请在展开图或右侧按钮中选择产品正面。"
                       : "原稿预览不可用，不能确认正面。"
-                  : "只有管理员可以确认结构；其他人仍可查看这单。"}
+                  : "你可以查看这单；等待管理员选择正面并生成。"}
               </span>
             )}
             <Button
               type="primary"
-              disabled={!confirmedAnchor || !canAdmin || submitting}
+              disabled={!confirmedAnchor || !canConfirmStructure || submitting}
               loading={submitting}
               onClick={() => void submit()}
             >
-              确认并开始打样
+              生成打样图
             </Button>
           </div>
         </div>

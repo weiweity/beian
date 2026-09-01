@@ -748,6 +748,84 @@ def test_legacy_proposal_layers_only_offer_stroke_only_paths_for_human_confirmat
     assert "explicitRecords.length > 0 ? explicitRecords : proposalRecords" in source
 
 
+def test_unassigned_stroke_only_layers_are_listed_without_becoming_structure():
+    source = EXPORTER.read_text(encoding="utf-8")
+    helper_start = source.index("function exactAssignment")
+    helper_end = source.index("var configPath", helper_start)
+    helpers = source[helper_start:helper_end]
+    program = helpers + r"""
+var candidates = [];
+recordProposalLayerCandidate(candidates, {stroked: true, filled: false, layer: {name: "结构-A"}});
+recordProposalLayerCandidate(candidates, {stroked: true, filled: false, layer: {name: "结构-A"}});
+recordProposalLayerCandidate(candidates, {stroked: true, filled: true, layer: {name: "填色稿"}});
+recordProposalLayerCandidate(candidates, {stroked: false, filled: false, layer: {name: "无描边"}});
+recordProposalLayerCandidate(candidates, {stroked: true, filled: false, layer: {name: "结构-B"}});
+recordProposalLayerCandidate(candidates, {stroked: true, filled: false, layer: {name: ""}});
+process.stdout.write(JSON.stringify(candidates));
+"""
+    completed = subprocess.run(
+        ["node", "-e", program],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert json.loads(completed.stdout) == [
+        {"name": "结构-A", "stroke_only_path_count": 2},
+        {"name": "结构-B", "stroke_only_path_count": 1},
+    ]
+    assert "proposal_layer_candidates: []" in source
+    assert "proposalRecords.push" in source
+
+
+def test_unassigned_layer_inventory_is_bounded_and_reports_truncation():
+    source = EXPORTER.read_text(encoding="utf-8")
+    helper_start = source.index("function exactAssignment")
+    helper_end = source.index("var configPath", helper_start)
+    helpers = source[helper_start:helper_end]
+    program = helpers + r"""
+var candidates = [];
+var truncated = false;
+for (var index = 0; index < 129; index += 1) {
+    if (recordProposalLayerCandidate(candidates, {
+        stroked: true,
+        filled: false,
+        layer: {name: "结构-" + index}
+    })) {
+        truncated = true;
+    }
+}
+process.stdout.write(JSON.stringify({candidates: candidates, truncated: truncated}));
+"""
+    completed = subprocess.run(
+        ["node", "-e", program],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+    assert len(payload["candidates"]) == 128
+    assert payload["candidates"][0]["name"] == "结构-0"
+    assert payload["candidates"][-1]["name"] == "结构-127"
+    assert payload["truncated"] is True
+
+
+def test_explicit_semantics_suppress_inapplicable_layer_candidates():
+    source = EXPORTER.read_text(encoding="utf-8")
+    suppression = source.index("if (explicitRecords.length > 0)")
+    chosen_records = source.index(
+        "var chosenRecords = explicitRecords.length > 0 ? explicitRecords : proposalRecords"
+    )
+
+    assert suppression < chosen_records
+    assert "result.proposal_layer_candidates = [];" in source[suppression:chosen_records]
+    assert (
+        "result.proposal_layer_candidates_truncated = false;"
+        in source[suppression:chosen_records]
+    )
+
+
 def test_proposal_paths_are_cleaned_from_artwork_without_hiding_the_whole_layer():
     source = EXPORTER.read_text(encoding="utf-8")
     assert "chosenRecords" in source
@@ -786,15 +864,18 @@ def test_structure_export_passes_explicit_print_layers_to_illustrator(
         return subprocess.CompletedProcess(command, 0, "ok", "")
 
     monkeypatch.setattr(pipeline.subprocess, "run", fake_run)
+    source_sha256 = pipeline.file_sha256(source)
     result = pipeline.run_illustrator_structure_export(
         source,
         tmp_path / "project",
         {"application": str(illustrator)},
         proposal_layers=["供应商结构候选"],
         print_layers=["印刷"],
+        source_sha256=source_sha256,
     )
 
     assert result["success"] is True
+    assert captured["source_sha256"] == source_sha256
     assert captured["proposal_layers"] == ["供应商结构候选"]
     assert captured["print_layers"] == ["印刷"]
 
@@ -831,6 +912,33 @@ def test_structure_export_rejects_missing_or_non_array_print_layers_before_worke
         "cause": "print_layers must be a non-empty list",
         "fix": "在对应包装模板中声明稿件现有的顶层印刷图层，再重新打样",
     }
+
+
+def test_structure_export_rejects_a_source_changed_since_preflight(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    pipeline = load_pipeline()
+    source = tmp_path / "source.ai"
+    source.write_bytes(b"changed-ai")
+    illustrator = tmp_path / "Illustrator.app"
+    illustrator.mkdir()
+    monkeypatch.setattr(
+        pipeline.subprocess,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail("stale source must fail before Illustrator"),
+    )
+
+    with pytest.raises(pipeline.PipelineError) as caught:
+        pipeline.run_illustrator_structure_export(
+            source,
+            tmp_path / "project",
+            {"application": str(illustrator)},
+            print_layers=["印刷"],
+            source_sha256="0" * 64,
+        )
+
+    assert caught.value.code == "packaging_structure_selection_stale"
 
 
 def test_v2_preflight_passes_template_print_layers_to_the_illustrator_exporter(
@@ -879,6 +987,366 @@ def test_v2_preflight_passes_template_print_layers_to_the_illustrator_exporter(
         )
 
     assert captured["print_layers"] == ["印刷"]
+    assert captured["source_sha256"] == pipeline.file_sha256(source)
+
+
+def test_v2_preflight_never_auto_selects_pdf_ocg_layer_names(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    pipeline = load_pipeline()
+    source = tmp_path / "source.ai"
+    source.write_bytes(b"native-ai")
+    template = tmp_path / "template.json"
+    template.write_text(json.dumps({"print_layers": ["印刷"]}), encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    def fake_export(*_args, **kwargs):
+        captured.update(kwargs)
+        export_dir = tmp_path / "export"
+        export_dir.mkdir()
+        artwork = export_dir / "artwork.pdf"
+        structure = export_dir / "structure.json"
+        artwork.write_bytes(b"artwork")
+        structure.write_text("{}", encoding="utf-8")
+        return {"print_pdf": str(artwork), "structure_json": str(structure)}
+
+    class ReachedResolver(RuntimeError):
+        pass
+
+    monkeypatch.setattr(
+        pipeline,
+        "PdfReader",
+        lambda *_args, **_kwargs: pytest.fail("V2 must not inspect PDF OCG names"),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "optional_content_layers",
+        lambda *_args, **_kwargs: pytest.fail("V2 must not inspect PDF OCG names"),
+    )
+    monkeypatch.setattr(pipeline, "run_illustrator_structure_export", fake_export)
+    monkeypatch.setattr(
+        pipeline,
+        "resolve_structure",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            ReachedResolver("no guessed layer observed")
+        ),
+    )
+
+    with pytest.raises(ReachedResolver, match="no guessed layer observed"):
+        pipeline.preflight_product_v2(
+            {
+                "code": "NO-OCG-GUESS",
+                "slug": "no-ocg-guess",
+                "display_name": "不猜图层",
+                "source_ai": source.name,
+                "template": template.name,
+            },
+            tmp_path,
+            tmp_path / "output",
+            False,
+            {"enabled": True},
+        )
+
+    assert captured["proposal_layers"] == []
+    assert captured["source_sha256"] == pipeline.file_sha256(source)
+
+
+def test_v2_preflight_uses_only_an_explicitly_selected_legacy_proposal_layer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    pipeline = load_pipeline()
+    source = tmp_path / "source.ai"
+    source.write_bytes(b"native-ai")
+    template = tmp_path / "template.json"
+    template.write_text(json.dumps({"print_layers": ["印刷"]}), encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    def fake_export(*_args, **kwargs):
+        captured.update(kwargs)
+        export_dir = tmp_path / "export"
+        export_dir.mkdir()
+        artwork = export_dir / "artwork.pdf"
+        structure = export_dir / "structure.json"
+        artwork.write_bytes(b"artwork")
+        structure.write_text("{}", encoding="utf-8")
+        return {"print_pdf": str(artwork), "structure_json": str(structure)}
+
+    class ReachedResolver(RuntimeError):
+        pass
+
+    monkeypatch.setattr(
+        pipeline,
+        "optional_content_layers",
+        lambda *_args: pytest.fail("an explicit selection must not be replaced by a layer-name guess"),
+    )
+    monkeypatch.setattr(pipeline, "run_illustrator_structure_export", fake_export)
+    monkeypatch.setattr(
+        pipeline,
+        "resolve_structure",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ReachedResolver("selection observed")),
+    )
+
+    with pytest.raises(ReachedResolver, match="selection observed"):
+        pipeline.preflight_product_v2(
+            {
+                "code": "LEGACY-LAYER",
+                "slug": "legacy-layer",
+                "display_name": "人工选层旧稿",
+                "source_ai": source.name,
+                "template": template.name,
+                "proposal_layers": ["客户确认结构层"],
+                "proposal_source_sha256": pipeline.file_sha256(source),
+            },
+            tmp_path,
+            tmp_path / "output",
+            False,
+            {"enabled": True},
+        )
+
+    assert captured["proposal_layers"] == ["客户确认结构层"]
+
+
+@pytest.mark.parametrize(
+    "proposal_layers",
+    ["结构层", [], [""], ["结构层"] * 17, ["结" * 161]],
+)
+def test_v2_preflight_rejects_invalid_explicit_proposal_layer_selection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    proposal_layers,
+):
+    pipeline = load_pipeline()
+    source = tmp_path / "source.ai"
+    source.write_bytes(b"native-ai")
+    template = tmp_path / "template.json"
+    template.write_text(json.dumps({"print_layers": ["印刷"]}), encoding="utf-8")
+    monkeypatch.setattr(
+        pipeline,
+        "run_illustrator_structure_export",
+        lambda *_args, **_kwargs: pytest.fail("invalid selection must fail before Illustrator"),
+    )
+
+    with pytest.raises(pipeline.PipelineError) as caught:
+        pipeline.preflight_product_v2(
+            {
+                "code": "BAD-LAYER",
+                "slug": "bad-layer",
+                "display_name": "错误选层",
+                "source_ai": source.name,
+                "template": template.name,
+                "proposal_layers": proposal_layers,
+                "proposal_source_sha256": pipeline.file_sha256(source),
+            },
+            tmp_path,
+            tmp_path / "output",
+            False,
+            {"enabled": True},
+        )
+
+    assert caught.value.code == "packaging_structure_selection_invalid"
+
+
+@pytest.mark.parametrize("selected_hash", [None, "not-a-hash", "0" * 64])
+def test_v2_preflight_rejects_missing_or_stale_proposal_layer_source_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    selected_hash,
+):
+    pipeline = load_pipeline()
+    source = tmp_path / "source.ai"
+    source.write_bytes(b"native-ai")
+    template = tmp_path / "template.json"
+    template.write_text(json.dumps({"print_layers": ["印刷"]}), encoding="utf-8")
+    monkeypatch.setattr(
+        pipeline,
+        "run_illustrator_structure_export",
+        lambda *_args, **_kwargs: pytest.fail("a stale selection must fail before Illustrator"),
+    )
+    product = {
+        "code": "STALE-LAYER",
+        "slug": "stale-layer",
+        "display_name": "过期选层",
+        "source_ai": source.name,
+        "template": template.name,
+        "proposal_layers": ["结构层"],
+    }
+    if selected_hash is not None:
+        product["proposal_source_sha256"] = selected_hash
+
+    with pytest.raises(pipeline.PipelineError) as caught:
+        pipeline.preflight_product_v2(
+            product,
+            tmp_path,
+            tmp_path / "output",
+            False,
+            {"enabled": True},
+        )
+
+    assert caught.value.code == "packaging_structure_selection_stale"
+
+
+def test_v2_hold_persists_source_bound_legacy_layer_candidates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    pipeline = load_pipeline()
+    source = tmp_path / "source.ai"
+    source.write_bytes(b"native-ai")
+    template = tmp_path / "template.json"
+    template.write_text(json.dumps({"print_layers": ["印刷"]}), encoding="utf-8")
+
+    def fake_export(*_args, **_kwargs):
+        export_dir = tmp_path / "export"
+        export_dir.mkdir()
+        artwork = export_dir / "artwork.pdf"
+        structure = export_dir / "structure.json"
+        artwork.write_bytes(b"artwork")
+        structure.write_text("{}", encoding="utf-8")
+        return {
+            "print_pdf": str(artwork),
+            "structure_json": str(structure),
+            "proposal_layer_candidates": [
+                {"name": "结构-A", "stroke_only_path_count": 12},
+                {"name": "结构-B", "stroke_only_path_count": 8},
+            ],
+        }
+
+    class ReviewResolution:
+        status = "review_required"
+        code = "structure_semantics_missing"
+        message = "稿件里没有明确结构语义。"
+        resolved = None
+
+        @staticmethod
+        def as_dict():
+            return {"status": "review_required", "code": "structure_semantics_missing"}
+
+    def fake_preview(_source, destination, **_kwargs):
+        preview = Path(destination).with_suffix(".png")
+        preview.write_bytes(b"png")
+        return preview
+
+    monkeypatch.setattr(pipeline, "run_illustrator_structure_export", fake_export)
+    monkeypatch.setattr(pipeline, "resolve_structure", lambda *_args, **_kwargs: ReviewResolution())
+    monkeypatch.setattr(pipeline, "render_pdf_thumbnail", fake_preview)
+
+    with pytest.raises(pipeline.PipelineHold) as caught:
+        pipeline.preflight_product_v2(
+            {
+                "code": "CANDIDATES",
+                "slug": "candidates",
+                "display_name": "候选层旧稿",
+                "source_ai": source.name,
+                "template": template.name,
+            },
+            tmp_path,
+            tmp_path / "output",
+            False,
+            {"enabled": True},
+        )
+
+    saved = json.loads(caught.value.resolution_path.read_text(encoding="utf-8"))
+    candidates = saved["input_candidates"]
+    assert candidates["schema"] == "packaging-structure-input-candidates/1"
+    assert candidates["source_sha256"] == pipeline.file_sha256(source)
+    assert candidates["proposal_layers"] == [
+        {
+            "id": candidates["proposal_layers"][0]["id"],
+            "name": "结构-A",
+            "stroke_only_path_count": 12,
+        },
+        {
+            "id": candidates["proposal_layers"][1]["id"],
+            "name": "结构-B",
+            "stroke_only_path_count": 8,
+        },
+    ]
+    assert candidates["proposal_layers"][0]["id"].startswith("proposal-layer-")
+    assert candidates["proposal_layers"][1]["id"].startswith("proposal-layer-")
+    assert candidates["proposal_layers"][0]["id"] != candidates["proposal_layers"][1]["id"]
+
+
+def test_explicit_proposal_layers_trim_and_deduplicate_names():
+    pipeline = load_pipeline()
+    source_sha256 = "a" * 64
+
+    assert pipeline.explicit_proposal_layers(
+        [" 结构-A ", "结构-A", "结构-B"],
+        source_sha256.upper(),
+        source_sha256,
+    ) == ["结构-A", "结构-B"]
+
+
+def test_structure_input_candidates_filter_untrusted_entries_and_cap_counts():
+    pipeline = load_pipeline()
+    payload = pipeline.structure_input_candidates(
+        {
+            "proposal_layer_candidates": [
+                None,
+                {"name": {"unexpected": "mapping"}, "stroke_only_path_count": 2},
+                {"name": "", "stroke_only_path_count": 2},
+                {"name": "结" * 161, "stroke_only_path_count": 2},
+                {"name": "布尔计数", "stroke_only_path_count": True},
+                {"name": "浮点计数", "stroke_only_path_count": 1.5},
+                {"name": "零计数", "stroke_only_path_count": 0},
+                {"name": " 结构-A ", "stroke_only_path_count": 2_000_000},
+                {"name": "结构-A", "stroke_only_path_count": 9},
+                {"name": "结构-B", "stroke_only_path_count": 3},
+            ],
+            "proposal_layer_candidates_truncated": True,
+        },
+        "b" * 64,
+    )
+
+    assert payload is not None
+    assert payload["truncated"] is True
+    assert [candidate["name"] for candidate in payload["proposal_layers"]] == [
+        "结构-A",
+        "结构-B",
+    ]
+    assert payload["proposal_layers"][0]["stroke_only_path_count"] == 1_000_000
+    assert payload["proposal_layers"][1]["stroke_only_path_count"] == 3
+
+
+def test_structure_input_candidates_return_none_when_every_entry_is_invalid():
+    pipeline = load_pipeline()
+
+    assert (
+        pipeline.structure_input_candidates(
+            {
+                "proposal_layer_candidates": [
+                    {"name": 7, "stroke_only_path_count": 1},
+                    {"name": "无计数"},
+                ]
+            },
+            "c" * 64,
+        )
+        is None
+    )
+
+
+def test_structure_input_candidates_are_bounded_and_source_bound():
+    pipeline = load_pipeline()
+    raw_candidates = [
+        {"name": f"结构-{index}", "stroke_only_path_count": 1}
+        for index in range(129)
+    ]
+
+    first = pipeline.structure_input_candidates(
+        {"proposal_layer_candidates": raw_candidates},
+        "d" * 64,
+    )
+    second = pipeline.structure_input_candidates(
+        {"proposal_layer_candidates": raw_candidates},
+        "e" * 64,
+    )
+
+    assert first is not None and second is not None
+    assert len(first["proposal_layers"]) == 128
+    assert first["truncated"] is True
+    assert first["proposal_layers"][0]["id"] != second["proposal_layers"][0]["id"]
 
 
 def test_production_flower_box_outputs_zoomable_white_shots():

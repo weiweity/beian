@@ -6,6 +6,7 @@ import {
   historyCanDelete,
   historyHasLive,
   historyMockRow,
+  paginateHistoryRows,
   historyRowKey,
   historySelectionState,
   historyTaskRow,
@@ -225,5 +226,36 @@ describe("history filters and batch selection", () => {
     const all = historySelectionState(rows, selectable.keys);
     assert.equal(all.all, true);
     assert.equal(all.some, false);
+  });
+
+  it("paginates merged history at ten rows and clamps a stale page", () => {
+    const many = Array.from({ length: 23 }, (_, index) => ({
+      ...rows[0],
+      id: String(index + 1),
+    }));
+    assert.deepEqual(paginateHistoryRows(many, 1).rows.map((row) => row.id), many.slice(0, 10).map((row) => row.id));
+    assert.equal(paginateHistoryRows(many, 2).rows.length, 10);
+    assert.equal(paginateHistoryRows(many, 3).rows.length, 3);
+    assert.deepEqual(paginateHistoryRows(many, 99), {
+      page: 3,
+      pageCount: 3,
+      rows: many.slice(20),
+    });
+    assert.deepEqual(paginateHistoryRows([], 4), { page: 1, pageCount: 1, rows: [] });
+  });
+
+  it("filters the merged history before paginating and clamps a page removed by the filter", () => {
+    const many = Array.from({ length: 23 }, (_, index) => ({
+      ...rows[index % 2],
+      id: String(index + 1),
+    }));
+    const mockups = filterHistoryRows(many, { kind: "打样台", time: "全部", actor: "" });
+
+    assert.equal(mockups.length, 11);
+    assert.deepEqual(paginateHistoryRows(mockups, 3), {
+      page: 2,
+      pageCount: 2,
+      rows: mockups.slice(10),
+    });
   });
 });
