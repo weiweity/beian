@@ -51,10 +51,15 @@ def resolved_fixture() -> dict:
     }
 
 
-def artwork_pdf(path: Path) -> Path:
+def artwork_pdf(
+    path: Path,
+    *,
+    page_width_mm: float = 120.0,
+    page_height_mm: float = 70.0,
+) -> Path:
     mm_to_pt = 72.0 / 25.4
     document = pymupdf.open()
-    page = document.new_page(width=120 * mm_to_pt, height=70 * mm_to_pt)
+    page = document.new_page(width=page_width_mm * mm_to_pt, height=page_height_mm * mm_to_pt)
     # Interior dark red must survive without the former global lightening.
     page.draw_rect(
         pymupdf.Rect(50 * mm_to_pt, 0, 80 * mm_to_pt, 50 * mm_to_pt),
@@ -169,6 +174,108 @@ def test_opposing_closure_layers_compose_without_white_padding(tmp_path: Path):
         assert image.getpixel((image.width // 2, image.height * 3 // 4)) == pytest.approx((26, 76, 204), abs=2)
 
 
+def test_clipped_vector_sampling_preserves_rotated_face_orientation(tmp_path: Path):
+    mm_to_pt = 72.0 / 25.4
+    source = tmp_path / "rotated-front.pdf"
+    document = pymupdf.open()
+    page = document.new_page(width=120 * mm_to_pt, height=70 * mm_to_pt)
+    page.draw_rect(
+        pymupdf.Rect(0, 0, 10 * mm_to_pt, 10 * mm_to_pt),
+        color=None,
+        fill=(1.0, 0.0, 0.0),
+    )
+    page.draw_rect(
+        pymupdf.Rect(40 * mm_to_pt, 20 * mm_to_pt, 50 * mm_to_pt, 30 * mm_to_pt),
+        color=None,
+        fill=(0.0, 0.0, 1.0),
+    )
+    document.save(source)
+    document.close()
+    resolved = resolved_fixture()
+    # Source 50×30 mm rotates clockwise into the 30×50 mm front face.
+    resolved["faces"]["front"]["artwork_layers"][0]["artwork_transform"] = [0, -1, 1, 0, 0, 50]
+
+    render_face_assets(source, resolved, tmp_path / "assets", raster_width_px=1_200)
+
+    with Image.open(tmp_path / "assets" / "panel_front.png").convert("RGB") as image:
+        assert image.getpixel((image.width // 6, image.height * 5 // 6)) == pytest.approx((255, 0, 0), abs=2)
+        assert image.getpixel((image.width * 5 // 6, image.height // 6)) == pytest.approx((0, 0, 255), abs=2)
+
+
+def test_pdf_page_rotation_is_normalized_to_the_structure_artboard_basis(tmp_path: Path):
+    mm_to_pt = 72.0 / 25.4
+    source = tmp_path / "page-rotated-front.pdf"
+    document = pymupdf.open()
+    page = document.new_page(width=120 * mm_to_pt, height=70 * mm_to_pt)
+    page.draw_rect(
+        pymupdf.Rect(50 * mm_to_pt, 0, 80 * mm_to_pt, 50 * mm_to_pt),
+        color=None,
+        fill=(117 / 255, 35 / 255, 46 / 255),
+    )
+    page.set_rotation(90)
+    document.save(source)
+    document.close()
+
+    render_face_assets(source, resolved_fixture(), tmp_path / "assets", raster_width_px=1_200)
+
+    assert center_rgba(tmp_path / "assets" / "panel_front.png") == pytest.approx((117, 35, 46, 255), abs=2)
+
+
+def test_nonzero_pdf_media_box_origin_is_normalized_to_the_structure_artboard_basis(tmp_path: Path):
+    mm_to_pt = 72.0 / 25.4
+    source = tmp_path / "offset-media-box-front.pdf"
+    document = pymupdf.open()
+    page = document.new_page(width=120 * mm_to_pt, height=70 * mm_to_pt)
+    page.set_mediabox(
+        pymupdf.Rect(
+            10,
+            20,
+            10 + 120 * mm_to_pt,
+            20 + 70 * mm_to_pt,
+        )
+    )
+    page.draw_rect(
+        pymupdf.Rect(50 * mm_to_pt, 0, 80 * mm_to_pt, 50 * mm_to_pt),
+        color=None,
+        fill=(117 / 255, 35 / 255, 46 / 255),
+    )
+    document.save(source)
+    document.close()
+
+    render_face_assets(source, resolved_fixture(), tmp_path / "assets", raster_width_px=1_200)
+
+    assert center_rgba(tmp_path / "assets" / "panel_front.png") == pytest.approx((117, 35, 46, 255), abs=2)
+
+
+def test_clipped_vector_sampling_preserves_explicit_mirrored_face_orientation(tmp_path: Path):
+    mm_to_pt = 72.0 / 25.4
+    source = tmp_path / "mirrored-front.pdf"
+    document = pymupdf.open()
+    page = document.new_page(width=120 * mm_to_pt, height=70 * mm_to_pt)
+    page.draw_rect(
+        pymupdf.Rect(50 * mm_to_pt, 0, 60 * mm_to_pt, 50 * mm_to_pt),
+        color=None,
+        fill=(1.0, 0.0, 0.0),
+    )
+    page.draw_rect(
+        pymupdf.Rect(70 * mm_to_pt, 0, 80 * mm_to_pt, 50 * mm_to_pt),
+        color=None,
+        fill=(0.0, 0.0, 1.0),
+    )
+    document.save(source)
+    document.close()
+    resolved = resolved_fixture()
+    # The confirmed negative-determinant transform mirrors source x=50..80
+    # into face x=30..0. The renderer must preserve that explicit direction.
+    resolved["faces"]["front"]["artwork_layers"][0]["artwork_transform"] = [-1, 0, 0, 1, 80, 0]
+
+    render_face_assets(source, resolved, tmp_path / "assets", raster_width_px=1_200)
+
+    with Image.open(tmp_path / "assets" / "panel_front.png").convert("RGB") as image:
+        assert image.getpixel((image.width // 6, image.height // 2)) == pytest.approx((0, 0, 255), abs=2)
+        assert image.getpixel((image.width * 5 // 6, image.height // 2)) == pytest.approx((255, 0, 0), abs=2)
+
+
 def test_blender_uses_the_artwork_alpha_as_a_binary_mask_over_the_opaque_core():
     source = RENDER_JOB.read_text(encoding="utf-8")
 
@@ -211,14 +318,145 @@ def test_raster_size_is_bounded(tmp_path: Path):
     assert error.value.code == "structure_limit_exceeded"
 
 
-def test_page_raster_is_downscaled_before_allocating_excess_pixels(tmp_path: Path):
+@pytest.mark.parametrize("minimum_pixels_per_mm", [True, float("nan"), 0.5, 65.0])
+def test_minimum_face_texture_density_is_bounded(tmp_path: Path, minimum_pixels_per_mm: object):
     source = artwork_pdf(tmp_path / "artwork.pdf")
+
+    with pytest.raises(ArtworkMappingError) as error:
+        render_face_assets(
+            source,
+            resolved_fixture(),
+            tmp_path / "assets",
+            minimum_face_pixels_per_mm=minimum_pixels_per_mm,  # type: ignore[arg-type]
+        )
+
+    assert error.value.code == "structure_limit_exceeded"
+
+
+def test_minimum_face_texture_density_can_be_raised_explicitly(tmp_path: Path):
+    source = artwork_pdf(tmp_path / "artwork.pdf")
+
+    sizes = render_face_assets(
+        source,
+        resolved_fixture(),
+        tmp_path / "assets",
+        raster_width_px=1_200,
+        minimum_face_pixels_per_mm=24.0,
+    )
+
+    assert sizes["front"] == [720, 1_200]
+
+
+def test_face_texture_density_does_not_spend_pixel_budget_on_unused_artboard(tmp_path: Path):
+    source = artwork_pdf(
+        tmp_path / "wide-artwork.pdf",
+        page_width_mm=1_000,
+        page_height_mm=532,
+    )
     sizes = render_face_assets(
         source,
         resolved_fixture(),
         tmp_path / "assets",
         raster_width_px=10_000,
-        max_raster_pixels=1_000_000,
     )
-    assert sizes["front"][0] < 1_000
-    assert sizes["front"][1] < 1_000
+
+    assert sizes["front"] == [600, 1_000]
+    assert sizes["right"] == [400, 1_000]
+    assert sizes["top"] == [600, 400]
+
+
+def test_narrow_tall_artboard_clamps_legacy_density_without_dropping_below_minimum(tmp_path: Path):
+    source = artwork_pdf(
+        tmp_path / "narrow-tall-artwork.pdf",
+        page_width_mm=10,
+        page_height_mm=100,
+    )
+    resolved = resolved_fixture()
+    dimensions = {"width": 8.0, "depth": 2.0, "height": 40.0}
+    resolved["dimensions_mm"] = dimensions
+    for role, face in resolved["faces"].items():
+        width_mm = dimensions["width"] if role in {"front", "back", "top", "bottom"} else dimensions["depth"]
+        height_mm = dimensions["height"] if role in {"front", "back", "left", "right"} else dimensions["depth"]
+        face["artwork_layers"][0]["artwork_transform"] = [1, 0, 0, 1, 0, 0]
+        face["artwork_layers"][0]["artwork_coverage_bounds_mm"] = [0.0, 0.0, width_mm, height_mm]
+
+    sizes = render_face_assets(
+        source,
+        resolved,
+        tmp_path / "assets",
+        raster_width_px=10_000,
+        max_raster_pixels=200_000,
+    )
+
+    assert sizes["front"][0] >= round(dimensions["width"] * 20)
+    assert sizes["front"][1] >= round(dimensions["height"] * 20)
+    assert sizes["front"][0] * sizes["front"][1] <= 200_000
+
+
+def test_face_texture_pixel_limit_fails_closed_instead_of_silently_blurring(tmp_path: Path):
+    source = artwork_pdf(tmp_path / "artwork.pdf")
+
+    with pytest.raises(ArtworkMappingError) as error:
+        render_face_assets(
+            source,
+            resolved_fixture(),
+            tmp_path / "assets",
+            raster_width_px=1_200,
+            max_raster_pixels=500_000,
+        )
+
+    assert error.value.code == "structure_limit_exceeded"
+    assert error.value.details["role"] == "front"
+
+
+def test_source_clip_pixel_limit_fails_before_allocating_a_huge_pixmap(tmp_path: Path, monkeypatch):
+    source = artwork_pdf(
+        tmp_path / "scaled-artwork.pdf",
+        page_width_mm=1_000,
+        page_height_mm=1_000,
+    )
+    resolved = resolved_fixture()
+    resolved["faces"]["front"]["artwork_layers"][0]["artwork_transform"] = [0.05, 0, 0, 0.05, 0, 0]
+
+    def unexpected_render(*_args, **_kwargs):
+        pytest.fail("source clip budget must fail before page.get_pixmap")
+
+    monkeypatch.setattr(pymupdf.Page, "get_pixmap", unexpected_render)
+    with pytest.raises(ArtworkMappingError) as error:
+        render_face_assets(
+            source,
+            resolved,
+            tmp_path / "assets",
+            raster_width_px=1_200,
+            max_raster_pixels=1_000_000,
+        )
+
+    assert error.value.code == "structure_limit_exceeded"
+    assert error.value.details["role"] == "front"
+    assert "矢量取样范围" in str(error.value)
+
+
+def test_actual_pixmap_pixel_limit_is_checked_after_library_rounding(tmp_path: Path, monkeypatch):
+    source = artwork_pdf(tmp_path / "artwork.pdf")
+
+    class OversizedPixmap:
+        width = 1_001
+        height = 1_000
+
+    monkeypatch.setattr(pymupdf.Page, "get_pixmap", lambda *_args, **_kwargs: OversizedPixmap())
+    with pytest.raises(ArtworkMappingError) as error:
+        render_face_assets(
+            source,
+            resolved_fixture(),
+            tmp_path / "assets",
+            raster_width_px=1_200,
+            max_raster_pixels=1_000_000,
+        )
+
+    assert error.value.code == "structure_limit_exceeded"
+    assert error.value.details == {
+        "role": "front",
+        "required_pixels": 1_001_000,
+        "max_pixels": 1_000_000,
+        "pixels_per_mm": 20.0,
+    }
