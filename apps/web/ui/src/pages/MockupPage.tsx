@@ -1037,15 +1037,26 @@ function WhiteShot({
           <img src={fileHref(jobId, fileKey)} alt={alt} onError={() => setBad(true)} />
         )}
         {bad ? null : (
-          <a
-            className="mockup-dl mockup-dl-corner"
-            href={fileHref(jobId, fileKey, true)}
-            download={downloadName}
-            aria-label={`下载${caption}`}
-            onClick={onDownload}
-          >
-            下载
-          </a>
+          <>
+            <a
+              className="mockup-dl mockup-dl-fs"
+              href={fileHref(jobId, fileKey)}
+              target="_blank"
+              rel="noreferrer"
+              aria-label={`打开${caption}原图`}
+            >
+              原图
+            </a>
+            <a
+              className="mockup-dl mockup-dl-corner"
+              href={fileHref(jobId, fileKey, true)}
+              download={downloadName}
+              aria-label={`下载${caption}`}
+              onClick={onDownload}
+            >
+              下载
+            </a>
+          </>
         )}
       </div>
       <figcaption className="mockup-sheet-cap">{caption}</figcaption>

@@ -105,3 +105,54 @@ test("结构待确认和不支持均显示可执行状态，不伪装成打样�
     page.locator(".review-card").filter({ hasText: unsupported.title }).locator(".review-card-summary-state"),
   ).toHaveText("结构暂不支持");
 });
+
+test("完成态打样单可在新窗口打开两张内联原图", async ({ page, context, syntheticApi }) => {
+  const mockup = completedMockup("777777777777", "高清白底图");
+  mockup.files = [
+    { key: "white_a", name: "正面与侧面.png" },
+    { key: "white_b", name: "反面与侧面.png" },
+  ];
+  syntheticApi.mockups.push(mockup);
+  const image = "<svg xmlns='http://www.w3.org/2000/svg' width='3000' height='3600'><rect width='3000' height='3600' fill='white'/></svg>";
+  for (const key of ["white_a", "white_b"]) {
+    const pattern = new RegExp(`/api/mockups/${mockup.id}/files/${key}(?:\\?.*)?$`);
+    await context.route(pattern, async (route) => {
+      await route.fulfill({ status: 200, contentType: "image/svg+xml", body: image });
+    });
+    await page.route(pattern, async (route) => {
+      await route.fulfill({ status: 200, contentType: "image/svg+xml", body: image });
+    });
+  }
+
+  await page.goto(`/mockup/${mockup.id}`);
+
+  const originalLinks = page.getByRole("link", { name: /打开.+原图/ });
+  await expect(originalLinks).toHaveCount(2);
+  await expect(originalLinks.nth(0)).toHaveAttribute("href", `/api/mockups/${mockup.id}/files/white_a`);
+  await expect(originalLinks.nth(0)).toHaveAttribute("target", "_blank");
+  await expect(originalLinks.nth(0)).toHaveAttribute("rel", "noreferrer");
+  await expect(originalLinks.nth(1)).toHaveAttribute("href", `/api/mockups/${mockup.id}/files/white_b`);
+
+  const [popup] = await Promise.all([page.waitForEvent("popup"), originalLinks.nth(0).click()]);
+  await popup.waitForLoadState();
+  expect(new URL(popup.url()).pathname).toBe(`/api/mockups/${mockup.id}/files/white_a`);
+  expect(new URL(popup.url()).search).toBe("");
+  await expect(popup.locator("svg")).toBeVisible();
+});
+
+test("白底图损坏时隐藏原图和下载操作", async ({ page, syntheticApi }) => {
+  const mockup = completedMockup("888888888888", "损坏白底图");
+  mockup.files = [{ key: "white_a", name: "损坏.png" }];
+  syntheticApi.mockups.push(mockup);
+  await page.route(new RegExp(`/api/mockups/${mockup.id}/files/white_a(?:\\?.*)?$`), async (route) => {
+    await route.fulfill({ status: 404, contentType: "text/plain", body: "missing" });
+  });
+
+  await page.goto(`/mockup/${mockup.id}`);
+
+  const shot = page.locator(".mockup-sheet-photo").filter({
+    has: page.getByText("正面 + 侧面", { exact: true }),
+  });
+  await expect(shot.getByText("这张白底图坏了，回到打样台重新打。")).toBeVisible();
+  await expect(shot.getByRole("link")).toHaveCount(0);
+});
