@@ -196,7 +196,10 @@ export function App() {
     tick();
     const id = window.setInterval(tick, 4000);
     const onVis = () => {
-      if (!document.hidden) tick();
+      if (!document.hidden) {
+        tick();
+        void refreshMe();
+      }
     };
     document.addEventListener("visibilitychange", onVis);
     return () => {
@@ -204,7 +207,7 @@ export function App() {
       window.clearInterval(id);
       document.removeEventListener("visibilitychange", onVis);
     };
-  }, [loggedIn]);
+  }, [loggedIn, refreshMe]);
 
   useEffect(() => {
     if (me === null) return;
@@ -388,7 +391,7 @@ export function App() {
           <Suspense fallback={<PaneFallback label="打开打样台…" />}>
             <MockupDesk
               canCreate={me.perms.includes("create")}
-              canAdmin={me.role === "admin"}
+              canConfirmStructure={me.perms.includes("confirm_structure")}
               openId={view === "mockupNew" ? null : mockupId}
               composing={view === "mockupNew"}
               receiptId={receiptId}
