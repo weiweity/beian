@@ -62,7 +62,11 @@ export type StructureNetProposal = {
   strip_axis: "x" | "y";
   bounds_mm?: [number, number, number, number];
   dimensions_mm?: { width: number; depth: number; height: number };
-  valid_anchors?: Array<{ front_face_id: string; quarter_turns: Array<0 | 1 | 2 | 3> }>;
+  valid_anchors?: Array<{
+    front_face_id: string;
+    quarter_turns: Array<0 | 1 | 2 | 3>;
+    preferred_quarter_turns?: 0 | 1 | 2 | 3;
+  }>;
   closure_assemblies: Array<{
     primary_face_id: string;
     side: -1 | 1;
@@ -205,14 +209,11 @@ export function mockupOwner(job: MockupJob): string {
   return String(job.owner || "");
 }
 
-export function assertCanAccessMockup(job: MockupJob, viewer: Viewer): void {
+/** 写操作仍服从对象所有权；团队共享读取不经过这里。 */
+export function assertCanManageMockup(job: MockupJob, viewer: Viewer): void {
   if (!canAccessOwner(mockupOwner(job), viewer)) {
     throw Object.assign(new Error("没有权限"), { status: 403 });
   }
-}
-
-export function listJobsFor(viewer: Viewer): MockupJob[] {
-  return listJobs().filter((job) => canAccessOwner(mockupOwner(job), viewer));
 }
 
 /** 回执属于具体账号；管理员权限也不能跨账号命中别人的幂等键。 */
@@ -289,7 +290,7 @@ export function listJobs(): MockupJob[] {
   return loadAllMockups().sort((a, b) => b.created_at.localeCompare(a.created_at));
 }
 
-export function publicMockup(job: MockupJob) {
+function publicMockupSummaryFields(job: MockupJob) {
   return {
     id: job.id,
     status: job.status,
@@ -310,6 +311,16 @@ export function publicMockup(job: MockupJob) {
     structure_status: job.structure_status,
     structure_code: job.structure_code,
     structure_message: job.structure_message,
+  };
+}
+
+export function publicMockupSummary(job: MockupJob) {
+  return publicMockupSummaryFields(job);
+}
+
+export function publicMockup(job: MockupJob) {
+  return {
+    ...publicMockupSummaryFields(job),
     structure_preview: loadStructurePreview(job),
   };
 }
@@ -354,8 +365,23 @@ export function loadStructurePreview(job: MockupJob): {
     if (contents.byteLength > 25 * 1024 * 1024) return undefined;
     const resolution = JSON.parse(contents.toString("utf8")) as {
       topology?: { face_proposal?: unknown[]; net_proposals?: unknown[] };
-      structure?: { source?: { page_size?: unknown } };
+      structure?: { structure_hash?: unknown; source?: { page_size?: unknown; sha256?: unknown } };
     };
+    const currentStructureHash = typeof resolution.structure?.structure_hash === "string"
+      && /^sha256:[0-9a-f]{64}$/.test(resolution.structure.structure_hash)
+      ? resolution.structure.structure_hash
+      : null;
+    const resolutionSourceHash = typeof resolution.structure?.source?.sha256 === "string"
+      && /^[0-9a-f]{64}$/.test(resolution.structure.source.sha256)
+      ? resolution.structure.source.sha256
+      : null;
+    const jobSourceHash = typeof job.structure_source_sha256 === "string"
+      && /^[0-9a-f]{64}$/.test(job.structure_source_sha256)
+      ? job.structure_source_sha256
+      : null;
+    const sourceMatchesJob = resolutionSourceHash !== null
+      && jobSourceHash !== null
+      && resolutionSourceHash === jobSourceHash;
     const raw = resolution.topology?.face_proposal;
     if (!Array.isArray(raw) || raw.length > 1000) return undefined;
     const faces: StructurePreviewFace[] = [];
@@ -394,6 +420,9 @@ export function loadStructurePreview(job: MockupJob): {
         if (
           net.schema !== BOX_NET_PROPOSAL_SCHEMA ||
           !isStructureProposalId(id) ||
+          !currentStructureHash ||
+          !sourceMatchesJob ||
+          net.structure_hash !== currentStructureHash ||
           faceIdsRaw.length < 6 ||
           faceIdsRaw.length > 8 ||
           new Set(faceIdsRaw).size !== faceIdsRaw.length ||
@@ -410,26 +439,38 @@ export function loadStructurePreview(job: MockupJob): {
           continue;
         }
         const dimensions = positiveDimensions(net.dimensions_mm);
-        const rawAnchors = Array.isArray(net.valid_anchors) ? net.valid_anchors : undefined;
+        const rawAnchors = Array.isArray(net.valid_anchors) ? net.valid_anchors : null;
         if (net.dimensions_mm !== undefined && !dimensions) continue;
-        if (net.valid_anchors !== undefined && !rawAnchors) continue;
+        if (!rawAnchors || !rawAnchors.length || rawAnchors.length > 4) continue;
         const validAnchors: NonNullable<StructureNetProposal["valid_anchors"]> = [];
-        if (rawAnchors && rawAnchors.length <= 4) {
-          for (const rawAnchor of rawAnchors) {
-            if (!rawAnchor || typeof rawAnchor !== "object" || Array.isArray(rawAnchor)) continue;
-            const anchor = rawAnchor as Record<string, unknown>;
-            const frontFaceId = typeof anchor.front_face_id === "string" ? anchor.front_face_id : "";
-            const turns = Array.isArray(anchor.quarter_turns)
-              ? anchor.quarter_turns.map(Number).filter((turn) => Number.isInteger(turn) && turn >= 0 && turn <= 3)
-              : [];
-            if (!bodyIds.includes(frontFaceId) || !turns.length || new Set(turns).size !== turns.length) continue;
-            validAnchors.push({
-              front_face_id: frontFaceId,
-              quarter_turns: turns as Array<0 | 1 | 2 | 3>,
-            });
-          }
+        for (const rawAnchor of rawAnchors) {
+          if (!rawAnchor || typeof rawAnchor !== "object" || Array.isArray(rawAnchor)) continue;
+          const anchor = rawAnchor as Record<string, unknown>;
+          const frontFaceId = typeof anchor.front_face_id === "string" ? anchor.front_face_id : "";
+          const rawTurns = Array.isArray(anchor.quarter_turns) ? anchor.quarter_turns : [];
+          const turns = rawTurns.filter((turn): turn is number => (
+            typeof turn === "number" && Number.isInteger(turn) && turn >= 0 && turn <= 3
+          ));
+          const preferred = anchor.preferred_quarter_turns;
+          if (
+            !bodyIds.includes(frontFaceId)
+            || !turns.length
+            || turns.length !== rawTurns.length
+            || new Set(turns).size !== turns.length
+            || typeof preferred !== "number"
+            || !Number.isInteger(preferred)
+            || !turns.includes(preferred)
+          ) continue;
+          validAnchors.push({
+            front_face_id: frontFaceId,
+            quarter_turns: turns as Array<0 | 1 | 2 | 3>,
+            preferred_quarter_turns: preferred as 0 | 1 | 2 | 3,
+          });
         }
-        if (rawAnchors && !validAnchors.length) continue;
+        if (
+          validAnchors.length !== rawAnchors.length
+          || new Set(validAnchors.map((anchor) => anchor.front_face_id)).size !== validAnchors.length
+        ) continue;
         const rawClosures = Array.isArray(net.closure_assemblies) ? net.closure_assemblies : undefined;
         if (!rawClosures || rawClosures.length !== 2) continue;
         const closures: NonNullable<StructureNetProposal["closure_assemblies"]> = [];

@@ -17,7 +17,6 @@
     {"tool":"knip","kind":"exports","path":"apps/web/server/src/illustratorAgent.ts","symbol":"ILLUSTRATOR_AGENT_SCRIPT","line":10,"confidence":100},
     {"tool":"knip","kind":"exports","path":"apps/web/server/src/jobs.ts","symbol":"tryStart","line":209,"confidence":100},
     {"tool":"knip","kind":"exports","path":"apps/web/server/src/mockup.ts","symbol":"findBlender","line":106,"confidence":100},
-    {"tool":"knip","kind":"exports","path":"apps/web/server/src/mockup.ts","symbol":"listJobs","line":235,"confidence":100},
     {"tool":"knip","kind":"exports","path":"apps/web/server/src/mockup.ts","symbol":"loadStructurePreview","line":281,"confidence":100},
     {"tool":"knip","kind":"exports","path":"apps/web/server/src/mockup.ts","symbol":"mockupOwner","line":151,"confidence":100},
     {"tool":"knip","kind":"exports","path":"apps/web/server/src/releaseAdmission.ts","symbol":"RELEASE_DRAIN_LEASE_MS","line":7,"confidence":100},

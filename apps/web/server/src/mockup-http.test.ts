@@ -61,6 +61,41 @@ function seedOwnedFile(id: string, key: string, name: string, buf: Buffer, owner
   });
 }
 
+function seedStructurePreviewJob(id: string, owner: string) {
+  const dir = join(DATA_DIR, "mockups", id);
+  mkdirSync(dir, { recursive: true });
+  const resolution = join(dir, "structure_resolution.json");
+  const sourceHash = "d".repeat(64);
+  writeFileSync(resolution, JSON.stringify({
+    structure: {
+      structure_hash: `sha256:${"e".repeat(64)}`,
+      source: { page_size: [210, 297], sha256: sourceHash },
+    },
+    topology: {
+      face_proposal: [{
+        id: "proposal-face-0001",
+        bounds_mm: [0, 0, 30, 50],
+        centroid_mm: [15, 25],
+        rectangular: true,
+      }],
+      net_proposals: [],
+    },
+  }));
+  saveMockup({
+    id,
+    status: "review_required",
+    created_at: "2026-08-20T00:00:01Z",
+    files: [],
+    owner,
+    job_kind: "mockup",
+    job_status: "waiting_input",
+    structure_engine: "v2",
+    structure_status: "review_required",
+    structure_resolution_path: resolution,
+    structure_source_sha256: sourceHash,
+  });
+}
+
 describe("mockup http", () => {
   it("rejects unauthenticated list", async () => {
     const res = await app.request("/api/mockups");
@@ -82,7 +117,7 @@ describe("mockup http", () => {
 });
 
 describe("mockup get", () => {
-  it("GET mockup without owner is 403 for a reviewer", async () => {
+  it("lets a reviewer read a legacy ownerless team mockup", async () => {
     saveMockup({
       id: "121212121212",
       status: "done",
@@ -92,18 +127,13 @@ describe("mockup get", () => {
       job_status: "succeeded",
     });
     const reviewer = issueSessionForTest("路人", "reviewer", "ou_mockup_ownerless");
-    const denied = await app.request("/api/mockups/121212121212", {
-      headers: { authorization: `Bearer ${reviewer.token}` },
-    });
-    assert.equal(denied.status, 403);
-    const admin = issueSessionForTest("管理员", "admin", "ou_mockup_ownerless_admin");
     const allowed = await app.request("/api/mockups/121212121212", {
-      headers: { authorization: `Bearer ${admin.token}` },
+      headers: { authorization: `Bearer ${reviewer.token}` },
     });
     assert.equal(allowed.status, 200);
   });
 
-  it("GET another owner's mockup is 403", async () => {
+  it("lets every logged-in worker read and list another owner's mockup", async () => {
     saveMockup({
       id: "aaaaaaaaaaaa",
       status: "done",
@@ -117,30 +147,55 @@ describe("mockup get", () => {
     const res = await app.request("/api/mockups/aaaaaaaaaaaa", {
       headers: { authorization: `Bearer ${sess.token}` },
     });
-    assert.equal(res.status, 403);
+    assert.equal(res.status, 200);
     const list = await app.request("/api/mockups", {
       headers: { authorization: `Bearer ${sess.token}` },
     });
     assert.equal(list.status, 200);
     const body = (await list.json()) as { id?: string }[];
-    assert.equal(body.some((j) => j.id === "aaaaaaaaaaaa"), false);
+    assert.equal(body.some((j) => j.id === "aaaaaaaaaaaa"), true);
   });
 
-  it("GET another owner's mockup file is 403", async () => {
-    saveMockup({
-      id: "bbbbbbbbbbbb",
-      status: "done",
-      created_at: "2026-08-20T00:00:01Z",
-      files: [{ key: "glb", path: "/secret/box.glb", name: "box.glb" }],
-      owner: "籽烨",
-      job_kind: "mockup",
-      job_status: "succeeded",
+  it("keeps structure previews out of the list while returning them from the detail endpoint", async () => {
+    const id = "abababababab";
+    seedStructurePreviewJob(id, "ou_preview_summary_owner");
+    const sess = issueSessionForTest("路人", "reviewer", "ou_preview_summary_reader");
+
+    const list = await app.request("/api/mockups", {
+      headers: { authorization: `Bearer ${sess.token}` },
     });
+    assert.equal(list.status, 200);
+    const rows = (await list.json()) as Array<Record<string, unknown>>;
+    const row = rows.find((item) => item.id === id);
+    assert.ok(row);
+    assert.equal(Object.hasOwn(row, "structure_preview"), false);
+
+    const detail = await app.request(`/api/mockups/${id}`, {
+      headers: { authorization: `Bearer ${sess.token}` },
+    });
+    assert.equal(detail.status, 200);
+    const body = (await detail.json()) as Record<string, unknown>;
+    assert.equal(Object.hasOwn(body, "structure_preview"), true);
+    assert.deepEqual(body.structure_preview, {
+      faces: [{
+        id: "proposal-face-0001",
+        bounds_mm: [0, 0, 30, 50],
+        centroid_mm: [15, 25],
+        rectangular: true,
+      }],
+      net_proposals: [],
+      page_size_mm: [210, 297],
+    });
+  });
+
+  it("lets every logged-in worker read another owner's mockup result file", async () => {
+    seedOwnedFile("bbbbbbbbbbbb", "glb", "box.glb", Buffer.from("glTF"), "ou_mockup_file_owner");
     const sess = issueSessionForTest("路人", "reviewer", "ou_mockup_file_acl");
     const res = await app.request("/api/mockups/bbbbbbbbbbbb/files/glb", {
       headers: { authorization: `Bearer ${sess.token}` },
     });
-    assert.equal(res.status, 403);
+    assert.equal(res.status, 200);
+    assert.equal(Buffer.from(await res.arrayBuffer()).toString(), "glTF");
   });
 
   it("GET mockup id that is not a tid is 400", async () => {
@@ -215,7 +270,7 @@ describe("mockup get", () => {
 });
 
 describe("mockup structure artwork preview", () => {
-  it("serves the private preview only to the owning account", async () => {
+  it("serves the preview to another logged-in worker without granting confirmation", async () => {
     const id = "facefeed0001";
     const dir = join(DATA_DIR, "mockups", id);
     mkdirSync(dir, { recursive: true });
@@ -242,10 +297,11 @@ describe("mockup structure artwork preview", () => {
     assert.deepEqual(Buffer.from(await own.arrayBuffer()), PNG_MAGIC);
 
     const stranger = issueSessionForTest("其他审核员", "reviewer", "ou_preview_other");
-    const denied = await app.request(`/api/mockups/${id}/structure-preview`, {
+    const shared = await app.request(`/api/mockups/${id}/structure-preview`, {
       headers: { authorization: `Bearer ${stranger.token}` },
     });
-    assert.equal(denied.status, 403);
+    assert.equal(shared.status, 200);
+    assert.deepEqual(Buffer.from(await shared.arrayBuffer()), PNG_MAGIC);
   });
 });
 
@@ -689,7 +745,7 @@ describe("mockup post", { concurrency: false }, () => {
     }
   });
 
-  it("does not let another Feishu account with the same display name read this mockup", async () => {
+  it("uses team read access instead of display-name ownership for mockups", async () => {
     const { setJobsTestHooks, resetJobsTestHooks } = await import("./jobs.js");
     const prevBin = process.env.BLENDER_EXECUTABLE;
     const prevAi = process.env.ILLUSTRATOR_EXECUTABLE;
@@ -712,15 +768,15 @@ describe("mockup post", { concurrency: false }, () => {
       assert.equal(start.status, 200);
       const job = (await start.json()) as { id?: string };
       const other = issueSessionForTest("同名", "reviewer", "ou_mock_same_b");
-      const denied = await app.request(`/api/mockups/${job.id}`, {
+      const shared = await app.request(`/api/mockups/${job.id}`, {
         headers: { authorization: `Bearer ${other.token}` },
       });
-      assert.equal(denied.status, 403);
+      assert.equal(shared.status, 200);
       const list = await app.request("/api/mockups", {
         headers: { authorization: `Bearer ${other.token}` },
       });
       const rows = (await list.json()) as { id?: string }[];
-      assert.equal(rows.some((j) => j.id === job.id), false);
+      assert.equal(rows.some((j) => j.id === job.id), true);
     } finally {
       resetJobsTestHooks();
       if (prevBin !== undefined) process.env.BLENDER_EXECUTABLE = prevBin;

@@ -450,7 +450,7 @@ def _anchor_decisions(
     if net is None:
         raise StructureConfirmationError("structure_confirmation_stale", "所选完整盒型已经失效，请刷新后重试。")
     bound_hash = net.get("structure_hash")
-    if bound_hash is not None and bound_hash != structure.get("structure_hash"):
+    if not isinstance(bound_hash, str) or bound_hash != structure.get("structure_hash"):
         raise StructureConfirmationError("structure_confirmation_stale", "完整盒型与当前结构版本不一致，请重新识别。")
     body_ids = [str(value) for value in net.get("body_face_ids", [])]
     cap_ids = [str(value) for value in net.get("cap_face_ids", [])]
@@ -885,11 +885,13 @@ def preflight_anchor_proposals(
         valid: list[dict[str, Any]] = []
         reasons: dict[str, int] = {}
         resolution = {"topology": {"net_proposals": [proposal]}}
-        for front_face_id in [str(value) for value in proposal.get("body_face_ids", [])]:
+        body_face_ids = [str(value) for value in proposal.get("body_face_ids", [])]
+        for front_face_id in body_face_ids:
             turns: list[int] = []
+            preferred_turn: int | None = None
             for quarter_turns in range(4):
                 try:
-                    _resolve_anchor(
+                    approved, _resolved = _resolve_anchor(
                         resolution,
                         structure,
                         {
@@ -902,8 +904,22 @@ def preflight_anchor_proposals(
                     reasons[error.code] = reasons.get(error.code, 0) + 1
                 else:
                     turns.append(quarter_turns)
+                    # Hide CAD rotation from the operator while keeping a deterministic
+                    # geometry choice: canonical body order advances to the physical right.
+                    roles = {
+                        str(face.get("role")): str(face.get("id"))
+                        for face in approved.get("faces", [])
+                        if isinstance(face, Mapping)
+                    }
+                    front_index = body_face_ids.index(front_face_id)
+                    if roles.get("right") == body_face_ids[(front_index + 1) % 4]:
+                        preferred_turn = quarter_turns
             if turns:
-                valid.append({"front_face_id": front_face_id, "quarter_turns": turns})
+                valid.append({
+                    "front_face_id": front_face_id,
+                    "quarter_turns": turns,
+                    "preferred_quarter_turns": preferred_turn if preferred_turn is not None else turns[0],
+                })
         if valid:
             proposal["valid_anchors"] = valid
             accepted.append(proposal)
