@@ -149,6 +149,7 @@ $forbiddenTaskCommands = @(
   "Stop-ScheduledTask",
   "Disable-ScheduledTask",
   "Enable-ScheduledTask",
+  "Set-ScheduledTask",
   "Unregister-ScheduledTask"
 )
 $mutatingTaskCalls = @($contractAst.FindAll({

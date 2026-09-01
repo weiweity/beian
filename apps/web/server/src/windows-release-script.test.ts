@@ -663,9 +663,18 @@ describe("windows release.ps1 contract", () => {
     assert.match(recovery, /runtime Illustrator installer hash does not match/);
     assert.match(recovery, /function Stop-IllustratorAgentTaskForRecovery/);
     assert.match(recovery, /& \$runtimeInstaller[\s\S]+-Quiesce/);
+    const verifierIdx = recovery.indexOf("function Get-VerifiedRuntimeInstallerForRecovery");
+    const verifierHashIdx = recovery.indexOf("Get-FileHash", verifierIdx);
+    const verifierReturnIdx = recovery.indexOf("return $runtimeInstaller", verifierIdx);
     const recoveryStopIdx = recovery.indexOf("-Quiesce");
     const recoveryResetIdx = recovery.indexOf('"reset", "--hard", $preSha');
     const restoredInstallerIdx = recovery.indexOf("$treeInstaller =", recoveryResetIdx);
+    assert.ok(
+      verifierIdx >= 0 &&
+        verifierHashIdx > verifierIdx &&
+        verifierReturnIdx > verifierHashIdx &&
+        recoveryStopIdx > verifierReturnIdx,
+    );
     assert.ok(recoveryStopIdx >= 0 && recoveryResetIdx > recoveryStopIdx);
     assert.ok(restoredInstallerIdx > recoveryResetIdx);
   });
@@ -687,6 +696,10 @@ describe("windows release.ps1 contract", () => {
 
     assert.match(installer, /New-ScheduledTaskSettingsSet @settingsArguments -Hidden/);
     assert.match(installer, /\[switch\]\$Quiesce/);
+    assert.match(
+      installer,
+      /\(\$ClearFaultFence -and \(\$Quiesce -or \$Uninstall\)\)[\s\S]+\(\$Quiesce -and \$Uninstall\)/,
+    );
     assert.match(installer, /MultipleInstances = "IgnoreNew"/);
     assert.match(installer, /New-ScheduledTaskTrigger -AtLogOn -User \$InteractiveUser/);
     assert.match(installer, /-Trigger \$taskTriggers/);
@@ -703,6 +716,16 @@ describe("windows release.ps1 contract", () => {
     const stopIdx = installer.indexOf("Stop-ScheduledTask -TaskName $Name -ErrorAction Stop");
     assert.ok(disableIdx >= 0 && stopIdx > disableIdx);
     assert.match(installer, /checkout identity is switching/);
+    const lifecycleIdx = installer.indexOf("if ($Quiesce -or $Uninstall)");
+    const uninstallGuardIdx = installer.indexOf("if ($Uninstall)", lifecycleIdx);
+    const unregisterIdx = installer.indexOf("Unregister-ScheduledTask", lifecycleIdx);
+    const quiescedResultIdx = installer.indexOf("ILLUSTRATOR_AGENT_TASK quiesced", lifecycleIdx);
+    assert.ok(
+      lifecycleIdx >= 0 &&
+        uninstallGuardIdx > lifecycleIdx &&
+        unregisterIdx > uninstallGuardIdx &&
+        quiescedResultIdx > unregisterIdx,
+    );
 
     assert.match(contract, /ILLUSTRATOR_AGENT_TASK_CONTRACT ok/);
     assert.match(contract, /Does not register, start, stop, or disable any production task/);
@@ -710,6 +733,7 @@ describe("windows release.ps1 contract", () => {
     assert.match(contract, /New-ScheduledTaskSettingsSet/);
     assert.match(contract, /System\.Management\.Automation\.Language\.Parser/);
     assert.match(contract, /System\.Management\.Automation\.Language\.CommandAst/);
+    assert.match(contract, /"Set-ScheduledTask"/);
     assert.match(contract, /ConvertTo-WindowsPowerShell5Ast \$release "release"/);
     assert.match(contract, /ConvertTo-WindowsPowerShell5Ast \$recovery "recovery"/);
     assert.match(contract, /persistent task must have exactly two triggers/);
