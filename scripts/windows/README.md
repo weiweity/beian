@@ -30,7 +30,7 @@ cmd.exe 才用 `set WB_DATA_DIR=...`。PowerShell 里写 `set` 不会进子进�
 
 `beian-server-8787` 与 Actions runner 是 LocalSystem / Session 0；Illustrator 是带 GUI 的桌面程序，两者不能在同一会话内直接自动化。`release.ps1` 会同步计划任务 `beian-illustrator-agent`：它使用 `InteractiveToken`，只在当前管理员已登录的交互会话启动 `scripts\windows\illustrator-agent.ps1`。任务本身 Hidden，进程用 `-WindowStyle Hidden -NonInteractive`，避免桌面弹出可被误关的 PowerShell 窗口。锁屏或 UU 断开不会注销；真正注销后 Agent 停止，打样入口返回可重试的 412，不会从服务进程补拉隐藏 Illustrator。
 
-Agent 空闲、读请求、等待执行锁和执行 cscript/COM 时都最多每 5 秒刷新一次心跳；Hono 与 Python 客户端统一在心跳停止超过 30 秒后拒绝接单。持久登录任务在 InteractiveToken 会话内每分钟存活触发一次，已运行实例由 `IgnoreNew` 跳过；异常退出另有每分钟 RestartOnFailure，最多 60 次。临时 L1 任务仍只有 AtLogOn，且只重试 3 次。发版/维护必须先 `Disable-ScheduledTask` 再停止，避免存活触发器与升版身份切换竞争。此恢复不跨越注销，也不把 Adobe 拉到 Session 0。
+Agent 空闲、读请求、等待执行锁和执行 cscript/COM 时都最多每 5 秒刷新一次心跳；Hono 与 Python 客户端统一在心跳停止超过 30 秒后拒绝接单。持久登录任务在 InteractiveToken 会话内每分钟存活触发一次，已运行实例由 `IgnoreNew` 跳过；异常退出另有每分钟 RestartOnFailure，最多 60 次。临时 L1 任务仍只有 AtLogOn，且只重试 3 次。发版在切换 Git checkout 前先把 Agent 变更责任写进恢复日志，再通过不可变安装器 `Quiesce`：先 `Disable-ScheduledTask`、再停止进程，但保留任务主体供目标版本同步或旧树回滚；维护卸载沿用同一停机顺序。此恢复不跨越注销，也不把 Adobe 拉到 Session 0。
 
 心跳已停止但交互会话仍在（任务 `Ready`、`LastTaskResult=0xC000013A`）时，不要发版、不要清 fault fence、不要重新上传稿件。管理员确认桌面 Illustrator 无客户稿后关闭，然后：
 
@@ -77,7 +77,7 @@ Clash 开系统代理时，备案域名和 `127.0.0.1` 必须直连。self-hoste
 
 恢复失败会保留 `$env:WB_DATA_DIR\runtime\release\release-journal.json` 和 `beian-release-watchdog`，`last_error` 是当前阻塞；不要删 journal、不要手工 `sc start` 掩盖现场。下一次发版会先要求这笔旧事务恢复完成。`release.ps1` 与独立恢复脚本都带 UTF-8 BOM，供中文 Windows PowerShell 5.1 正确解析。
 
-当前脚本会在依赖图复核和新 UI 构建后、重启 8787 前停掉旧 Agent 登录任务并按新 checkout 重新注册/启动，避免发版后旧 Agent 进程继续执行旧脚本；旧 PID 未退出、Agent 正 busy 或 faulted 都拒绝切换，回滚会按旧 checkout 恢复任务。它沿用已注册的管理员 principal，只同步 InteractiveToken 任务，不会把 Illustrator 注册成 Session 0 服务。目标 8787 在 transaction fence 后启动并通过 health/version 身份核对后，发版脚本还会调用生产 Agent 完成管道 → VBS → 唯一 JSX 的 Session 1 冒烟；Session、可见窗口、空文档、脚本哈希、发布版本、checkout 或管道服务 PID 任一不符都会回滚，业务仍不开放。PR 和可选择 ref 的手工工作流都不能触达杭州生产 runner。
+当前脚本会在切换 Git checkout 前先通过不可变安装器 Quiesce 旧 Agent 登录任务；新 UI 构建后，再按目标 checkout 重新注册/启动，避免旧进程或每分钟存活触发器跨越版本身份切换。旧 PID 未退出、Agent 正 busy 或 faulted 都拒绝切换，回滚会在 reset 前再次 Quiesce，并利用保留的 principal 按旧 checkout 恢复任务。它只同步 InteractiveToken 任务，不会把 Illustrator 注册成 Session 0 服务。目标 8787 在 transaction fence 后启动并通过 health/version 身份核对后，发版脚本还会调用生产 Agent 完成管道 → VBS → 唯一 JSX 的 Session 1 冒烟；Session、可见窗口、空文档、脚本哈希、发布版本、checkout 或管道服务 PID 任一不符都会回滚，业务仍不开放。PR 和可选择 ref 的手工工作流都不能触达杭州生产 runner。
 
 从 `0.20.0.0` 起，停服务前还会读取 `$env:WB_DATA_DIR\runtime\release-control.json`，用其中不打印的随机令牌和发布方生成的 `lease_id` 让 Hono 原子进入 admission drain。每个 Node 进程同时生成随机 `instance_id`；PowerShell 必须用 control token 向 loopback identity 接口在线挑战，并同时匹配协议、实例、版本、PID 和真实 8787 listener，不能只凭容易复用的 PID 或宽松时间窗认领进程。除不可变静态资源、health 和受令牌保护的控制接口外，动态页面和全部业务 API 都会暂时返回“系统正在安全升版”；这样新增路由默认纳入，避免 SPA、session/OAuth 清理等隐藏写入漏过。Hono 聚合在途请求、队列、上传租约、作业通知 outbox、签字通知与 Agent 状态，只向 PowerShell 返回稳定的 `ready/blocker_codes`，发布脚本不再理解任务目录、状态或心跳结构。journal 落盘前使用 2 分钟可续租 lease，发版在这个准备阶段中断才会自动恢复接单；journal 与 watchdog 就绪后立即提升为不自动过期的 transaction fence，此后只能由匹配 `lease_id` 的提交或恢复路径解除。升版失败时脚本强制重启 WinSW，并要求 `/api/health.version` 精确等于回滚树 `VERSION`；`0.20.0.0` 及以后还必须完成上述在线实例核对，旧版本回滚才允许没有 control 文件。control 文件只有在记录的 PID 已退出时才会作为陈旧文件清理。
 

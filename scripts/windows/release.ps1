@@ -883,8 +883,8 @@ function Set-ReleaseJournalStage([string]$Stage) {
 }
 
 function Arm-GitMergeTransaction {
-  if ([string]$ReleaseJournalState.stage -ne "stopped") {
-    throw "Git merge 事务只能从 stopped 阶段建立"
+  if ([string]$ReleaseJournalState.stage -ne "agent_quiesce") {
+    throw "Git merge 事务只能在 Illustrator Agent 静默后建立"
   }
   if ([bool]$ReleaseJournalState.git_transaction_armed -or [string]$ReleaseJournalState.git_transaction_owner) {
     throw "Git merge 事务所有权已经建立，拒绝覆盖"
@@ -895,7 +895,7 @@ function Arm-GitMergeTransaction {
   $ReleaseJournalState.git_transaction_operation = "merge-ff-only-main"
   $ReleaseJournalState.git_transaction_ref = "refs/heads/main"
   $ReleaseJournalState.git_transaction_target_sha = $TargetSha
-  $ReleaseJournalState.git_transaction_source_stage = "stopped"
+  $ReleaseJournalState.git_transaction_source_stage = "agent_quiesce"
   $ReleaseJournalState.git_transaction_baseline = "all-absent"
   $ReleaseJournalState.git_transaction_lock_policy_sha256 = Get-GitMergeLockPolicySha256
   $ReleaseJournalState.git_transaction_started_at = $started.ToString("o")
@@ -1325,6 +1325,16 @@ try {
 }
 
 try {
+  # Persist ownership before touching the Agent. The immutable target installer
+  # disables its keep-alive trigger and stops the process while preserving the
+  # InteractiveToken principal that an older rollback tree may need.
+  $ReleaseJournalState.agent_mutated = $true
+  Set-ReleaseJournalStage "agent_quiesce"
+  & $ReleaseInstallerPath `
+    -DataRoot $env:WB_DATA_DIR `
+    -TaskName "beian-illustrator-agent" `
+    -Quiesce
+
   Arm-GitMergeTransaction
   Set-ReleaseJournalStage "merging"
   Invoke-GitChecked "git merge --ff-only TargetSha" @("merge", "--ff-only", $TargetSha) |
@@ -1352,7 +1362,6 @@ try {
 
   Write-Host "requirements unchanged; reuse verified offline Python environment"
 
-  $ReleaseJournalState.agent_mutated = $true
   Set-ReleaseJournalStage "agent_sync"
   Sync-IllustratorAgentTaskToCurrentTree
 

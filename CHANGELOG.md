@@ -1,11 +1,11 @@
 # Changelog
 
-## [0.21.9.1] - 2026-09-01
+## [0.21.9.1] - 2026-09-02
 
 ### Fixed
 
 - Illustrator 桌面代理计划任务改为隐藏窗口、隐藏任务，并在 InteractiveToken 登录会话内每分钟存活探测；CTRL_C / 误关控制台导致的 `0xC000013A` 退出不再需要一直靠手工 `Start-ScheduledTask`。注销仍不能从 Session 0 修复。
-- 发版和维护在停止 Agent 前先 Disable 任务，避免存活触发器与升版身份切换竞争。临时 L1 过期任务不加存活触发器。
+- 发版在切换 Git checkout 前先持久化恢复责任，并通过不可变安装器 `Quiesce`：Disable 任务后再 Stop，保留 InteractiveToken 主体供目标同步或旧树回滚；维护卸载沿用同一停机顺序。临时 L1 过期任务不加存活触发器。
 
 ### For contributors
 

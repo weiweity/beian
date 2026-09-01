@@ -1752,6 +1752,9 @@ def test_agent_task_is_interactive_token_single_instance_and_passwordless():
     assert "Set-AgentRuntimeAcl" in source
     assert "Stop-AgentTaskAndWait" in source
     assert "Get-AgentHeartbeatPid" in source
+    assert "[switch]$Quiesce" in source
+    assert "if ($Quiesce -or $Uninstall)" in source
+    assert "ILLUSTRATOR_AGENT_TASK quiesced" in source
     assert "$activeSid.Value -eq $interactiveSid.Value" in source
     assert "Stop-AgentTaskAndWait $TaskName $heartbeat" in source
     assert "ClearFaultFence" in source
@@ -1776,7 +1779,8 @@ def test_temporary_agent_task_supports_scheduler_owned_expiry_after_hard_cancel(
     agent = AGENT_SCRIPT.read_text(encoding="utf-8")
 
     assert "[DateTime]$ExpiresAt" in installer
-    assert "$trigger.EndBoundary" in installer
+    assert "$logonTrigger.EndBoundary" in installer
+    assert "-Trigger $taskTriggers" in installer
     assert "DeleteExpiredTaskAfter" in installer
     assert '"-ExpiresAtUtc"' in installer
     assert "$settingsArguments.ExecutionTimeLimit = $temporaryLimit" in installer

@@ -7,6 +7,7 @@ param(
   [string]$InteractiveUser = "",
   [DateTime]$ExpiresAt = [DateTime]::MinValue,
   [switch]$ClearFaultFence,
+  [switch]$Quiesce,
   [switch]$Uninstall
 )
 
@@ -34,8 +35,11 @@ $DataRoot = [System.IO.Path]::GetFullPath($DataRoot)
 if (-not $HeartbeatName -or [System.IO.Path]::GetFileName($HeartbeatName) -ne $HeartbeatName) {
   throw "Illustrator agent heartbeat name is invalid"
 }
-if ($ClearFaultFence -and $Uninstall) {
-  throw "ClearFaultFence and Uninstall cannot be used together"
+if (
+  ($ClearFaultFence -and ($Quiesce -or $Uninstall)) -or
+  ($Quiesce -and $Uninstall)
+) {
+  throw "ClearFaultFence, Quiesce, and Uninstall are mutually exclusive"
 }
 
 function Get-AgentHeartbeatPid([string]$Path) {
@@ -50,10 +54,7 @@ function Stop-AgentTaskAndWait([string]$Name, [string]$HeartbeatPath) {
     # The InteractiveToken keep-alive trigger would otherwise start a new
     # Agent during release/recovery while this checkout identity is switching.
     Disable-ScheduledTask -TaskName $Name -ErrorAction Stop
-    $task = Get-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue
-    if ($task -and $task.State -eq "Running") {
-      Stop-ScheduledTask -TaskName $Name -ErrorAction Stop
-    }
+    Stop-ScheduledTask -TaskName $Name -ErrorAction Stop
   }
   for ($attempt = 0; $attempt -lt 20; $attempt++) {
     $state = (Get-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue).State
@@ -100,12 +101,14 @@ function Assert-FaultClearWorkspaceIdle([string]$RuntimePath) {
   }
 }
 
-if ($Uninstall) {
+if ($Quiesce -or $Uninstall) {
   $heartbeat = Join-Path (Join-Path $DataRoot "runtime") $HeartbeatName
   $existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
   if ($existing) {
     Stop-AgentTaskAndWait $TaskName $heartbeat | Out-Null
-    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
+    if ($Uninstall) {
+      Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
+    }
   } else {
     $orphanPid = Get-AgentHeartbeatPid $heartbeat
     if ($orphanPid -gt 0 -and (Get-Process -Id $orphanPid -ErrorAction SilentlyContinue)) {
@@ -113,7 +116,11 @@ if ($Uninstall) {
     }
   }
   Remove-Item $heartbeat -Force -ErrorAction SilentlyContinue
-  Write-Host "ILLUSTRATOR_AGENT_TASK removed name=$TaskName"
+  if ($Quiesce) {
+    Write-Host "ILLUSTRATOR_AGENT_TASK quiesced name=$TaskName"
+  } else {
+    Write-Host "ILLUSTRATOR_AGENT_TASK removed name=$TaskName"
+  }
   return
 }
 
