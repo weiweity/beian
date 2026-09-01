@@ -51,7 +51,7 @@ export function structureConfirmationErrorCopy(error: unknown): string {
     return "这套盒型不能形成连续折叠关系，请整理真实刀线和折线后重新上传。";
   }
   if (error.code === "artwork_transform_invalid" || error.code === "structure_confirmation_invalid") {
-    return "当前正面或朝向未通过六面贴图预检，请选择页面仍可用的正面和方向。";
+    return "当前正面未通过成盒预检，请重新选择页面仍可用的正面。";
   }
   return error.message || "结构确认失败，请检查后重试";
 }
@@ -76,29 +76,36 @@ export function validTurnsForFace(
   frontFaceId: string,
 ): Array<0 | 1 | 2 | 3> {
   if (!proposal || !proposal.body_face_ids.includes(frontFaceId)) return [];
-  if (!proposal.valid_anchors) return [0, 1, 2, 3];
+  if (!proposal.valid_anchors) return [];
   return proposal.valid_anchors.find((item) => item.front_face_id === frontFaceId)?.quarter_turns || [];
 }
 
-export function structureProposalLabel(proposal: StructureNetProposal, index: number): string {
-  const dimensions = proposal.dimensions_mm;
-  const size = dimensions
-    ? ` · 底面 ${dimensions.width}×${dimensions.depth} · 高 ${dimensions.height} mm`
-    : "";
-  return `盒型方案 ${index + 1}${size}${structureClosureNote(proposal)}`;
+export function preferredStructureTurn(
+  proposal: StructureNetProposal | undefined,
+  frontFaceId: string,
+): 0 | 1 | 2 | 3 | null {
+  const valid = validTurnsForFace(proposal, frontFaceId);
+  if (!valid.length) return null;
+  const preferred = proposal?.valid_anchors?.find(
+    (item) => item.front_face_id === frontFaceId,
+  )?.preferred_quarter_turns;
+  return preferred !== undefined && valid.includes(preferred) ? preferred : null;
 }
 
-export function structureClosureNote(proposal: StructureNetProposal): string {
-  const closures = proposal.closure_assemblies || [];
-  if (closures.some((item) => item.closure_kind === "assembly")) {
-    return " · 组合封口由多折片共同闭合";
-  }
-  if (closures.some((item) => (
-    item.closure_kind === "clearance"
-  ))) {
-    return " · 主盖片有正常让位";
-  }
-  return "";
+export function structureProposalHasRealPolygons(
+  proposal: StructureNetProposal,
+  faces: NonNullable<MockupJob["structure_preview"]>["faces"],
+): boolean {
+  const polygonFaceIds = new Set(
+    faces
+      .filter((face) => (
+        Array.isArray(face.points_mm)
+        && face.points_mm.length >= 3
+        && face.points_mm.every((point) => point.every(Number.isFinite))
+      ))
+      .map((face) => face.id),
+  );
+  return proposal.face_ids.every((faceId) => polygonFaceIds.has(faceId));
 }
 
 export function structureViewBox(

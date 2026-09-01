@@ -12,6 +12,12 @@ function face(
     bounds_mm: bounds,
     centroid_mm: [(bounds[0] + bounds[2]) / 2, (bounds[1] + bounds[3]) / 2],
     size_mm: [bounds[2] - bounds[0], bounds[3] - bounds[1]],
+    points_mm: [
+      [bounds[0], bounds[1]],
+      [bounds[2], bounds[1]],
+      [bounds[2], bounds[3]],
+      [bounds[0], bounds[3]],
+    ],
     rectangular: true,
   };
 }
@@ -39,11 +45,16 @@ function netProposal(input: Omit<NetProposal, "schema" | "face_ids" | "closure_a
     ...input,
     schema: "box-net-proposal/3",
     face_ids: [...input.body_face_ids, ...input.cap_face_ids],
+    valid_anchors: input.valid_anchors || input.body_face_ids.map((front_face_id) => ({
+      front_face_id,
+      quarter_turns: [0],
+      preferred_quarter_turns: 0,
+    })),
     closure_assemblies: [closure(top, -1), closure(bottom, 1)],
   };
 }
 
-test("完整盒型只让管理员确认正面和方向，并显示服务端版本", async ({ page, syntheticApi }) => {
+test("管理员只需看展开图、选择正面并生成，朝向由系统决定", async ({ page, syntheticApi }) => {
   await page.setViewportSize({ width: 1366, height: 700 });
   const mockup: SyntheticMockup = {
     id: "abcdef123456",
@@ -72,6 +83,12 @@ test("完整盒型只让管理员确认正面和方向，并显示服务端版�
         cap_face_ids: ["cap-top", "cap-bottom"],
         strip_axis: "x",
         bounds_mm: [10, 5, 110, 95],
+        valid_anchors: [
+          { front_face_id: "body-a", quarter_turns: [0, 2], preferred_quarter_turns: 0 },
+          { front_face_id: "body-b", quarter_turns: [0, 2], preferred_quarter_turns: 2 },
+          { front_face_id: "body-c", quarter_turns: [0, 2], preferred_quarter_turns: 0 },
+          { front_face_id: "body-d", quarter_turns: [0, 2], preferred_quarter_turns: 0 },
+        ],
       })],
     },
   };
@@ -81,13 +98,16 @@ test("完整盒型只让管理员确认正面和方向，并显示服务端版�
 
   await expect(page.locator(".sidebar-version")).toHaveText("v0.0.0.0");
   await expect(page.locator(".account-copy > .account-name + .sidebar-version")).toHaveCount(1);
-  await expect(page.getByText("完整盒型已经找出，只需确认正面")).toBeVisible();
+  await expect(page.getByText("先看展开图，再选产品正面")).toBeVisible();
+  await expect(page.getByText("文字朝向", { exact: true })).toHaveCount(0);
+  await expect(page.getByText(/底面 .*高 .*mm/)).toHaveCount(0);
   await expect(page.locator(".structure-map g")).toHaveCount(6);
   await expect(page.locator(".structure-front-choices button")).toHaveCount(4);
 
-  const startButton = page.locator(".structure-confirm-actions").getByRole("button", { name: "确认并开始打样" });
-  await page.locator(".structure-front-choices").getByRole("button", { name: /候选 B/ }).click();
-  await page.getByText("右转 90°", { exact: true }).click();
+  const startButton = page.locator(".structure-confirm-actions").getByRole("button", { name: "生成打样图" });
+  await page.locator(".structure-front-choices").getByRole("button", { name: "B 面" }).click();
+  await expect(page.locator(".structure-front-choices").getByRole("button", { name: "B 面" })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator('.structure-map g[aria-label="选择 B 面作为产品正面"]')).toHaveAttribute("aria-pressed", "true");
   await expect(startButton).toBeInViewport({ ratio: 1 });
   await startButton.click({ trial: true });
   await page.setViewportSize({ width: 1366, height: 640 });
@@ -103,7 +123,7 @@ test("完整盒型只让管理员确认正面和方向，并显示服务端版�
     anchor: {
       proposal_id: "box-net-0001",
       front_face_id: "body-b",
-      quarter_turns: 1,
+      quarter_turns: 2,
     },
   });
 });
@@ -153,8 +173,8 @@ test("结构确认失败留在原位给出可重试原因，不产生未处理 P
     });
   });
   await page.goto(`/mockup/${mockup.id}`);
-  await page.locator(".structure-front-choices").getByRole("button", { name: /候选 A/ }).click();
-  await page.getByRole("button", { name: "确认并开始打样" }).evaluate((button) => {
+  await page.locator(".structure-front-choices").getByRole("button", { name: "A 面" }).click();
+  await page.getByRole("button", { name: "生成打样图" }).evaluate((button) => {
     (button as HTMLButtonElement).click();
     (button as HTMLButtonElement).click();
   });
@@ -162,13 +182,13 @@ test("结构确认失败留在原位给出可重试原因，不产生未处理 P
   releaseFirst();
 
   await expect(page.getByText("盒盖尺寸与盒身宽深不一致，不能形成闭合盒。")).toBeVisible();
-  await expect(page.getByRole("button", { name: "确认并开始打样" })).toBeEnabled();
-  await page.getByRole("button", { name: "确认并开始打样" }).click();
+  await expect(page.getByRole("button", { name: "生成打样图" })).toBeEnabled();
+  await page.getByRole("button", { name: "生成打样图" }).click();
   await expect.poll(() => attempts).toBe(2);
   expect(pageErrors).toEqual([]);
 });
 
-test("切换完整盒型时清空上一方案的正面和方向", async ({ page, syntheticApi }) => {
+test("多张展开图只显示视觉翻页，切换后清空上一张的正面", async ({ page, syntheticApi }) => {
   const mockup: SyntheticMockup = {
     id: "abcdef123461",
     title: "多盒型候选",
@@ -195,10 +215,10 @@ test("切换完整盒型时清空上一方案的正面和方向", async ({ page,
           strip_axis: "x",
           dimensions_mm: { width: 30, depth: 20, height: 50 },
           valid_anchors: [
-            { front_face_id: "body-a", quarter_turns: [0, 1] },
-            { front_face_id: "body-b", quarter_turns: [0, 1] },
-            { front_face_id: "body-c", quarter_turns: [0, 1] },
-            { front_face_id: "body-d", quarter_turns: [0, 1] },
+            { front_face_id: "body-a", quarter_turns: [0], preferred_quarter_turns: 0 },
+            { front_face_id: "body-b", quarter_turns: [0], preferred_quarter_turns: 0 },
+            { front_face_id: "body-c", quarter_turns: [0], preferred_quarter_turns: 0 },
+            { front_face_id: "body-d", quarter_turns: [0], preferred_quarter_turns: 0 },
           ],
         }),
         netProposal({
@@ -208,10 +228,10 @@ test("切换完整盒型时清空上一方案的正面和方向", async ({ page,
           strip_axis: "x",
           dimensions_mm: { width: 31, depth: 20, height: 50 },
           valid_anchors: [
-            { front_face_id: "body-d", quarter_turns: [0, 2] },
-            { front_face_id: "body-c", quarter_turns: [0, 2] },
-            { front_face_id: "body-b", quarter_turns: [0, 2] },
-            { front_face_id: "body-a", quarter_turns: [0, 2] },
+            { front_face_id: "body-d", quarter_turns: [0, 2], preferred_quarter_turns: 2 },
+            { front_face_id: "body-c", quarter_turns: [0, 2], preferred_quarter_turns: 2 },
+            { front_face_id: "body-b", quarter_turns: [0, 2], preferred_quarter_turns: 2 },
+            { front_face_id: "body-a", quarter_turns: [0, 2], preferred_quarter_turns: 2 },
           ],
         }),
       ],
@@ -220,17 +240,16 @@ test("切换完整盒型时清空上一方案的正面和方向", async ({ page,
   syntheticApi.mockups.push(mockup);
   await page.goto(`/mockup/${mockup.id}`);
 
-  const startButton = page.getByRole("button", { name: "确认并开始打样" });
-  await page.locator(".structure-front-choices").getByRole("button", { name: /候选 B/ }).click();
-  await page.getByText("右转 90°", { exact: true }).click();
+  const startButton = page.getByRole("button", { name: "生成打样图" });
+  await page.locator(".structure-front-choices").getByRole("button", { name: "B 面" }).click();
   await expect(startButton).toBeEnabled();
 
-  await page.locator(".structure-anchor-field .ant-select").click();
-  await page.getByText("盒型方案 2 · 底面 31×20 · 高 50 mm", { exact: true }).click();
+  await page.getByRole("button", { name: "下一张" }).click();
 
+  await expect(page.getByText("第 2 张，共 2 张")).toBeVisible();
+  await expect(page.getByText(/底面 .*高 .*mm/)).toHaveCount(0);
   await expect(startButton).toBeDisabled();
   await expect(page.locator(".structure-front-choices .ant-btn-primary")).toHaveCount(0);
-  await expect(page.locator(".structure-anchor-field .ant-segmented-item-selected")).toContainText("不旋转");
 });
 
 test("非法结构锚点被拒绝且待确认任务保持原状", async ({ page, syntheticApi }) => {
@@ -313,7 +332,7 @@ test("旧版零散候选不会退回逐面猜测", async ({ page, syntheticApi }
   await page.goto(`/mockup/${mockup.id}`);
 
   await expect(page.getByText("这单需要重新识别结构")).toBeVisible();
-  await expect(page.getByRole("button", { name: "确认并开始打样" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "生成打样图" })).toHaveCount(0);
 });
 
 test("没有原稿预览时完整盒型也不能盲选正面", async ({ page, syntheticApi }) => {
@@ -351,5 +370,111 @@ test("没有原稿预览时完整盒型也不能盲选正面", async ({ page, sy
   await expect(page.getByText(/原稿预览.*不可用，不能可靠判断正面/)).toBeVisible();
   await expect(page.locator(".structure-front-choices button")).toHaveCount(4);
   await expect(page.locator(".structure-front-choices button").first()).toBeDisabled();
-  await expect(page.getByRole("button", { name: "确认并开始打样" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "生成打样图" })).toBeDisabled();
+});
+
+test("非管理员可以查看展开图，但不能选择正面或生成", async ({ page, syntheticApi }) => {
+  const mockup: SyntheticMockup = {
+    id: "abcdef123462",
+    title: "团队可见待确认单",
+    status: "review_required",
+    job_status: "waiting_input",
+    structure_status: "review_required",
+    files: [],
+    structure_preview: {
+      page_size_mm: [160, 90],
+      image_url: ARTWORK,
+      faces: [
+        face("body-a", [10, 25, 40, 75]),
+        face("body-b", [40, 25, 60, 75]),
+        face("body-c", [60, 25, 90, 75]),
+        face("body-d", [90, 25, 110, 75]),
+        face("cap-top", [10, 5, 40, 25]),
+        face("cap-bottom", [10, 75, 40, 95]),
+      ],
+      net_proposals: [netProposal({
+        id: "box-net-0001",
+        body_face_ids: ["body-a", "body-b", "body-c", "body-d"],
+        cap_face_ids: ["cap-top", "cap-bottom"],
+        strip_axis: "x",
+      })],
+    },
+  };
+  syntheticApi.mockups.push(mockup);
+  await page.route("**/api/auth/me", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({
+      logged_in: true,
+      display_name: "审稿员",
+      open_id: "ou_reviewer",
+      role: "reviewer",
+      perms: ["read", "create", "delete"],
+    }),
+  }));
+
+  await page.goto(`/mockup/${mockup.id}`);
+
+  await expect(page.getByText("这单可以正常查看；只有管理员能选择产品正面并生成打样图。")).toBeVisible();
+  await expect(page.locator(".structure-map")).toBeVisible();
+  await expect(page.locator(".structure-front-choices button")).toHaveCount(4);
+  await expect(page.locator(".structure-front-choices button").first()).toBeDisabled();
+  await expect(page.getByRole("button", { name: "生成打样图" })).toBeDisabled();
+});
+
+test("页面重新可见时刷新身份并立即撤销结构确认权限", async ({ page, syntheticApi }) => {
+  const mockup: SyntheticMockup = {
+    id: "abcdef123463",
+    title: "权限即时收回",
+    status: "review_required",
+    job_status: "waiting_input",
+    structure_status: "review_required",
+    files: [],
+    structure_preview: {
+      page_size_mm: [160, 90],
+      image_url: ARTWORK,
+      faces: [
+        face("body-a", [10, 25, 40, 75]),
+        face("body-b", [40, 25, 60, 75]),
+        face("body-c", [60, 25, 90, 75]),
+        face("body-d", [90, 25, 110, 75]),
+        face("cap-top", [10, 5, 40, 25]),
+        face("cap-bottom", [10, 75, 40, 95]),
+      ],
+      net_proposals: [netProposal({
+        id: "box-net-0001",
+        body_face_ids: ["body-a", "body-b", "body-c", "body-d"],
+        cap_face_ids: ["cap-top", "cap-bottom"],
+        strip_axis: "x",
+      })],
+    },
+  };
+  syntheticApi.mockups.push(mockup);
+  let isAdmin = true;
+  await page.route("**/api/auth/me", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({
+      logged_in: true,
+      display_name: isAdmin ? "管理员" : "审稿员",
+      open_id: "ou_permission_refresh",
+      role: isAdmin ? "admin" : "reviewer",
+      perms: isAdmin ? ["read", "create", "delete", "confirm_structure"] : ["read", "create", "delete"],
+    }),
+  }));
+
+  await page.goto(`/mockup/${mockup.id}`);
+  const frontA = page.locator(".structure-front-choices").getByRole("button", { name: "A 面" });
+  const generate = page.getByRole("button", { name: "生成打样图" });
+  await frontA.click();
+  await expect(generate).toBeEnabled();
+
+  isAdmin = false;
+  const refreshed = page.waitForResponse((response) => response.url().endsWith("/api/auth/me"));
+  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+  await refreshed;
+
+  await expect(page.getByText("这单可以正常查看；只有管理员能选择产品正面并生成打样图。")).toBeVisible();
+  await expect(frontA).toBeDisabled();
+  await expect(generate).toBeDisabled();
 });

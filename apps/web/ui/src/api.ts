@@ -805,7 +805,11 @@ export type MockupJob = {
       strip_axis: "x" | "y";
       bounds_mm?: [number, number, number, number];
       dimensions_mm?: { width: number; depth: number; height: number };
-      valid_anchors?: Array<{ front_face_id: string; quarter_turns: Array<0 | 1 | 2 | 3> }>;
+      valid_anchors?: Array<{
+        front_face_id: string;
+        quarter_turns: Array<0 | 1 | 2 | 3>;
+        preferred_quarter_turns?: 0 | 1 | 2 | 3;
+      }>;
       closure_assemblies: Array<{
         primary_face_id: string;
         side: -1 | 1;

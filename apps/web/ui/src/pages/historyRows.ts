@@ -27,6 +27,20 @@ export type HistoryFilters = {
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+export const HISTORY_PAGE_SIZE = 10;
+
+export function paginateHistoryRows(
+  rows: HistoryRow[],
+  requestedPage: number,
+  pageSize = HISTORY_PAGE_SIZE,
+): { page: number; pageCount: number; rows: HistoryRow[] } {
+  const safeSize = Number.isFinite(pageSize) ? Math.max(1, Math.trunc(pageSize)) : HISTORY_PAGE_SIZE;
+  const pageCount = Math.max(1, Math.ceil(rows.length / safeSize));
+  const normalizedPage = Number.isFinite(requestedPage) ? Math.trunc(requestedPage) : 1;
+  const page = Math.min(pageCount, Math.max(1, normalizedPage));
+  const start = (page - 1) * safeSize;
+  return { page, pageCount, rows: rows.slice(start, start + safeSize) };
+}
 
 function taskLive(row: TaskSummary): string | null {
   return liveJobLine({

@@ -2307,6 +2307,12 @@ html[data-theme="dark"] .apple-slider::-moz-range-thumb {
   background: color-mix(in srgb, var(--accent-soft) 44%, var(--surface));
 }
 
+.history-pagination {
+  display: flex;
+  justify-content: flex-end;
+  padding: 14px 4px 0;
+}
+
 .history-record-button {
   display: inline-flex;
   align-items: center;
@@ -2973,13 +2979,13 @@ html[data-theme="dark"] .notes.is-float {
 
 .structure-confirm-layout {
   display: grid;
-  grid-template-columns: minmax(320px, 0.9fr) minmax(420px, 1.1fr);
+  grid-template-columns: minmax(320px, 1fr) minmax(360px, 0.82fr);
   gap: 16px;
   min-height: 0;
 }
 
 .structure-map-shell,
-.structure-anchor-card {
+.structure-guide-card {
   min-height: 0;
   border: 1px solid rgba(128, 88, 152, 0.18);
   border-radius: 22px;
@@ -2994,7 +3000,16 @@ html[data-theme="dark"] .notes.is-float {
   overflow: hidden;
 }
 
-.structure-map-shell p {
+.structure-map-caption {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.structure-map-caption p {
+  flex: 1;
   margin: 10px 0 0;
   color: #6b6572;
   font-size: 13px;
@@ -3066,41 +3081,63 @@ html[data-theme="dark"] .notes.is-float {
   stroke-dasharray: 4 3;
 }
 
-.structure-anchor-card {
+.structure-guide-card {
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
   box-shadow: 0 16px 40px rgba(40, 24, 56, 0.06);
   overflow: hidden;
 }
 
-.structure-anchor-scroll {
+.structure-guide {
   display: grid;
-  gap: 12px;
+  gap: 18px;
   align-content: start;
   min-height: 0;
   overflow: auto;
-  padding: 16px 16px 8px;
+  padding: 22px 20px 12px;
 }
 
-.structure-anchor-field,
-.structure-front-choices,
-.structure-net-found {
+.structure-guide-step {
   display: grid;
-  gap: 9px;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
 }
 
-.structure-anchor-field > span,
-.structure-front-choices > span,
-.structure-net-found > span {
-  color: #6b6572;
-  font-size: 13px;
-  font-weight: 500;
+.structure-guide-step > div {
+  display: grid;
+  gap: 4px;
 }
 
-.structure-net-found strong {
+.structure-guide-step strong {
   color: #1c1a1f;
   font-size: 16px;
+  line-height: 24px;
+}
+
+.structure-guide-step > div > span {
+  color: #6b6572;
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.structure-step-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: rgba(128, 88, 152, 0.12);
+  color: #5f3675;
+  font-size: 14px;
   font-weight: 600;
+}
+
+.structure-front-choices {
+  display: grid;
+  gap: 9px;
+  padding-left: 44px;
 }
 
 .structure-front-choices > div {
@@ -3116,20 +3153,19 @@ html[data-theme="dark"] .notes.is-float {
   white-space: normal;
 }
 
-.structure-derived-copy {
-  display: grid;
-  gap: 5px;
-  padding: 11px 14px;
-  border-radius: 16px;
-  background: rgba(128, 88, 152, 0.07);
+.structure-proposal-nav {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex: none;
+  white-space: nowrap;
   color: #6b6572;
   font-size: 13px;
-  line-height: 20px;
 }
 
-.structure-derived-copy strong {
-  color: #3c3341;
-  font-size: 14px;
+.structure-proposal-nav .ant-btn {
+  border-radius: 16px;
 }
 
 .structure-confirm-actions {
@@ -3385,12 +3421,12 @@ html[data-theme="dark"] .notes.is-float {
     grid-template-columns: 1fr;
   }
 
-  .structure-anchor-card {
+  .structure-guide-card {
     grid-template-rows: auto auto;
     overflow: visible;
   }
 
-  .structure-anchor-scroll {
+  .structure-guide {
     overflow: visible;
   }
 
@@ -3408,8 +3444,25 @@ html[data-theme="dark"] .notes.is-float {
 }
 
 @media (max-width: 720px) {
+  .structure-map-caption {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .structure-map-caption p {
+    margin-top: 0;
+  }
+
+  .structure-proposal-nav {
+    justify-content: space-between;
+  }
+
   .structure-front-choices > div {
     grid-template-columns: 1fr;
+  }
+
+  .structure-front-choices {
+    padding-left: 0;
   }
 
   .structure-confirm-actions {
