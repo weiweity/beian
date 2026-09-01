@@ -360,6 +360,32 @@ def test_stroke_proposal_excludes_unrelated_components_without_auto_accepting():
     ]
 
 
+def test_stroke_proposal_keeps_complete_net_when_export_skips_a_zero_segment_path():
+    payload = stroke_payload()
+    payload["validation"]["errors"].append("structure_path_too_short")
+
+    proposed = resolve_structure_payload(payload)
+
+    assert proposed.status == "review_required"
+    assert proposed.code == "structure_face_mapping_incomplete"
+    assert proposed.resolved is None
+    assert len(proposed.topology["net_proposals"]) == 1
+
+
+def test_zero_segment_paths_without_real_linework_never_create_a_box_candidate():
+    payload = stroke_payload()
+    payload["vertices"] = []
+    payload["edges"] = []
+    payload["validation"]["errors"].append("structure_path_too_short")
+
+    proposed = resolve_structure_payload(payload)
+
+    assert proposed.status == "review_required"
+    assert proposed.code == "structure_semantics_missing"
+    assert proposed.resolved is None
+    assert not (proposed.topology or {}).get("net_proposals")
+
+
 def test_stroke_proposal_groups_only_complete_box_nets_for_human_review():
     payload = semantic_box()
     payload["source"]["adapter"] = "illustrator-stroke-proposal/1"

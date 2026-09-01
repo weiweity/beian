@@ -30,6 +30,9 @@ except ImportError:
 
 PIPELINE_VERSION = "1.4.0"
 MAX_RASTER_PIXELS = 32_000_000
+MAX_EXPLICIT_PROPOSAL_LAYERS = 16
+MAX_PROPOSAL_LAYER_CANDIDATES = 128
+STRUCTURE_INPUT_CANDIDATES_SCHEMA = "packaging-structure-input-candidates/1"
 ROOT = Path(__file__).resolve().parent
 BLENDER_SCRIPT = ROOT / "blender" / "render_job.py"
 PPT_SCRIPT = ROOT / "ppt" / "build_product_ppt.mjs"
@@ -133,6 +136,104 @@ def save_json(path: Path, value: Any) -> None:
     with path.open("w", encoding="utf-8") as stream:
         json.dump(value, stream, ensure_ascii=False, indent=2)
         stream.write("\n")
+
+
+def explicit_proposal_layers(
+    value: Any,
+    selected_source_sha256: Any,
+    current_source_sha256: str,
+) -> list[str]:
+    selected_hash = str(selected_source_sha256 or "").strip().lower()
+    if (
+        len(selected_hash) != 64
+        or any(character not in "0123456789abcdef" for character in selected_hash)
+        or selected_hash != current_source_sha256
+    ):
+        raise PipelineError(
+            "稿件已变化，请重新选择结构层",
+            code="packaging_structure_selection_stale",
+            cause="proposal layer selection is not bound to the current source SHA-256",
+            fix="重新识别当前稿件，再从这次返回的候选层中选择",
+        )
+    if (
+        not isinstance(value, list)
+        or not value
+        or len(value) > MAX_EXPLICIT_PROPOSAL_LAYERS
+        or any(not isinstance(item, str) or not item.strip() for item in value)
+    ):
+        raise PipelineError(
+            "结构层选择无效，请重新选择",
+            code="packaging_structure_selection_invalid",
+            cause="proposal_layers must contain 1 to 16 non-empty layer names",
+            fix="从当前稿件列出的候选层中重新选择，不要手填或沿用旧稿选择",
+        )
+    normalized: list[str] = []
+    for item in value:
+        name = item.strip()
+        if len(name) > 160:
+            raise PipelineError(
+                "结构层选择无效，请重新选择",
+                code="packaging_structure_selection_invalid",
+                cause="proposal layer name exceeds 160 characters",
+                fix="从当前稿件列出的候选层中重新选择，不要手填或沿用旧稿选择",
+            )
+        if name not in normalized:
+            normalized.append(name)
+    return normalized
+
+
+def structure_input_candidates(
+    illustrator_result: dict[str, Any] | None,
+    source_sha256: str,
+) -> dict[str, Any] | None:
+    raw_candidates = (
+        illustrator_result.get("proposal_layer_candidates")
+        if isinstance(illustrator_result, dict)
+        else None
+    )
+    if not isinstance(raw_candidates, list):
+        return None
+    proposal_layers: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw in raw_candidates[:MAX_PROPOSAL_LAYER_CANDIDATES]:
+        if not isinstance(raw, dict):
+            continue
+        raw_name = raw.get("name")
+        if not isinstance(raw_name, str):
+            continue
+        name = raw_name.strip()
+        count = raw.get("stroke_only_path_count")
+        if (
+            not name
+            or len(name) > 160
+            or name in seen
+            or not isinstance(count, int)
+            or isinstance(count, bool)
+            or count < 1
+        ):
+            continue
+        seen.add(name)
+        candidate_hash = hashlib.sha256(
+            (source_sha256 + "\0" + name).encode("utf-8")
+        ).hexdigest()[:16]
+        proposal_layers.append(
+            {
+                "id": f"proposal-layer-{candidate_hash}",
+                "name": name,
+                "stroke_only_path_count": min(count, 1_000_000),
+            }
+        )
+    if not proposal_layers:
+        return None
+    return {
+        "schema": STRUCTURE_INPUT_CANDIDATES_SCHEMA,
+        "source_sha256": source_sha256,
+        "proposal_layers": proposal_layers,
+        "truncated": bool(
+            illustrator_result.get("proposal_layer_candidates_truncated")
+            or len(raw_candidates) > MAX_PROPOSAL_LAYER_CANDIDATES
+        ),
+    }
 
 
 def is_smoke_template(path: Path) -> bool:
@@ -686,6 +787,7 @@ def run_illustrator_structure_export(
     semantic_assignments: dict[str, Any] | None = None,
     proposal_layers: list[str] | None = None,
     print_layers: list[str] | None = None,
+    source_sha256: str | None = None,
 ) -> dict[str, Any]:
     """V2 exporter is explicit and object-level; legacy fallback stays unchanged."""
     app_path = Path(
@@ -720,10 +822,23 @@ def run_illustrator_structure_export(
     config_path = normalized_dir / "illustrator_input.json"
     result_path = normalized_dir / "illustrator_result.json"
     log_path = normalized_dir / "illustrator.log"
+    current_source_sha256 = file_sha256(source)
+    expected_source_sha256 = str(source_sha256 or current_source_sha256).strip().lower()
+    if (
+        len(expected_source_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in expected_source_sha256)
+        or expected_source_sha256 != current_source_sha256
+    ):
+        raise PipelineError(
+            "稿件已变化，请重新识别结构",
+            code="packaging_structure_selection_stale",
+            cause="Illustrator export source no longer matches the preflight SHA-256",
+            fix="重新识别当前稿件，不要沿用旧稿的结构选择",
+        )
     worker_config = {
         "application": str(app_path),
         "source_ai": str(source),
-        "source_sha256": file_sha256(source),
+        "source_sha256": expected_source_sha256,
         "full_pdf": str(normalized_dir / "full.pdf"),
         "print_pdf": str(normalized_dir / "artwork.pdf"),
         "structure_json": str(normalized_dir / "structure.json"),
@@ -802,6 +917,7 @@ def preflight_product_v2(
     project_dir = (output_root / code).resolve()
     assets_dir = project_dir / "assets"
     project_dir.mkdir(parents=True, exist_ok=True)
+    source_sha256 = file_sha256(source)
 
     sidecar_value = product.get("structure_sidecar")
     structure_sidecar = resolve_from(manifest_dir, sidecar_value) if sidecar_value else None
@@ -811,16 +927,16 @@ def preflight_product_v2(
     if artwork_pdf is None:
         if not bool(illustrator_config.get("enabled", True)):
             raise PipelineError("V2 需要对象级清理后的 artwork PDF，但 Illustrator 已禁用")
-        proposal_layers: list[str] = []
-        try:
-            source_layers = optional_content_layers(PdfReader(str(source)))
-            proposal_layer = pick_knife_layer(source_layers)
-            if proposal_layer:
-                proposal_layers.append(proposal_layer)
-        except Exception:
-            # Native AI has no PDF OCG table to inspect before Illustrator.
-            # It remains explicit-semantics-only until a platform adapter can
-            # name a candidate layer without guessing inside JSX.
+        if "proposal_layers" in product:
+            # A legacy layer may only enter proposal mode after an explicit,
+            # source-bound human selection.  Do not replace it with OCG or
+            # filename heuristics.
+            proposal_layers = explicit_proposal_layers(
+                product["proposal_layers"],
+                product.get("proposal_source_sha256"),
+                source_sha256,
+            )
+        else:
             proposal_layers = []
         illustrator_result = run_illustrator_structure_export(
             source,
@@ -829,6 +945,7 @@ def preflight_product_v2(
             semantic_assignments=product.get("semantic_assignments"),
             proposal_layers=proposal_layers,
             print_layers=template.get("print_layers"),
+            source_sha256=source_sha256,
         )
         artwork_pdf = Path(illustrator_result["print_pdf"])
         if structure_sidecar is None:
@@ -842,7 +959,11 @@ def preflight_product_v2(
         cache_dir=project_dir / "structure_cache",
     )
     resolution_path = project_dir / "structure_resolution.json"
-    save_json(resolution_path, resolution.as_dict())
+    resolution_payload = resolution.as_dict()
+    input_candidates = structure_input_candidates(illustrator_result, source_sha256)
+    if input_candidates is not None:
+        resolution_payload["input_candidates"] = input_candidates
+    save_json(resolution_path, resolution_payload)
     if resolution.status != "ready" or resolution.resolved is None:
         artwork_preview = render_pdf_thumbnail(
             artwork_pdf,
@@ -858,7 +979,7 @@ def preflight_product_v2(
                 "artwork_pdf": str(artwork_pdf),
                 "artwork_preview": str(artwork_preview),
                 "structure_sidecar": str(structure_sidecar) if structure_sidecar else None,
-                "source_sha256": file_sha256(source),
+                "source_sha256": source_sha256,
             },
         )
     structure_job = resolution.resolved
