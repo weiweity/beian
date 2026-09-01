@@ -1,11 +1,26 @@
 import { ApiError, type MockupJob } from "../api";
 
 export type StructureNetProposal = NonNullable<MockupJob["structure_preview"]>["net_proposals"][number];
+export type StructureInput = NonNullable<MockupJob["structure_input"]>;
 export type StructureAnchor = {
   proposal_id: string;
   front_face_id: string;
   quarter_turns: 0 | 1 | 2 | 3;
 };
+
+export function selectedStructureLayerIds(input: StructureInput, selectedIds: string[]): string[] {
+  const selected = new Set(selectedIds);
+  return input.proposal_layers
+    .filter((candidate) => selected.has(candidate.id))
+    .slice(0, 16)
+    .map((candidate) => candidate.id);
+}
+
+export function sameStructureLayerSelection(input: StructureInput, selectedIds: string[]): boolean {
+  const normalized = selectedStructureLayerIds(input, selectedIds);
+  return normalized.length === input.selected_ids.length
+    && normalized.every((id, index) => id === input.selected_ids[index]);
+}
 
 export function structureStatusLabel(job: Pick<MockupJob, "structure_status">): string | null {
   if (job.structure_status === "analyzing") return "识别结构";

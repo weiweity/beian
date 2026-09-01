@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -94,6 +95,58 @@ function seedStructurePreviewJob(id: string, owner: string) {
     structure_resolution_path: resolution,
     structure_source_sha256: sourceHash,
   });
+}
+
+function seedStructureInputJob(id: string, owner: string) {
+  const dir = join(DATA_DIR, "mockups", id);
+  mkdirSync(dir, { recursive: true });
+  const source = join(dir, "source.ai");
+  const resolution = join(dir, "structure_resolution.json");
+  const manifest = join(dir, "manifest.json");
+  const artworkPreview = join(dir, "structure_preview.png");
+  const sourceHash = "7".repeat(64);
+  const names = ["结构线", "折线"];
+  const candidateIds = names.map((name) => `proposal-layer-${createHash("sha256")
+    .update(`${sourceHash}\0${name}`)
+    .digest("hex")
+    .slice(0, 16)}`);
+  writeFileSync(source, "%PDF-1.4\n");
+  writeFileSync(artworkPreview, PNG_MAGIC);
+  writeFileSync(resolution, JSON.stringify({
+    structure: { source: { sha256: sourceHash } },
+    input_candidates: {
+      schema: "packaging-structure-input-candidates/2",
+      source_sha256: sourceHash,
+      proposal_layers: names.map((name, index) => ({
+        id: candidateIds[index],
+        name,
+        stroke_only_path_count: index === 0 ? 36 : 12,
+      })),
+      truncated: false,
+    },
+  }));
+  writeFileSync(manifest, JSON.stringify({
+    output_root: dir,
+    products: [{ code: id.slice(0, 8), source_ai: source, structure_engine: "v2" }],
+  }));
+  saveMockup({
+    id,
+    status: "review_required",
+    created_at: "2026-09-01T00:00:00Z",
+    files: [],
+    owner,
+    source_path: source,
+    manifest_path: manifest,
+    job_kind: "mockup",
+    job_status: "waiting_input",
+    structure_engine: "v2",
+    structure_status: "review_required",
+    structure_code: "structure_semantics_missing",
+    structure_resolution_path: resolution,
+    structure_artwork_preview_path: artworkPreview,
+    structure_source_sha256: sourceHash,
+  });
+  return { artworkPreview, candidateId: candidateIds[0], candidateIds, dir };
 }
 
 describe("mockup http", () => {
@@ -314,6 +367,37 @@ describe("mockup structure artwork preview", () => {
     assert.equal(shared.status, 200);
     assert.deepEqual(Buffer.from(await shared.arrayBuffer()), PNG_MAGIC);
   });
+
+  it("keeps the pre-selection artwork available after a selected layer is hidden", async () => {
+    const id = "facefeed0002";
+    const dir = join(DATA_DIR, "mockups", id);
+    mkdirSync(dir, { recursive: true });
+    const currentPreview = join(dir, "structure_preview.png");
+    const inputPreview = join(dir, "structure-input-preview.png");
+    const currentBytes = Buffer.concat([PNG_MAGIC, Buffer.from("current")]);
+    const inputBytes = Buffer.concat([PNG_MAGIC, Buffer.from("before-selection")]);
+    writeFileSync(currentPreview, currentBytes);
+    writeFileSync(inputPreview, inputBytes);
+    saveMockup({
+      id,
+      status: "review_required",
+      created_at: "2026-09-01T00:00:00Z",
+      files: [],
+      owner: "ou_input_preview_owner",
+      job_kind: "mockup",
+      job_status: "waiting_input",
+      structure_engine: "v2",
+      structure_status: "review_required",
+      structure_artwork_preview_path: currentPreview,
+      structure_input_preview_path: inputPreview,
+    });
+    const viewer = issueSessionForTest("审核员", "reviewer", "ou_input_preview_viewer");
+    const response = await app.request(`/api/mockups/${id}/structure-input-preview`, {
+      headers: { authorization: `Bearer ${viewer.token}` },
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(Buffer.from(await response.arrayBuffer()), inputBytes);
+  });
 });
 
 describe("publicMockup", () => {
@@ -336,6 +420,174 @@ describe("publicMockup", () => {
     assert.equal("path" in out.files[0], false);
     assert.equal(out.structure_status, "review_required");
     assert.equal(JSON.stringify(out).includes("structure_resolution.json"), false);
+  });
+});
+
+describe("mockup structure input http", () => {
+  it("bounds the small selection body before parsing JSON", async () => {
+    const admin = issueSessionForTest("管理员", "admin", "ou_structure_input_limit");
+    const oversized = JSON.stringify({
+      candidate_ids: ["proposal-layer-0000000000000000"],
+      padding: "x".repeat(16 * 1024),
+    });
+    const response = await app.request("/api/mockups/feed3000feed/structure/input", {
+      method: "POST",
+      headers: { authorization: `Bearer ${admin.token}`, "content-type": "application/json" },
+      body: oversized,
+    });
+
+    assert.equal(response.status, 413);
+    assert.equal(
+      ((await response.json()) as { code?: string }).code,
+      "packaging_structure_selection_too_large",
+    );
+  });
+
+  it("does not expose local paths when preparing the selection fails", async () => {
+    const id = "feed4000feed";
+    const { artworkPreview, candidateId } = seedStructureInputJob(id, "ou_structure_input_error_owner");
+    rmSync(artworkPreview);
+    mkdirSync(artworkPreview);
+    const admin = issueSessionForTest("管理员", "admin", "ou_structure_input_error_admin");
+    const response = await app.request(`/api/mockups/${id}/structure/input`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${admin.token}`, "content-type": "application/json" },
+      body: JSON.stringify({ candidate_ids: [candidateId] }),
+    });
+    const body = (await response.json()) as { code?: string; detail?: string };
+
+    assert.equal(response.status, 500);
+    assert.equal(body.code, "packaging_structure_selection_failed");
+    assert.equal(JSON.stringify(body).includes(DATA_DIR), false);
+    assert.equal(JSON.stringify(body).includes(artworkPreview), false);
+  });
+
+  it("lets only an admin submit current candidate ids and resumes the same job", async () => {
+    const { setJobsTestHooks, resetJobsTestHooks } = await import("./jobs.js");
+    const id = "feed1000feed";
+    const ownerId = "ou_structure_input_owner";
+    const { candidateId, dir } = seedStructureInputJob(id, ownerId);
+    const reviewer = issueSessionForTest("审稿", "reviewer", ownerId);
+    const denied = await app.request(`/api/mockups/${id}/structure/input`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${reviewer.token}`, "content-type": "application/json" },
+      body: JSON.stringify({ candidate_ids: [candidateId] }),
+    });
+    assert.equal(denied.status, 403);
+
+    const admin = issueSessionForTest("管理员", "admin", "ou_structure_input_admin");
+    const forged = await app.request(`/api/mockups/${id}/structure/input`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${admin.token}`, "content-type": "application/json" },
+      body: JSON.stringify({ candidate_ids: ["proposal-layer-0000000000000000"] }),
+    });
+    assert.equal(forged.status, 400);
+    assert.equal(
+      ((await forged.json()) as { code?: string }).code,
+      "packaging_structure_selection_invalid",
+    );
+
+    let releaseRun!: () => void;
+    const runGate = new Promise<void>((resolve) => {
+      releaseRun = resolve;
+    });
+    setJobsTestHooks({
+      runStructure: async () => {
+        await runGate;
+        return { code: 1, stdout: "", stderr: "synthetic stop", timedOut: false };
+      },
+    });
+    try {
+      const selected = await app.request(`/api/mockups/${id}/structure/input`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${admin.token}`, "content-type": "application/json" },
+        body: JSON.stringify({ candidate_ids: [candidateId] }),
+      });
+      assert.equal(selected.status, 200);
+      const body = (await selected.json()) as {
+        id?: string;
+        status?: string;
+        job_status?: string;
+        structure_status?: string;
+      };
+      assert.equal(body.id, id);
+      assert.equal(body.status, "running");
+      assert.equal(body.job_status, "running");
+      assert.equal(body.structure_status, "analyzing");
+
+      const files = JSON.parse(readFileSync(join(dir, "job.json"), "utf8")) as { manifest_path?: string };
+      const manifest = JSON.parse(readFileSync(files.manifest_path || "", "utf8"));
+      assert.deepEqual(manifest.products[0].proposal_layers, ["结构线"]);
+      assert.equal(manifest.products[0].proposal_source_sha256, "7".repeat(64));
+
+      const responseLostRetry = await app.request(`/api/mockups/${id}/structure/input`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${admin.token}`, "content-type": "application/json" },
+        body: JSON.stringify({ candidate_ids: [candidateId] }),
+      });
+      assert.equal(responseLostRetry.status, 200);
+    } finally {
+      releaseRun();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      resetJobsTestHooks();
+    }
+  });
+
+  it("rechecks the current job after a slow request body instead of applying a stale selection", async () => {
+    const { setJobsTestHooks, resetJobsTestHooks } = await import("./jobs.js");
+    const id = "feed2000feed";
+    const { candidateIds } = seedStructureInputJob(id, "ou_structure_input_race_owner");
+    const admin = issueSessionForTest("管理员", "admin", "ou_structure_input_race_admin");
+    let releaseBody!: () => void;
+    const slowBody = new ReadableStream<Uint8Array>({
+      start(controller) {
+        releaseBody = () => {
+          controller.enqueue(new TextEncoder().encode(JSON.stringify({ candidate_ids: [candidateIds[1]] })));
+          controller.close();
+        };
+      },
+    });
+    let releaseRun!: () => void;
+    const runGate = new Promise<void>((resolve) => {
+      releaseRun = resolve;
+    });
+    setJobsTestHooks({
+      runStructure: async () => {
+        await runGate;
+        return { code: 1, stdout: "", stderr: "synthetic stop", timedOut: false };
+      },
+    });
+    try {
+      const slowRequest = app.request(new Request(
+        `http://localhost/api/mockups/${id}/structure/input`,
+        {
+          method: "POST",
+          headers: { authorization: `Bearer ${admin.token}`, "content-type": "application/json" },
+          body: slowBody,
+          duplex: "half",
+        } as RequestInit & { duplex: "half" },
+      ));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      const selected = await app.request(`/api/mockups/${id}/structure/input`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${admin.token}`, "content-type": "application/json" },
+        body: JSON.stringify({ candidate_ids: [candidateIds[0]] }),
+      });
+      assert.equal(selected.status, 200);
+
+      releaseBody();
+      const stale = await slowRequest;
+      assert.equal(stale.status, 409);
+      assert.equal(
+        ((await stale.json()) as { code?: string }).code,
+        "packaging_structure_selection_stale",
+      );
+    } finally {
+      releaseRun();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      resetJobsTestHooks();
+    }
   });
 });
 

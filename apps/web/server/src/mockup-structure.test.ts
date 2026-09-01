@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { describe, it } from "node:test";
+import type { MockupJob } from "./mockup.js";
 import { makeTestTempDir } from "./testTemp.js";
 
 process.env.VITEST = "1";
@@ -13,12 +15,72 @@ const {
   beginStructureConfirmation,
   deleteMockup,
   finishStructureConfirmation,
+  prepareStructureInputSelection,
   prepareStructureConfirmation,
   publicMockup,
   publicMockupSummary,
   saveMockup,
   structureConfirmationFailureStatus,
 } = await import("./mockup.js");
+
+function proposalLayerId(sourceHash: string, name: string): string {
+  return `proposal-layer-${createHash("sha256").update(`${sourceHash}\0${name}`).digest("hex").slice(0, 16)}`;
+}
+
+function structureInputJob() {
+  const id = "cafe1234cafe";
+  const root = join(DATA_DIR, "mockups", id);
+  mkdirSync(root, { recursive: true });
+  const source = join(root, "source.ai");
+  const resolution = join(root, "structure_resolution.json");
+  const manifest = join(root, "manifest.json");
+  const artworkPreview = join(root, "structure_preview.png");
+  const sourceHash = "c".repeat(64);
+  const layers = [
+    { name: "刀线", stroke_only_path_count: 24 },
+    { name: " 折线 ", stroke_only_path_count: 12 },
+  ].map((layer) => ({
+    id: proposalLayerId(sourceHash, layer.name),
+    ...layer,
+  }));
+  writeFileSync(source, "%PDF-1.4\n");
+  writeFileSync(artworkPreview, "preview-before-selection");
+  writeFileSync(resolution, JSON.stringify({
+    structure: { source: { sha256: sourceHash } },
+    input_candidates: {
+      schema: "packaging-structure-input-candidates/2",
+      source_sha256: sourceHash,
+      proposal_layers: layers,
+      truncated: false,
+    },
+  }));
+  writeFileSync(manifest, JSON.stringify({
+    output_root: root,
+    products: [{
+      code: "cafe1234",
+      source_ai: source,
+      structure_engine: "v2",
+    }],
+  }));
+  const job: MockupJob = {
+    id,
+    status: "review_required" as const,
+    created_at: "2026-09-01T00:00:00.000Z",
+    files: [],
+    source_path: source,
+    manifest_path: manifest,
+    job_kind: "mockup" as const,
+    job_status: "waiting_input" as const,
+    structure_engine: "v2" as const,
+    structure_status: "review_required" as const,
+    structure_code: "structure_semantics_missing",
+    structure_resolution_path: resolution,
+    structure_artwork_preview_path: artworkPreview,
+    structure_source_sha256: sourceHash,
+  };
+  saveMockup(job);
+  return { job, layers, manifest, root, sourceHash };
+}
 
 function previewFaceIds(): string[] {
   return Array.from({ length: 7 }, (_, index) => `proposal-face-${String(index + 1).padStart(4, "0")}`);
@@ -134,6 +196,109 @@ function reviewJob() {
 }
 
 describe("mockup structure confirmation persistence", () => {
+  it("publishes source-bound stroke candidates only on the detail response", () => {
+    const { job, layers, sourceHash } = structureInputJob();
+    const view = publicMockup(job);
+
+    assert.deepEqual(view.structure_input, {
+      schema: "packaging-structure-input-candidates/2",
+      proposal_layers: layers,
+      selected_ids: [],
+      truncated: false,
+      image_url: `/api/mockups/${job.id}/structure-input-preview`,
+    });
+    assert.equal("structure_input" in publicMockupSummary(job), false);
+    assert.equal(JSON.stringify(view).includes(sourceHash), false);
+    assert.equal(JSON.stringify(view).includes(DATA_DIR), false);
+  });
+
+  it("preserves exact Illustrator names and fails whitespace-equivalent candidates closed", () => {
+    const { job, layers, sourceHash } = structureInputJob();
+    assert.equal(layers[1].name, " 折线 ");
+    const resolutionPath = job.structure_resolution_path || "";
+    const resolution = JSON.parse(readFileSync(resolutionPath, "utf8"));
+    resolution.input_candidates.proposal_layers.push({
+      id: proposalLayerId(sourceHash, "折线"),
+      name: "折线",
+      stroke_only_path_count: 8,
+    });
+    writeFileSync(resolutionPath, JSON.stringify(resolution));
+
+    assert.equal(publicMockup(job).structure_input, undefined);
+  });
+
+  it("keeps legacy v1 candidate inventories out of the public selection entry", () => {
+    const { job } = structureInputJob();
+    const resolutionPath = job.structure_resolution_path || "";
+    const resolution = JSON.parse(readFileSync(resolutionPath, "utf8"));
+    resolution.input_candidates.schema = "packaging-structure-input-candidates/1";
+    writeFileSync(resolutionPath, JSON.stringify(resolution));
+
+    assert.equal(publicMockup(job).structure_input, undefined);
+  });
+
+  it("turns candidate ids into one source-bound manifest and requeues the same job", () => {
+    const { job, layers, root, sourceHash } = structureInputJob();
+    const selection = prepareStructureInputSelection(job, [layers[1].id, layers[0].id]);
+
+    assert.equal(selection.changed, true);
+    assert.deepEqual(selection.job.structure_input_selection_ids, layers.map((layer) => layer.id));
+    assert.equal(selection.job.structure_status, "analyzing");
+    assert.equal(selection.job.status, "queued");
+    assert.equal(selection.job.job_status, "queued");
+    assert.equal(selection.job.structure_resolution_path, undefined);
+    assert.ok(selection.job.structure_input_preview_path);
+    assert.equal(
+      readFileSync(selection.job.structure_input_preview_path || "", "utf8"),
+      "preview-before-selection",
+    );
+    assert.ok(selection.job.manifest_path?.startsWith(root));
+    const manifest = JSON.parse(readFileSync(selection.job.manifest_path || "", "utf8"));
+    assert.deepEqual(manifest.products[0].proposal_layers, ["刀线", " 折线 "]);
+    assert.equal(manifest.products[0].proposal_source_sha256, sourceHash);
+    assert.equal(JSON.stringify(manifest).includes(layers[0].id), false);
+  });
+
+  it("keeps the cached job retryable when preparing the original preview fails", () => {
+    const { job, layers } = structureInputJob();
+    const previewPath = job.structure_artwork_preview_path || "";
+    rmSync(previewPath);
+    mkdirSync(previewPath);
+
+    assert.throws(() => prepareStructureInputSelection(job, [layers[0].id]));
+    assert.equal(job.structure_input_selection_ids, undefined);
+    assert.equal(job.structure_status, "review_required");
+    assert.equal(job.job_status, "waiting_input");
+
+    rmSync(previewPath, { recursive: true });
+    writeFileSync(previewPath, "preview-before-selection");
+    const retry = prepareStructureInputSelection(job, [layers[0].id]);
+    assert.equal(retry.changed, true);
+    assert.deepEqual(retry.job.structure_input_selection_ids, [layers[0].id]);
+    assert.equal(retry.job.job_status, "queued");
+  });
+
+  it("rejects forged, duplicate, stale, and over-broad layer selections", () => {
+    const { job, layers } = structureInputJob();
+    for (const ids of [
+      [],
+      [layers[0].id, layers[0].id],
+      ["proposal-layer-0000000000000000"],
+      Array.from({ length: 17 }, (_, index) => `proposal-layer-${index.toString(16).padStart(16, "0")}`),
+    ]) {
+      assert.throws(
+        () => prepareStructureInputSelection(job, ids),
+        (error: unknown) => Number((error as { status?: number }).status) === 400,
+      );
+    }
+
+    job.structure_source_sha256 = "d".repeat(64);
+    assert.throws(
+      () => prepareStructureInputSelection(job, [layers[0].id]),
+      (error: unknown) => Number((error as { status?: number }).status) === 409,
+    );
+  });
+
   it("separates stale identity, impossible structure, and unknown worker failures", () => {
     assert.equal(structureConfirmationFailureStatus("structure_confirmation_stale"), 409);
     assert.equal(structureConfirmationFailureStatus("structure_source_mismatch"), 409);
