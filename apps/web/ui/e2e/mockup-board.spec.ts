@@ -107,7 +107,7 @@ test("结构待确认和不支持均显示可执行状态，不伪装成打样�
 });
 
 test("完成态打样单可在新窗口打开两张内联原图", async ({ page, context, syntheticApi }) => {
-  const mockup = completedMockup("777777777777", "高清白底图");
+  const mockup = completedMockup("7a7b7c7d7e7f", "高清白底图");
   mockup.files = [
     { key: "white_a", name: "正面与侧面.png" },
     { key: "white_b", name: "反面与侧面.png" },
@@ -141,7 +141,7 @@ test("完成态打样单可在新窗口打开两张内联原图", async ({ page,
 });
 
 test("白底图损坏时隐藏原图和下载操作", async ({ page, syntheticApi }) => {
-  const mockup = completedMockup("888888888888", "损坏白底图");
+  const mockup = completedMockup("8a8b8c8d8e8f", "损坏白底图");
   mockup.files = [{ key: "white_a", name: "损坏.png" }];
   syntheticApi.mockups.push(mockup);
   await page.route(new RegExp(`/api/mockups/${mockup.id}/files/white_a(?:\\?.*)?$`), async (route) => {
