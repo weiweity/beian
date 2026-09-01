@@ -65,7 +65,7 @@ finding 身份由工具、类型、仓库相对路径和符号组成；行号只
 - Vulture 精确锁在 `apps/web/backend/requirements-quality.txt`，不得进入生产 `requirements.txt`。
 - 项目 skill 采用正向许可：`.agents/skills` 的实际一级目录、`skills-lock.json` 和质量脚本内审核清单必须完全相等，空锁、额外目录、额外锁项、符号链接或未知 skill 都失败。`antd` skill 是仓库内 vendored 权威源，锁项必须是 `sourceType: "local"` 且指向自身受 Git 管理的目录；上游仓库和标准 skill restore/update 不是本地 hardening 的恢复源，恢复只能来自受信任的 Git 提交并重新核验内容哈希。
 - skill 不获得自动 shell 权限。所有可执行示例必须经过 `scripts/quality/antd-readonly.mjs`；包装器不用 shell，固定 `@ant-design/cli@6.6.1`，强制 `CI=1`、`NO_UPDATE_CHECK=1`，只允许审核过的只读子命令和仓库内路径，并拒绝 setup、升级、外部提交及可写迁移参数。CLI 缺失或版本不符时失败关闭，不得由普通设计任务修改开发机工具链。
-- `.github/workflows/quality.yml` 把职责拆成两个 GitHub-hosted job：`windows-2022` 在原生 Windows PowerShell 5.1 下实跑 `.NET File.Replace` 的无备份原子替换合同；Linux Node 22 job 分别安装产品依赖与 `tools/quality`，再运行 `npm run test:quality`、`npm run quality`、完整 `npm test` 和严格 `npm run typecheck`/UI build。质量工具链要求 Node 20.19+ 或 22.12+，不并入产品 `Node >=20` 的 L0 合同。
+- `.github/workflows/quality.yml` 把职责拆成两个 GitHub-hosted job：`windows-2022` 在原生 Windows PowerShell 5.1 下实跑 `.NET File.Replace` 的无备份原子替换合同，并以不注册、不启动、不停止、不禁用生产任务的合同脚本验证 Illustrator Agent 的隐藏任务、持久/临时触发器与 `Quiesce` 顺序；Linux Node 22 job 分别安装产品依赖与 `tools/quality`，再运行 `npm run test:quality`、`npm run quality`、完整 `npm test` 和严格 `npm run typecheck`/UI build。质量工具链要求 Node 20.19+ 或 22.12+，不并入产品 `Node >=20` 的 L0 合同。
 - npm 的跨平台 optional-dependency 缺口会让 macOS 生成的根 lock 漏掉 Rollup Linux 原生包（[npm/cli#4828](https://github.com/npm/cli/issues/4828)）。CI 只在缺包时从已安装 Rollup 读取精确版本，以 `--no-save --package-lock=false` 补齐 Linux 包；不修改产品 manifest/lock，不把质量 CI 需求带入杭州依赖图。
 - 质量 workflow 不使用杭州/self-hosted runner，不调用 `release.ps1`，不持有生产环境或密钥。
 - `.github/workflows/hangzhou-release.yml` 保持只接收可信 `main` push，不因质量治理改变。
