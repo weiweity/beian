@@ -263,6 +263,8 @@ def structure_input_candidates(
         )
         preview_path_count, preview_point_count = consumed
     preview_plates: list[dict[str, Any]] = []
+    plate_preview_path_count = 0
+    plate_preview_point_count = 0
     raw_plates = illustrator_result.get("preview_plate_candidates")
     if isinstance(raw_plates, list):
         plate_names: dict[str, int] = {}
@@ -295,10 +297,10 @@ def structure_input_candidates(
                 plate_id,
                 page_size_points,
                 preview_layers,
-                preview_path_count,
-                preview_point_count,
+                plate_preview_path_count,
+                plate_preview_point_count,
             )
-            preview_path_count, preview_point_count = consumed
+            plate_preview_path_count, plate_preview_point_count = consumed
     if not proposal_layers:
         return None
     result = {
@@ -307,7 +309,12 @@ def structure_input_candidates(
         "proposal_layers": proposal_layers,
         "truncated": bool(
             illustrator_result.get("proposal_layer_candidates_truncated")
+            or illustrator_result.get("preview_plate_candidates_truncated")
             or len(raw_candidates) > MAX_PROPOSAL_LAYER_CANDIDATES
+            or (
+                isinstance(raw_plates, list)
+                and len(raw_plates) > MAX_PROPOSAL_LAYER_CANDIDATES
+            )
         ),
     }
     if preview_plates:

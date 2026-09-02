@@ -869,6 +869,46 @@ process.stdout.write(JSON.stringify({
     assert result["layerCap"]["budget"] == {"paths": 512, "points": 1024}
 
 
+def test_structure_export_preview_skips_pathpoints_after_budget_cap():
+    program = _structure_preview_helpers() + r"""
+var reads = 0;
+var item = {
+    closed: false,
+    get pathPoints() {
+        reads += 1;
+        var anchor = [0, 80];
+        return [
+            {anchor: anchor, leftDirection: anchor.slice(), rightDirection: anchor.slice()},
+            {anchor: [1, 80], leftDirection: [1, 80], rightDirection: [1, 80]}
+        ];
+    }
+};
+var candidate = {preview_paths: [], preview_truncated: false};
+appendProposalPreview(candidate, item, 0, 100, {paths: 5000, points: 0});
+var pointCandidate = {preview_paths: [], preview_truncated: false};
+appendProposalPreview(pointCandidate, item, 0, 100, {paths: 0, points: 20000});
+var remainderCandidate = {preview_paths: [], preview_truncated: false};
+appendProposalPreview(remainderCandidate, item, 0, 100, {paths: 0, points: 19999});
+process.stdout.write(JSON.stringify({
+    reads: reads,
+    pathCap: {paths: candidate.preview_paths.length, truncated: candidate.preview_truncated},
+    pointCap: {paths: pointCandidate.preview_paths.length, truncated: pointCandidate.preview_truncated},
+    remainderCap: {paths: remainderCandidate.preview_paths.length, truncated: remainderCandidate.preview_truncated}
+}));
+"""
+    completed = subprocess.run(
+        ["node", "-e", program],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    result = json.loads(completed.stdout)
+    assert result["reads"] == 0
+    assert result["pathCap"] == {"paths": 0, "truncated": True}
+    assert result["pointCap"] == {"paths": 0, "truncated": True}
+    assert result["remainderCap"] == {"paths": 0, "truncated": True}
+
+
 def test_unassigned_stroke_only_layers_are_listed_without_becoming_structure():
     source = EXPORTER.read_text(encoding="utf-8")
     helper_start = source.index("function exactAssignment")
@@ -1023,6 +1063,172 @@ def test_explicit_semantics_suppress_inapplicable_layer_candidates():
         "result.preview_plate_candidates_truncated = false;"
         in source[suppression:chosen_records]
     )
+
+
+def test_preview_plates_use_a_second_pass_and_separate_budget():
+    source = EXPORTER.read_text(encoding="utf-8")
+    first_loop = source.index("for (var pathIndex = 0;")
+    plate_pass = source.index("if (explicitRecords.length === 0)")
+    suppression = source.index("if (explicitRecords.length > 0)")
+    plate_body = source[plate_pass:suppression]
+    assert first_loop < plate_pass < suppression
+    assert "recordProposalLayerCandidate(" in source[first_loop:plate_pass]
+    assert "proposalPreviewBudget" in source[first_loop:plate_pass]
+    assert "recordPreviewPlateCandidate(" not in source[first_loop:plate_pass]
+    assert "platePreviewBudget" not in source[first_loop:plate_pass]
+    assert "recordPreviewPlateCandidate(" in plate_body
+    assert "var platePreviewBudget = {paths: 0, points: 0};" in source
+    assert "platePreviewBudget" in plate_body
+    assert "proposalPreviewBudget" not in plate_body
+    assert "remainderItems" in source[first_loop:plate_pass]
+    assert "remainderItems" in plate_body
+    assert "documentRef.pathItems" not in plate_body
+    assert "assignmentOf(" not in plate_body
+    assert "preview_plate_candidates_truncated = true;" in plate_body
+    assert "break;" in plate_body
+
+
+def test_process_plate_second_pass_cannot_starve_knife_overlay():
+    source = EXPORTER.read_text(encoding="utf-8")
+    assign_start = source.index("function exactAssignment")
+    assign_end = source.index("function proposalLayerKey")
+    loop_start = source.index("    var proposalLayerKeys = [];")
+    suppression = source.index("    if (explicitRecords.length > 0) {")
+    program = _structure_preview_helpers() + source[assign_start:assign_end] + r"""
+function pathItem(layer, filled, extra) {
+    var anchor = [0, 80];
+    var item = {
+        layer: layer,
+        stroked: !filled,
+        filled: filled,
+        closed: filled,
+        clipping: false,
+        pathPoints: [
+            {anchor: anchor, leftDirection: anchor.slice(), rightDirection: anchor.slice()},
+            {anchor: [40, 80], leftDirection: [40, 80], rightDirection: [40, 80]}
+        ]
+    };
+    if (extra) {
+        for (var key in extra) item[key] = extra[key];
+    }
+    return item;
+}
+function harvest(pathItems) {
+    var config = {};
+    var artboard = [0, 100, 160, 0];
+    var explicitRecords = [];
+    var proposalRecords = [];
+    var result = {
+        proposal_layer_candidates: [],
+        preview_plate_candidates: [],
+        proposal_layer_candidates_truncated: false,
+        preview_plate_candidates_truncated: false
+    };
+    var documentRef = {pathItems: pathItems};
+""" + source[loop_start:suppression] + r"""
+    return {
+        names: result.proposal_layer_candidates.map(function (row) { return row.name; }),
+        plateNames: result.preview_plate_candidates.map(function (row) { return row.name; }),
+        knifePaths: (result.proposal_layer_candidates[0] && result.proposal_layer_candidates[0].preview_paths || []).length,
+        knifeTruncated: Boolean(result.proposal_layer_candidates[0] && result.proposal_layer_candidates[0].preview_truncated),
+        plateTruncated: result.preview_plate_candidates_truncated
+    };
+}
+var documentRef = {typename: "Document"};
+var knifeLayer = {typename: "Layer", name: "刀线", parent: documentRef, zOrderPosition: 0};
+var foilLayer = {typename: "Layer", name: "烫雅银", parent: documentRef, zOrderPosition: 1};
+var clipLayer = {typename: "Layer", name: "裁剪", parent: documentRef, zOrderPosition: 2};
+var clip = pathItem(clipLayer, true, {clipping: true});
+var foil = pathItem(foilLayer, true);
+var knife = pathItem(knifeLayer, false);
+var mixed = harvest([clip, foil, knife]);
+var tagged = pathItem(knifeLayer, false, {note: "packaging:cut"});
+var explicit = harvest([foil, tagged]);
+process.stdout.write(JSON.stringify({mixed: mixed, explicit: explicit}));
+"""
+    completed = subprocess.run(
+        ["node", "-e", program],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(completed.stdout)
+    assert payload["mixed"] == {
+        "names": ["刀线"],
+        "plateNames": ["烫雅银"],
+        "knifePaths": 1,
+        "knifeTruncated": False,
+        "plateTruncated": False,
+    }
+    assert payload["explicit"] == {
+        "names": [],
+        "plateNames": [],
+        "knifePaths": 0,
+        "knifeTruncated": False,
+        "plateTruncated": False,
+    }
+
+
+def test_exhausted_plate_preview_budget_does_not_drop_knife_overlay():
+    program = _structure_preview_helpers() + r"""
+var documentRef = {typename: "Document"};
+var knifeLayer = {typename: "Layer", name: "刀线", parent: documentRef, zOrderPosition: 0};
+var foilLayer = {typename: "Layer", name: "烫雅银", parent: documentRef, zOrderPosition: 1};
+function item(layer, filled) {
+    var anchor = [0, 80];
+    return {
+        layer: layer,
+        stroked: !filled,
+        filled: filled,
+        closed: filled,
+        pathPoints: [
+            {anchor: anchor, leftDirection: anchor.slice(), rightDirection: anchor.slice()},
+            {anchor: [1, 80], leftDirection: [1, 80], rightDirection: [1, 80]}
+        ]
+    };
+}
+var proposal = [];
+var proposalKeys = [];
+var plates = [];
+var plateKeys = [];
+var proposalBudget = {paths: 0, points: 0};
+var plateBudget = {paths: 5000, points: 20000};
+recordPreviewPlateCandidate(plates, plateKeys, proposalKeys, item(foilLayer, true), 0, 100, plateBudget);
+recordProposalLayerCandidate(proposal, proposalKeys, item(knifeLayer, false), 0, 100, proposalBudget);
+var reverseProposal = [];
+var reverseProposalKeys = [];
+var reversePlates = [];
+var reversePlateKeys = [];
+recordProposalLayerCandidate(reverseProposal, reverseProposalKeys, item(knifeLayer, false), 0, 100, {paths: 5000, points: 20000});
+recordPreviewPlateCandidate(reversePlates, reversePlateKeys, reverseProposalKeys, item(foilLayer, true), 0, 100, {paths: 0, points: 0});
+process.stdout.write(JSON.stringify({
+    knife: {name: proposal[0].name, paths: proposal[0].preview_paths.length, truncated: proposal[0].preview_truncated, budget: proposalBudget},
+    foil: {name: plates[0].name, paths: plates[0].preview_paths.length, truncated: plates[0].preview_truncated, budget: plateBudget},
+    reverseKnife: {paths: reverseProposal[0].preview_paths.length, truncated: reverseProposal[0].preview_truncated},
+    reverseFoil: {name: reversePlates[0].name, paths: reversePlates[0].preview_paths.length, truncated: reversePlates[0].preview_truncated}
+}));
+"""
+    completed = subprocess.run(
+        ["node", "-e", program],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(completed.stdout)
+    assert payload["knife"] == {
+        "name": "刀线",
+        "paths": 1,
+        "truncated": False,
+        "budget": {"paths": 1, "points": 2},
+    }
+    assert payload["foil"] == {
+        "name": "烫雅银",
+        "paths": 0,
+        "truncated": True,
+        "budget": {"paths": 5000, "points": 20000},
+    }
+    assert payload["reverseKnife"] == {"paths": 0, "truncated": True}
+    assert payload["reverseFoil"] == {"name": "烫雅银", "paths": 1, "truncated": False}
 
 
 def test_proposal_paths_are_cleaned_from_artwork_without_hiding_the_whole_layer():
@@ -1624,6 +1830,82 @@ def test_structure_input_candidates_publish_view_only_preview_plates():
         {"preview_plate_candidates": [{"name": "烫雅银"}]},
         source_hash,
     ) is None
+
+
+def test_structure_input_candidates_surface_preview_plate_truncation():
+    pipeline = load_pipeline()
+    source_hash = "c" * 64
+    payload = pipeline.structure_input_candidates(
+        {
+            "proposal_layer_candidates": [{
+                "name": "刀线",
+                "stroke_only_path_count": 1,
+            }],
+            "preview_plate_candidates": [{"name": "烫雅银"}],
+            "preview_plate_candidates_truncated": True,
+        },
+        source_hash,
+    )
+    assert payload is not None
+    assert payload["truncated"] is True
+    assert payload["preview_plates"][0]["name"] == "烫雅银"
+
+
+def test_structure_input_candidates_keep_plate_preview_after_proposal_budget():
+    pipeline = load_pipeline()
+    source_hash = "d" * 64
+    point = [10.0, 20.0, 10.0, 20.0, 10.0, 20.0]
+    knife_paths = [
+        {"closed": False, "points": [list(point) for _ in range(250)]}
+        for _ in range(80)
+    ]
+    payload = pipeline.structure_input_candidates(
+        {
+            "page_size_points": [160, 90],
+            "proposal_layer_candidates": [{
+                "name": "刀线",
+                "stroke_only_path_count": 80,
+                "preview_paths": knife_paths,
+            }],
+            "preview_plate_candidates": [{
+                "name": "烫雅银",
+                "preview_paths": [{
+                    "closed": True,
+                    "points": [list(point), [30.0, 20.0, 30.0, 20.0, 30.0, 20.0]],
+                }],
+            }],
+        },
+        source_hash,
+    )
+    assert payload is not None
+    ids = [layer["candidate_id"] for layer in payload["preview"]["layers"]]
+    assert ids[0].startswith("proposal-layer-")
+    assert ids[1].startswith("preview-plate-")
+    assert len(payload["preview"]["layers"][0]["paths"]) == 80
+    assert len(payload["preview"]["layers"][1]["paths"]) == 1
+
+
+def test_structure_input_candidates_truncate_when_preview_plates_exceed_cap():
+    pipeline = load_pipeline()
+    source_hash = "c" * 64
+    payload = pipeline.structure_input_candidates(
+        {
+            "proposal_layer_candidates": [{
+                "name": "刀线",
+                "stroke_only_path_count": 1,
+            }],
+            "preview_plate_candidates": [
+                {"name": f"工艺-{index}"} for index in range(129)
+            ],
+        },
+        source_hash,
+    )
+    assert payload is not None
+    assert payload["truncated"] is True
+    assert payload["proposal_layers"][0]["name"] == "刀线"
+    assert [plate["name"] for plate in payload["preview_plates"]] == [
+        f"工艺-{index}" for index in range(128)
+    ]
 
 
 def test_structure_input_candidates_cap_preview_paths_per_layer():
