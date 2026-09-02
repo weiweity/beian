@@ -20,6 +20,7 @@ AGENT_CLIENT = PACKAGING / "illustrator" / "illustrator_agent.py"
 AGENT_SCRIPT = PACKAGING.parents[1] / "scripts" / "windows" / "illustrator-agent.ps1"
 AGENT_INSTALLER = PACKAGING.parents[1] / "scripts" / "windows" / "install-illustrator-agent.ps1"
 AGENT_SMOKE = PACKAGING.parents[1] / "scripts" / "windows" / "illustrator-jsx-smoke.ps1"
+RUNNER_PROBE = PACKAGING / "illustrator" / "runner_probe.jsx"
 SERVER_AGENT = PACKAGING.parents[1] / "apps" / "web" / "server" / "src" / "illustratorAgent.ts"
 
 
@@ -2553,6 +2554,35 @@ def test_session_one_agent_is_acl_bounded_timeout_safe_and_fixed_exporter_only()
     assert "Illustrator.Application" not in source
 
 
+def test_agent_runtime_jsx_writes_utf8_bom_and_smoke_covers_factory_chinese():
+    source = AGENT_SCRIPT.read_text(encoding="utf-8")
+    probe = RUNNER_PROBE.read_text(encoding="utf-8")
+    write_plain = source[source.index("function Write-Utf8File") : source.index("function Write-Utf8BomFile")]
+    write_atomic = source[source.index("function Write-AtomicJson") : source.index("function Read-AgentFaultFence")]
+    bind = source[source.index("function Bind-RuntimeJsx") : source.index("function Restore-OwnedDocumentState")]
+    smoke = source[source.index("function Invoke-SmokeRequest") : source.index("function Invoke-AgentRequest")]
+    exporter = EXPORTER.read_text(encoding="utf-8")
+
+    assert "UTF8Encoding]::new($true" in source
+    assert "UTF8Encoding]::new($false, $true)" in source
+    assert "$Utf8NoBom" in write_plain
+    assert "$Utf8Bom" not in write_plain
+    assert "Write-Utf8File $temporary" in write_atomic
+    assert "Write-Utf8BomFile" not in write_atomic
+    assert "Write-Utf8BomFile $runtimePath $source" in bind
+    assert "Write-Utf8File $runtimePath" not in bind
+    assert "0xEF" in bind and "0xBB" in bind and "0xBF" in bind
+    assert 'Join-Path $ExporterRoot "export_structure.jsx"' in smoke
+    assert "$probeSource.IndexOf($FactoryKnifeLiteral)" in smoke
+    assert "$probeSource.IndexOf($FactoryCreaseLiteral)" in smoke
+    assert "$structureSource.IndexOf($FactoryKnifeLiteral)" in smoke
+    assert "$structureSource.IndexOf($FactoryCreaseLiteral)" in smoke
+    assert "0x5200" in source and "0x7248" in source and "0x7EBF" in source
+    assert "刀版" in probe and "刀线" in probe
+    assert "charCodeAt(0) !== 0x5200" in probe
+    assert '"刀版"' in exporter and '"刀线"' in exporter
+
+
 def test_agent_task_is_interactive_token_single_instance_and_passwordless():
     source = AGENT_INSTALLER.read_text(encoding="utf-8")
     assert "New-ScheduledTaskTrigger -AtLogOn" in source
@@ -2769,6 +2799,12 @@ def test_agent_client_rejects_faulted_heartbeat(
             "桌面桥执行失败",
         ),
         (
+            11,
+            '{"kind":"illustrator_agent_error","ok":false,"code":"illustrator_bridge_failed","message":"Illustrator JSX execution failed","details":{"exit_code":11,"diagnostic":"Illustrator JSX failed: JavaScript code was missing"}}',
+            "illustrator_bridge_failed",
+            "JavaScript code was missing",
+        ),
+        (
             6,
             '{"kind":"illustrator_agent_error","ok":false,"code":"illustrator_recovery_failed","message":"cleanup failed","details":{}}',
             "illustrator_recovery_failed",
@@ -2799,6 +2835,11 @@ def test_structure_export_failure_has_actionable_public_contract(
     assert "日志=" not in payload["error"]
     assert payload["cause"]
     assert payload["fix"]
+    if expected_message == "JavaScript code was missing":
+        assert "没能加载导出脚本" in payload["error"]
+        assert "请关掉 Illustrator" in payload["error"]
+        assert "请重新打样" not in payload["error"]
+        assert "C:\\" not in payload["error"]
 
 
 def test_legacy_normalize_uses_the_same_agent_failure_contract_without_structure_wording():
