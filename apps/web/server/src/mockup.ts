@@ -68,11 +68,17 @@ export type StructureInputPreview = {
   }>;
 };
 
+type StructureInputPreviewPlate = {
+  id: string;
+  name: string;
+};
+
 type StructureInputCandidates = {
   schema: "packaging-structure-input-candidates/2";
   source_sha256: string;
   proposal_layers: StructureInputLayerCandidate[];
   truncated: boolean;
+  preview_plates?: StructureInputPreviewPlate[];
   preview?: StructureInputPreview;
 };
 
@@ -534,14 +540,54 @@ function normalizeStructureInputCandidates(
     displayNames.add(displayName);
     layers.push({ id, name, stroke_only_path_count: count });
   }
-  const preview = normalizeStructureInputPreview(input.preview, ids);
+  const plates = normalizePreviewPlates(input.preview_plates, sourceHash, ids, displayNames);
+  const previewIds = new Set([...ids, ...plates.map((plate) => plate.id)]);
+  const preview = normalizeStructureInputPreview(input.preview, previewIds);
   return {
     schema: STRUCTURE_INPUT_CANDIDATES_SCHEMA,
     source_sha256: sourceHash,
     proposal_layers: layers,
     truncated: input.truncated,
+    ...(plates.length ? { preview_plates: plates } : {}),
     ...(preview ? { preview } : {}),
   };
+}
+
+function normalizePreviewPlates(
+  value: unknown,
+  sourceHash: string,
+  takenIds: Set<string>,
+  takenNames: Set<string>,
+): StructureInputPreviewPlate[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > MAX_STRUCTURE_INPUT_CANDIDATES) {
+    return [];
+  }
+  const plates: StructureInputPreviewPlate[] = [];
+  const ids = new Set<string>();
+  const names = new Set<string>();
+  for (const raw of value) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return [];
+    const plate = raw as Record<string, unknown>;
+    const id = typeof plate.id === "string" ? plate.id : "";
+    const name = typeof plate.name === "string" ? plate.name : "";
+    const displayName = name.trim();
+    const expectedId = displayName
+      ? `preview-plate-${createHash("sha256").update(`${sourceHash}\0${name}`).digest("hex").slice(0, 16)}`
+      : "";
+    if (
+      id !== expectedId
+      || !displayName
+      || name.length > 160
+      || ids.has(id)
+      || names.has(displayName)
+      || takenIds.has(id)
+      || takenNames.has(displayName)
+    ) return [];
+    ids.add(id);
+    names.add(displayName);
+    plates.push({ id, name });
+  }
+  return plates;
 }
 
 function loadStructureInputCandidates(
@@ -562,6 +608,7 @@ function publicStructureInput(job: MockupJob, resolution: StructureResolution | 
   selected_ids: string[];
   truncated: boolean;
   image_url?: string;
+  preview_plates?: StructureInputPreviewPlate[];
   preview?: StructureInputPreview;
 } | undefined {
   if (job.structure_status !== "review_required") return undefined;
@@ -581,6 +628,7 @@ function publicStructureInput(job: MockupJob, resolution: StructureResolution | 
       .map((candidate) => candidate.id)
       .filter((id) => selected.has(id)),
     truncated: candidates.truncated,
+    ...(candidates.preview_plates?.length ? { preview_plates: candidates.preview_plates } : {}),
     ...(candidates.preview ? { preview: candidates.preview } : {}),
     ...(preview && existsSync(preview) && underJobDir(job.id, preview)
       ? { image_url: `/api/mockups/${job.id}/structure-input-preview` }

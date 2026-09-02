@@ -52,6 +52,12 @@ export function selectedStructureLayerIds(input: StructureInput, selectedIds: st
     .map((candidate) => candidate.id);
 }
 
+export function defaultStructureLayerIds(input: StructureInput): string[] {
+  if (input.selected_ids.length) return selectedStructureLayerIds(input, input.selected_ids);
+  const cuts = input.proposal_layers.filter((candidate) => candidate.name === "刀线");
+  return cuts.length === 1 ? [cuts[0].id] : [];
+}
+
 export function sameStructureLayerSelection(input: StructureInput, selectedIds: string[]): boolean {
   const normalized = selectedStructureLayerIds(input, selectedIds);
   return normalized.length === input.selected_ids.length

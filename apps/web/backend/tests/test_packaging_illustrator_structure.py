@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import math
@@ -897,6 +898,52 @@ process.stdout.write(JSON.stringify(candidates));
     ]
     assert "proposal_layer_candidates: []" in source
     assert "proposalRecords.push" in source
+    assert "function recordPreviewPlateCandidate" in source
+
+
+def test_filled_process_layers_are_preview_plates_not_structure_candidates():
+    source = EXPORTER.read_text(encoding="utf-8")
+    helper_start = source.index("function exactAssignment")
+    helper_end = source.index("var configPath", helper_start)
+    helpers = source[helper_start:helper_end]
+    program = helpers + r"""
+var candidates = [];
+var proposalKeys = [];
+var plates = [];
+var plateKeys = [];
+var budget = {paths: 0, points: 0};
+var foil = {
+    layer: {name: "\u70eb\u96c5\u94f6", zOrderPosition: 2},
+    stroked: false,
+    filled: true,
+    closed: true,
+    pathPoints: [
+        {anchor: [10, 80], leftDirection: [10, 80], rightDirection: [10, 80]},
+        {anchor: [40, 80], leftDirection: [40, 80], rightDirection: [40, 80]}
+    ]
+};
+recordProposalLayerCandidate(candidates, proposalKeys, foil, 0, 100, budget);
+recordPreviewPlateCandidate(plates, plateKeys, proposalKeys, foil, 0, 100, budget);
+process.stdout.write(JSON.stringify({candidates: candidates, plates: plates, budget: budget}));
+"""
+    completed = subprocess.run(
+        ["node", "-e", program],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+    assert payload["candidates"] == []
+    assert payload["plates"][0]["name"] == "烫雅银"
+    assert payload["plates"][0]["preview_paths"] == [{
+        "closed": True,
+        "points": [
+            [10.0, 20.0, 10.0, 20.0, 10.0, 20.0],
+            [40.0, 20.0, 40.0, 20.0, 40.0, 20.0],
+        ],
+    }]
+    assert payload["budget"] == {"paths": 1, "points": 2}
 
 
 def test_duplicate_physical_layer_names_are_marked_ambiguous():
@@ -969,6 +1016,11 @@ def test_explicit_semantics_suppress_inapplicable_layer_candidates():
     assert "result.proposal_layer_candidates = [];" in source[suppression:chosen_records]
     assert (
         "result.proposal_layer_candidates_truncated = false;"
+        in source[suppression:chosen_records]
+    )
+    assert "result.preview_plate_candidates = [];" in source[suppression:chosen_records]
+    assert (
+        "result.preview_plate_candidates_truncated = false;"
         in source[suppression:chosen_records]
     )
 
@@ -1358,6 +1410,9 @@ def test_v2_hold_persists_source_bound_legacy_layer_candidates(
                 {"name": "结构-A", "stroke_only_path_count": 12},
                 {"name": "结构-B", "stroke_only_path_count": 8},
             ],
+            "preview_plate_candidates": [
+                {"name": "烫雅银"},
+            ],
         }
 
     class ReviewResolution:
@@ -1413,6 +1468,13 @@ def test_v2_hold_persists_source_bound_legacy_layer_candidates(
     assert candidates["proposal_layers"][0]["id"].startswith("proposal-layer-")
     assert candidates["proposal_layers"][1]["id"].startswith("proposal-layer-")
     assert candidates["proposal_layers"][0]["id"] != candidates["proposal_layers"][1]["id"]
+    assert candidates["preview_plates"] == [{
+        "id": "preview-plate-" + hashlib.sha256(
+            (candidates["source_sha256"] + "\0烫雅银").encode("utf-8")
+        ).hexdigest()[:16],
+        "name": "烫雅银",
+    }]
+    assert all(plate["id"].startswith("preview-plate-") for plate in candidates["preview_plates"])
 
 
 def test_explicit_proposal_layers_preserve_exact_names_and_deduplicate_exact_values():
@@ -1507,6 +1569,61 @@ def test_structure_input_candidates_publish_bounded_advisory_layer_preview():
             }
         ],
     }
+
+
+def test_structure_input_candidates_publish_view_only_preview_plates():
+    pipeline = load_pipeline()
+    source_hash = "d" * 64
+    payload = pipeline.structure_input_candidates(
+        {
+            "page_size_points": [160, 90],
+            "proposal_layer_candidates": [{
+                "name": "刀线",
+                "stroke_only_path_count": 2,
+                "preview_paths": [{
+                    "closed": False,
+                    "points": [
+                        [10, 20, 10, 20, 10, 20],
+                        [140, 20, 140, 20, 140, 20],
+                    ],
+                }],
+            }],
+            "preview_plate_candidates": [
+                {
+                    "name": "烫雅银",
+                    "preview_paths": [{
+                        "closed": True,
+                        "points": [
+                            [12, 18, 12, 18, 12, 18],
+                            [30, 18, 30, 18, 30, 18],
+                        ],
+                    }],
+                },
+                {"name": "刀线", "preview_paths": []},
+                {"name": "印刷", "ambiguous_name": True},
+            ],
+        },
+        source_hash,
+    )
+
+    assert payload is not None
+    assert [layer["name"] for layer in payload["proposal_layers"]] == ["刀线"]
+    assert payload["preview_plates"] == [{
+        "id": "preview-plate-" + hashlib.sha256(
+            (source_hash + "\0烫雅银").encode("utf-8")
+        ).hexdigest()[:16],
+        "name": "烫雅银",
+    }]
+    preview_ids = [layer["candidate_id"] for layer in payload["preview"]["layers"]]
+    assert payload["proposal_layers"][0]["id"] in preview_ids
+    assert payload["preview_plates"][0]["id"] in preview_ids
+    assert payload["preview_plates"][0]["id"] not in {
+        layer["id"] for layer in payload["proposal_layers"]
+    }
+    assert pipeline.structure_input_candidates(
+        {"preview_plate_candidates": [{"name": "烫雅银"}]},
+        source_hash,
+    ) is None
 
 
 def test_structure_input_candidates_cap_preview_paths_per_layer():
