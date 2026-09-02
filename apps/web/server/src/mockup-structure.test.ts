@@ -52,6 +52,21 @@ function structureInputJob() {
       source_sha256: sourceHash,
       proposal_layers: layers,
       truncated: false,
+      preview: {
+        schema: "illustrator-layer-preview/1",
+        page_size_points: [160, 90],
+        layers: layers.map((layer, index) => ({
+          candidate_id: layer.id,
+          paths: [{
+            closed: false,
+            points: [
+              [10 + index, 20, 10 + index, 20, 10 + index, 20],
+              [40 + index, 60, 40 + index, 60, 40 + index, 60],
+            ],
+          }],
+          truncated: false,
+        })),
+      },
     },
   }));
   writeFileSync(manifest, JSON.stringify({
@@ -206,6 +221,21 @@ describe("mockup structure confirmation persistence", () => {
       selected_ids: [],
       truncated: false,
       image_url: `/api/mockups/${job.id}/structure-input-preview`,
+      preview: {
+        schema: "illustrator-layer-preview/1",
+        page_size_points: [160, 90],
+        layers: layers.map((layer, index) => ({
+          candidate_id: layer.id,
+          paths: [{
+            closed: false,
+            points: [
+              [10 + index, 20, 10 + index, 20, 10 + index, 20],
+              [40 + index, 60, 40 + index, 60, 40 + index, 60],
+            ],
+          }],
+          truncated: false,
+        })),
+      },
     });
     assert.equal("structure_input" in publicMockupSummary(job), false);
     assert.equal(JSON.stringify(view).includes(sourceHash), false);
@@ -235,6 +265,92 @@ describe("mockup structure confirmation persistence", () => {
     writeFileSync(resolutionPath, JSON.stringify(resolution));
 
     assert.equal(publicMockup(job).structure_input, undefined);
+  });
+
+  it("drops malformed advisory layer geometry without disabling source-bound selection", () => {
+    const { job, layers } = structureInputJob();
+    const resolutionPath = job.structure_resolution_path || "";
+    const resolution = JSON.parse(readFileSync(resolutionPath, "utf8"));
+    resolution.input_candidates.preview.layers[0].paths[0].points[0][0] = "not-a-number";
+    writeFileSync(resolutionPath, JSON.stringify(resolution));
+
+    const input = publicMockup(job).structure_input;
+    assert.deepEqual(input?.proposal_layers, layers);
+    assert.equal(input?.preview, undefined);
+  });
+
+  it("drops advisory preview when bezier coordinates are booleans", () => {
+    const { job, layers } = structureInputJob();
+    const resolutionPath = job.structure_resolution_path || "";
+    const resolution = JSON.parse(readFileSync(resolutionPath, "utf8"));
+    resolution.input_candidates.preview.layers[0].paths[0].points[0][0] = true;
+    writeFileSync(resolutionPath, JSON.stringify(resolution));
+
+    const input = publicMockup(job).structure_input;
+    assert.deepEqual(input?.proposal_layers, layers);
+    assert.equal(input?.preview, undefined);
+  });
+
+  it("still publishes source-bound layers when the old job has no advisory preview", () => {
+    const { job, layers } = structureInputJob();
+    const resolutionPath = job.structure_resolution_path || "";
+    const resolution = JSON.parse(readFileSync(resolutionPath, "utf8"));
+    delete resolution.input_candidates.preview;
+    writeFileSync(resolutionPath, JSON.stringify(resolution));
+
+    const input = publicMockup(job).structure_input;
+    assert.deepEqual(input?.proposal_layers, layers);
+    assert.equal(input?.preview, undefined);
+    assert.equal(input?.image_url, `/api/mockups/${job.id}/structure-input-preview`);
+  });
+
+  it("drops oversized, infinite, or cross-id advisory preview without blocking selection", () => {
+    const cases: Array<(preview: Record<string, unknown>, layers: Array<{ id: string }>) => void> = [
+      (preview) => {
+        const layer = (preview.layers as Array<{ paths: unknown[] }>)[0];
+        layer.paths = Array.from({ length: 513 }, () => layer.paths[0]);
+      },
+      (preview) => {
+        const layer = (preview.layers as Array<{ paths: Array<{ points: number[][] }> }>)[0];
+        layer.paths[0].points[0][0] = Number.POSITIVE_INFINITY;
+      },
+      (preview) => {
+        const layer = (preview.layers as Array<{ paths: Array<{ points: unknown }> }>)[0];
+        layer.paths[0].points = [[0, 0], [1, 1]];
+      },
+      (preview) => {
+        (preview.layers as Array<{ candidate_id: string }>)[0].candidate_id = "proposal-layer-deadbeefdeadbeef";
+      },
+      (preview, layers) => {
+        const copy = structuredClone((preview.layers as unknown[])[0]);
+        (copy as { candidate_id: string }).candidate_id = layers[0].id;
+        (preview.layers as unknown[]).push(copy);
+      },
+    ];
+    for (const mutate of cases) {
+      const { job, layers } = structureInputJob();
+      const resolutionPath = job.structure_resolution_path || "";
+      const resolution = JSON.parse(readFileSync(resolutionPath, "utf8"));
+      mutate(resolution.input_candidates.preview, layers);
+      writeFileSync(resolutionPath, JSON.stringify(resolution));
+      const input = publicMockup(job).structure_input;
+      assert.deepEqual(input?.proposal_layers, layers);
+      assert.equal(input?.preview, undefined);
+    }
+  });
+
+  it("inlines a truncated advisory preview subset when the geometry is otherwise valid", () => {
+    const { job, layers } = structureInputJob();
+    const resolutionPath = job.structure_resolution_path || "";
+    const resolution = JSON.parse(readFileSync(resolutionPath, "utf8"));
+    resolution.input_candidates.preview.layers[0].truncated = true;
+    resolution.input_candidates.preview.layers = [resolution.input_candidates.preview.layers[0]];
+    writeFileSync(resolutionPath, JSON.stringify(resolution));
+
+    const input = publicMockup(job).structure_input;
+    assert.equal(input?.preview?.layers.length, 1);
+    assert.equal(input?.preview?.layers[0].truncated, true);
+    assert.equal(input?.preview?.layers[0].candidate_id, layers[0].id);
   });
 
   it("turns candidate ids into one source-bound manifest and requeues the same job", () => {

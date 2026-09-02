@@ -748,6 +748,126 @@ def test_legacy_proposal_layers_only_offer_stroke_only_paths_for_human_confirmat
     assert "explicitRecords.length > 0 ? explicitRecords : proposalRecords" in source
 
 
+def _structure_preview_helpers() -> str:
+    source = EXPORTER.read_text(encoding="utf-8")
+    preview_start = source.index("function proposalLayerKey")
+    preview_end = source.index("function samePoint", preview_start)
+    point_start = source.index("function structurePoint")
+    point_end = source.index("function exportSemanticPath", point_start)
+    return source[point_start:point_end] + source[preview_start:preview_end]
+
+
+def test_structure_export_collects_source_aligned_bezier_layer_preview():
+    program = _structure_preview_helpers() + r"""
+var documentRef = {typename: "Document"};
+var layer = {typename: "Layer", name: "刀线", parent: documentRef, zOrderPosition: 2};
+var item = {
+    layer: layer,
+    stroked: true,
+    filled: false,
+    closed: false,
+    pathPoints: [
+        {anchor: [10, 80], leftDirection: [10, 80], rightDirection: [20, 70]},
+        {anchor: [40, 50], leftDirection: [30, 60], rightDirection: [40, 50]}
+    ]
+};
+var candidates = [];
+var keys = [];
+var budget = {paths: 0, points: 0};
+recordProposalLayerCandidate(candidates, keys, item, 0, 100, budget);
+process.stdout.write(JSON.stringify({candidate: candidates[0], budget: budget}));
+"""
+    completed = subprocess.run(
+        ["node", "-e", program],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    result = json.loads(completed.stdout)
+    assert result["candidate"] == {
+        "name": "刀线",
+        "stroke_only_path_count": 1,
+        "preview_paths": [
+            {
+                "closed": False,
+                "points": [
+                    [10, 20, 10, 20, 20, 30],
+                    [40, 50, 30, 40, 40, 50],
+                ],
+            }
+        ],
+        "preview_truncated": False,
+    }
+    assert result["budget"] == {"paths": 1, "points": 2}
+
+
+def test_structure_export_preview_budget_and_invalid_points():
+    program = _structure_preview_helpers() + r"""
+var documentRef = {typename: "Document"};
+var layer = {typename: "Layer", name: "刀线", parent: documentRef, zOrderPosition: 2};
+function makeItem(count, mutateFirst) {
+    var pathPoints = [];
+    for (var index = 0; index < count; index += 1) {
+        var anchor = [index, 80];
+        pathPoints.push({anchor: anchor, leftDirection: anchor.slice(), rightDirection: anchor.slice()});
+    }
+    if (mutateFirst) mutateFirst(pathPoints[0]);
+    return {layer: layer, stroked: true, filled: false, closed: false, pathPoints: pathPoints};
+}
+var oversized = [];
+var oversizedKeys = [];
+var oversizedBudget = {paths: 0, points: 0};
+recordProposalLayerCandidate(oversized, oversizedKeys, makeItem(257), 0, 100, oversizedBudget);
+var nanCandidate = {preview_paths: [], preview_truncated: false};
+var nanBudget = {paths: 0, points: 0};
+appendProposalPreview(nanCandidate, makeItem(2, function (point) { point.anchor = [Number.NaN, 80]; }), 0, 100, nanBudget);
+var overflowCandidate = {preview_paths: [], preview_truncated: false};
+var overflowBudget = {paths: 0, points: 0};
+appendProposalPreview(overflowCandidate, makeItem(2, function (point) { point.anchor = [10000001, 80]; }), 0, 100, overflowBudget);
+var pathBudgetCandidate = {preview_paths: [], preview_truncated: false};
+var pathBudget = {paths: 5000, points: 0};
+appendProposalPreview(pathBudgetCandidate, makeItem(2), 0, 100, pathBudget);
+var pointBudgetCandidate = {preview_paths: [], preview_truncated: false};
+var pointBudget = {paths: 0, points: 19999};
+appendProposalPreview(pointBudgetCandidate, makeItem(2), 0, 100, pointBudget);
+var layerCap = [];
+for (var fill = 0; fill < 512; fill += 1) layerCap.push({closed: false, points: [[0, 0, 0, 0, 0, 0], [1, 0, 1, 0, 1, 0]]});
+var layerCapCandidate = {preview_paths: layerCap, preview_truncated: false};
+var layerCapBudget = {paths: 512, points: 1024};
+appendProposalPreview(layerCapCandidate, makeItem(2), 0, 100, layerCapBudget);
+process.stdout.write(JSON.stringify({
+    oversized: {paths: oversized[0].preview_paths.length, truncated: oversized[0].preview_truncated, budget: oversizedBudget},
+    nan: {paths: nanCandidate.preview_paths.length, truncated: nanCandidate.preview_truncated, budget: nanBudget},
+    overflow: {paths: overflowCandidate.preview_paths.length, truncated: overflowCandidate.preview_truncated, budget: overflowBudget},
+    pathBudget: {paths: pathBudgetCandidate.preview_paths.length, truncated: pathBudgetCandidate.preview_truncated, budget: pathBudget},
+    pointBudget: {paths: pointBudgetCandidate.preview_paths.length, truncated: pointBudgetCandidate.preview_truncated, budget: pointBudget},
+    layerCap: {paths: layerCapCandidate.preview_paths.length, truncated: layerCapCandidate.preview_truncated, budget: layerCapBudget}
+}));
+"""
+    completed = subprocess.run(
+        ["node", "-e", program],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    result = json.loads(completed.stdout)
+    empty = {"paths": 0, "truncated": True}
+    assert result["oversized"]["paths"] == 0
+    assert result["oversized"]["truncated"] is True
+    assert result["oversized"]["budget"] == {"paths": 0, "points": 0}
+    assert {key: result["nan"][key] for key in empty} == empty
+    assert result["nan"]["budget"] == {"paths": 0, "points": 0}
+    assert {key: result["overflow"][key] for key in empty} == empty
+    assert result["pathBudget"]["truncated"] is True
+    assert result["pathBudget"]["budget"] == {"paths": 5000, "points": 0}
+    assert result["pointBudget"]["truncated"] is True
+    assert result["pointBudget"]["budget"] == {"paths": 0, "points": 19999}
+    assert result["layerCap"]["paths"] == 512
+    assert result["layerCap"]["truncated"] is True
+    assert result["layerCap"]["budget"] == {"paths": 512, "points": 1024}
+
+
 def test_unassigned_stroke_only_layers_are_listed_without_becoming_structure():
     source = EXPORTER.read_text(encoding="utf-8")
     helper_start = source.index("function exactAssignment")
@@ -1337,6 +1457,150 @@ def test_structure_input_candidates_filter_untrusted_entries_and_cap_counts():
     ]
     assert payload["proposal_layers"][0]["stroke_only_path_count"] == 3
     assert payload["proposal_layers"][1]["stroke_only_path_count"] == 1_000_000
+
+
+def test_structure_input_candidates_publish_bounded_advisory_layer_preview():
+    pipeline = load_pipeline()
+    source_hash = "f" * 64
+    payload = pipeline.structure_input_candidates(
+        {
+            "page_size_points": [160, 90],
+            "proposal_layer_candidates": [
+                {
+                    "name": "刀线",
+                    "stroke_only_path_count": 2,
+                    "preview_paths": [
+                        {
+                            "closed": False,
+                            "points": [
+                                [10, 20, 10, 20, 20, 30],
+                                [40, 50, 30, 40, 40, 50],
+                            ],
+                        },
+                        {"closed": False, "points": [[True, 0, 0, 0, 0, 0]] * 2},
+                    ],
+                    "preview_truncated": False,
+                }
+            ],
+        },
+        source_hash,
+    )
+
+    assert payload is not None
+    candidate_id = payload["proposal_layers"][0]["id"]
+    assert payload["preview"] == {
+        "schema": "illustrator-layer-preview/1",
+        "page_size_points": [160.0, 90.0],
+        "layers": [
+            {
+                "candidate_id": candidate_id,
+                "paths": [
+                    {
+                        "closed": False,
+                        "points": [
+                            [10.0, 20.0, 10.0, 20.0, 20.0, 30.0],
+                            [40.0, 50.0, 30.0, 40.0, 40.0, 50.0],
+                        ],
+                    }
+                ],
+                "truncated": True,
+            }
+        ],
+    }
+
+
+def test_structure_input_candidates_cap_preview_paths_per_layer():
+    pipeline = load_pipeline()
+    source_hash = "e" * 64
+    path = {
+        "closed": False,
+        "points": [
+            [0, 0, 0, 0, 0, 0],
+            [1, 0, 1, 0, 1, 0],
+        ],
+    }
+    payload = pipeline.structure_input_candidates(
+        {
+            "page_size_points": [160, 90],
+            "proposal_layer_candidates": [
+                {
+                    "name": "刀线",
+                    "stroke_only_path_count": 513,
+                    "preview_paths": [path] * 513,
+                    "preview_truncated": False,
+                }
+            ],
+        },
+        source_hash,
+    )
+
+    assert payload is not None
+    layer = payload["preview"]["layers"][0]
+    assert len(layer["paths"]) == 512
+    assert layer["truncated"] is True
+
+
+def test_structure_input_candidates_omit_preview_without_page_size():
+    pipeline = load_pipeline()
+    payload = pipeline.structure_input_candidates(
+        {
+            "proposal_layer_candidates": [{
+                "name": "刀线",
+                "stroke_only_path_count": 1,
+                "preview_paths": [{
+                    "closed": False,
+                    "points": [[10, 20, 10, 20, 20, 30], [40, 50, 30, 40, 40, 50]],
+                }],
+            }],
+        },
+        "a" * 64,
+    )
+    assert payload is not None
+    assert "preview" not in payload
+    assert payload["proposal_layers"][0]["name"] == "刀线"
+
+
+def test_structure_input_candidates_drop_short_points_and_honor_global_preview_budget():
+    pipeline = load_pipeline()
+    two_point_path = {
+        "closed": False,
+        "points": [[0, 0, 0, 0, 0, 0], [1, 0, 1, 0, 1, 0]],
+    }
+    payload = pipeline.structure_input_candidates(
+        {
+            "page_size_points": [160, 90],
+            "proposal_layer_candidates": [
+                {
+                    "name": "短点",
+                    "stroke_only_path_count": 1,
+                    "preview_paths": [{"closed": False, "points": [[0, 0], [1, 1]]}],
+                },
+                *[
+                    {
+                        "name": f"预算层{index}",
+                        "stroke_only_path_count": 1,
+                        "preview_paths": [two_point_path] * 512,
+                    }
+                    for index in range(10)
+                ],
+            ],
+        },
+        "b" * 64,
+    )
+    assert payload is not None
+    assert payload["proposal_layers"][0]["name"] == "短点"
+    layers = payload["preview"]["layers"]
+    assert payload["proposal_layers"][0]["id"] not in {
+        layer["candidate_id"] for layer in layers
+    }
+    assert sum(len(layer["paths"]) for layer in layers) == 5000
+    assert layers[-1]["truncated"] is True
+
+
+def test_structure_preview_thumbnail_uses_5600px_budget():
+    source = PIPELINE.read_text(encoding="utf-8")
+    assert "width_px=5_600" in source
+    assert "MAX_RASTER_PIXELS = 32_000_000" in source
 
 
 def test_structure_input_candidates_return_none_when_every_entry_is_invalid():

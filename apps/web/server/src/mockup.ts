@@ -56,11 +56,24 @@ export type StructureInputLayerCandidate = {
   stroke_only_path_count: number;
 };
 
+type StructureInputPreviewPoint = [number, number, number, number, number, number];
+
+export type StructureInputPreview = {
+  schema: "illustrator-layer-preview/1";
+  page_size_points: [number, number];
+  layers: Array<{
+    candidate_id: string;
+    paths: Array<{ closed: boolean; points: StructureInputPreviewPoint[] }>;
+    truncated: boolean;
+  }>;
+};
+
 type StructureInputCandidates = {
   schema: "packaging-structure-input-candidates/2";
   source_sha256: string;
   proposal_layers: StructureInputLayerCandidate[];
   truncated: boolean;
+  preview?: StructureInputPreview;
 };
 
 export type StructurePreviewFace = {
@@ -111,8 +124,13 @@ export type StructureConfirmationDecision = { anchor: StructureAnchorDecision };
 
 const BOX_NET_PROPOSAL_SCHEMA = "box-net-proposal/3";
 const STRUCTURE_INPUT_CANDIDATES_SCHEMA = "packaging-structure-input-candidates/2";
+const STRUCTURE_INPUT_PREVIEW_SCHEMA = "illustrator-layer-preview/1";
 const MAX_STRUCTURE_INPUT_CANDIDATES = 128;
 const MAX_STRUCTURE_INPUT_SELECTIONS = 16;
+const MAX_STRUCTURE_INPUT_PREVIEW_PATHS = 5_000;
+const MAX_STRUCTURE_INPUT_PREVIEW_POINTS = 20_000;
+const MAX_STRUCTURE_INPUT_PREVIEW_PATHS_PER_LAYER = 512;
+const MAX_STRUCTURE_INPUT_PREVIEW_POINTS_PER_PATH = 256;
 const MAX_STRUCTURE_RESOLUTION_BYTES = 25 * 1024 * 1024;
 const MIN_ASSEMBLY_MEMBER_RATIO = 0.45;
 const MAX_ASSEMBLY_MEMBER_RATIO = 0.55;
@@ -403,6 +421,74 @@ function canonicalSourceHash(value: unknown): string | null {
   return typeof value === "string" && /^[0-9a-f]{64}$/.test(value) ? value : null;
 }
 
+function normalizeStructureInputPreview(
+  value: unknown,
+  candidateIds: Set<string>,
+): StructureInputPreview | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const input = value as Record<string, unknown>;
+  const size = finiteNumbers(input.page_size_points, 2);
+  const rawLayers = input.layers;
+  if (
+    input.schema !== STRUCTURE_INPUT_PREVIEW_SCHEMA
+    || !size
+    || size.some((number) => number < 1 || number > 1_000_000)
+    || !Array.isArray(rawLayers)
+    || rawLayers.length < 1
+    || rawLayers.length > candidateIds.size
+  ) return undefined;
+  const layers: StructureInputPreview["layers"] = [];
+  const seen = new Set<string>();
+  let pathCount = 0;
+  let pointCount = 0;
+  for (const rawLayer of rawLayers) {
+    if (!rawLayer || typeof rawLayer !== "object" || Array.isArray(rawLayer)) return undefined;
+    const layer = rawLayer as Record<string, unknown>;
+    const candidateId = typeof layer.candidate_id === "string" ? layer.candidate_id : "";
+    const rawPaths = layer.paths;
+    if (
+      !candidateIds.has(candidateId)
+      || seen.has(candidateId)
+      || typeof layer.truncated !== "boolean"
+      || !Array.isArray(rawPaths)
+      || rawPaths.length < 1
+      || rawPaths.length > MAX_STRUCTURE_INPUT_PREVIEW_PATHS_PER_LAYER
+    ) return undefined;
+    const paths: StructureInputPreview["layers"][number]["paths"] = [];
+    for (const rawPath of rawPaths) {
+      if (!rawPath || typeof rawPath !== "object" || Array.isArray(rawPath)) return undefined;
+      const path = rawPath as Record<string, unknown>;
+      const rawPoints = path.points;
+      if (
+        typeof path.closed !== "boolean"
+        || !Array.isArray(rawPoints)
+        || rawPoints.length < 2
+        || rawPoints.length > MAX_STRUCTURE_INPUT_PREVIEW_POINTS_PER_PATH
+      ) return undefined;
+      const points: StructureInputPreviewPoint[] = [];
+      for (const rawPoint of rawPoints) {
+        const point = finiteNumbers(rawPoint, 6);
+        if (!point || point.some((number) => Math.abs(number) > 10_000_000)) return undefined;
+        points.push(point as StructureInputPreviewPoint);
+      }
+      pathCount += 1;
+      pointCount += points.length;
+      if (
+        pathCount > MAX_STRUCTURE_INPUT_PREVIEW_PATHS
+        || pointCount > MAX_STRUCTURE_INPUT_PREVIEW_POINTS
+      ) return undefined;
+      paths.push({ closed: path.closed, points });
+    }
+    seen.add(candidateId);
+    layers.push({ candidate_id: candidateId, paths, truncated: layer.truncated });
+  }
+  return {
+    schema: STRUCTURE_INPUT_PREVIEW_SCHEMA,
+    page_size_points: size as [number, number],
+    layers,
+  };
+}
+
 function normalizeStructureInputCandidates(
   value: unknown,
   expectedSourceHash: string,
@@ -448,11 +534,13 @@ function normalizeStructureInputCandidates(
     displayNames.add(displayName);
     layers.push({ id, name, stroke_only_path_count: count });
   }
+  const preview = normalizeStructureInputPreview(input.preview, ids);
   return {
     schema: STRUCTURE_INPUT_CANDIDATES_SCHEMA,
     source_sha256: sourceHash,
     proposal_layers: layers,
     truncated: input.truncated,
+    ...(preview ? { preview } : {}),
   };
 }
 
@@ -474,6 +562,7 @@ function publicStructureInput(job: MockupJob, resolution: StructureResolution | 
   selected_ids: string[];
   truncated: boolean;
   image_url?: string;
+  preview?: StructureInputPreview;
 } | undefined {
   if (job.structure_status !== "review_required") return undefined;
   const candidates = loadStructureInputCandidates(job, resolution);
@@ -492,6 +581,7 @@ function publicStructureInput(job: MockupJob, resolution: StructureResolution | 
       .map((candidate) => candidate.id)
       .filter((id) => selected.has(id)),
     truncated: candidates.truncated,
+    ...(candidates.preview ? { preview: candidates.preview } : {}),
     ...(preview && existsSync(preview) && underJobDir(job.id, preview)
       ? { image_url: `/api/mockups/${job.id}/structure-input-preview` }
       : {}),
@@ -610,8 +700,12 @@ export function prepareStructureInputSelection(
 
 function finiteNumbers(value: unknown, count: number): number[] | null {
   if (!Array.isArray(value) || value.length !== count) return null;
-  const numbers = value.map(Number);
-  return numbers.every(Number.isFinite) ? numbers : null;
+  const numbers: number[] = [];
+  for (const item of value) {
+    if (typeof item !== "number" || !Number.isFinite(item)) return null;
+    numbers.push(item);
+  }
+  return numbers;
 }
 
 function finitePointPairs(value: unknown): Array<[number, number]> | undefined {

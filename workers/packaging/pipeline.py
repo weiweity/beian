@@ -6,6 +6,7 @@ import concurrent.futures
 from copy import deepcopy
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import shutil
@@ -32,7 +33,12 @@ PIPELINE_VERSION = "1.4.0"
 MAX_RASTER_PIXELS = 32_000_000
 MAX_EXPLICIT_PROPOSAL_LAYERS = 16
 MAX_PROPOSAL_LAYER_CANDIDATES = 128
+MAX_PROPOSAL_PREVIEW_PATHS = 5_000
+MAX_PROPOSAL_PREVIEW_POINTS = 20_000
+MAX_PROPOSAL_PREVIEW_PATHS_PER_LAYER = 512
+MAX_PROPOSAL_PREVIEW_POINTS_PER_PATH = 256
 STRUCTURE_INPUT_CANDIDATES_SCHEMA = "packaging-structure-input-candidates/2"
+STRUCTURE_INPUT_PREVIEW_SCHEMA = "illustrator-layer-preview/1"
 ROOT = Path(__file__).resolve().parent
 BLENDER_SCRIPT = ROOT / "blender" / "render_job.py"
 PPT_SCRIPT = ROOT / "ppt" / "build_product_ppt.mjs"
@@ -194,7 +200,7 @@ def structure_input_candidates(
     )
     if not isinstance(raw_candidates, list):
         return None
-    validated: list[tuple[str, str, int]] = []
+    validated: list[tuple[str, str, int, dict[str, Any]]] = []
     display_counts: dict[str, int] = {}
     for raw in raw_candidates[:MAX_PROPOSAL_LAYER_CANDIDATES]:
         if not isinstance(raw, dict):
@@ -213,11 +219,28 @@ def structure_input_candidates(
             or count < 1
         ):
             continue
-        validated.append((raw_name, display_name, min(count, 1_000_000)))
+        validated.append((raw_name, display_name, min(count, 1_000_000), raw))
         display_counts[display_name] = display_counts.get(display_name, 0) + 1
 
     proposal_layers: list[dict[str, Any]] = []
-    for name, display_name, count in validated:
+    preview_layers: list[dict[str, Any]] = []
+    preview_path_count = 0
+    preview_point_count = 0
+    raw_page_size = illustrator_result.get("page_size_points")
+    page_size_points = (
+        [float(raw_page_size[0]), float(raw_page_size[1])]
+        if isinstance(raw_page_size, list)
+        and len(raw_page_size) == 2
+        and all(
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and math.isfinite(float(value))
+            and 1 <= float(value) <= 1_000_000
+            for value in raw_page_size
+        )
+        else None
+    )
+    for name, display_name, count, raw in validated:
         # Two physically different layers can have identical or whitespace-
         # equivalent names. A name-only selector cannot distinguish them, so
         # omit the whole ambiguous group instead of selecting multiple layers.
@@ -226,16 +249,71 @@ def structure_input_candidates(
         candidate_hash = hashlib.sha256(
             (source_sha256 + "\0" + name).encode("utf-8")
         ).hexdigest()[:16]
+        candidate_id = f"proposal-layer-{candidate_hash}"
         proposal_layers.append(
-            {
-                "id": f"proposal-layer-{candidate_hash}",
-                "name": name,
-                "stroke_only_path_count": count,
-            }
+            {"id": candidate_id, "name": name, "stroke_only_path_count": count}
         )
+        raw_paths = raw.get("preview_paths")
+        if page_size_points is None or not isinstance(raw_paths, list):
+            continue
+        preview_paths: list[dict[str, Any]] = []
+        preview_truncated = raw.get("preview_truncated") is True
+        if len(raw_paths) > MAX_PROPOSAL_PREVIEW_PATHS_PER_LAYER:
+            preview_truncated = True
+            raw_paths = raw_paths[:MAX_PROPOSAL_PREVIEW_PATHS_PER_LAYER]
+        for raw_path in raw_paths:
+            if (
+                preview_path_count >= MAX_PROPOSAL_PREVIEW_PATHS
+                or preview_point_count >= MAX_PROPOSAL_PREVIEW_POINTS
+            ):
+                preview_truncated = True
+                break
+            if not isinstance(raw_path, dict) or not isinstance(raw_path.get("closed"), bool):
+                preview_truncated = True
+                continue
+            raw_points = raw_path.get("points")
+            if (
+                not isinstance(raw_points, list)
+                or len(raw_points) < 2
+                or len(raw_points) > MAX_PROPOSAL_PREVIEW_POINTS_PER_PATH
+                or preview_point_count + len(raw_points) > MAX_PROPOSAL_PREVIEW_POINTS
+            ):
+                preview_truncated = True
+                continue
+            points: list[list[float]] = []
+            valid_path = True
+            for raw_point in raw_points:
+                if (
+                    not isinstance(raw_point, list)
+                    or len(raw_point) != 6
+                    or any(
+                        not isinstance(value, (int, float))
+                        or isinstance(value, bool)
+                        or not math.isfinite(float(value))
+                        or abs(float(value)) > 10_000_000
+                        for value in raw_point
+                    )
+                ):
+                    valid_path = False
+                    break
+                points.append([float(value) for value in raw_point])
+            if not valid_path:
+                preview_truncated = True
+                continue
+            preview_paths.append({"closed": raw_path["closed"], "points": points})
+            preview_path_count += 1
+            preview_point_count += len(points)
+        if preview_paths:
+            preview_layers.append(
+                {
+                    "candidate_id": candidate_id,
+                    "paths": preview_paths,
+                    "truncated": preview_truncated,
+                }
+            )
     if not proposal_layers:
         return None
-    return {
+    result = {
         "schema": STRUCTURE_INPUT_CANDIDATES_SCHEMA,
         "source_sha256": source_sha256,
         "proposal_layers": proposal_layers,
@@ -244,6 +322,13 @@ def structure_input_candidates(
             or len(raw_candidates) > MAX_PROPOSAL_LAYER_CANDIDATES
         ),
     }
+    if page_size_points is not None and preview_layers:
+        result["preview"] = {
+            "schema": STRUCTURE_INPUT_PREVIEW_SCHEMA,
+            "page_size_points": page_size_points,
+            "layers": preview_layers,
+        }
+    return result
 
 
 def is_smoke_template(path: Path) -> bool:
@@ -978,7 +1063,7 @@ def preflight_product_v2(
         artwork_preview = render_pdf_thumbnail(
             artwork_pdf,
             project_dir / "structure_preview",
-            width_px=2_400,
+            width_px=5_600,
         )
         raise PipelineHold(
             status=resolution.status,

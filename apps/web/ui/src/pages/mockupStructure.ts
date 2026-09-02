@@ -8,6 +8,42 @@ export type StructureAnchor = {
   quarter_turns: 0 | 1 | 2 | 3;
 };
 
+type IllustratorPreviewPath = NonNullable<StructureInput["preview"]>["layers"][number]["paths"][number];
+
+function svgNumber(value: number): string {
+  const rounded = Math.round(value * 1000) / 1000;
+  return Object.is(rounded, -0) ? "0" : String(rounded);
+}
+
+function samePreviewPoint(left: number[], leftOffset: number, right: number[], rightOffset: number): boolean {
+  return Math.abs(left[leftOffset] - right[rightOffset]) <= 0.001
+    && Math.abs(left[leftOffset + 1] - right[rightOffset + 1]) <= 0.001;
+}
+
+export function illustratorPreviewPathD(path: IllustratorPreviewPath): string {
+  if (path.points.length < 2) return "";
+  const first = path.points[0];
+  const commands = [`M ${svgNumber(first[0])} ${svgNumber(first[1])}`];
+  const segmentCount = path.closed ? path.points.length : path.points.length - 1;
+  for (let index = 0; index < segmentCount; index += 1) {
+    const current = path.points[index];
+    const next = path.points[(index + 1) % path.points.length];
+    if (samePreviewPoint(current, 0, current, 4) && samePreviewPoint(next, 0, next, 2)) {
+      commands.push(`L ${svgNumber(next[0])} ${svgNumber(next[1])}`);
+    } else {
+      commands.push(
+        `C ${svgNumber(current[4])} ${svgNumber(current[5])} ${svgNumber(next[2])} ${svgNumber(next[3])} ${svgNumber(next[0])} ${svgNumber(next[1])}`,
+      );
+    }
+  }
+  if (path.closed) commands.push("Z");
+  return commands.join(" ");
+}
+
+export function illustratorLayerPreviewD(paths: IllustratorPreviewPath[]): string {
+  return paths.map(illustratorPreviewPathD).filter(Boolean).join(" ");
+}
+
 export function selectedStructureLayerIds(input: StructureInput, selectedIds: string[]): string[] {
   const selected = new Set(selectedIds);
   return input.proposal_layers
