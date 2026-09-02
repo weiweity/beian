@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.21.13.0] - 2026-09-02
+
+### Added
+
+- 打样单上面三图仍只看形；下面多了读字区，用已经生成的各面印刷图放大到 6 倍看小字，不用再盯 GLB 或 3/4 白底静帧。
+- 旧单当时没记下印刷面时，只要磁盘上还有 `assets/panel_*.png`，打开详情就能读字，不必重跑打样。
+
+### Changed
+
+- 读字只认 `assets/` 里恰好叫 `panel_{正面/反面/右/左/顶/底}.png` 的文件；作业根目录或 scratch 里的同名图不会冒充印刷面。
+
+### For contributors
+
+- `collectOutputs` / `fileOf` 的 `read_*` 与 live-merge 同一条合同：`assets/panel_{face}.png`。列表接口不扫盘。坏 PNG 走印刷面 415，不是白底 415。L0 不替代杭州 L1。
+
 ## [0.21.12.0] - 2026-09-02
 
 ### Changed
