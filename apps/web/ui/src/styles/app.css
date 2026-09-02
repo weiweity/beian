@@ -3357,6 +3357,41 @@ html[data-theme="dark"] .notes.is-float {
   margin: 0 0 0 44px;
 }
 
+.structure-preview-plates {
+  display: grid;
+  gap: 8px;
+}
+
+.structure-preview-plates strong {
+  color: #1c1a1f;
+  font-size: 15px;
+  line-height: 22px;
+}
+
+.structure-preview-plates > span {
+  color: #6b6572;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.structure-preview-plates button {
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid rgba(128, 88, 152, 0.16);
+  border-radius: 14px;
+  background: rgba(246, 241, 248, 0.34);
+  color: #1c1a1f;
+  text-align: left;
+  cursor: pointer;
+}
+
+.structure-preview-plates button.is-hovered,
+.structure-preview-plates button:hover,
+.structure-preview-plates button:focus-visible {
+  border-color: #805898;
+  background: rgba(128, 88, 152, 0.12);
+}
+
 .structure-proposal-nav {
   display: flex;
   align-items: center;
