@@ -17,6 +17,9 @@ $RequestReadTimeoutMs = 15000
 $HeartbeatIntervalMs = 5000
 $CleanupReserveMs = 30000
 $Utf8NoBom = [System.Text.UTF8Encoding]::new($false, $true)
+$Utf8Bom = [System.Text.UTF8Encoding]::new($true, $true)
+$FactoryKnifeLiteral = [string]([char]0x5200) + [char]0x7248
+$FactoryCreaseLiteral = [string]([char]0x5200) + [char]0x7EBF
 $AgentProcess = [System.Diagnostics.Process]::GetCurrentProcess()
 $AgentSessionId = [int]$AgentProcess.SessionId
 $AgentPid = [int]$AgentProcess.Id
@@ -116,6 +119,10 @@ function Get-JsonProperty([object]$Object, [string]$Name, [bool]$Required = $fal
 
 function Write-Utf8File([string]$Path, [string]$Text) {
   [System.IO.File]::WriteAllText($Path, $Text, $Utf8NoBom)
+}
+
+function Write-Utf8BomFile([string]$Path, [string]$Text) {
+  [System.IO.File]::WriteAllText($Path, $Text, $Utf8Bom)
 }
 
 function Write-AtomicJson([string]$Path, [object]$Value) {
@@ -598,7 +605,11 @@ function Bind-RuntimeJsx([string]$ExporterPath, [string]$ConfigPath) {
     $source = $source.Replace($include, $helper)
   }
   $source = "var PIPELINE_CONFIG_PATH = $configLiteral;`n" + $source
-  Write-Utf8File $runtimePath $source
+  Write-Utf8BomFile $runtimePath $source
+  $header = [System.IO.File]::ReadAllBytes($runtimePath)
+  if ($header.Length -lt 3 -or $header[0] -ne 0xEF -or $header[1] -ne 0xBB -or $header[2] -ne 0xBF) {
+    Throw-AgentFailure "illustrator_bridge_failed" "Illustrator runtime JSX is missing UTF-8 BOM"
+  }
   return $runtimePath
 }
 
@@ -727,6 +738,17 @@ function Invoke-SmokeRequest([object]$Request, [DateTime]$Deadline) {
   try {
     $sentinel = Join-Path $smokeDir "runner-probe.txt"
     $runtimePath = Bind-RuntimeJsx (Join-Path $ExporterRoot "runner_probe.jsx") $sentinel
+    $probeSource = [System.IO.File]::ReadAllText($runtimePath, $Utf8Bom)
+    if ($probeSource.IndexOf($FactoryKnifeLiteral) -lt 0 -or $probeSource.IndexOf($FactoryCreaseLiteral) -lt 0) {
+      Throw-AgentFailure "illustrator_bridge_failed" "Illustrator smoke probe is missing factory knife literals"
+    }
+    $structureConfig = Join-Path $smokeDir "structure-bind.json"
+    Write-Utf8File $structureConfig "{}"
+    $structureRuntime = Bind-RuntimeJsx (Join-Path $ExporterRoot "export_structure.jsx") $structureConfig
+    $structureSource = [System.IO.File]::ReadAllText($structureRuntime, $Utf8Bom)
+    if ($structureSource.IndexOf($FactoryKnifeLiteral) -lt 0 -or $structureSource.IndexOf($FactoryCreaseLiteral) -lt 0) {
+      Throw-AgentFailure "illustrator_bridge_failed" "Illustrator smoke structure JSX is missing factory knife literals"
+    }
     $run = Invoke-Cscript @("run", $runtimePath) $Deadline 15000
     if ($run.TimedOut) { Throw-AgentFailure "illustrator_timeout" "Illustrator smoke timed out" }
     if ($run.ExitCode -ne 0) {
