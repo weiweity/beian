@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, App, Button, Checkbox } from "antd";
 import { api, type MockupJob } from "../api";
 import {
@@ -8,11 +8,15 @@ import {
   selectedStructureAnchor,
   structureConfirmationErrorCopy,
   structureIssueCopy,
+  illustratorLayerPreviewD,
   structurePolygonPoints,
   structureProposalHasRealPolygons,
   structureViewBox,
   validTurnsForFace,
 } from "./mockupStructure";
+
+const STRUCTURE_INPUT_GUIDE_KEY = "beian:structure-input-guide:v1";
+const STRUCTURE_PREVIEW_ZOOMS = [1, 1.5, 2, 3, 4, 6] as const;
 
 type Props = {
   job: MockupJob;
@@ -36,6 +40,9 @@ export function StructureConfirmPanel({ job, canConfirmStructure, onConfirmed }:
   );
   const [selectingLayers, setSelectingLayers] = useState(false);
   const [layerSelectionError, setLayerSelectionError] = useState<string | null>(null);
+  const [hoveredLayerId, setHoveredLayerId] = useState("");
+  const [previewScale, setPreviewScale] = useState(1);
+  const [showLayerGuide, setShowLayerGuide] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const submitLock = useRef(false);
@@ -71,6 +78,44 @@ export function StructureConfirmPanel({ job, canConfirmStructure, onConfirmed }:
   const sameLayerSelection = structureInput
     ? sameStructureLayerSelection(structureInput, selectedLayerIds)
     : false;
+  const layerPreview = structureInput?.preview;
+  const layerPreviewPaths = useMemo(
+    () => new Map(
+      (layerPreview?.layers || []).map((layer) => [layer.candidate_id, illustratorLayerPreviewD(layer.paths)]),
+    ),
+    [layerPreview],
+  );
+  const previewTruncatedIds = useMemo(
+    () => new Set((layerPreview?.layers || []).filter((layer) => layer.truncated).map((layer) => layer.candidate_id)),
+    [layerPreview],
+  );
+
+  useEffect(() => {
+    if (!canConfirmStructure || currentLayerIds.length || !structureInput?.proposal_layers.length) return;
+    try {
+      setShowLayerGuide(window.localStorage.getItem(STRUCTURE_INPUT_GUIDE_KEY) !== "done");
+    } catch {
+      setShowLayerGuide(true);
+    }
+  }, [canConfirmStructure, currentLayerIds.length, job.id, structureInput?.proposal_layers.length]);
+
+  function dismissLayerGuide() {
+    setShowLayerGuide(false);
+    try {
+      window.localStorage.setItem(STRUCTURE_INPUT_GUIDE_KEY, "done");
+    } catch {
+      // The guide remains safely dismissible when storage is unavailable.
+    }
+  }
+
+  function changePreviewScale(direction: -1 | 1) {
+    const currentIndex = STRUCTURE_PREVIEW_ZOOMS.findIndex((scale) => scale === previewScale);
+    const nextIndex = Math.min(
+      STRUCTURE_PREVIEW_ZOOMS.length - 1,
+      Math.max(0, (currentIndex < 0 ? 0 : currentIndex) + direction),
+    );
+    setPreviewScale(STRUCTURE_PREVIEW_ZOOMS[nextIndex]);
+  }
 
   function selectProposal(nextId: string) {
     setProposalId(nextId);
@@ -107,6 +152,7 @@ export function StructureConfirmPanel({ job, canConfirmStructure, onConfirmed }:
       setLayerSelectionError("一次最多选择 16 个结构图层。");
       return;
     }
+    if (checked) dismissLayerGuide();
     setSelectedLayerIds((current) => {
       if (!checked) return current.filter((id) => id !== candidateId);
       if (current.includes(candidateId)) return current;
@@ -144,29 +190,113 @@ export function StructureConfirmPanel({ job, canConfirmStructure, onConfirmed }:
         />
         <div className="structure-confirm-layout structure-input-layout">
           <div className="structure-map-shell structure-input-preview">
-            {structureInput.image_url ? (
-              <img src={structureInput.image_url} alt="当前 Illustrator 稿件预览" />
-            ) : (
-              <div className="structure-input-preview-empty">原稿预览暂不可用，请按 Illustrator 中的图层核对。</div>
-            )}
+            <div className="structure-input-preview-toolbar" aria-label="结构图层预览缩放">
+              <span>高清分层预览</span>
+              <Button
+                aria-label="缩小结构预览"
+                disabled={previewScale === STRUCTURE_PREVIEW_ZOOMS[0]}
+                onClick={() => changePreviewScale(-1)}
+                size="small"
+              >
+                −
+              </Button>
+              <span className="structure-input-preview-scale">{Math.round(previewScale * 100)}%</span>
+              <Button
+                aria-label="放大结构预览"
+                disabled={previewScale === STRUCTURE_PREVIEW_ZOOMS[STRUCTURE_PREVIEW_ZOOMS.length - 1]}
+                onClick={() => changePreviewScale(1)}
+                size="small"
+              >
+                +
+              </Button>
+              <Button
+                aria-label="适应结构预览"
+                disabled={previewScale === 1}
+                onClick={() => setPreviewScale(1)}
+                size="small"
+              >
+                适应
+              </Button>
+            </div>
+            <div className="structure-input-preview-viewport">
+              <div
+                className="structure-input-preview-stage"
+                style={{ width: `${previewScale * 100}%`, height: `${previewScale * 100}%` }}
+              >
+                {structureInput.image_url && layerPreview ? (
+                  <svg
+                    aria-label="当前 Illustrator 稿件与所选图层路径"
+                    className="structure-input-layer-map"
+                    preserveAspectRatio="xMidYMid meet"
+                    role="img"
+                    viewBox={`0 0 ${layerPreview.page_size_points[0]} ${layerPreview.page_size_points[1]}`}
+                  >
+                    <image
+                      height={layerPreview.page_size_points[1]}
+                      href={structureInput.image_url}
+                      preserveAspectRatio="none"
+                      width={layerPreview.page_size_points[0]}
+                      x="0"
+                      y="0"
+                    />
+                    {layerPreview.layers.map((layer) => {
+                      const selected = selectedLayerSet.has(layer.candidate_id);
+                      const hovered = hoveredLayerId === layer.candidate_id;
+                      const path = layerPreviewPaths.get(layer.candidate_id);
+                      if ((!selected && !hovered) || !path) return null;
+                      return (
+                        <g
+                          className={selected ? "is-selected" : "is-hovered"}
+                          data-candidate-id={layer.candidate_id}
+                          key={layer.candidate_id}
+                        >
+                          <path className="structure-input-layer-halo" d={path} />
+                          <path className="structure-input-layer-stroke" d={path} />
+                        </g>
+                      );
+                    })}
+                  </svg>
+                ) : structureInput.image_url ? (
+                  <img src={structureInput.image_url} alt="当前 Illustrator 稿件预览" />
+                ) : (
+                  <div className="structure-input-preview-empty">原稿预览暂不可用，请按 Illustrator 中的图层核对。</div>
+                )}
+              </div>
+            </div>
             <div className="structure-map-caption">
-              <p>只展示原稿帮助核对；系统不会按颜色、白色区域或图层名称自动判断结构。</p>
+              <p>
+                {layerPreview
+                  ? "移到或勾选右侧图层，左侧会涂亮真实路径。紫色只表示当前选择；系统不会按颜色、白色区域或图层名称判断结构。"
+                  : "这份稿只有高清原稿预览；新上传稿会同时导出可涂亮的真实分层路径。系统不会按颜色、白色区域或图层名称判断结构。"}
+              </p>
             </div>
           </div>
 
           <div className="structure-guide-card">
+            {showLayerGuide ? (
+              <div
+                aria-label="三步完成结构确认"
+                aria-modal="false"
+                className="structure-input-coachmark"
+                role="dialog"
+              >
+                <strong>三步完成结构确认</strong>
+                <span>1 选择候选图层　2 看左侧真实路径涂亮　3 点右下角重新识别完整盒型</span>
+                <Button onClick={dismissLayerGuide} size="small" type="primary">开始选择</Button>
+              </div>
+            ) : null}
             <div className="structure-guide">
               <div className="structure-guide-step">
                 <span className="structure-step-index">1</span>
                 <div>
-                  <strong>在 Illustrator 里核对图层</strong>
-                  <span>选择实际承载刀线、折线的纯描边层；分开放在多层时可以一起选。</span>
+                  <strong>点选图层，看左侧真实路径涂亮</strong>
+                  <span>选择实际承载刀线、折线的纯描边层；鼠标移入可临时预览，分开放在多层时可以一起选。</span>
                 </div>
               </div>
               <div className="structure-guide-step">
                 <span className="structure-step-index">2</span>
                 <div>
-                  <strong>重新识别完整盒型</strong>
+                  <strong>点右下角重新识别完整盒型</strong>
                   <span>所选线条还要通过闭合盒身、上下封口和最终正面确认，不会直接进入 Blender。</span>
                 </div>
               </div>
@@ -178,10 +308,18 @@ export function StructureConfirmPanel({ job, canConfirmStructure, onConfirmed }:
                     className="structure-layer-option"
                     disabled={!canConfirmStructure || selectingLayers}
                     key={candidate.id}
+                    onFocus={() => setHoveredLayerId(candidate.id)}
                     onChange={(event) => toggleLayer(candidate.id, event.target.checked)}
+                    onMouseEnter={() => setHoveredLayerId(candidate.id)}
+                    onMouseLeave={() => setHoveredLayerId("")}
                   >
                     <strong>{candidate.name}</strong>
-                    <small>{candidate.stroke_only_path_count} 条纯描边路径</small>
+                    <small>
+                      {candidate.stroke_only_path_count} 条纯描边路径
+                      {layerPreviewPaths.has(candidate.id)
+                        ? previewTruncatedIds.has(candidate.id) ? " · 预览已安全截取" : " · 可在左侧涂亮"
+                        : " · 本次无分层预览"}
+                    </small>
                   </Checkbox>
                 ))}
               </div>
@@ -221,7 +359,7 @@ export function StructureConfirmPanel({ job, canConfirmStructure, onConfirmed }:
                 loading={selectingLayers}
                 onClick={() => void submitLayers()}
               >
-                用所选图层重新识别
+                重新识别完整盒型
               </Button>
             </div>
           </div>

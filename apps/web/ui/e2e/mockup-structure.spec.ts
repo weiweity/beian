@@ -75,6 +75,34 @@ test("无显式语义时管理员可多选本稿候选层并重跑同一打样�
       ],
       selected_ids: [],
       truncated: false,
+      preview: {
+        schema: "illustrator-layer-preview/1",
+        page_size_points: [160, 90],
+        layers: [
+          {
+            candidate_id: cutId,
+            paths: [{
+              closed: false,
+              points: [
+                [10, 20, 10, 20, 10, 20],
+                [140, 20, 140, 20, 140, 20],
+              ],
+            }],
+            truncated: false,
+          },
+          {
+            candidate_id: creaseId,
+            paths: [{
+              closed: false,
+              points: [
+                [80, 10, 80, 10, 80, 10],
+                [80, 80, 80, 80, 80, 80],
+              ],
+            }],
+            truncated: false,
+          },
+        ],
+      },
     },
   };
   syntheticApi.mockups.push(mockup);
@@ -82,13 +110,30 @@ test("无显式语义时管理员可多选本稿候选层并重跑同一打样�
   await page.goto(`/mockup/${mockup.id}`);
 
   await expect(page.getByText("请选择真实结构线所在图层")).toBeVisible();
-  await expect(page.getByText("系统不会按颜色、白色区域或图层名称自动判断结构。")).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "三步完成结构确认" })).toBeVisible();
+  await page.getByRole("button", { name: "开始选择" }).click();
+  await expect(page.getByRole("dialog", { name: "三步完成结构确认" })).toHaveCount(0);
+  await expect(page.getByText(/系统不会按颜色、白色区域或图层名称判断结构/)).toBeVisible();
   await expect(page.getByRole("checkbox")).toHaveCount(2);
-  const submit = page.getByRole("button", { name: "用所选图层重新识别" });
+  const cut = page.getByText("刀线", { exact: true });
+  await cut.hover();
+  await expect(page.locator(`[data-candidate-id="${cutId}"] .structure-input-layer-stroke`)).toHaveAttribute(
+    "d",
+    "M 10 20 L 140 20",
+  );
+  const submit = page.getByRole("button", { name: "重新识别完整盒型" });
   await expect(submit).toBeDisabled();
-  await page.getByText("刀线", { exact: true }).click();
+  await cut.click();
+  await expect(page.locator(`[data-candidate-id="${cutId}"].is-selected`)).toHaveCount(1);
   await page.getByText("折线", { exact: true }).click();
   await expect(submit).toBeEnabled();
+  await page.getByRole("button", { name: "放大结构预览" }).click();
+  await expect(page.getByText("150%", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "放大结构预览" }).click();
+  await expect(page.getByText("200%", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "适应结构预览" }).click();
+  await expect(page.getByText("100%", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "缩小结构预览" })).toBeDisabled();
   await expect(submit).toBeInViewport({ ratio: 1 });
   await submit.click();
 
@@ -97,6 +142,76 @@ test("无显式语义时管理员可多选本稿候选层并重跑同一打样�
     (call) => call.method === "POST" && call.path === `/api/mockups/${mockup.id}/structure/input`,
   );
   expect(selection?.body).toEqual({ candidate_ids: [cutId, creaseId] });
+});
+
+test("旧单无分层预览仍可多选图层重跑", async ({ page, syntheticApi }) => {
+  await page.setViewportSize({ width: 1366, height: 700 });
+  const cutId = "proposal-layer-aaaaaaaaaaaaaaaa";
+  const creaseId = "proposal-layer-bbbbbbbbbbbbbbbb";
+  const mockup: SyntheticMockup = {
+    id: "abcdef123454",
+    title: "旧稿无快照",
+    status: "review_required",
+    job_status: "waiting_input",
+    structure_status: "review_required",
+    structure_code: "structure_semantics_missing",
+    files: [],
+    structure_input: {
+      schema: "packaging-structure-input-candidates/2",
+      image_url: ARTWORK,
+      proposal_layers: [
+        { id: cutId, name: "刀线", stroke_only_path_count: 24 },
+        { id: creaseId, name: "折线", stroke_only_path_count: 12 },
+      ],
+      selected_ids: [],
+      truncated: false,
+    },
+  };
+  syntheticApi.mockups.push(mockup);
+
+  await page.goto(`/mockup/${mockup.id}`);
+  await page.getByRole("button", { name: "开始选择" }).click();
+  await expect(page.getByText(/这份稿只有高清原稿预览/)).toBeVisible();
+  await expect(page.getByRole("img", { name: "当前 Illustrator 稿件预览" })).toBeVisible();
+  await page.getByText("刀线", { exact: true }).click();
+  await page.getByRole("button", { name: "重新识别完整盒型" }).click();
+  const selection = syntheticApi.calls.find(
+    (call) => call.method === "POST" && call.path === `/api/mockups/${mockup.id}/structure/input`,
+  );
+  expect(selection?.body).toEqual({ candidate_ids: [cutId] });
+});
+
+test("截取后的分层预览仍显示安全截取说明", async ({ page, syntheticApi }) => {
+  await page.setViewportSize({ width: 1366, height: 700 });
+  const cutId = "proposal-layer-cccccccccccccccc";
+  syntheticApi.mockups.push({
+    id: "abcdef123453",
+    title: "截取预览",
+    status: "review_required",
+    job_status: "waiting_input",
+    structure_status: "review_required",
+    structure_code: "structure_semantics_missing",
+    files: [],
+    structure_input: {
+      schema: "packaging-structure-input-candidates/2",
+      image_url: ARTWORK,
+      proposal_layers: [{ id: cutId, name: "刀线", stroke_only_path_count: 24 }],
+      selected_ids: [],
+      truncated: false,
+      preview: {
+        schema: "illustrator-layer-preview/1",
+        page_size_points: [160, 90],
+        layers: [{
+          candidate_id: cutId,
+          paths: [{ closed: false, points: [[10, 20, 10, 20, 10, 20], [140, 20, 140, 20, 140, 20]] }],
+          truncated: true,
+        }],
+      },
+    },
+  });
+
+  await page.goto("/mockup/abcdef123453");
+  await expect(page.getByText("预览已安全截取")).toBeVisible();
 });
 
 test("管理员只需看展开图、选择正面并生成，朝向由系统决定", async ({ page, syntheticApi }) => {

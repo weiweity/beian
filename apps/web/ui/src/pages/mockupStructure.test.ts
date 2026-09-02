@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { ApiError } from "../api.js";
 import {
+  illustratorLayerPreviewD,
+  illustratorPreviewPathD,
   preferredStructureTurn,
   sameStructureLayerSelection,
   selectedStructureLayerIds,
@@ -24,6 +26,37 @@ const faces = ["front", "right", "back", "left", "top", "bottom"].map((_role, in
 }));
 
 describe("mockup V2 structure UX", () => {
+  it("renders straight and bezier Illustrator paths without flattening the visual preview", () => {
+    const straight: NonNullable<NonNullable<import("../api.js").MockupJob["structure_input"]>["preview"]>["layers"][number]["paths"][number] = {
+      closed: false,
+      points: [
+        [10, 20, 10, 20, 10, 20],
+        [40, 50, 40, 50, 40, 50],
+      ],
+    };
+    const curve: typeof straight = {
+      closed: true,
+      points: [
+        [0, 0, 0, 0, 10, 0],
+        [20, 20, 20, 10, 20, 20],
+      ],
+    };
+    assert.equal(illustratorPreviewPathD(straight), "M 10 20 L 40 50");
+    assert.equal(
+      illustratorPreviewPathD(curve),
+      "M 0 0 C 10 0 20 10 20 20 L 0 0 Z",
+    );
+    assert.equal(
+      illustratorLayerPreviewD([straight, curve]),
+      "M 10 20 L 40 50 M 0 0 C 10 0 20 10 20 20 L 0 0 Z",
+    );
+    assert.equal(illustratorPreviewPathD({ closed: false, points: [[0, 0, 0, 0, 0, 0]] }), "");
+    assert.equal(
+      illustratorLayerPreviewD([{ closed: false, points: [[0, 0, 0, 0, 0, 0]] }, straight]),
+      "M 10 20 L 40 50",
+    );
+  });
+
   it("keeps only current candidate ids in server order and caps one selection at sixteen", () => {
     const proposalLayers = Array.from({ length: 18 }, (_, index) => ({
       id: `proposal-layer-${index.toString(16).padStart(16, "0")}`,
