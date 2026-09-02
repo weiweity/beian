@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.21.19.0] - 2026-09-02
+
+### Added
+
+- 打样唯一可确认正面时不再停在 A–D：服务端自动出图，关页也继续。
+- 管理员可在已出图的单上换正面，只重跑 Blender，不重开 Illustrator。
+- 膜袋本轮只锁验收标准（`docs/pouch-v1-acceptance.md`），还不做 3D。
+
+### Changed
+
+- 籽烨看不到选层。没有完整花盒时看板/历史写「打样失败」，只有待选正面才写「待选正面」。
+- 结构识别阶段文案改成「正在出图」。
+- 选层接口只给管理员；非管理员详情不再返回图层候选。
+
+### For contributors
+
+- `POST /api/mockups/:id/structure/input` 仅 admin。`GET /api/mockups/:id` 非 admin 省略 `structure_input`。唯一 net + 唯一 valid_anchor 且带 `preferred_quarter_turns` 时 `finishStructure` 保持 Illustrator 槽并自动确认；失败再落 `waiting_input`。admin 对 done+ready 且只有一套公开盒型的单可再 `POST /structure` 换正面。L0 不替代杭州 L1。
+
 ## [0.21.18.0] - 2026-09-02
 
 ### Added

@@ -111,8 +111,8 @@ export function historyMockRow(row: MockupJob): HistoryRow {
     status = "已出图";
     color = "success";
   } else if (row.structure_status === "review_required") {
-    status = "待确认结构";
-    color = "warning";
+    status = row.structure_code === "structure_face_mapping_incomplete" ? "待选正面" : "打样失败";
+    color = row.structure_code === "structure_face_mapping_incomplete" ? "warning" : "error";
   } else if (row.structure_status === "unsupported") {
     status = "结构暂不支持";
     color = "error";

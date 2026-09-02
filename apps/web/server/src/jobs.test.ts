@@ -37,6 +37,81 @@ function tid(n: number): string {
   return n.toString(16).padStart(12, "0");
 }
 
+function uniqueNetResolution(sourceHash: string) {
+  const faces = Array.from({ length: 7 }, (_, index) => ({
+    id: `proposal-face-${String(index + 1).padStart(4, "0")}`,
+    bounds_mm: [index * 30, 0, index * 30 + 30, 50],
+    centroid_mm: [index * 30 + 15, 25],
+    size_mm: [30, 50],
+    points_mm: [
+      [index * 30, 0],
+      [index * 30 + 30, 0],
+      [index * 30 + 30, 50],
+      [index * 30, 50],
+    ],
+    rectangular: true,
+  }));
+  const structureHash = `sha256:${"b".repeat(64)}`;
+  return {
+    structure: { structure_hash: structureHash, source: { page_size: [210, 297], sha256: sourceHash } },
+    topology: {
+      face_proposal: faces,
+      net_proposals: [{
+        schema: "box-net-proposal/3",
+        structure_hash: structureHash,
+        id: "box-net-0123456789abcdef",
+        face_ids: faces.map((face) => face.id),
+        body_face_ids: faces.slice(0, 4).map((face) => face.id),
+        cap_face_ids: [faces[4].id, faces[6].id],
+        strip_axis: "x",
+        bounds_mm: [0, 0, 180, 50],
+        dimensions_mm: { width: 30, depth: 20, height: 50 },
+        valid_anchors: [{
+          front_face_id: faces[1].id,
+          quarter_turns: [0, 2],
+          preferred_quarter_turns: 0,
+        }],
+        closure_assemblies: [
+          {
+            primary_face_id: faces[4].id,
+            side: -1,
+            extent: "full",
+            closure_kind: "assembly",
+            coverage_ratio: 1,
+            members: [
+              {
+                face_id: faces[4].id,
+                attached_body_face_id: faces[0].id,
+                extent: "partial",
+                coverage_ratio: 0.5,
+              },
+              {
+                face_id: faces[5].id,
+                attached_body_face_id: faces[2].id,
+                extent: "partial",
+                coverage_ratio: 0.5,
+              },
+            ],
+          },
+          {
+            primary_face_id: faces[6].id,
+            side: 1,
+            extent: "full",
+            closure_kind: "full",
+            coverage_ratio: 1,
+            members: [{
+              face_id: faces[6].id,
+              attached_body_face_id: faces[0].id,
+              extent: "full",
+              coverage_ratio: 1,
+            }],
+          },
+        ],
+      }],
+    },
+  };
+}
+
 function queuedCompare(id: string, createdAt: string) {
   saveTask({
     id,
@@ -1015,6 +1090,197 @@ describe("jobs dispatcher", () => {
     }
     assert.equal(loadMockup(tid(86))?.job_error, "结构识别没有返回可继续的作业清单");
     assert.equal(blenderCalls, 0);
+  });
+
+  it("labels a running V2 structure job as 正在出图", async () => {
+    const { saveMockup, loadMockup } = await import("./mockup.js");
+    setJobsTestHooks({
+      runStructure: () => new Promise(() => {
+        /* keep the illustrator slot occupied */
+      }),
+    });
+    saveMockup({
+      id: tid(103),
+      status: "queued",
+      created_at: "2026-09-02T00:00:00.000Z",
+      files: [],
+      job_kind: "mockup",
+      job_status: "queued",
+      structure_engine: "v2",
+      structure_status: "analyzing",
+    });
+    enqueue({ kind: "mockup", id: tid(103) });
+    const job = loadMockup(tid(103));
+    assert.equal(job?.job_status, "running");
+    assert.equal(job?.job_stage, "structure");
+    assert.equal(job?.job_stage_label, "正在出图");
+  });
+
+  it("auto-confirms a unique preferred front and hands Blender the approved sidecar", async () => {
+    const { saveMockup, loadMockup } = await import("./mockup.js");
+    const id = tid(104);
+    const root = join(process.env.WB_DATA_DIR || "", "mockups", id);
+    mkdirSync(root, { recursive: true });
+    const sourceHash = "a".repeat(64);
+    const source = join(root, "source.ai");
+    const resolutionPath = join(root, "structure_resolution.json");
+    const artworkPath = join(root, "artwork.pdf");
+    const manifestPath = join(root, "manifest.json");
+    writeFileSync(source, "%PDF-1.4\n");
+    writeFileSync(artworkPath, "%PDF");
+    writeFileSync(join(root, "structure.json"), "{}");
+    writeFileSync(manifestPath, JSON.stringify({
+      output_root: root,
+      products: [{ code: id.slice(0, 8), source_ai: source, structure_engine: "v2" }],
+    }));
+    writeFileSync(resolutionPath, JSON.stringify(uniqueNetResolution(sourceHash)));
+    let blenderManifest = "";
+    setJobsTestHooks({
+      runStructure: async () => ({
+        code: 3,
+        stdout: "",
+        stderr: JSON.stringify({
+          ok: false,
+          kind: "structure_resolution",
+          structure_status: "review_required",
+          code: "structure_face_mapping_incomplete",
+          message: "请选择完整盒型的正面和朝向。",
+          resolution_path: resolutionPath,
+          details: {
+            artwork_pdf: artworkPath,
+            structure_sidecar: join(root, "structure.json"),
+            source_sha256: sourceHash,
+          },
+        }) + "\n",
+        timedOut: false,
+      }),
+      confirmStructure: async (options) => {
+        writeFileSync(options.output, "{}");
+        return {
+          code: 0,
+          stdout: `${JSON.stringify({ ok: true, sidecar: options.output })}\n`,
+          stderr: "",
+          timedOut: false,
+        };
+      },
+      runPack: (manifest) => {
+        blenderManifest = manifest;
+        return new Promise(() => {
+          /* prove the Blender slot was claimed */
+        });
+      },
+    });
+    saveMockup({
+      id,
+      status: "queued",
+      created_at: "2026-09-02T00:00:01.000Z",
+      files: [],
+      source_path: source,
+      manifest_path: manifestPath,
+      job_kind: "mockup",
+      job_status: "queued",
+      structure_engine: "v2",
+      structure_status: "analyzing",
+    });
+    try {
+      enqueue({ kind: "mockup", id });
+      for (let index = 0; index < 80 && loadMockup(id)?.structure_status !== "ready"; index += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      const job = loadMockup(id);
+      assert.equal(job?.structure_status, "ready");
+      assert.equal(job?.job_status, "running");
+      assert.equal(job?.job_stage, "render_pdf");
+      assert.ok(blenderManifest.endsWith("confirmed_manifest.json"));
+      const stamped = JSON.parse(readFileSync(resolutionPath, "utf8")) as {
+        auto_confirmed?: { proposal_id?: string; front_face_id?: string; quarter_turns?: number };
+      };
+      assert.deepEqual(stamped.auto_confirmed, {
+        proposal_id: "box-net-0123456789abcdef",
+        front_face_id: "proposal-face-0002",
+        quarter_turns: 0,
+      });
+    } finally {
+      resetJobsTestHooks();
+    }
+  });
+
+  it("keeps a unique front waiting when auto-confirm cannot write an approved sidecar", async () => {
+    const { saveMockup, loadMockup } = await import("./mockup.js");
+    const id = tid(105);
+    const root = join(process.env.WB_DATA_DIR || "", "mockups", id);
+    mkdirSync(root, { recursive: true });
+    const sourceHash = "a".repeat(64);
+    const source = join(root, "source.ai");
+    const resolutionPath = join(root, "structure_resolution.json");
+    const artworkPath = join(root, "artwork.pdf");
+    const manifestPath = join(root, "manifest.json");
+    writeFileSync(source, "%PDF-1.4\n");
+    writeFileSync(artworkPath, "%PDF");
+    writeFileSync(manifestPath, JSON.stringify({
+      output_root: root,
+      products: [{ code: id.slice(0, 8), source_ai: source, structure_engine: "v2" }],
+    }));
+    writeFileSync(resolutionPath, JSON.stringify(uniqueNetResolution(sourceHash)));
+    let blenderCalls = 0;
+    setJobsTestHooks({
+      runStructure: async () => ({
+        code: 3,
+        stdout: "",
+        stderr: JSON.stringify({
+          ok: false,
+          kind: "structure_resolution",
+          structure_status: "review_required",
+          code: "structure_face_mapping_incomplete",
+          message: "请选择完整盒型的正面和朝向。",
+          resolution_path: resolutionPath,
+          details: {
+            artwork_pdf: artworkPath,
+            source_sha256: sourceHash,
+          },
+        }) + "\n",
+        timedOut: false,
+      }),
+      confirmStructure: async () => ({
+        code: 1,
+        stdout: "",
+        stderr: '{"code":"structure_confirmation_invalid","message":"当前正面未通过成盒预检"}',
+        timedOut: false,
+      }),
+      runPack: async () => {
+        blenderCalls += 1;
+        return { code: 1, stdout: "", stderr: "should not run", timedOut: false };
+      },
+    });
+    saveMockup({
+      id,
+      status: "queued",
+      created_at: "2026-09-02T00:00:02.000Z",
+      files: [],
+      source_path: source,
+      manifest_path: manifestPath,
+      job_kind: "mockup",
+      job_status: "queued",
+      structure_engine: "v2",
+      structure_status: "analyzing",
+    });
+    try {
+      enqueue({ kind: "mockup", id });
+      for (let index = 0; index < 80 && loadMockup(id)?.job_status !== "waiting_input"; index += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      const job = loadMockup(id);
+      assert.equal(job?.job_status, "waiting_input");
+      assert.equal(job?.structure_status, "review_required");
+      assert.equal(job?.structure_code, "structure_face_mapping_incomplete");
+      assert.equal(blenderCalls, 0);
+      assert.equal(
+        Object.hasOwn(JSON.parse(readFileSync(resolutionPath, "utf8")) as object, "auto_confirmed"),
+        false,
+      );
+    } finally {
+      resetJobsTestHooks();
+    }
   });
 
   it("second mockup stays queued while the Blender slot is full", async () => {
