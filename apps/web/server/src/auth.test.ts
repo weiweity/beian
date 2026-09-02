@@ -12,11 +12,11 @@ process.env.FEISHU_APP_SECRET = "test-secret";
 const auth = await import("./auth.js");
 
 describe("feishu authorize", () => {
-  it("grants structure confirmation as an explicit admin-only capability", () => {
+  it("lets every logged-in role confirm structure and generate a mockup", () => {
     assert.equal(auth.hasPerm("admin", "confirm_structure"), true);
-    assert.equal(auth.hasPerm("reviewer", "confirm_structure"), false);
-    assert.equal(auth.hasPerm("viewer", "confirm_structure"), false);
-    assert.equal(auth.permissionsFor("admin").includes("confirm_structure"), true);
+    assert.equal(auth.hasPerm("reviewer", "confirm_structure"), true);
+    assert.equal(auth.hasPerm("viewer", "confirm_structure"), true);
+    assert.equal(auth.permissionsFor("reviewer").includes("confirm_structure"), true);
   });
 
   it("prunes expired sessions from memory and disk when issuing a new session", (t) => {

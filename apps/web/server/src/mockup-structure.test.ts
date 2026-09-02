@@ -27,6 +27,10 @@ function proposalLayerId(sourceHash: string, name: string): string {
   return `proposal-layer-${createHash("sha256").update(`${sourceHash}\0${name}`).digest("hex").slice(0, 16)}`;
 }
 
+function previewPlateId(sourceHash: string, name: string): string {
+  return `preview-plate-${createHash("sha256").update(`${sourceHash}\0${name}`).digest("hex").slice(0, 16)}`;
+}
+
 function structureInputJob() {
   const id = "cafe1234cafe";
   const root = join(DATA_DIR, "mockups", id);
@@ -242,6 +246,34 @@ describe("mockup structure confirmation persistence", () => {
     assert.equal(JSON.stringify(view).includes(DATA_DIR), false);
   });
 
+  it("publishes view-only process plates on the detail response", () => {
+    const { job, sourceHash } = structureInputJob();
+    const plate = { id: previewPlateId(sourceHash, "烫雅银"), name: "烫雅银" };
+    const resolutionPath = job.structure_resolution_path || "";
+    const resolution = JSON.parse(readFileSync(resolutionPath, "utf8"));
+    resolution.input_candidates.preview_plates = [plate];
+    resolution.input_candidates.preview.layers.push({
+      candidate_id: plate.id,
+      paths: [{
+        closed: true,
+        points: [
+          [12, 18, 12, 18, 12, 18],
+          [30, 18, 30, 18, 30, 18],
+        ],
+      }],
+      truncated: false,
+    });
+    writeFileSync(resolutionPath, JSON.stringify(resolution));
+
+    const view = publicMockup(job);
+    assert.deepEqual(view.structure_input?.preview_plates, [plate]);
+    assert.equal(
+      view.structure_input?.preview?.layers.some((layer) => layer.candidate_id === plate.id),
+      true,
+    );
+    assert.equal("preview_plates" in publicMockupSummary(job), false);
+  });
+
   it("preserves exact Illustrator names and fails whitespace-equivalent candidates closed", () => {
     const { job, layers, sourceHash } = structureInputJob();
     assert.equal(layers[1].name, " 折线 ");
@@ -400,6 +432,7 @@ describe("mockup structure confirmation persistence", () => {
       [],
       [layers[0].id, layers[0].id],
       ["proposal-layer-0000000000000000"],
+      ["preview-plate-0000000000000000"],
       Array.from({ length: 17 }, (_, index) => `proposal-layer-${index.toString(16).padStart(16, "0")}`),
     ]) {
       assert.throws(

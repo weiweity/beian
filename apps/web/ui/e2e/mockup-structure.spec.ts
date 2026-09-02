@@ -54,10 +54,11 @@ function netProposal(input: Omit<NetProposal, "schema" | "face_ids" | "closure_a
   };
 }
 
-test("无显式语义时管理员可多选本稿候选层并重跑同一打样单", async ({ page, syntheticApi }) => {
+test("无显式语义时已登录账号可多选本稿候选层并重跑同一打样单", async ({ page, syntheticApi }) => {
   await page.setViewportSize({ width: 1366, height: 700 });
   const cutId = "proposal-layer-1111111111111111";
   const creaseId = "proposal-layer-2222222222222222";
+  const foilId = "preview-plate-3333333333333333";
   const mockup: SyntheticMockup = {
     id: "abcdef123455",
     title: "旧稿候选层",
@@ -75,6 +76,7 @@ test("无显式语义时管理员可多选本稿候选层并重跑同一打样�
       ],
       selected_ids: [],
       truncated: false,
+      preview_plates: [{ id: foilId, name: "烫雅银" }],
       preview: {
         schema: "illustrator-layer-preview/1",
         page_size_points: [160, 90],
@@ -101,6 +103,19 @@ test("无显式语义时管理员可多选本稿候选层并重跑同一打样�
             }],
             truncated: false,
           },
+          {
+            candidate_id: foilId,
+            paths: [{
+              closed: true,
+              points: [
+                [20, 30, 20, 30, 20, 30],
+                [60, 30, 60, 30, 60, 30],
+                [60, 70, 60, 70, 60, 70],
+                [20, 70, 20, 70, 20, 70],
+              ],
+            }],
+            truncated: false,
+          },
         ],
       },
     },
@@ -115,18 +130,18 @@ test("无显式语义时管理员可多选本稿候选层并重跑同一打样�
   await expect(page.getByRole("dialog", { name: "三步完成结构确认" })).toHaveCount(0);
   await expect(page.getByText(/系统不会按颜色、白色区域或图层名称判断结构/)).toBeVisible();
   await expect(page.getByRole("checkbox")).toHaveCount(2);
-  const cut = page.getByText("刀线", { exact: true });
-  await cut.hover();
-  await expect(page.locator(`[data-candidate-id="${cutId}"] .structure-input-layer-stroke`)).toHaveAttribute(
+  await expect(page.getByRole("checkbox", { name: /刀线/ })).toBeChecked();
+  await expect(page.locator(`.structure-input-layer-map [data-candidate-id="${cutId}"].is-selected`)).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "烫雅银" })).toBeVisible();
+  await page.getByRole("button", { name: "烫雅银" }).click();
+  await expect(page.locator(`.structure-input-layer-map [data-candidate-id="${foilId}"] .structure-input-layer-stroke`)).toHaveAttribute(
     "d",
-    "M 10 20 L 140 20",
+    "M 20 30 L 60 30 L 60 70 L 20 70 L 20 30 Z",
   );
   const submit = page.getByRole("button", { name: "重新识别完整盒型" });
-  await expect(submit).toBeDisabled();
-  await cut.click();
-  await expect(page.locator(`[data-candidate-id="${cutId}"].is-selected`)).toHaveCount(1);
-  await page.getByText("折线", { exact: true }).click();
   await expect(submit).toBeEnabled();
+  await page.getByText("折线", { exact: true }).click();
+  await expect(page.locator(`.structure-input-layer-map [data-candidate-id="${creaseId}"].is-selected`)).toHaveCount(1);
   await page.getByRole("button", { name: "放大结构预览" }).click();
   await expect(page.getByText("150%", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "放大结构预览" }).click();
@@ -171,9 +186,9 @@ test("旧单无分层预览仍可多选图层重跑", async ({ page, syntheticAp
 
   await page.goto(`/mockup/${mockup.id}`);
   await page.getByRole("button", { name: "开始选择" }).click();
-  await expect(page.getByText(/这份稿只有高清原稿预览/)).toBeVisible();
+  await expect(page.getByText(/这份稿没有分层路径快照/)).toBeVisible();
   await expect(page.getByRole("img", { name: "当前 Illustrator 稿件预览" })).toBeVisible();
-  await page.getByText("刀线", { exact: true }).click();
+  await expect(page.getByRole("checkbox", { name: /刀线/ })).toBeChecked();
   await page.getByRole("button", { name: "重新识别完整盒型" }).click();
   const selection = syntheticApi.calls.find(
     (call) => call.method === "POST" && call.path === `/api/mockups/${mockup.id}/structure/input`,
@@ -214,7 +229,7 @@ test("截取后的分层预览仍显示安全截取说明", async ({ page, synth
   await expect(page.getByText("预览已安全截取")).toBeVisible();
 });
 
-test("管理员只需看展开图、选择正面并生成，朝向由系统决定", async ({ page, syntheticApi }) => {
+test("已登录账号只需看展开图、选择正面并生成，朝向由系统决定", async ({ page, syntheticApi }) => {
   await page.setViewportSize({ width: 1366, height: 700 });
   const mockup: SyntheticMockup = {
     id: "abcdef123456",
@@ -533,7 +548,7 @@ test("没有原稿预览时完整盒型也不能盲选正面", async ({ page, sy
   await expect(page.getByRole("button", { name: "生成打样图" })).toBeDisabled();
 });
 
-test("非管理员可以查看展开图，但不能选择正面或生成", async ({ page, syntheticApi }) => {
+test("审稿员可以选择正面并生成打样图", async ({ page, syntheticApi }) => {
   const mockup: SyntheticMockup = {
     id: "abcdef123462",
     title: "团队可见待确认单",
@@ -569,13 +584,63 @@ test("非管理员可以查看展开图，但不能选择正面或生成", async
       display_name: "审稿员",
       open_id: "ou_reviewer",
       role: "reviewer",
-      perms: ["read", "create", "delete"],
+      perms: ["read", "create", "delete", "confirm_structure"],
     }),
   }));
 
   await page.goto(`/mockup/${mockup.id}`);
 
-  await expect(page.getByText("这单可以正常查看；只有管理员能选择产品正面并生成打样图。")).toBeVisible();
+  await expect(page.getByText("确认左侧是这次要生成的包装，点击印有品名和主视觉的一面，最后点生成打样图。")).toBeVisible();
+  await expect(page.locator(".structure-map")).toBeVisible();
+  const frontA = page.locator(".structure-front-choices").getByRole("button", { name: "A 面" });
+  await expect(frontA).toBeEnabled();
+  await frontA.click();
+  await expect(page.getByRole("button", { name: "生成打样图" })).toBeEnabled();
+});
+
+test("没有结构确认权限时不能选择正面或生成", async ({ page, syntheticApi }) => {
+  const mockup: SyntheticMockup = {
+    id: "abcdef123464",
+    title: "无确认权限待确认单",
+    status: "review_required",
+    job_status: "waiting_input",
+    structure_status: "review_required",
+    files: [],
+    structure_preview: {
+      page_size_mm: [160, 90],
+      image_url: ARTWORK,
+      faces: [
+        face("body-a", [10, 25, 40, 75]),
+        face("body-b", [40, 25, 60, 75]),
+        face("body-c", [60, 25, 90, 75]),
+        face("body-d", [90, 25, 110, 75]),
+        face("cap-top", [10, 5, 40, 25]),
+        face("cap-bottom", [10, 75, 40, 95]),
+      ],
+      net_proposals: [netProposal({
+        id: "box-net-0001",
+        body_face_ids: ["body-a", "body-b", "body-c", "body-d"],
+        cap_face_ids: ["cap-top", "cap-bottom"],
+        strip_axis: "x",
+      })],
+    },
+  };
+  syntheticApi.mockups.push(mockup);
+  await page.route("**/api/auth/me", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({
+      logged_in: true,
+      display_name: "只读访客",
+      open_id: "ou_no_confirm",
+      role: "viewer",
+      perms: ["read", "export"],
+    }),
+  }));
+
+  await page.goto(`/mockup/${mockup.id}`);
+
+  await expect(page.getByRole("alert").getByText("当前账号不能选择产品正面或生成打样图。")).toBeVisible();
   await expect(page.locator(".structure-map")).toBeVisible();
   await expect(page.locator(".structure-front-choices button")).toHaveCount(4);
   await expect(page.locator(".structure-front-choices button").first()).toBeDisabled();
@@ -634,7 +699,7 @@ test("页面重新可见时刷新身份并立即撤销结构确认权限", async
   await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
   await refreshed;
 
-  await expect(page.getByText("这单可以正常查看；只有管理员能选择产品正面并生成打样图。")).toBeVisible();
+  await expect(page.getByRole("alert").getByText("当前账号不能选择产品正面或生成打样图。")).toBeVisible();
   await expect(frontA).toBeDisabled();
   await expect(generate).toBeDisabled();
 });

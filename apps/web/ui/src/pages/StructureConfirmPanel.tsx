@@ -5,6 +5,7 @@ import {
   preferredStructureTurn,
   sameStructureLayerSelection,
   selectedStructureLayerIds,
+  defaultStructureLayerIds,
   selectedStructureAnchor,
   structureConfirmationErrorCopy,
   structureIssueCopy,
@@ -36,11 +37,12 @@ export function StructureConfirmPanel({ job, canConfirmStructure, onConfirmed }:
   const [proposalId, setProposalId] = useState("");
   const [frontFaceId, setFrontFaceId] = useState("");
   const [selectedLayerIds, setSelectedLayerIds] = useState<string[]>(
-    () => structureInput?.selected_ids || [],
+    () => (structureInput ? defaultStructureLayerIds(structureInput) : []),
   );
   const [selectingLayers, setSelectingLayers] = useState(false);
   const [layerSelectionError, setLayerSelectionError] = useState<string | null>(null);
   const [hoveredLayerId, setHoveredLayerId] = useState("");
+  const [previewedPlateId, setPreviewedPlateId] = useState("");
   const [previewScale, setPreviewScale] = useState(1);
   const [showLayerGuide, setShowLayerGuide] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -186,7 +188,7 @@ export function StructureConfirmPanel({ job, canConfirmStructure, onConfirmed }:
           title={hadSelection ? "这组结构层还不能组成完整盒型" : "请选择真实结构线所在图层"}
           description={hadSelection
             ? `${issue} 可以增删下方图层后重新识别；系统仍会检查连续盒身和上下封口。`
-            : "系统已盘点本稿中的纯描边图层。请由管理员选择真实刀线、折线所在的一层或多层，再交给拓扑引擎验证。"}
+            : "系统已盘点本稿中的纯描边图层。请选择真实刀线、折线所在的一层或多层，再交给拓扑引擎验证。烫金等工艺板只用来看，不会当成刀线。"}
         />
         <div className="structure-confirm-layout structure-input-layout">
           <div className="structure-map-shell structure-input-preview">
@@ -241,7 +243,8 @@ export function StructureConfirmPanel({ job, canConfirmStructure, onConfirmed }:
                     />
                     {layerPreview.layers.map((layer) => {
                       const selected = selectedLayerSet.has(layer.candidate_id);
-                      const hovered = hoveredLayerId === layer.candidate_id;
+                      const hovered = hoveredLayerId === layer.candidate_id
+                        || previewedPlateId === layer.candidate_id;
                       const path = layerPreviewPaths.get(layer.candidate_id);
                       if ((!selected && !hovered) || !path) return null;
                       return (
@@ -267,7 +270,7 @@ export function StructureConfirmPanel({ job, canConfirmStructure, onConfirmed }:
               <p>
                 {layerPreview
                   ? "移到或勾选右侧图层，左侧会涂亮真实路径。紫色只表示当前选择；系统不会按颜色、白色区域或图层名称判断结构。"
-                  : "这份稿只有高清原稿预览；新上传稿会同时导出可涂亮的真实分层路径。系统不会按颜色、白色区域或图层名称判断结构。"}
+                  : "这份稿没有分层路径快照。重新识别后才能在勾选时涂亮真实刀线；系统不会伪造路径。"}
               </p>
             </div>
           </div>
@@ -323,6 +326,28 @@ export function StructureConfirmPanel({ job, canConfirmStructure, onConfirmed }:
                   </Checkbox>
                 ))}
               </div>
+              {structureInput.preview_plates?.length ? (
+                <div className="structure-preview-plates" role="group" aria-label="工艺与印刷板">
+                  <strong>工艺 / 印刷板</strong>
+                  <span>点一下只在左侧涂亮查看，不会当成刀线折盒。</span>
+                  {structureInput.preview_plates.map((plate) => (
+                    <button
+                      aria-pressed={previewedPlateId === plate.id}
+                      className={hoveredLayerId === plate.id || previewedPlateId === plate.id ? "is-hovered" : ""}
+                      data-candidate-id={plate.id}
+                      key={plate.id}
+                      onBlur={() => setHoveredLayerId("")}
+                      onClick={() => setPreviewedPlateId((current) => (current === plate.id ? "" : plate.id))}
+                      onFocus={() => setHoveredLayerId(plate.id)}
+                      onMouseEnter={() => setHoveredLayerId(plate.id)}
+                      onMouseLeave={() => setHoveredLayerId("")}
+                      type="button"
+                    >
+                      {plate.name}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
               {structureInput.truncated ? (
                 <p className="structure-input-truncated">
                   候选图层超过安全展示上限。若正确图层不在列表里，请先在 Illustrator 整理图层后重新上传。
@@ -345,7 +370,7 @@ export function StructureConfirmPanel({ job, canConfirmStructure, onConfirmed }:
                       : normalizedLayerIds.length
                         ? `已选 ${normalizedLayerIds.length} 个图层，可以重新识别。`
                         : "请至少选择一个真实结构图层。"
-                    : "你可以查看候选；等待管理员选择结构图层。"}
+                    : "当前账号不能选择结构图层。"}
                 </span>
               )}
               <Button
@@ -402,7 +427,7 @@ export function StructureConfirmPanel({ job, canConfirmStructure, onConfirmed }:
         title="先看展开图，再选产品正面"
         description={canConfirmStructure
           ? "确认左侧是这次要生成的包装，点击印有品名和主视觉的一面，最后点生成打样图。"
-          : "这单可以正常查看；只有管理员能选择产品正面并生成打样图。"}
+          : "当前账号不能选择产品正面或生成打样图。"}
       />
       <div className="structure-confirm-layout">
         <div className="structure-map-shell">
@@ -537,7 +562,7 @@ export function StructureConfirmPanel({ job, canConfirmStructure, onConfirmed }:
                     : hasArtwork
                       ? "请在展开图或右侧按钮中选择产品正面。"
                       : "原稿预览不可用，不能确认正面。"
-                  : "你可以查看这单；等待管理员选择正面并生成。"}
+                  : "可以查看这单，但不能提交。"}
               </span>
             )}
             <Button

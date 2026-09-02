@@ -106,7 +106,7 @@ Python `cli.py` **不再** `save_task`。对照/对红 CLI 只把结果 JSON 打
 
 ### 权限与团队协作
 
-`users.json` 只配置 `admin/reviewer/viewer`，不存页面级权限数组。Hono 把权限拆为三层：所有已登录角色都可读取、下载团队打样单和结构预览；结构确认必须具备独立 `confirm_structure` 能力，当前只授予 `admin`；删除继续经过对象所有权校验，`reviewer` 只能删本人已结束打样单，`admin` 可删全部，`viewer` 无删除能力。审稿单仍保持原有所有者隔离。团队共享序列化必须再次脱敏旧 worker 错误里的本机绝对路径、客户稿件名和疑似凭据，只返回短摘要；列表不得为轮询读取完整结构预览。UI 只消费 `/api/auth/me.perms` 控制动作可用性，服务端继续作为最终授权边界。
+`users.json` 只配置 `admin/reviewer/viewer`，不存页面级权限数组。Hono 把权限拆为三层：所有已登录角色都可读取、下载团队打样单和结构预览；结构确认必须具备独立 `confirm_structure` 能力，现已授予 `admin` / `reviewer` / `viewer`；删除继续经过对象所有权校验，`reviewer` 只能删本人已结束打样单，`admin` 可删全部，`viewer` 无删除能力。审稿单仍保持原有所有者隔离。团队共享序列化必须再次脱敏旧 worker 错误里的本机绝对路径、客户稿件名和疑似凭据，只返回短摘要；列表不得为轮询读取完整结构预览。UI 只消费 `/api/auth/me.perms` 控制动作可用性，服务端继续作为最终授权边界。
 
 打样写回：`runPackaging` 退出码 0 → 现有 `collectOutputs` 填 `files`（只公开 key/name；白底只收 `front_right` / `back_left`，不要把 `ai-raster` 或 PPT 质检 PNG 算进去；另收 `glb` / `ppt` / `sheet`），`status=done`，`job_status=succeeded`。非 0 或超时 → `status=failed`，`job_status=failed`，内部 `job_error` 截 800 字；对外读取必须再走团队共享脱敏和摘要边界。不读 packaging 的内部目录当 HTTP 合同。
 
@@ -180,7 +180,7 @@ Windows 上 spawn 必须进 Job Object，Node 退出时杀掉子进程树。做�
 ### Worker
 
 - 对照 / 对红：`python -m app.cli compare|rework`，最后一行结果 JSON，过程中 `STAGE render_pdf|ingest|ocr|layout|match`。按 `compare-pdf-ingest-v2.md` 逐页选择 PDF 文字层或一次 OCR，再用版面区域收敛到真实单钉；不搬 `fields.py`。确认单底部工艺说明 / 颜色要求 / 版本号 / 更新内容走 `skip_sheet_field`（字段名开头），不进机审。
-- 打样：`workers/packaging`。POST 时已确认 Blender；Windows worker 不直接 COM 或启动 Illustrator，而是通过 `beian.illustrator.v1` 命名管道请求登录桌面 Agent → 现有 VBS → 唯一 JSX。所有 Agent 实例共用独占执行锁和持久故障围栏：围栏在 cscript/COM 前建立，只有成功或已证明清理完成的失败才能移除；Agent 消失、cscript 超时且退出未确认或稿件无法清空时保持 `faulted`，任何实例都不得接手，需交互管理员确认后显式恢复。错误按稳定码写清会话、窗口、未知稿件或超时原因，不统一伪装成“请关闭稿件”。stderr 打 `STAGE render_pdf|blender|export`（出图/打样/导出）。入队后 `job_stage` 从 `render_pdf` 开始，不是 `blender`。平面出图用 pymupdf（对照同一 Python），不靠 qlmanage。结构只认与源稿绑定的 `PackagingStructure` 显式语义；没有对象语义时先发布与当前源稿绑定的 `/2` 纯描边候选，管理员只提交候选 ID，Hono 复核后重跑同一 Illustrator/拓扑链。候选可携带与本次候选 ID 对齐的 `illustrator-layer-preview/1` 有界真实路径；它只给详情页做高清底图上的移入/勾选涂亮，服务端校验失败时删掉预览而保留合法候选，不能把涂亮颜色或快照路径直接当结构。所选线稿仍是不可信输入，必须形成完整盒身环和上下封口。拓扑有歧义时只暴露经过最终确认引擎预检的完整候选，页面用真实展开图做视觉翻页，管理员只选择产品正面。预检引擎为正面生成确定性的 `preferred_quarter_turns`，内部锚点仍携带候选、正面和朝向，再由连通关系推导其余五面。无语义或不安全结构不得靠颜色、图层名、零散矩形、间距、bbox 或模板猜测进入 Blender。GLB 导出后验证轴向、毫米尺寸和六个已确认面的贴图来源、方向与镜像。PPT 先用两张白底写 OOXML，不依赖 Node；写不出才试演示文稿运行时（stderr `PPT 跳过`）。两张白底合成一页 PDF。缺 PPT/PDF 时白底图和 GLB 仍 `done`/`succeeded`，不要把整单判成「Node不存在」。
+- 打样：`workers/packaging`。POST 时已确认 Blender；Windows worker 不直接 COM 或启动 Illustrator，而是通过 `beian.illustrator.v1` 命名管道请求登录桌面 Agent → 现有 VBS → 唯一 JSX。所有 Agent 实例共用独占执行锁和持久故障围栏：围栏在 cscript/COM 前建立，只有成功或已证明清理完成的失败才能移除；Agent 消失、cscript 超时且退出未确认或稿件无法清空时保持 `faulted`，任何实例都不得接手，需交互管理员确认后显式恢复。错误按稳定码写清会话、窗口、未知稿件或超时原因，不统一伪装成“请关闭稿件”。stderr 打 `STAGE render_pdf|blender|export`（出图/打样/导出）。入队后 `job_stage` 从 `render_pdf` 开始，不是 `blender`。平面出图用 pymupdf（对照同一 Python），不靠 qlmanage。结构只认与源稿绑定的 `PackagingStructure` 显式语义；没有对象语义时先发布与当前源稿绑定的 `/2` 纯描边候选，已登录账号只提交候选 ID，Hono 复核后重跑同一 Illustrator/拓扑链。候选可携带与本次候选 ID 对齐的 `illustrator-layer-preview/1` 有界真实路径；它只给详情页做高清底图上的移入/勾选涂亮，服务端校验失败时删掉预览而保留合法候选，不能把涂亮颜色或快照路径直接当结构。所选线稿仍是不可信输入，必须形成完整盒身环和上下封口。拓扑有歧义时只暴露经过最终确认引擎预检的完整候选，页面用真实展开图做视觉翻页，已登录账号只选择产品正面。预检引擎为正面生成确定性的 `preferred_quarter_turns`，内部锚点仍携带候选、正面和朝向，再由连通关系推导其余五面。无语义或不安全结构不得靠颜色、图层名、零散矩形、间距、bbox 或模板猜测进入 Blender。GLB 导出后验证轴向、毫米尺寸和六个已确认面的贴图来源、方向与镜像。PPT 先用两张白底写 OOXML，不依赖 Node；写不出才试演示文稿运行时（stderr `PPT 跳过`）。两张白底合成一页 PDF。缺 PPT/PDF 时白底图和 GLB 仍 `done`/`succeeded`，不要把整单判成「Node不存在」。
 - 超时：对照 180s、打样 420s（已有）。超时 = failed，回收槽。
 - 取消：不做。
 
@@ -198,7 +198,7 @@ Windows 上 spawn 必须进 Job Object，Node 退出时杀掉子进程树。做�
 
 - `NewTaskPage`：先上传得到回执，再调用 `/api/tasks/start`；开始接口立即返回后进入核对页。核对页见 `job_status in {queued,running}` 或 `status===comparing` 就上 WaitCard。
 - `ReviewPage`：对红 POST 返回 queued 时不要 toast「已对照第二份 PDF」；WaitCard 增加「对红」文案。
-- `MockupPage` / `MockupJobPage`：打样台只交稿和列单。点进度或已出图进打样单；待确认时所有登录者都可看真实展开图，只有 `confirm_structure` 能选择 A–D 正面并点「生成打样图」。多候选只显示视觉翻页，不显示盒型尺寸、封口算法和阅读方向。进行中是 WaitCard，完成一屏三图：正面+侧面、反面+侧面、GLB；每张图右上角下载；页头「下载 PPT」（没写成仍显示，点了出「PPT 没写成，白底仍可下」），不提供 PDF 下载入口；点下载底部提示不挡操作；GLB 全屏居中；截图时下载钮藏起来；全屏被拒出「全屏打不开」。不要死等 POST；打样单里轮询 GET `/api/mockups/:id`。`status=done|failed` 不当等待卡。地址 `/mockup`、`/mockup/new` 与 `/mockup/:id`。审稿台看板 `/reviewup`，工作台 `/reviewup/new`，核对页仍 `/review/:id`。
+- `MockupPage` / `MockupJobPage`：打样台只交稿和列单。点进度或已出图进打样单；待确认时所有已登录角色都可看真实展开图，并凭 `confirm_structure` 选择 A–D 正面、点「生成打样图」。多候选只显示视觉翻页，不显示盒型尺寸、封口算法和阅读方向。进行中是 WaitCard，完成一屏三图：正面+侧面、反面+侧面、GLB；每张图右上角下载；页头「下载 PPT」（没写成仍显示，点了出「PPT 没写成，白底仍可下」），不提供 PDF 下载入口；点下载底部提示不挡操作；GLB 全屏居中；截图时下载钮藏起来；全屏被拒出「全屏打不开」。不要死等 POST；打样单里轮询 GET `/api/mockups/:id`。`status=done|failed` 不当等待卡。地址 `/mockup`、`/mockup/new` 与 `/mockup/:id`。审稿台看板 `/reviewup`，工作台 `/reviewup/new`，核对页仍 `/review/:id`。
 - `WaitCard`：吃 `job_stage` / `job_stage_label`、`job_eta_s`、`queue_ahead`。queued 显示「前面还有 N 单」。
 - `TasksPage`：任一 `board==comparing` 时轮询 `/api/tasks`，否则排队卡片会停在旧状态。审稿台四栏统一用紧凑明细；对照中首行显示品名和由真实阶段映射出的粗粒度百分比，下一行只放日期。WaitCard、历史行和侧栏仍用 `liveJobLine` 写阶段和大约还要，不画假精确百分比。
 - 侧栏：`liveNavPulse` 看登录后 `/api/status` 的 jobs 槽；审稿台/打样台作业在跑时有圆点。离开核对页再回看板，仍能看到阶段。

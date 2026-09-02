@@ -49,7 +49,7 @@ V2 任务在产品项中写 `"structure_engine": "v2"`。显式 sidecar 可写 `
 - 原生 AI 或非 PDF 兼容 AI 自动通过 Illustrator 导出完整稿和印刷层 PDF，再进入相同建模流程。Windows 上管理员必须保持登录，`beian-illustrator-agent` 的 Session 和心跳必须正常；Agent 接单后按需启动并验证同会话可见窗口与文档列表。生产任务与可信 `main` 发版内的 L1 请求共用同一个执行锁及持久故障围栏，执行中断或清理未确认后不能由另一请求接手；只能按 `scripts/windows/README.md` 的交互管理员流程确认并清除。用户注销、Agent 离线或 faulted 时开始接口返回 412，不消耗待开工回执，也不退回 Session 0。
 - Illustrator 冷启动和复杂转曲稿解析可能较慢，建议保持应用常驻并批量处理异常稿；兜底 Worker 默认 7 分钟硬超时。
 - 相同结构只需新增任务记录即可并行处理；缓存键包含源稿、结构 sidecar、清理后的 artwork 和流程版本。
-- `structure_v2` 用 Shapely/GEOS 做单位归一、同源近点归一、noding、polygonize 和拓扑诊断。结构可闭合但产品正面仍有业务歧义时返回 `review_required`；管理员只提供一个正面锚点，系统只公开最终确认引擎接受的方向，自动带入其几何推荐，再从完整盒型推导其余五面。尺寸不匹配与贴图方向不唯一使用不同错误码，不能用方向文案掩盖尺寸失败。曲线适配或结构工作量超过安全上限时返回可执行的 `unsupported`，不会进入 Blender。确认接口用 409 表示候选已过期、422 表示当前结构不能成盒；它们不是网络错误。
+- `structure_v2` 用 Shapely/GEOS 做单位归一、同源近点归一、noding、polygonize 和拓扑诊断。结构可闭合但产品正面仍有业务歧义时返回 `review_required`；已登录账号只提供一个正面锚点，系统只公开最终确认引擎接受的方向，自动带入其几何推荐，再从完整盒型推导其余五面。尺寸不匹配与贴图方向不唯一使用不同错误码，不能用方向文案掩盖尺寸失败。曲线适配或结构工作量超过安全上限时返回可执行的 `unsupported`，不会进入 Blender。确认接口用 409 表示候选已过期、422 表示当前结构不能成盒；它们不是网络错误。
 - 只有 `validation.status=accepted`、源稿 SHA-256 匹配、六面角色唯一且拓扑闭合的结构才能形成 `ResolvedPackagingJob`。人工确认结果写成新的批准 sidecar，再进入现有建模、渲染、PPT 和 GLB 合同。GLB 导出后还要逐面核对已确认 artwork 绑定；底面缺图、方向错误或镜像错误都判失败。
 - Blender MCP 只保留给交互调试。稳定生产通过独立 Blender 后台进程并行执行，避免界面串行和上下文开销。
 

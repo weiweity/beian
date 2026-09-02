@@ -7,6 +7,7 @@ import {
   preferredStructureTurn,
   sameStructureLayerSelection,
   selectedStructureLayerIds,
+  defaultStructureLayerIds,
   selectedStructureAnchor,
   structureConfirmationErrorCopy,
   structureIssueCopy,
@@ -76,6 +77,35 @@ describe("mockup V2 structure UX", () => {
     assert.deepEqual(selected, proposalLayers.slice(0, 16).map((candidate) => candidate.id));
     assert.equal(sameStructureLayerSelection(input, [proposalLayers[0].id]), true);
     assert.equal(sameStructureLayerSelection(input, [proposalLayers[1].id]), false);
+  });
+
+  it("preselects a unique 刀线 layer and never treats a preview plate as selected structure", () => {
+    const cut = {
+      id: "proposal-layer-aaaaaaaaaaaaaaaa",
+      name: "刀线",
+      stroke_only_path_count: 8,
+    };
+    const crease = {
+      id: "proposal-layer-bbbbbbbbbbbbbbbb",
+      name: "折线",
+      stroke_only_path_count: 4,
+    };
+    const empty = {
+      schema: "packaging-structure-input-candidates/2" as const,
+      proposal_layers: [cut, crease],
+      selected_ids: [],
+      truncated: false,
+      preview_plates: [{ id: "preview-plate-cccccccccccccccc", name: "烫雅银" }],
+    };
+    assert.deepEqual(defaultStructureLayerIds(empty), [cut.id]);
+    assert.deepEqual(selectedStructureLayerIds(empty, [empty.preview_plates![0].id]), []);
+    const already = { ...empty, selected_ids: [crease.id] };
+    assert.deepEqual(defaultStructureLayerIds(already), [crease.id]);
+    const duplicateCuts = {
+      ...empty,
+      proposal_layers: [cut, { ...cut, id: "proposal-layer-dddddddddddddddd", name: "刀线" }],
+    };
+    assert.deepEqual(defaultStructureLayerIds(duplicateCuts), []);
   });
 
   it("distinguishes a human confirmation from a failed mockup", () => {
