@@ -151,6 +151,80 @@ function assignmentOf(item, config) {
     return null;
 }
 
+function isFactoryKnifeLayerName(name) {
+    return name === "刀版" || name === "刀线";
+}
+
+function isProcessPlateLayerName(name) {
+    var n = String(name || "");
+    return n.indexOf("击凹") >= 0 || n.indexOf("击凸") >= 0 || n.indexOf("哑油") >= 0 ||
+        n.indexOf("垫白") >= 0 || n.indexOf("丝印") >= 0 || n.indexOf("注塑") >= 0 ||
+        n.indexOf("漏银") >= 0 || n.indexOf("烫") >= 0;
+}
+
+function isNeverDefaultProposalLayerName(name) {
+    var n = String(name || "");
+    return n.indexOf("印刷") >= 0 || n === "表" || n.indexOf("标注") >= 0 || n.indexOf("码") >= 0;
+}
+
+function isPrintFallbackEligibleLayerName(name) {
+    return name.length > 0 &&
+        !isFactoryKnifeLayerName(name) &&
+        !isProcessPlateLayerName(name) &&
+        !isNeverDefaultProposalLayerName(name);
+}
+
+function uniqueFactoryKnifeLayerName(layerNames) {
+    if (!layerNames || !(layerNames instanceof Array)) {
+        return null;
+    }
+    var daoBan = 0;
+    var daoXian = 0;
+    var index;
+    for (index = 0; index < layerNames.length; index += 1) {
+        if (layerNames[index] === "刀版") {
+            daoBan += 1;
+        } else if (layerNames[index] === "刀线") {
+            daoXian += 1;
+        }
+    }
+    if (daoBan === 1 && daoXian === 0) {
+        return "刀版";
+    }
+    if (daoXian === 1 && daoBan === 0) {
+        return "刀线";
+    }
+    return null;
+}
+
+function uniquePrintFallbackLayerName(layerNames) {
+    if (!layerNames || !(layerNames instanceof Array)) {
+        return null;
+    }
+    var eligible = [];
+    var index;
+    var name;
+    var prior;
+    var seen;
+    for (index = 0; index < layerNames.length; index += 1) {
+        name = String(layerNames[index] || "");
+        if (!isPrintFallbackEligibleLayerName(name)) {
+            continue;
+        }
+        seen = false;
+        for (prior = 0; prior < eligible.length; prior += 1) {
+            if (eligible[prior] === name) {
+                seen = true;
+                break;
+            }
+        }
+        if (!seen) {
+            eligible.push(name);
+        }
+    }
+    return eligible.length === 1 ? eligible[0] : null;
+}
+
 function configuredProposalLayer(item, config) {
     if (!item.layer || !config.proposal_layers || !(config.proposal_layers instanceof Array)) {
         return false;
@@ -158,10 +232,12 @@ function configuredProposalLayer(item, config) {
     var layerName = String(item.layer.name || "");
     for (var index = 0; index < config.proposal_layers.length; index += 1) {
         if (layerName === String(config.proposal_layers[index] || "")) {
-            // Migration proposals are deliberately narrower than legacy layer
-            // selection: converted text is normally filled artwork, while
-            // structural paths are stroke-only.  This is only a proposal and
-            // can never bypass the six-face human confirmation gate.
+            // Factory knife layers may be filled spot-color cuts. Other
+            // selected layers stay stroke-only so converted text is not
+            // exported as structure. This is still only a proposal.
+            if (isFactoryKnifeLayerName(layerName)) {
+                return true;
+            }
             return item.stroked && !item.filled;
         }
     }
@@ -279,7 +355,11 @@ function appendProposalPreview(candidate, item, artboardLeft, artboardTop, budge
 }
 
 function recordProposalLayerCandidate(candidates, layerKeys, item, artboardLeft, artboardTop, previewBudget) {
-    if (!item.layer || !item.stroked || item.filled) {
+    if (!item.layer) {
+        return false;
+    }
+    var candidateLayerName = String(item.layer.name || "");
+    if (!isFactoryKnifeLayerName(candidateLayerName) && (!item.stroked || item.filled)) {
         return false;
     }
     var layerName = String(item.layer.name || "");
@@ -301,8 +381,8 @@ function recordProposalLayerCandidate(candidates, layerKeys, item, artboardLeft,
             ambiguousName = true;
         }
     }
-    // Layer inventory is only a bounded menu for a later human decision.  It
-    // never selects structure and never changes the exported edge set.
+    // Inventory is a bounded menu. Unique 刀版/刀线 may later enter proposal
+    // mode in this same export; this function still does not choose them.
     if (candidates.length >= 128) {
         return true;
     }
@@ -320,7 +400,13 @@ function recordProposalLayerCandidate(candidates, layerKeys, item, artboardLeft,
 }
 
 function recordPreviewPlateCandidate(plates, plateKeys, proposalLayerKeys, item, artboardLeft, artboardTop, previewBudget) {
-    if (!item.layer || (item.stroked && !item.filled)) {
+    if (!item.layer) {
+        return false;
+    }
+    if (isFactoryKnifeLayerName(String(item.layer.name || ""))) {
+        return false;
+    }
+    if (item.stroked && !item.filled) {
         return false;
     }
     var layerName = String(item.layer.name || "");
@@ -744,7 +830,32 @@ function restorePrintLayers(state) {
 }
 
 function isolateConfiguredPrintLayers(documentRef, configuredNames) {
-    var names = normalizedPrintLayerNames(configuredNames);
+    var requested = normalizedPrintLayerNames(configuredNames);
+    var topNames = [];
+    var topIndex;
+    for (topIndex = 0; topIndex < documentRef.layers.length; topIndex += 1) {
+        topNames.push(String(documentRef.layers[topIndex].name || ""));
+    }
+    var names = [];
+    var foundExact = true;
+    var requestIndex;
+    for (requestIndex = 0; requestIndex < requested.length; requestIndex += 1) {
+        if (!containsExactLayerName(topNames, requested[requestIndex])) {
+            foundExact = false;
+            break;
+        }
+        names.push(requested[requestIndex]);
+    }
+    if (!foundExact) {
+        var fallback = uniquePrintFallbackLayerName(topNames);
+        if (fallback === null) {
+            throw new Error(
+                "Configured artwork layer not found: " + requested.join(",") +
+                " | layers: " + topNames.join(",")
+            );
+        }
+        names = [fallback];
+    }
     var state = [];
     var found = [];
     var failure = null;
@@ -765,7 +876,10 @@ function isolateConfiguredPrintLayers(documentRef, configuredNames) {
         }
         for (var nameIndex = 0; nameIndex < names.length; nameIndex += 1) {
             if (!containsExactLayerName(found, names[nameIndex])) {
-                throw new Error("Configured artwork layer not found: " + names[nameIndex]);
+                throw new Error(
+                    "Configured artwork layer not found: " + names[nameIndex] +
+                    " | layers: " + topNames.join(",")
+                );
             }
         }
     } catch (error) {
@@ -914,7 +1028,31 @@ try {
             )) {
                 result.proposal_layer_candidates_truncated = true;
             }
-            remainderItems.push(item);
+            remainderItems.push({item: item, pathIndex: pathIndex});
+        }
+    }
+    if (
+        explicitRecords.length === 0 &&
+        proposalRecords.length === 0 &&
+        (!config.proposal_layers || config.proposal_layers.length < 1)
+    ) {
+        var defaultKnife = uniqueFactoryKnifeLayerName(result.layers);
+        if (defaultKnife !== null) {
+            config.proposal_layers = [defaultKnife];
+            var keptRemainder = [];
+            var remIndex;
+            for (remIndex = 0; remIndex < remainderItems.length; remIndex += 1) {
+                if (configuredProposalLayer(remainderItems[remIndex].item, config)) {
+                    proposalRecords.push({
+                        item: remainderItems[remIndex].item,
+                        pathIndex: remainderItems[remIndex].pathIndex,
+                        assignment: "crease"
+                    });
+                } else {
+                    keptRemainder.push(remainderItems[remIndex]);
+                }
+            }
+            remainderItems = keptRemainder;
         }
     }
     if (explicitRecords.length === 0) {
@@ -923,7 +1061,7 @@ try {
                 result.preview_plate_candidates,
                 previewPlateKeys,
                 proposalLayerKeys,
-                remainderItems[plateIndex],
+                remainderItems[plateIndex].item,
                 artboard[0],
                 artboard[1],
                 platePreviewBudget

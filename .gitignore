@@ -1,5 +1,9 @@
 # Python
 .venv/
+.venv
+
+# Worktree dependency symlinks are files, not directories, so the
+# trailing-slash rules below would not hide them.
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -53,6 +57,7 @@ Thumbs.db
 *.swp
 
 # Node
+node_modules
 node_modules/
 dist/
 **/.vite/
