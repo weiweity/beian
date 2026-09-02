@@ -39,6 +39,7 @@ import {
   publicTask,
   queueSnapshot,
   reclaimOnBoot,
+  retryMockup,
 } from "./jobs.js";
 import {
   feishuRedirect,
@@ -1287,6 +1288,16 @@ app.delete("/api/mockups/:id", (c) => {
     assertCanManageMockup(job, viewerFromSession(s));
     deleteMockup(job.id);
     return c.json({ ok: true });
+  } catch (e) {
+    boom(e);
+  }
+});
+
+app.post("/api/mockups/:id/retry", (c) => {
+  const s = need(c, "create");
+  try {
+    const job = retryMockup(assertTid(c.req.param("id")), viewerFromSession(s));
+    return c.json(decorateQueueAhead([publicMockup(job)])[0]);
   } catch (e) {
     boom(e);
   }

@@ -1397,3 +1397,86 @@ describe("mockup file bytes", () => {
     assert.match(dl.headers.get("content-disposition") || "", /^attachment;/);
   });
 });
+
+describe("mockup retry http", { concurrency: false }, () => {
+  it("requeues a failed job that still has the source on disk", async () => {
+    const { setJobsTestHooks, resetJobsTestHooks } = await import("./jobs.js");
+    setJobsTestHooks({
+      runPack: async () => ({ code: 1, stdout: "", stderr: "stop", timedOut: false }),
+    });
+    try {
+      const id = "aa11bb22cc99";
+      const dir = join(DATA_DIR, "mockups", id);
+      mkdirSync(dir, { recursive: true });
+      const source = join(dir, "art.ai");
+      writeFileSync(source, "%PDF-1.4\n");
+      saveMockup({
+        id,
+        status: "failed",
+        title: "喷雾",
+        created_at: "2026-08-20T00:00:02Z",
+        files: [],
+        owner: "ou_mockup_retry_ok",
+        source_path: source,
+        job_kind: "mockup",
+        job_status: "failed",
+        job_error: "打样中断",
+        error: "打样中断",
+        structure_engine: "v2",
+        structure_status: "ready",
+      });
+      const sess = issueSessionForTest("籽烨", "reviewer", "ou_mockup_retry_ok");
+      const res = await app.request(`/api/mockups/${id}/retry`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${sess.token}` },
+      });
+      assert.equal(res.status, 200);
+      const body = (await res.json()) as { status?: string; structure_status?: string };
+      assert.ok(body.status === "queued" || body.status === "running");
+      assert.equal(body.structure_status, "ready");
+    } finally {
+      resetJobsTestHooks();
+    }
+  });
+
+  it("refuses another account and already-done jobs", async () => {
+    saveMockup({
+      id: "bb22cc33dd44",
+      status: "done",
+      created_at: "2026-08-20T00:00:03Z",
+      files: [],
+      owner: "ou_mockup_retry_done",
+      job_kind: "mockup",
+      job_status: "succeeded",
+    });
+    const owner = issueSessionForTest("籽烨", "reviewer", "ou_mockup_retry_done");
+    const done = await app.request("/api/mockups/bb22cc33dd44/retry", {
+      method: "POST",
+      headers: { authorization: `Bearer ${owner.token}` },
+    });
+    assert.equal(done.status, 409);
+    saveMockup({
+      id: "cc33dd44ee55",
+      status: "failed",
+      created_at: "2026-08-20T00:00:04Z",
+      files: [],
+      owner: "ou_mockup_retry_own",
+      job_kind: "mockup",
+      job_status: "failed",
+    });
+    const stranger = issueSessionForTest("路人", "reviewer", "ou_mockup_retry_no");
+    const denied = await app.request("/api/mockups/cc33dd44ee55/retry", {
+      method: "POST",
+      headers: { authorization: `Bearer ${stranger.token}` },
+    });
+    assert.equal(denied.status, 403);
+    const anon = await app.request("/api/mockups/cc33dd44ee55/retry", { method: "POST" });
+    assert.equal(anon.status, 401);
+    const viewer = issueSessionForTest("只看", "viewer", "ou_mockup_retry_view");
+    const forbidden = await app.request("/api/mockups/cc33dd44ee55/retry", {
+      method: "POST",
+      headers: { authorization: `Bearer ${viewer.token}` },
+    });
+    assert.equal(forbidden.status, 403);
+  });
+});

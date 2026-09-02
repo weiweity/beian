@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -1267,6 +1267,58 @@ export function assertBlenderReady(): string {
   }
   defaultTemplatePath();
   return blender;
+}
+
+/**
+ * 打样中 / 打样失败用机上已有稿再排。不重传。进行中的 PID 由 jobs 杀掉。
+ * 结构已 ready 的单跳过 Illustrator，从 Blender 再跑。
+ */
+export function resetMockupForRetry(job: MockupJob): MockupJob {
+  if (activeStructureConfirmations.has(job.id)) {
+    throw Object.assign(new Error("结构正在确认，暂时不能重试"), { status: 409 });
+  }
+  if (job.status === "done") {
+    throw Object.assign(new Error("已经出图，不用重试"), { status: 409 });
+  }
+  if (job.status === "review_required") {
+    throw Object.assign(new Error("先确认结构再打样"), { status: 409 });
+  }
+  if (job.status === "unsupported") {
+    throw Object.assign(new Error("当前结构还不支持，不能重试"), { status: 409 });
+  }
+  if (job.status !== "queued" && job.status !== "running" && job.status !== "failed") {
+    throw Object.assign(new Error("这单当前不能重试"), { status: 409 });
+  }
+  if (!isMockupJobFile(job.id, job.source_path)) {
+    throw Object.assign(new Error("稿件不在了，请重新上传"), { status: 409 });
+  }
+  const resultPath = join(mockupRoot(false), job.id, "pipeline_result.json");
+  if (existsSync(resultPath)) {
+    try {
+      unlinkSync(resultPath);
+    } catch {
+      /* 删不掉时下一次仍可能命中旧缓存，不要假装已经强制重跑 */
+    }
+  }
+  job.status = "queued";
+  job.job_kind = "mockup";
+  job.job_status = "queued";
+  job.error = undefined;
+  job.job_error = undefined;
+  job.job_stage = undefined;
+  job.job_stage_label = undefined;
+  job.job_eta_s = undefined;
+  delete job.job_started_at;
+  delete job.job_finished_at;
+  delete job.job_pid;
+  delete job.notify_job_id;
+  job.notify_sent = false;
+  job.reclaim_count = 0;
+  if (job.structure_engine === "v2" && job.structure_status !== "ready") {
+    job.structure_status = "analyzing";
+  }
+  saveMockup(job);
+  return job;
 }
 
 export function deleteMockup(id: string): void {
