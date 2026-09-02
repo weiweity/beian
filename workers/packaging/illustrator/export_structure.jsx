@@ -215,7 +215,60 @@ function proposalLayerKey(layer) {
     return parts.length > 0 ? parts.join("/") : null;
 }
 
-function recordProposalLayerCandidate(candidates, layerKeys, item) {
+function roundedPreviewNumber(value) {
+    return Math.round(Number(value) * 1000) / 1000;
+}
+
+function proposalPreviewPath(item, artboardLeft, artboardTop) {
+    var points = item.pathPoints;
+    if (!points || points.length < 2 || points.length > 256) {
+        return null;
+    }
+    var previewPoints = [];
+    for (var index = 0; index < points.length; index += 1) {
+        var anchor = structurePoint(points[index].anchor, artboardLeft, artboardTop);
+        var left = structurePoint(points[index].leftDirection, artboardLeft, artboardTop);
+        var right = structurePoint(points[index].rightDirection, artboardLeft, artboardTop);
+        var values = [anchor[0], anchor[1], left[0], left[1], right[0], right[1]];
+        for (var valueIndex = 0; valueIndex < values.length; valueIndex += 1) {
+            if (!isFinite(values[valueIndex]) || Math.abs(values[valueIndex]) > 10000000) {
+                return null;
+            }
+            values[valueIndex] = roundedPreviewNumber(values[valueIndex]);
+        }
+        previewPoints.push(values);
+    }
+    return {closed: Boolean(item.closed), points: previewPoints};
+}
+
+var MAX_PROPOSAL_PREVIEW_PATHS = 5000;
+var MAX_PROPOSAL_PREVIEW_POINTS = 20000;
+var MAX_PROPOSAL_PREVIEW_PATHS_PER_LAYER = 512;
+
+function appendProposalPreview(candidate, item, artboardLeft, artboardTop, budget) {
+    if (!budget || typeof budget.paths !== "number" || typeof budget.points !== "number") {
+        return;
+    }
+    if (!(candidate.preview_paths instanceof Array)) {
+        candidate.preview_paths = [];
+        candidate.preview_truncated = false;
+    }
+    var preview = proposalPreviewPath(item, artboardLeft, artboardTop);
+    if (
+        preview === null ||
+        candidate.preview_paths.length >= MAX_PROPOSAL_PREVIEW_PATHS_PER_LAYER ||
+        budget.paths >= MAX_PROPOSAL_PREVIEW_PATHS ||
+        budget.points + preview.points.length > MAX_PROPOSAL_PREVIEW_POINTS
+    ) {
+        candidate.preview_truncated = true;
+        return;
+    }
+    candidate.preview_paths.push(preview);
+    budget.paths += 1;
+    budget.points += preview.points.length;
+}
+
+function recordProposalLayerCandidate(candidates, layerKeys, item, artboardLeft, artboardTop, previewBudget) {
     if (!item.layer || !item.stroked || item.filled) {
         return false;
     }
@@ -227,6 +280,7 @@ function recordProposalLayerCandidate(candidates, layerKeys, item) {
     for (var keyIndex = 0; keyIndex < layerKeys.length; keyIndex += 1) {
         if (layerKeys[keyIndex] === layerKey) {
             candidates[keyIndex].stroke_only_path_count += 1;
+            appendProposalPreview(candidates[keyIndex], item, artboardLeft, artboardTop, previewBudget);
             return false;
         }
     }
@@ -242,10 +296,14 @@ function recordProposalLayerCandidate(candidates, layerKeys, item) {
     if (candidates.length >= 128) {
         return true;
     }
-    var candidate = {name: layerName, stroke_only_path_count: 1};
+    var candidate = {
+        name: layerName,
+        stroke_only_path_count: 1
+    };
     if (ambiguousName) {
         candidate.ambiguous_name = true;
     }
+    appendProposalPreview(candidate, item, artboardLeft, artboardTop, previewBudget);
     candidates.push(candidate);
     layerKeys.push(layerKey);
     return false;
@@ -779,6 +837,7 @@ try {
     var explicitRecords = [];
     var proposalRecords = [];
     var proposalLayerKeys = [];
+    var proposalPreviewBudget = {paths: 0, points: 0};
     for (var pathIndex = 0; pathIndex < documentRef.pathItems.length; pathIndex += 1) {
         var item = documentRef.pathItems[pathIndex];
         if (item.clipping) {
@@ -789,7 +848,14 @@ try {
             explicitRecords.push({item: item, pathIndex: pathIndex, assignment: assignment});
         } else if (configuredProposalLayer(item, config)) {
             proposalRecords.push({item: item, pathIndex: pathIndex, assignment: "crease"});
-        } else if (recordProposalLayerCandidate(result.proposal_layer_candidates, proposalLayerKeys, item)) {
+        } else if (recordProposalLayerCandidate(
+            result.proposal_layer_candidates,
+            proposalLayerKeys,
+            item,
+            artboard[0],
+            artboard[1],
+            proposalPreviewBudget
+        )) {
             result.proposal_layer_candidates_truncated = true;
         }
     }
