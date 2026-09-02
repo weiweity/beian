@@ -789,6 +789,18 @@ def illustrator_export_failure(
         f"worker exit {returncode}",
     )
     lowered = cause.lower()
+    details = agent_error.get("details") if isinstance(agent_error.get("details"), dict) else {}
+    diagnostic_text = " ".join(
+        str(item)
+        for item in (
+            cause,
+            details.get("diagnostic"),
+            details,
+            stderr,
+            stdout,
+        )
+        if item
+    ).lower()
 
     if (
         agent_code == "illustrator_documents_open"
@@ -863,6 +875,13 @@ def illustrator_export_failure(
             code="illustrator_timeout",
             cause=cause,
             fix="查看交互桌面的许可、恢复或模态弹窗；处理后重新打样",
+        )
+    if "javascript code was missing" in diagnostic_text:
+        return PipelineError(
+            "桌面 Illustrator 没能加载导出脚本（JavaScript code was missing），请关掉 Illustrator 后重试",
+            code="illustrator_bridge_failed",
+            cause=cause,
+            fix="关掉 Illustrator 后重试；仍失败由管理员查看桌面代理日志",
         )
     if agent_code in {
         "illustrator_bridge_missing",
