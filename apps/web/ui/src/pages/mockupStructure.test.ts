@@ -106,6 +106,14 @@ describe("mockup V2 structure UX", () => {
       proposal_layers: [cut, { ...cut, id: "proposal-layer-dddddddddddddddd", name: "刀线" }],
     };
     assert.deepEqual(defaultStructureLayerIds(duplicateCuts), []);
+    const board = { ...cut, id: "proposal-layer-bbbbbbbbbbbbbb01", name: "刀版" };
+    const print = { id: "proposal-layer-eeeeeeeeeeeeeeee", name: "印刷", stroke_only_path_count: 2 };
+    const boardOnly = { ...empty, proposal_layers: [board, crease, print] };
+    assert.deepEqual(defaultStructureLayerIds(boardOnly), [board.id]);
+    const bothKnives = { ...empty, proposal_layers: [cut, board] };
+    assert.deepEqual(defaultStructureLayerIds(bothKnives), []);
+    const printOnly = { ...empty, proposal_layers: [print] };
+    assert.deepEqual(defaultStructureLayerIds(printOnly), []);
   });
 
   it("distinguishes a human confirmation from a failed mockup", () => {
@@ -113,9 +121,17 @@ describe("mockup V2 structure UX", () => {
     assert.equal(structureStatusLabel({ structure_status: "unsupported" }), "结构暂不支持");
     assert.match(
       structureIssueCopy({ structure_code: "structure_semantics_missing" }),
-      /packaging:cut.*packaging:crease/,
+      /刀版/,
     );
-    assert.match(structureIssueCopy({ structure_code: "structure_box_net_missing" }), /不会按颜色/);
+    assert.doesNotMatch(
+      structureIssueCopy({ structure_code: "structure_semantics_missing" }),
+      /packaging:cut/,
+    );
+    assert.match(structureIssueCopy({ structure_code: "structure_box_net_missing" }), /组不成花盒/);
+    assert.match(
+      structureIssueCopy({ structure_code: "structure_flattened_artwork" }),
+      /拼合稿/,
+    );
     assert.match(structureIssueCopy({ structure_code: "structure_limit_exceeded" }), /安全上限/);
   });
 

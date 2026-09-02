@@ -124,7 +124,7 @@ test("无显式语义时已登录账号可多选本稿候选层并重跑同一�
 
   await page.goto(`/mockup/${mockup.id}`);
 
-  await expect(page.getByText("请选择真实结构线所在图层")).toBeVisible();
+  await expect(page.getByText("请选择刀版或刀线所在图层")).toBeVisible();
   await expect(page.getByRole("dialog", { name: "三步完成结构确认" })).toBeVisible();
   await page.getByRole("button", { name: "开始选择" }).click();
   await expect(page.getByRole("dialog", { name: "三步完成结构确认" })).toHaveCount(0);
