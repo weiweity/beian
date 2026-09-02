@@ -393,6 +393,7 @@ export function publicMockup(job: MockupJob) {
   const resolution = readStructureResolution(job);
   return {
     ...publicMockupSummaryFields(job),
+    files: visibleMockupFiles(job),
     structure_preview: structurePreviewFromResolution(job, resolution),
     structure_input: publicStructureInput(job, resolution),
   };
@@ -1128,11 +1129,24 @@ export function acceptStructureConfirmation(job: MockupJob, approvedSidecar: str
   return job;
 }
 
+const READ_PANEL_NAME = /^panel_(front|back|right|left|top|bottom)\.png$/;
+
+function readKeyForPanelName(name: string): string | undefined {
+  const match = basename(name).toLowerCase().match(READ_PANEL_NAME);
+  return match ? `read_${match[1]}` : undefined;
+}
+
 export function isWhiteFile(key: string, name: string): boolean {
   const lower = name.toLowerCase();
   if (key === "white_a") return lower.includes("front_right");
   if (key === "white_b") return lower.includes("back_left");
+  if (key.startsWith("read_")) return readKeyForPanelName(name) === key;
   return true;
+}
+
+export function mockupFileBrokenMessage(key: string): string {
+  if (key.startsWith("read_")) return "这张印刷面图坏了，不是 PNG。重新打样后才能读字。";
+  return "这张白底图坏了，不是 PNG。回到打样台重新打。";
 }
 
 export function collectOutputs(root: string): MockupJob["files"] {
@@ -1151,7 +1165,13 @@ export function collectOutputs(root: string): MockupJob["files"] {
         else if (lower.endsWith(".pdf") && lower.includes("white_sheet")) key = "sheet";
         else if (lower.endsWith(".png") && lower.includes("front_right")) key = "white_a";
         else if (lower.endsWith(".png") && lower.includes("back_left")) key = "white_b";
-        else continue;
+        else if (lower.endsWith(".png")) {
+          const readKey = readKeyForPanelName(name.name);
+          if (!readKey) continue;
+          const rel = relative(root, p).replace(/\\/g, "/").toLowerCase();
+          if (rel !== `assets/${basename(p).toLowerCase()}`) continue;
+          key = readKey;
+        } else continue;
         if (found.some((f) => f.key === key)) continue;
         found.push({ key, path: p, name: basename(p) });
       }
@@ -1168,17 +1188,45 @@ function underJobDir(jobId: string, p: string): boolean {
   return Boolean(rel) && !rel.startsWith("..") && !isAbsolute(rel);
 }
 
+function liveReadPanelFiles(jobId: string): MockupJob["files"] {
+  const files: MockupJob["files"] = [];
+  for (const face of ["front", "back", "right", "left", "top", "bottom"] as const) {
+    const name = `panel_${face}.png`;
+    const path = join(mockupRoot(false), jobId, "assets", name);
+    if (existsSync(path) && underJobDir(jobId, path)) {
+      files.push({ key: `read_${face}`, path, name });
+    }
+  }
+  return files;
+}
+
+function visibleMockupFiles(job: MockupJob): { key: string; name: string }[] {
+  const byKey = new Map<string, { key: string; name: string }>();
+  for (const file of job.files || []) {
+    if (!file.key || !file.name) continue;
+    byKey.set(file.key, { key: file.key, name: file.name });
+  }
+  for (const file of liveReadPanelFiles(job.id)) {
+    if (!byKey.has(file.key)) byKey.set(file.key, { key: file.key, name: file.name });
+  }
+  return [...byKey.values()];
+}
+
 export function isMockupJobFile(jobId: string, path: string | null | undefined): path is string {
   return Boolean(path && existsSync(path) && underJobDir(jobId, path));
 }
 
 export function fileOf(job: MockupJob, key: string) {
-  const f = job.files.find((x) => x.key === key);
-  if (!f) return undefined;
-  if (f.path && existsSync(f.path) && underJobDir(job.id, f.path)) return f;
-  const dir = join(mockupRoot(), job.id);
-  const guess = join(dir, basename(f.name || "file"));
-  if (existsSync(guess) && underJobDir(job.id, guess)) return { ...f, path: guess };
+  if (key.startsWith("read_")) {
+    const live = liveReadPanelFiles(job.id).find((item) => item.key === key);
+    if (live?.path && existsSync(live.path) && underJobDir(job.id, live.path)) return live;
+    return undefined;
+  }
+  const listed = job.files.find((x) => x.key === key);
+  if (!listed) return undefined;
+  if (listed.path && existsSync(listed.path) && underJobDir(job.id, listed.path)) return listed;
+  const guess = join(mockupRoot(false), job.id, basename(listed.name || "file"));
+  if (existsSync(guess) && underJobDir(job.id, guess)) return { ...listed, path: guess };
   return undefined;
 }
 

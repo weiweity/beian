@@ -108,7 +108,7 @@ Python `cli.py` **不再** `save_task`。对照/对红 CLI 只把结果 JSON 打
 
 `users.json` 只配置 `admin/reviewer/viewer`，不存页面级权限数组。Hono 把权限拆为三层：所有已登录角色都可读取、下载团队打样单和结构预览；结构确认必须具备独立 `confirm_structure` 能力，现已授予 `admin` / `reviewer` / `viewer`；删除继续经过对象所有权校验，`reviewer` 只能删本人已结束打样单，`admin` 可删全部，`viewer` 无删除能力。审稿单仍保持原有所有者隔离。团队共享序列化必须再次脱敏旧 worker 错误里的本机绝对路径、客户稿件名和疑似凭据，只返回短摘要；列表不得为轮询读取完整结构预览。UI 只消费 `/api/auth/me.perms` 控制动作可用性，服务端继续作为最终授权边界。
 
-打样写回：`runPackaging` 退出码 0 → 现有 `collectOutputs` 填 `files`（只公开 key/name；白底只收 `front_right` / `back_left`，不要把 `ai-raster` 或 PPT 质检 PNG 算进去；另收 `glb` / `ppt` / `sheet`），`status=done`，`job_status=succeeded`。非 0 或超时 → `status=failed`，`job_status=failed`，内部 `job_error` 截 800 字；对外读取必须再走团队共享脱敏和摘要边界。不读 packaging 的内部目录当 HTTP 合同。
+打样写回：`runPackaging` 退出码 0 → 现有 `collectOutputs` 填 `files`（只公开 key/name；白底只收 `front_right` / `back_left`，不要把 `ai-raster` 或 PPT 质检 PNG 算进去；另收 `glb` / `ppt` / `sheet`，以及恰好名为 `panel_{front,back,right,left,top,bottom}.png` 的印刷面 `read_*`），`status=done`，`job_status=succeeded`。旧单 `job.files` 没有 `read_*` 时，详情读取和文件接口按磁盘现有 panel PNG 补上，不重跑 Blender。非 0 或超时 → `status=failed`，`job_status=failed`，内部 `job_error` 截 800 字；对外读取必须再走团队共享脱敏和摘要边界。不读 packaging 的内部目录当 HTTP 合同。
 
 ### HTTP 合同（不新增 `/api/jobs`）
 

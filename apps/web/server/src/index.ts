@@ -82,6 +82,7 @@ import {
   isMockupJobFile,
   isStructureProposalId,
   isWhiteFile,
+  mockupFileBrokenMessage,
   listJobs,
   publicMockup,
   publicMockupSummary,
@@ -1299,7 +1300,7 @@ app.get("/api/mockups/:id/files/:key", (c) => {
   const f = fileOf(job, key);
   if (!f?.path || !existsSync(f.path)) throw new HTTPException(404, { message: "文件还没有" });
   if (!isWhiteFile(key, f.name)) {
-    throw new HTTPException(415, { message: "这张白底图坏了，不是 PNG。回到打样台重新打。" });
+    throw new HTTPException(415, { message: mockupFileBrokenMessage(key) });
   }
   const lower = f.name.toLowerCase();
   const type = lower.endsWith(".glb")
@@ -1310,7 +1311,7 @@ app.get("/api/mockups/:id/files/:key", (c) => {
         ? "application/pdf"
         : "application/vnd.openxmlformats-officedocument.presentationml.presentation";
   if (type === "image/png" && !pngMagicAt(f.path)) {
-    throw new HTTPException(415, { message: "这张白底图坏了，不是 PNG。回到打样台重新打。" });
+    throw new HTTPException(415, { message: mockupFileBrokenMessage(key) });
   }
   const ascii = f.name.replace(/[^\x20-\x7E]/g, "_").replace(/"/g, "");
   const encoded = encodeURIComponent(f.name);

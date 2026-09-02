@@ -1297,4 +1297,103 @@ describe("mockup file bytes", () => {
     assert.equal(dl.status, 200);
     assert.match(dl.headers.get("content-disposition") || "", /^attachment;/);
   });
+
+  it("serves an on-disk panel png as read_front even when job.files omitted it", async () => {
+    const id = "ab12ab12ab12";
+    const dir = join(DATA_DIR, "mockups", id);
+    mkdirSync(join(dir, "assets"), { recursive: true });
+    writeFileSync(join(dir, "assets", "panel_front.png"), PNG_MAGIC);
+    writeFileSync(join(dir, "box.glb"), Buffer.from("glTF"));
+    writeFileSync(join(dir, "26H06A_x_front_right_white.png"), PNG_MAGIC);
+    writeFileSync(join(dir, "26H06A_x_back_left_white.png"), PNG_MAGIC);
+    saveMockup({
+      id,
+      status: "done",
+      created_at: "2026-09-02T00:00:04Z",
+      files: [
+        { key: "glb", path: join(dir, "box.glb"), name: "box.glb" },
+        { key: "white_a", path: join(dir, "26H06A_x_front_right_white.png"), name: "26H06A_x_front_right_white.png" },
+        { key: "white_b", path: join(dir, "26H06A_x_back_left_white.png"), name: "26H06A_x_back_left_white.png" },
+      ],
+      owner: "籽烨",
+      job_kind: "mockup",
+      job_status: "succeeded",
+    });
+    const sess = issueSessionForTest("籽烨", "reviewer", "ou_mockup_read_face");
+    const listed = await app.request(`/api/mockups/${id}`, {
+      headers: { authorization: `Bearer ${sess.token}` },
+    });
+    assert.equal(listed.status, 200);
+    const body = (await listed.json()) as { files?: Array<{ key: string; name: string }> };
+    assert.equal(body.files?.some((f) => f.key === "read_front" && f.name === "panel_front.png"), true);
+    assert.equal(body.files?.some((f) => f.key === "white_a" && f.name.includes("front_right")), true);
+    assert.equal(body.files?.some((f) => f.key === "white_b" && f.name.includes("back_left")), true);
+    const res = await app.request(`/api/mockups/${id}/files/read_front`, {
+      headers: { authorization: `Bearer ${sess.token}` },
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get("content-type"), "image/png");
+    assert.match(res.headers.get("content-disposition") || "", /^inline;/);
+  });
+
+  it("rejects a leftover raster labeled as read_front", async () => {
+    seedOwnedFile("cd34cd34cd34", "read_front", "ai-raster.png", PNG_MAGIC);
+    const sess = issueSessionForTest("籽烨", "reviewer", "ou_mockup_read_bad");
+    const res = await app.request("/api/mockups/cd34cd34cd34/files/read_front", {
+      headers: { authorization: `Bearer ${sess.token}` },
+    });
+    assert.equal(res.status, 404);
+  });
+
+  it("rejects a panel png that is not a PNG with the print-face message", async () => {
+    const id = "ee12ee12ee12";
+    const dir = join(DATA_DIR, "mockups", id);
+    mkdirSync(join(dir, "assets"), { recursive: true });
+    writeFileSync(join(dir, "assets", "panel_front.png"), Buffer.from("not-png!!"));
+    saveMockup({
+      id,
+      status: "done",
+      created_at: "2026-09-02T00:00:04Z",
+      files: [{ key: "read_front", path: join(dir, "assets", "panel_front.png"), name: "panel_front.png" }],
+      owner: "籽烨",
+      job_kind: "mockup",
+      job_status: "succeeded",
+    });
+    const sess = issueSessionForTest("籽烨", "reviewer", "ou_mockup_read_magic");
+    const res = await app.request(`/api/mockups/${id}/files/read_front`, {
+      headers: { authorization: `Bearer ${sess.token}` },
+    });
+    assert.equal(res.status, 415);
+    const body = (await res.json()) as { detail?: string };
+    assert.match(String(body.detail || ""), /印刷面图坏了/);
+    assert.doesNotMatch(String(body.detail || ""), /白底图坏了/);
+  });
+
+  it("keeps print-face preview inline and only attaches on download=1", async () => {
+    const id = "ab56ab56ab56";
+    const dir = join(DATA_DIR, "mockups", id);
+    mkdirSync(join(dir, "assets"), { recursive: true });
+    writeFileSync(join(dir, "assets", "panel_front.png"), PNG_MAGIC);
+    saveMockup({
+      id,
+      status: "done",
+      created_at: "2026-09-02T00:00:04Z",
+      files: [{ key: "read_front", path: join(dir, "assets", "panel_front.png"), name: "panel_front.png" }],
+      owner: "籽烨",
+      job_kind: "mockup",
+      job_status: "succeeded",
+    });
+    const sess = issueSessionForTest("籽烨", "reviewer", "ou_mockup_read_dl");
+    const preview = await app.request("/api/mockups/ab56ab56ab56/files/read_front", {
+      headers: { authorization: `Bearer ${sess.token}` },
+    });
+    assert.equal(preview.status, 200);
+    assert.match(preview.headers.get("content-disposition") || "", /^inline;/);
+    const dl = await app.request("/api/mockups/ab56ab56ab56/files/read_front?download=1", {
+      headers: { authorization: `Bearer ${sess.token}` },
+    });
+    assert.equal(dl.status, 200);
+    assert.equal(dl.headers.get("content-type"), "image/png");
+    assert.match(dl.headers.get("content-disposition") || "", /^attachment;/);
+  });
 });
