@@ -312,15 +312,16 @@ describe("collectOutputs", () => {
       { key: "white_a", path: join(dir, "pack_front_right_white.png"), name: "pack_front_right_white.png" },
       { key: "white_a_ground", path: join(dir, "pack_front_right_ground.png"), name: "pack_front_right_ground.png" },
     ];
-    const view = publicMockup({
+    const job = {
       id,
-      status: "done",
+      status: "done" as const,
       created_at: "2026-09-03T00:00:00Z",
       files: listed,
-    });
+    };
+    const view = publicMockup(job);
     assert.equal(view.files.some((f) => f.key === "white_a_ground"), true);
     assert.equal(view.files.every((f) => !("path" in f)), true);
-    assert.equal(fileOf({ id, files: listed }, "white_a_ground")?.name, "pack_front_right_ground.png");
+    assert.equal(fileOf(job, "white_a_ground")?.name, "pack_front_right_ground.png");
     assert.equal(isWhiteFile("white_a", "pack_front_right_ground.png"), false);
     assert.match(mockupFileBrokenMessage("white_a_ground"), /白底图坏了/);
   });
