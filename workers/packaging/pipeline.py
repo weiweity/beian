@@ -1272,6 +1272,8 @@ def preflight_product_v2(
             "glb": str(project_dir / f"{code}_{slug}.glb"),
             "front_right": str(project_dir / f"{code}_{slug}_front_right_white.png"),
             "back_left": str(project_dir / f"{code}_{slug}_back_left_white.png"),
+            "front_right_ground": str(project_dir / f"{code}_{slug}_front_right_ground.png"),
+            "back_left_ground": str(project_dir / f"{code}_{slug}_back_left_ground.png"),
         },
     }
     resolved_path = project_dir / "resolved_job.json"
@@ -1477,6 +1479,8 @@ def preflight_product(
             "glb": str(project_dir / f"{code}_{slug}.glb"),
             "front_right": str(project_dir / f"{code}_{slug}_front_right_white.png"),
             "back_left": str(project_dir / f"{code}_{slug}_back_left_white.png"),
+            "front_right_ground": str(project_dir / f"{code}_{slug}_front_right_ground.png"),
+            "back_left_ground": str(project_dir / f"{code}_{slug}_back_left_ground.png"),
         },
     }
     resolved_path = project_dir / "resolved_job.json"
