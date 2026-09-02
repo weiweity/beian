@@ -20,10 +20,16 @@ import { panBy, resetZoom, zoomAt, zoomCss, type ZoomState } from "./canvasZoom"
 import { listedReadFaces, READ_FACE_LABEL, readFaceKey } from "./mockupReadFaces";
 import {
   blobFromLitStill,
+  blobFromStudioStill,
+  canvasFilterSupported,
   clampStudioLight,
+  composeStudioStill,
+  containRect,
   glbExposure,
+  jobHasGround,
   stillsFilter,
   studioBackdrop,
+  STUDIO_GROUND_FILL,
   STUDIO_LIGHT_DEFAULT,
   STUDIO_LIGHT_MAX,
   STUDIO_LIGHT_MIN,
@@ -740,6 +746,7 @@ export function MockupJobPage({
   const [productLight, setProductLight] = useState(STUDIO_LIGHT_DEFAULT);
   const [backgroundLight, setBackgroundLight] = useState(STUDIO_LIGHT_DEFAULT);
   const [retrying, setRetrying] = useState(false);
+  const [lightsOpen, setLightsOpen] = useState(false);
   const glbBox = useRef<HTMLDivElement>(null);
   const hudTimer = useRef<number | null>(null);
   const announced = useRef("");
@@ -947,8 +954,11 @@ export function MockupJobPage({
 
   const whiteA = (job.files || []).find((f) => f.key === "white_a");
   const whiteB = (job.files || []).find((f) => f.key === "white_b");
+  const groundA = (job.files || []).find((f) => f.key === "white_a_ground");
+  const groundB = (job.files || []).find((f) => f.key === "white_b_ground");
   const hasGlb = (job.files || []).some((f) => f.key === "glb");
   const hasPpt = (job.files || []).some((f) => f.key === "ppt");
+  const grounded = jobHasGround(job.files);
   const readFaces = listedReadFaces(job.files || []);
 
   return (
@@ -956,13 +966,19 @@ export function MockupJobPage({
       <header className="page-head">
         <div>
           <h1 className="page-title">{mockTitle(job)}</h1>
-          <p className="page-lead">打样单。上面三张看形；下面印刷面读字，可放大。不要用 GLB 读小字。</p>
-          <StudioLightSliders
-            productLight={productLight}
-            backgroundLight={backgroundLight}
-            onProductLight={setProductLight}
-            onBackgroundLight={setBackgroundLight}
-          />
+          <p className="page-lead">
+            {grounded
+              ? "打样单。上面成片交差；下面印刷面读字。不要用 GLB 读小字。"
+              : "打样单。上面三张看形；下面印刷面读字，可放大。不要用 GLB 读小字。"}
+          </p>
+          {grounded ? null : (
+            <StudioLightSliders
+              productLight={productLight}
+              backgroundLight={backgroundLight}
+              onProductLight={setProductLight}
+              onBackgroundLight={setBackgroundLight}
+            />
+          )}
         </div>
         <div className="mockup-sheet-head-actions">
           {canCreate && job.status === "failed" ? (
@@ -973,7 +989,7 @@ export function MockupJobPage({
           <button type="button" className="btn-ghost" onClick={onBack}>
             返回打样台
           </button>
-          {hasPpt ? (
+          {grounded ? null : hasPpt ? (
             <a
               className="btn-ghost"
               href={fileHref(job.id, "ppt", true)}
@@ -998,8 +1014,47 @@ export function MockupJobPage({
         <AdminRotateFront job={job} onConfirmed={setJob} />
       ) : null}
 
-      <div className="mockup-sheet-photos">
-        {whiteA ? (
+      <div className={grounded ? "mockup-sheet-photos is-studio-hero" : "mockup-sheet-photos"}>
+        {grounded ? (
+          <div className="mockup-sheet-hero">
+            {groundA && whiteA ? (
+              <GroundedShot
+                jobId={job.id}
+                fileKey="white_a"
+                groundKey="white_a_ground"
+                alt="正面与侧面成片"
+                caption="正面 + 侧面"
+                downloadName={whiteA.name}
+                productLight={productLight}
+                backgroundLight={backgroundLight}
+                onProductLight={setProductLight}
+                onBackgroundLight={setBackgroundLight}
+                onDownload={() => notice(downloadHudLine("成片"))}
+                onError={() => notice("导出失败")}
+              />
+            ) : whiteA ? (
+              <WhiteShot
+                jobId={job.id}
+                fileKey="white_a"
+                alt="正面与侧面白底"
+                caption="正面 + 侧面"
+                downloadName={whiteA.name}
+                productLight={productLight}
+                backgroundLight={backgroundLight}
+                onProductLight={setProductLight}
+                onBackgroundLight={setBackgroundLight}
+                onDownload={() => notice(downloadHudLine("白底"))}
+              />
+            ) : (
+              <figure className="mockup-sheet-photo">
+                <div className="mockup-sheet-frame is-studio-ground">
+                  <p className="page-lead">还没有正面+侧面。</p>
+                </div>
+                <figcaption className="mockup-sheet-cap">正面 + 侧面</figcaption>
+              </figure>
+            )}
+          </div>
+        ) : whiteA ? (
           <WhiteShot
             jobId={job.id}
             fileKey="white_a"
@@ -1020,7 +1075,82 @@ export function MockupJobPage({
             <figcaption className="mockup-sheet-cap">正面 + 侧面</figcaption>
           </figure>
         )}
-        {whiteB ? (
+        {grounded ? (
+          <>
+            <button
+              type="button"
+              className="mockup-dl mockup-studio-toggle"
+              aria-expanded={lightsOpen}
+              onClick={() => setLightsOpen((open) => !open)}
+            >
+              {lightsOpen ? "收起调灯" : "调灯"}
+            </button>
+            {lightsOpen ? (
+              <StudioLightSliders
+                productLight={productLight}
+                backgroundLight={backgroundLight}
+                onProductLight={setProductLight}
+                onBackgroundLight={setBackgroundLight}
+              />
+            ) : null}
+            <div className="mockup-sheet-secondary">
+              {groundB && whiteB ? (
+                <GroundedShot
+                  jobId={job.id}
+                  fileKey="white_b"
+                  groundKey="white_b_ground"
+                  alt="反面与侧面成片"
+                  caption="反面 + 侧面"
+                  downloadName={whiteB.name}
+                  productLight={productLight}
+                  backgroundLight={backgroundLight}
+                  onProductLight={setProductLight}
+                  onBackgroundLight={setBackgroundLight}
+                  onDownload={() => notice(downloadHudLine("成片"))}
+                  onError={() => notice("导出失败")}
+                  lazy
+                />
+              ) : whiteB ? (
+                <WhiteShot
+                  jobId={job.id}
+                  fileKey="white_b"
+                  alt="反面与侧面白底"
+                  caption="反面 + 侧面"
+                  downloadName={whiteB.name}
+                  productLight={productLight}
+                  backgroundLight={backgroundLight}
+                  onProductLight={setProductLight}
+                  onBackgroundLight={setBackgroundLight}
+                  onDownload={() => notice(downloadHudLine("白底"))}
+                />
+              ) : (
+                <figure className="mockup-sheet-photo">
+                  <div className="mockup-sheet-frame is-studio-ground">
+                    <p className="page-lead">还没有反面+侧面。</p>
+                  </div>
+                  <figcaption className="mockup-sheet-cap">反面 + 侧面</figcaption>
+                </figure>
+              )}
+              {hasGlb ? (
+                <GlbShot
+                  jobId={job.id}
+                  boxRef={glbBox}
+                  backgroundLight={backgroundLight}
+                  productLight={productLight}
+                  glbFs={glbFs}
+                  onNotice={notice}
+                />
+              ) : (
+                <figure className="mockup-sheet-photo">
+                  <div className="mockup-sheet-frame">
+                    <Empty description={job.status === "done" ? "没有 GLB。看上面的失败原因。" : "GLB 还没出"} />
+                  </div>
+                  <figcaption className="mockup-sheet-cap">GLB</figcaption>
+                </figure>
+              )}
+            </div>
+          </>
+        ) : whiteB ? (
           <WhiteShot
             jobId={job.id}
             fileKey="white_b"
@@ -1041,55 +1171,15 @@ export function MockupJobPage({
             <figcaption className="mockup-sheet-cap">反面 + 侧面</figcaption>
           </figure>
         )}
-        {hasGlb ? (
-          <figure className="mockup-sheet-photo">
-            <div
-              className="mockup-sheet-frame mockup-sheet-glb"
-              ref={glbBox}
-              style={{ background: studioBackdrop(backgroundLight) }}
-            >
-              <model-viewer
-                src={fileHref(job.id, "glb")}
-                camera-controls
-                environment-image="neutral"
-                exposure={glbExposure(productLight)}
-                shadow-intensity="1"
-                shadow-softness="0.25"
-                tone-mapping="commerce"
-                interaction-prompt="none"
-                style={{
-                  background: studioBackdrop(backgroundLight),
-                  ["--poster-color" as string]: studioBackdrop(backgroundLight),
-                }}
-              />
-              <button
-                type="button"
-                className="mockup-dl mockup-dl-fs"
-                aria-label={glbFs ? "退出全屏" : "全屏截图"}
-                onClick={() => {
-                  const el = glbBox.current;
-                  if (!el) return;
-                  if (isElementFullscreen(el)) {
-                    void exitElementFullscreen().catch(() => undefined);
-                    return;
-                  }
-                  void enterElementFullscreen(el).catch(() => notice("全屏打不开"));
-                }}
-              >
-                {glbFs ? "退出" : "全屏"}
-              </button>
-              <a
-                className="mockup-dl mockup-dl-corner"
-                href={fileHref(job.id, "glb", true)}
-                download
-                aria-label="下载 GLB"
-                onClick={() => notice(downloadHudLine("GLB"))}
-              >
-                下载
-              </a>
-            </div>
-            <figcaption className="mockup-sheet-cap">GLB</figcaption>
-          </figure>
+        {grounded ? null : hasGlb ? (
+          <GlbShot
+            jobId={job.id}
+            boxRef={glbBox}
+            backgroundLight={backgroundLight}
+            productLight={productLight}
+            glbFs={glbFs}
+            onNotice={notice}
+          />
         ) : (
           <figure className="mockup-sheet-photo">
             <div className="mockup-sheet-frame">
@@ -1313,6 +1403,388 @@ function ReadFaceShot({
       <figcaption className="mockup-sheet-cap">{label}</figcaption>
     </figure>
   );
+}
+
+function GlbShot({
+  jobId,
+  boxRef,
+  backgroundLight,
+  productLight,
+  glbFs,
+  onNotice,
+}: {
+  jobId: string;
+  boxRef: { current: HTMLDivElement | null };
+  backgroundLight: number;
+  productLight: number;
+  glbFs: boolean;
+  onNotice: (text: string) => void;
+}) {
+  const backdrop = studioBackdrop(backgroundLight);
+  return (
+    <figure className="mockup-sheet-photo">
+      <div className="mockup-sheet-frame mockup-sheet-glb" ref={boxRef} style={{ background: backdrop }}>
+        <model-viewer
+          src={fileHref(jobId, "glb")}
+          camera-controls
+          environment-image="neutral"
+          exposure={glbExposure(productLight)}
+          shadow-intensity="1"
+          shadow-softness="0.25"
+          tone-mapping="commerce"
+          interaction-prompt="none"
+          style={{
+            background: backdrop,
+            ["--poster-color" as string]: backdrop,
+          }}
+        />
+        <button
+          type="button"
+          className="mockup-dl mockup-dl-fs"
+          aria-label={glbFs ? "退出全屏" : "全屏截图"}
+          onClick={() => {
+            const el = boxRef.current;
+            if (!el) return;
+            if (isElementFullscreen(el)) {
+              void exitElementFullscreen().catch(() => undefined);
+              return;
+            }
+            void enterElementFullscreen(el).catch(() => onNotice("全屏打不开"));
+          }}
+        >
+          {glbFs ? "退出" : "全屏"}
+        </button>
+        <a
+          className="mockup-dl mockup-dl-corner"
+          href={fileHref(jobId, "glb", true)}
+          download
+          aria-label="下载 GLB"
+          onClick={() => onNotice(downloadHudLine("GLB"))}
+        >
+          下载
+        </a>
+      </div>
+      <figcaption className="mockup-sheet-cap">GLB</figcaption>
+    </figure>
+  );
+}
+
+type PreviewSource = CanvasImageSource & { naturalWidth?: number; naturalHeight?: number; width?: number; height?: number };
+
+function closePreviewSource(image: PreviewSource | null | undefined): void {
+  if (!image) return;
+  if (typeof ImageBitmap !== "undefined" && image instanceof ImageBitmap) {
+    image.close();
+    return;
+  }
+  if (typeof HTMLImageElement !== "undefined" && image instanceof HTMLImageElement && image.src.startsWith("blob:")) {
+    URL.revokeObjectURL(image.src);
+  }
+}
+
+async function previewSource(url: string, destW: number, destH: number): Promise<PreviewSource> {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error("load");
+  const blob = await response.blob();
+  if (typeof createImageBitmap === "function") {
+    const probe = await createImageBitmap(blob);
+    const rect = containRect(destW, destH, probe.width, probe.height);
+    const sized = await createImageBitmap(blob, {
+      resizeWidth: Math.max(1, Math.round(rect.w)),
+      resizeHeight: Math.max(1, Math.round(rect.h)),
+    });
+    probe.close();
+    return sized;
+  }
+  const image = new Image();
+  image.src = URL.createObjectURL(blob);
+  await image.decode();
+  return image;
+}
+
+function GroundedShot({
+  jobId,
+  fileKey,
+  groundKey,
+  alt,
+  caption,
+  downloadName,
+  productLight,
+  backgroundLight,
+  onProductLight,
+  onBackgroundLight,
+  onDownload,
+  onError,
+  lazy,
+}: {
+  jobId: string;
+  fileKey: "white_a" | "white_b";
+  groundKey: "white_a_ground" | "white_b_ground";
+  alt: string;
+  caption: string;
+  downloadName?: string;
+  productLight: number;
+  backgroundLight: number;
+  onProductLight: (value: number) => void;
+  onBackgroundLight: (value: number) => void;
+  onDownload: () => void;
+  onError: () => void;
+  lazy?: boolean;
+}) {
+  const [bad, setBad] = useState(false);
+  const [ready, setReady] = useState(false);
+  const [originalOpen, setOriginalOpen] = useState(false);
+  const [visible, setVisible] = useState(!lazy);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const frameRef = useRef<HTMLDivElement>(null);
+  const previewRef = useRef<{ product: PreviewSource; ground: PreviewSource } | null>(null);
+  const exporting = useRef(false);
+
+  useEffect(() => {
+    if (!lazy || visible) return;
+    const node = frameRef.current;
+    if (!node || typeof IntersectionObserver === "undefined") {
+      setVisible(true);
+      return;
+    }
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) setVisible(true);
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [lazy, visible]);
+
+  useEffect(() => {
+    if (!visible || bad) return;
+    const canvas = canvasRef.current;
+    const frame = frameRef.current;
+    if (!canvas || !frame) return;
+    const dpr = window.devicePixelRatio || 1;
+    const destW = Math.max(1, Math.round(frame.clientWidth * dpr));
+    const destH = Math.max(1, Math.round(frame.clientHeight * dpr));
+    canvas.width = destW;
+    canvas.height = destH;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      setBad(true);
+      return;
+    }
+    ctx.fillStyle = STUDIO_GROUND_FILL;
+    ctx.fillRect(0, 0, destW, destH);
+    setReady(false);
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [product, ground] = await Promise.all([
+          previewSource(fileHref(jobId, fileKey), destW, destH),
+          previewSource(fileHref(jobId, groundKey), destW, destH),
+        ]);
+        if (cancelled) {
+          closePreviewSource(product);
+          closePreviewSource(ground);
+          return;
+        }
+        closePreviewSource(previewRef.current?.product);
+        closePreviewSource(previewRef.current?.ground);
+        previewRef.current = { product, ground };
+        setReady(true);
+      } catch {
+        if (!cancelled) setBad(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [visible, bad, jobId, fileKey, groundKey]);
+
+  useEffect(() => {
+    if (!visible || bad || !ready) return;
+    const canvas = canvasRef.current;
+    const sources = previewRef.current;
+    if (!canvas || !sources) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    composeStudioStill(ctx, canvas.width, canvas.height, sources.product, sources.ground, {
+      productLight,
+      backgroundLight,
+      filterSupported: canvasFilterSupported(ctx),
+    });
+  }, [visible, bad, ready, productLight, backgroundLight]);
+
+  useEffect(() => {
+    return () => {
+      closePreviewSource(previewRef.current?.product);
+      closePreviewSource(previewRef.current?.ground);
+      previewRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!originalOpen) return;
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") setOriginalOpen(false);
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [originalOpen]);
+
+  async function saveLit() {
+    if (!ready || exporting.current) return;
+    exporting.current = true;
+    try {
+      const [product, ground] = await Promise.all([
+        loadNaturalImage(fileHref(jobId, fileKey)),
+        loadNaturalImage(fileHref(jobId, groundKey)),
+      ]);
+      const blob = await blobFromStudioStill(product, ground, { productLight, backgroundLight });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = downloadName || `${caption}.png`;
+      link.click();
+      URL.revokeObjectURL(url);
+      onDownload();
+    } catch {
+      onError();
+    } finally {
+      exporting.current = false;
+    }
+  }
+
+  return (
+    <figure className="mockup-sheet-photo">
+      <div className="mockup-sheet-frame is-studio-ground" ref={frameRef} style={{ background: STUDIO_GROUND_FILL }}>
+        {bad ? (
+          <p className="page-lead">这张白底图坏了，回到打样台重新打。</p>
+        ) : (
+          <canvas ref={canvasRef} className="mockup-studio-canvas" aria-label={alt} />
+        )}
+        {bad ? null : (
+          <>
+            <button
+              type="button"
+              className="mockup-dl mockup-dl-fs"
+              aria-label={`打开${caption}原图`}
+              onClick={() => setOriginalOpen(true)}
+            >
+              原图
+            </button>
+            <button
+              type="button"
+              className="mockup-dl mockup-dl-corner"
+              aria-label={`下载${caption}`}
+              disabled={!ready}
+              onClick={() => void saveLit()}
+            >
+              下载
+            </button>
+          </>
+        )}
+      </div>
+      <figcaption className="mockup-sheet-cap">{caption}</figcaption>
+      {originalOpen && !bad
+        ? createPortal(
+            <div
+              className="mockup-still-lightbox"
+              role="dialog"
+              aria-modal="true"
+              aria-label={`${caption}原图`}
+              onClick={() => setOriginalOpen(false)}
+            >
+              <div className="mockup-still-lightbox-panel" onClick={(event) => event.stopPropagation()}>
+                <div className="mockup-still-lightbox-stage is-studio-ground" style={{ background: STUDIO_GROUND_FILL }}>
+                  <GroundedLightboxStill
+                    jobId={jobId}
+                    fileKey={fileKey}
+                    groundKey={groundKey}
+                    alt={alt}
+                    productLight={productLight}
+                    backgroundLight={backgroundLight}
+                  />
+                </div>
+                <StudioLightSliders
+                  productLight={productLight}
+                  backgroundLight={backgroundLight}
+                  onProductLight={onProductLight}
+                  onBackgroundLight={onBackgroundLight}
+                />
+                <div className="mockup-still-lightbox-actions">
+                  <button type="button" className="mockup-dl" disabled={!ready} onClick={() => void saveLit()}>
+                    下载
+                  </button>
+                  <button type="button" className="mockup-dl" onClick={() => setOriginalOpen(false)}>
+                    关闭
+                  </button>
+                </div>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
+    </figure>
+  );
+}
+
+function GroundedLightboxStill({
+  jobId,
+  fileKey,
+  groundKey,
+  alt,
+  productLight,
+  backgroundLight,
+}: {
+  jobId: string;
+  fileKey: "white_a" | "white_b";
+  groundKey: "white_a_ground" | "white_b_ground";
+  alt: string;
+  productLight: number;
+  backgroundLight: number;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const sourcesRef = useRef<{ product: HTMLImageElement; ground: HTMLImageElement } | null>(null);
+  const [loaded, setLoaded] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [product, ground] = await Promise.all([
+          loadNaturalImage(fileHref(jobId, fileKey)),
+          loadNaturalImage(fileHref(jobId, groundKey)),
+        ]);
+        if (cancelled) return;
+        sourcesRef.current = { product, ground };
+        setLoaded((n) => n + 1);
+      } catch {
+        /* lightbox keeps the 242 stage */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [jobId, fileKey, groundKey]);
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const sources = sourcesRef.current;
+    if (!canvas || !sources || !loaded) return;
+    canvas.width = sources.product.naturalWidth;
+    canvas.height = sources.product.naturalHeight;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    composeStudioStill(ctx, canvas.width, canvas.height, sources.product, sources.ground, {
+      productLight,
+      backgroundLight,
+      filterSupported: canvasFilterSupported(ctx),
+    });
+  }, [loaded, productLight, backgroundLight]);
+  return <canvas ref={canvasRef} className="mockup-studio-lightbox-canvas" aria-label={alt} />;
+}
+
+async function loadNaturalImage(url: string): Promise<HTMLImageElement> {
+  const image = new Image();
+  image.crossOrigin = "anonymous";
+  image.src = url;
+  await image.decode();
+  return image;
 }
 
 function StudioLightSliders({

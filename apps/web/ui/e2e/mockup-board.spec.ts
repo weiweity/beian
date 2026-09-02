@@ -295,3 +295,86 @@ test("印刷面图损坏时隐藏原图和下载操作", async ({ page, syntheti
   await expect(read.getByRole("link")).toHaveCount(0);
   await expect(read.getByRole("button", { name: /印刷面/ })).toHaveCount(0);
 });
+
+test("有 ground 的已出图单走 canvas 成片，不显示 PPT，调灯默认收起", async ({ page, syntheticApi }) => {
+  const mockup = completedMockup("ee11ff22aa33", "影棚花盒");
+  mockup.files = [
+    { key: "white_a", name: "front_right_white.png" },
+    { key: "white_a_ground", name: "front_right_ground.png" },
+    { key: "white_b", name: "back_left_white.png" },
+    { key: "white_b_ground", name: "back_left_ground.png" },
+    { key: "ppt", name: "deck.pptx" },
+  ];
+  syntheticApi.mockups.push(mockup);
+  const png = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+    "base64",
+  );
+  for (const key of ["white_a", "white_a_ground", "white_b", "white_b_ground"]) {
+    await page.route(new RegExp(`/api/mockups/${mockup.id}/files/${key}(?:\\?.*)?$`), async (route) => {
+      await route.fulfill({ status: 200, contentType: "image/png", body: png });
+    });
+  }
+
+  await page.goto(`/mockup/${mockup.id}`);
+
+  await expect(page.locator(".mockup-sheet-hero canvas").first()).toBeVisible();
+  await expect(page.locator(".mockup-sheet-hero .mockup-sheet-frame img")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "调灯" })).toBeVisible();
+  await expect(page.getByRole("slider", { name: "产品灯光" })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "下载 PPT" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "下载 PPT" })).toHaveCount(0);
+  await expect(page.locator(".mockup-sheet-hero .mockup-sheet-frame").first()).toHaveCSS("aspect-ratio", /5\s*\/\s*6/);
+  await page.getByRole("button", { name: "调灯" }).click();
+  await expect(page.getByRole("slider", { name: "产品灯光" })).toBeVisible();
+  await page.getByRole("button", { name: /打开正面/ }).click();
+  await expect(page.getByRole("dialog", { name: "正面 + 侧面原图" })).toBeVisible();
+  await expect(page.locator(".mockup-still-lightbox-stage.is-studio-ground")).toBeVisible();
+});
+
+test("成片 ground 损坏时隐藏原图和下载", async ({ page, syntheticApi }) => {
+  const mockup = completedMockup("ee11ff22aa34", "影棚坏地面");
+  mockup.files = [
+    { key: "white_a", name: "front_right_white.png" },
+    { key: "white_a_ground", name: "front_right_ground.png" },
+  ];
+  syntheticApi.mockups.push(mockup);
+  const png = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+    "base64",
+  );
+  await page.route(new RegExp(`/api/mockups/${mockup.id}/files/white_a(?:\\?.*)?$`), async (route) => {
+    await route.fulfill({ status: 200, contentType: "image/png", body: png });
+  });
+  await page.route(new RegExp(`/api/mockups/${mockup.id}/files/white_a_ground(?:\\?.*)?$`), async (route) => {
+    await route.fulfill({ status: 404, contentType: "text/plain", body: "missing" });
+  });
+  await page.goto(`/mockup/${mockup.id}`);
+  const shot = page.locator(".mockup-sheet-hero");
+  await expect(shot.getByText("这张白底图坏了，回到打样台重新打。")).toBeVisible();
+  await expect(shot.getByRole("button", { name: /原图|下载/ })).toHaveCount(0);
+});
+
+test("无 ground 的已出图单保持 CSS 滤镜、描边和 PPT", async ({ page, syntheticApi }) => {
+  const mockup = completedMockup("bb22cc33dd44", "旧白底图");
+  mockup.files = [
+    { key: "white_a", name: "正面与侧面.png" },
+    { key: "white_b", name: "反面与侧面.png" },
+    { key: "ppt", name: "deck.pptx" },
+  ];
+  syntheticApi.mockups.push(mockup);
+  const image = "<svg xmlns='http://www.w3.org/2000/svg' width='300' height='400'><rect width='300' height='400' fill='white'/></svg>";
+  for (const key of ["white_a", "white_b"]) {
+    await page.route(new RegExp(`/api/mockups/${mockup.id}/files/${key}(?:\\?.*)?$`), async (route) => {
+      await route.fulfill({ status: 200, contentType: "image/svg+xml", body: image });
+    });
+  }
+  await page.goto(`/mockup/${mockup.id}`);
+  await expect(page.locator(".mockup-sheet-photo .mockup-sheet-frame img").first()).toHaveCSS(
+    "filter",
+    /contrast\(1\.12\).*brightness\(1\)/,
+  );
+  await expect(page.getByRole("link", { name: "下载 PPT" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "调灯" })).toHaveCount(0);
+  await expect(page.locator(".mockup-sheet-hero")).toHaveCount(0);
+});
