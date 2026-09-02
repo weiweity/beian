@@ -107,7 +107,7 @@ def test_structure_export_hides_structure_objects_and_isolates_declared_print_la
 
 def test_structure_export_temporarily_unlocks_parent_chain_and_restores_it():
     source = EXPORTER.read_text(encoding="utf-8")
-    helper_start = source.index("function findLockState")
+    helper_start = source.index("function isFactoryKnifeLayerName")
     helper_end = source.index("var configPath", helper_start)
     helpers = source[helper_start:helper_end]
     program = helpers + r"""
@@ -166,7 +166,7 @@ process.stdout.write(JSON.stringify({
 
 def test_structure_export_restores_partial_changes_when_hiding_fails():
     source = EXPORTER.read_text(encoding="utf-8")
-    helper_start = source.index("function findLockState")
+    helper_start = source.index("function isFactoryKnifeLayerName")
     helper_end = source.index("var configPath", helper_start)
     helpers = source[helper_start:helper_end]
     program = helpers + r"""
@@ -221,7 +221,7 @@ process.stdout.write(JSON.stringify({
 
 def test_structure_export_restores_original_state_when_artwork_save_fails():
     source = EXPORTER.read_text(encoding="utf-8")
-    helper_start = source.index("function findLockState")
+    helper_start = source.index("function isFactoryKnifeLayerName")
     helper_end = source.index("var configPath", helper_start)
     helpers = source[helper_start:helper_end]
     program = helpers + r"""
@@ -281,7 +281,7 @@ process.stdout.write(JSON.stringify({
 
 def test_structure_export_restores_declared_print_layer_visibility_when_save_fails():
     source = EXPORTER.read_text(encoding="utf-8")
-    helper_start = source.index("function findLockState")
+    helper_start = source.index("function isFactoryKnifeLayerName")
     helper_end = source.index("var configPath", helper_start)
     helpers = source[helper_start:helper_end]
     program = helpers + r"""
@@ -337,7 +337,7 @@ process.stdout.write(JSON.stringify({
 
 def test_print_layer_isolation_fails_closed_and_restores_every_observed_state():
     source = EXPORTER.read_text(encoding="utf-8")
-    helper_start = source.index("function findLockState")
+    helper_start = source.index("function isFactoryKnifeLayerName")
     helper_end = source.index("var configPath", helper_start)
     helpers = source[helper_start:helper_end]
     program = helpers + r"""
@@ -461,7 +461,7 @@ process.stdout.write(JSON.stringify({
         "successError": None,
         "successObserved": [True, False],
         "successRestored": [False, True],
-        "missingError": "Configured artwork layer not found: 不存在",
+        "missingError": "Configured artwork layer not found: 不存在 | layers: 印刷,码",
         "missingRestored": [False, True],
         "settingError": "blocked hide",
         "settingRestored": [False, True],
@@ -474,7 +474,7 @@ process.stdout.write(JSON.stringify({
 
 def test_structure_export_skips_unsupported_host_locks_and_uses_layer_parent_fallback():
     source = EXPORTER.read_text(encoding="utf-8")
-    helper_start = source.index("function findLockState")
+    helper_start = source.index("function isFactoryKnifeLayerName")
     helper_end = source.index("var configPath", helper_start)
     helpers = source[helper_start:helper_end]
     program = helpers + r"""
@@ -549,7 +549,7 @@ process.stdout.write(JSON.stringify({
 
 def test_structure_export_attempts_every_rollback_before_reporting_failure():
     source = EXPORTER.read_text(encoding="utf-8")
-    helper_start = source.index("function findLockState")
+    helper_start = source.index("function isFactoryKnifeLayerName")
     helper_end = source.index("var configPath", helper_start)
     helpers = source[helper_start:helper_end]
     program = helpers + r"""
@@ -595,7 +595,7 @@ process.stdout.write(JSON.stringify({message: message, secondLocked: second.lock
 
 def test_structure_export_records_lock_before_a_host_setter_mutates_then_throws():
     source = EXPORTER.read_text(encoding="utf-8")
-    helper_start = source.index("function findLockState")
+    helper_start = source.index("function isFactoryKnifeLayerName")
     helper_end = source.index("var configPath", helper_start)
     helpers = source[helper_start:helper_end]
     program = helpers + r"""
@@ -736,8 +736,24 @@ def test_semantics_require_exact_tags_or_explicit_config():
     assert 'var prefix = "packaging:"' in source
     assert 'configuredAssignment(config, "layers"' in source
     assert 'configuredAssignment(config, "spots"' in source
-    assert "刀线" not in source
-    assert "刀版" not in source
+    assert "function isFactoryKnifeLayerName" in source
+    assignment_start = source.index("function exactAssignment")
+    assignment_end = source.index("function isFactoryKnifeLayerName")
+    program = source[assignment_start:assignment_end] + r"""
+process.stdout.write(JSON.stringify({
+    tagged: exactAssignment("packaging:cut"),
+    knife: exactAssignment("刀线"),
+    board: exactAssignment("刀版"),
+    object: assignmentOf({note: "", name: "", layer: {name: "刀线"}}, {semantic_assignments: {}})
+}));
+"""
+    completed = subprocess.run(["node", "-e", program], check=True, capture_output=True, text=True)
+    assert json.loads(completed.stdout) == {
+        "tagged": "cut",
+        "knife": None,
+        "board": None,
+        "object": None,
+    }
 
 
 def test_legacy_proposal_layers_only_offer_stroke_only_paths_for_human_confirmation():
@@ -751,7 +767,7 @@ def test_legacy_proposal_layers_only_offer_stroke_only_paths_for_human_confirmat
 
 def _structure_preview_helpers() -> str:
     source = EXPORTER.read_text(encoding="utf-8")
-    preview_start = source.index("function proposalLayerKey")
+    preview_start = source.index("function isFactoryKnifeLayerName")
     preview_end = source.index("function samePoint", preview_start)
     point_start = source.index("function structurePoint")
     point_end = source.index("function exportSemanticPath", point_start)
@@ -1169,6 +1185,89 @@ process.stdout.write(JSON.stringify({mixed: mixed, explicit: explicit}));
     }
 
 
+def test_unique_filled_knife_layer_is_exported_as_proposal_not_a_process_plate():
+    source = EXPORTER.read_text(encoding="utf-8")
+    assign_start = source.index("function exactAssignment")
+    assign_end = source.index("function proposalLayerKey")
+    loop_start = source.index("    var proposalLayerKeys = [];")
+    suppression = source.index("    if (explicitRecords.length > 0) {")
+    program = _structure_preview_helpers() + source[assign_start:assign_end] + r"""
+function pathItem(layer, filled) {
+    var anchor = [0, 80];
+    return {
+        layer: layer,
+        stroked: true,
+        filled: filled,
+        closed: filled,
+        clipping: false,
+        pathPoints: [
+            {anchor: anchor, leftDirection: anchor.slice(), rightDirection: anchor.slice()},
+            {anchor: [40, 80], leftDirection: [40, 80], rightDirection: [40, 80]}
+        ]
+    };
+}
+function harvest(pathItems, layers) {
+    var config = {proposal_layers: []};
+    var artboard = [0, 100, 160, 0];
+    var explicitRecords = [];
+    var proposalRecords = [];
+    var result = {
+        layers: layers,
+        proposal_layer_candidates: [],
+        preview_plate_candidates: [],
+        proposal_layer_candidates_truncated: false,
+        preview_plate_candidates_truncated: false
+    };
+    var documentRef = {pathItems: pathItems, layers: layers.map(function (name) { return {name: name}; })};
+""" + source[loop_start:suppression] + r"""
+    return {
+        proposalCount: proposalRecords.length,
+        names: result.proposal_layer_candidates.map(function (row) { return row.name; }),
+        plateNames: result.preview_plate_candidates.map(function (row) { return row.name; }),
+        defaultKnife: config.proposal_layers
+    };
+}
+var documentRef = {typename: "Document"};
+var knifeLayer = {typename: "Layer", name: "刀版", parent: documentRef, zOrderPosition: 0};
+var foilLayer = {typename: "Layer", name: "击凹", parent: documentRef, zOrderPosition: 1};
+var filledKnife = harvest([pathItem(knifeLayer, true), pathItem(foilLayer, true)], ["刀版", "击凹"]);
+process.stdout.write(JSON.stringify(filledKnife));
+"""
+    completed = subprocess.run(["node", "-e", program], check=True, capture_output=True, text=True)
+    payload = json.loads(completed.stdout)
+    assert payload == {
+        "proposalCount": 1,
+        "names": ["刀版"],
+        "plateNames": ["击凹"],
+        "defaultKnife": ["刀版"],
+    }
+
+
+def test_print_isolation_falls_back_to_unique_non_structure_top_layer():
+    source = EXPORTER.read_text(encoding="utf-8")
+    helper_start = source.index("function isFactoryKnifeLayerName")
+    helper_end = source.index("var configPath", helper_start)
+    helpers = source[helper_start:helper_end]
+    program = helpers + r"""
+var printLayer = {name: "图层 1", visible: false};
+var knifeLayer = {name: "刀线", visible: true};
+var documentRef = {layers: [printLayer, knifeLayer]};
+var observed = null;
+withConfiguredPrintLayers(documentRef, ["印刷"], function () {
+    observed = [printLayer.visible, knifeLayer.visible];
+});
+process.stdout.write(JSON.stringify({
+    observed: observed,
+    restored: [printLayer.visible, knifeLayer.visible]
+}));
+"""
+    completed = subprocess.run(["node", "-e", program], check=True, capture_output=True, text=True)
+    assert json.loads(completed.stdout) == {
+        "observed": [True, False],
+        "restored": [False, True],
+    }
+
+
 def test_exhausted_plate_preview_budget_does_not_drop_knife_overlay():
     program = _structure_preview_helpers() + r"""
 var documentRef = {typename: "Document"};
@@ -1455,6 +1554,62 @@ def test_v2_preflight_never_auto_selects_pdf_ocg_layer_names(
 
     assert captured["proposal_layers"] == []
     assert captured["source_sha256"] == pipeline.file_sha256(source)
+
+
+def test_v2_preflight_marks_flattened_artwork_unsupported(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    pipeline = load_pipeline()
+    source = tmp_path / "source.ai"
+    source.write_bytes(b"flat-ai")
+    template = tmp_path / "template.json"
+    template.write_text(json.dumps({"print_layers": ["印刷"]}), encoding="utf-8")
+
+    def fake_export(*_args, **_kwargs):
+        export_dir = tmp_path / "export"
+        export_dir.mkdir()
+        artwork = export_dir / "artwork.pdf"
+        structure = export_dir / "structure.json"
+        artwork.write_bytes(b"artwork")
+        structure.write_text("{}", encoding="utf-8")
+        return {
+            "print_pdf": str(artwork),
+            "structure_json": str(structure),
+            "layers": ["图层 1"],
+        }
+
+    monkeypatch.setattr(pipeline, "run_illustrator_structure_export", fake_export)
+    monkeypatch.setattr(
+        pipeline,
+        "render_pdf_thumbnail",
+        lambda *_args, **_kwargs: tmp_path / "preview.png",
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "resolve_structure",
+        lambda *_args, **_kwargs: pytest.fail("flattened artwork must not enter topology"),
+    )
+
+    with pytest.raises(pipeline.PipelineHold) as caught:
+        pipeline.preflight_product_v2(
+            {
+                "code": "26E20A",
+                "slug": "flat",
+                "display_name": "外发拼合",
+                "source_ai": source.name,
+                "template": template.name,
+            },
+            tmp_path,
+            tmp_path / "output",
+            False,
+            {"enabled": True},
+        )
+
+    hold = caught.value
+    assert hold.status == "unsupported"
+    assert hold.code == "structure_flattened_artwork"
+    assert "拼合稿" in hold.message
 
 
 def test_v2_preflight_uses_only_an_explicitly_selected_legacy_proposal_layer(
@@ -2693,7 +2848,7 @@ def test_structure_export_maps_artwork_layer_failures_without_blaming_structure_
     payload = error.as_dict()
     assert payload["code"] == "illustrator_artwork_layers_invalid"
     assert payload["error"] == "Illustrator 无法按模板隔离印刷图层，请检查稿件图层后重试"
-    assert "顶层印刷层" in payload["fix"]
+    assert "印刷层名称" in payload["fix"]
     assert "packaging:cut" not in payload["fix"]
 
 
