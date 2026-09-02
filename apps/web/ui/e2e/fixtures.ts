@@ -70,6 +70,18 @@ export type SyntheticMockup = {
     selected_ids: string[];
     truncated: boolean;
     image_url?: string;
+    preview?: {
+      schema: "illustrator-layer-preview/1";
+      page_size_points: [number, number];
+      layers: Array<{
+        candidate_id: string;
+        paths: Array<{
+          closed: boolean;
+          points: Array<[number, number, number, number, number, number]>;
+        }>;
+        truncated: boolean;
+      }>;
+    };
   };
   structure_preview?: {
     page_size_mm?: [number, number];

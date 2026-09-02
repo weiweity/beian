@@ -424,6 +424,45 @@ describe("publicMockup", () => {
 });
 
 describe("mockup structure input http", () => {
+  it("inlines sanitized layer preview on GET detail and keeps it off the list", async () => {
+    const id = "abababababa1";
+    const { candidateIds } = seedStructureInputJob(id, "ou_preview_get");
+    const resolutionPath = join(DATA_DIR, "mockups", id, "structure_resolution.json");
+    const resolution = JSON.parse(readFileSync(resolutionPath, "utf8"));
+    resolution.input_candidates.preview = {
+      schema: "illustrator-layer-preview/1",
+      page_size_points: [160, 90],
+      layers: [{
+        candidate_id: candidateIds[0],
+        paths: [{
+          closed: false,
+          points: [[10, 20, 10, 20, 10, 20], [40, 60, 40, 60, 40, 60]],
+        }],
+        truncated: false,
+      }],
+    };
+    writeFileSync(resolutionPath, JSON.stringify(resolution));
+
+    const sess = issueSessionForTest("路人", "reviewer", "ou_preview_get");
+    const detail = await app.request(`/api/mockups/${id}`, {
+      headers: { authorization: `Bearer ${sess.token}` },
+    });
+    assert.equal(detail.status, 200);
+    const body = (await detail.json()) as {
+      structure_input?: { preview?: { schema?: string; layers?: unknown[] } };
+    };
+    assert.equal(body.structure_input?.preview?.schema, "illustrator-layer-preview/1");
+    assert.equal(body.structure_input?.preview?.layers?.length, 1);
+
+    const list = await app.request("/api/mockups", {
+      headers: { authorization: `Bearer ${sess.token}` },
+    });
+    const rows = (await list.json()) as Array<Record<string, unknown>>;
+    const row = rows.find((item) => item.id === id);
+    assert.ok(row);
+    assert.equal(Object.hasOwn(row, "structure_input"), false);
+  });
+
   it("bounds the small selection body before parsing JSON", async () => {
     const admin = issueSessionForTest("管理员", "admin", "ou_structure_input_limit");
     const oversized = JSON.stringify({

@@ -11,7 +11,7 @@
 | `apps/web/ui` | React + Ant Design 6 审稿台 / 打样台 / 历史 / 设置 |
 | `apps/web/server` | Hono + TypeScript，对外 HTTP `:8787` |
 | `apps/web/backend` | Python 对照 worker（TS 用 `python -m app.cli` 调用）。PDF 按页分为活字 / 转曲 / 图片：活字直接读文字层，其他页只跑一次 OCR，再进入既有字段规则与单钉证据收敛；成分表按完整原料原子核对，并只在可靠正文锚点或高密度成分块内定位，模糊命中保留为人工疑点 |
-| `workers/packaging/` | 2D→3D CLI，打样台调用。V2 以显式 `cut/crease/...` 语义为结构事实；确定性曲线适配、统一毫米坐标、连通分量隔离和有界拓扑只消费已确认的结构语义。无对象语义的旧稿先盘点与源稿绑定的纯描边候选层；管理员可在同一打样单选择 1–16 个候选图层，由服务端复核源稿与候选成员后重跑识别，所选线稿仍须形成完整盒身环和上下封口才可进入 Blender。管理员在真实展开图上只选产品正面；候选身份和几何推导的默认朝向仍作为内部锚点交给同一确认引擎，其余五面自动推导。不按颜色、零散矩形或 bbox 静默套盒。macOS 用 AppleScript，Windows 由登录桌面的 Illustrator Agent 经命名管道执行现有 VBS/JSX，服务进程不在 Session 0 拉起 Illustrator。平面出图用 pymupdf（对照同一 Python）；杭州不需要 macOS qlmanage。PPT 用两张白底写 OOXML；两张白底再合成一页 PDF。缺 PPT/PDF 仍算出图 |
+| `workers/packaging/` | 2D→3D CLI，打样台调用。V2 以显式 `cut/crease/...` 语义为结构事实；确定性曲线适配、统一毫米坐标、连通分量隔离和有界拓扑只消费已确认的结构语义。无对象语义的旧稿先盘点与源稿绑定的纯描边候选层；管理员可在同一打样单选择 1–16 个候选图层，并在 5600px 原稿上看真实刀线/折线涂亮（旧单无快照则降级高清底图），由服务端复核源稿与候选成员后重跑识别，所选线稿仍须形成完整盒身环和上下封口才可进入 Blender。管理员在真实展开图上只选产品正面；候选身份和几何推导的默认朝向仍作为内部锚点交给同一确认引擎，其余五面自动推导。不按颜色、零散矩形或 bbox 静默套盒。macOS 用 AppleScript，Windows 由登录桌面的 Illustrator Agent 经命名管道执行现有 VBS/JSX，服务进程不在 Session 0 拉起 Illustrator。平面出图用 pymupdf（对照同一 Python）；杭州不需要 macOS qlmanage。PPT 用两张白底写 OOXML；两张白底再合成一页 PDF。缺 PPT/PDF 仍算出图 |
 | `docs/` | 章程、ADR、设计 |
 
 旧 `apps/web/frontend` 已删除。网页入口只有 `apps/web/ui` + Hono `apps/web/server`；对照规则和 Blender 仍是 Python。见 `docs/adr-002-typescript-http.md`。
