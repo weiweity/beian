@@ -8,6 +8,7 @@ import {
   sameStructureLayerSelection,
   selectedStructureLayerIds,
   defaultStructureLayerIds,
+  shouldAutoSubmitStructureLayers,
   selectedStructureAnchor,
   structureConfirmationErrorCopy,
   structureIssueCopy,
@@ -106,14 +107,46 @@ describe("mockup V2 structure UX", () => {
       proposal_layers: [cut, { ...cut, id: "proposal-layer-dddddddddddddddd", name: "刀线" }],
     };
     assert.deepEqual(defaultStructureLayerIds(duplicateCuts), []);
-    const board = { ...cut, id: "proposal-layer-bbbbbbbbbbbbbb01", name: "刀版" };
+    assert.equal(shouldAutoSubmitStructureLayers(empty), false);
+    const topCut = { ...cut, name: "上刀线" };
     const print = { id: "proposal-layer-eeeeeeeeeeeeeeee", name: "印刷", stroke_only_path_count: 2 };
+    const usual = {
+      ...empty,
+      proposal_layers: [topCut, crease, print],
+    };
+    assert.deepEqual(defaultStructureLayerIds(usual), [topCut.id, print.id]);
+    assert.equal(shouldAutoSubmitStructureLayers(usual), true);
+    assert.deepEqual(
+      selectedStructureLayerIds(usual, [usual.preview_plates![0].id, print.id]),
+      [print.id],
+    );
+    const onlyPrint = { ...empty, proposal_layers: [print] };
+    assert.deepEqual(defaultStructureLayerIds(onlyPrint), []);
+    assert.equal(shouldAutoSubmitStructureLayers(onlyPrint), false);
+    assert.equal(shouldAutoSubmitStructureLayers(already), false);
+    assert.equal(shouldAutoSubmitStructureLayers({ ...empty, proposal_layers: [] }), false);
+    assert.equal(shouldAutoSubmitStructureLayers({ ...empty, proposal_layers: [crease] }), false);
+    assert.equal(shouldAutoSubmitStructureLayers(duplicateCuts), false);
+    assert.equal(shouldAutoSubmitStructureLayers({ ...empty, proposal_layers: [print, crease] }), false);
+    const topOnly = { ...empty, proposal_layers: [topCut, crease] };
+    assert.deepEqual(defaultStructureLayerIds(topOnly), [topCut.id]);
+    assert.equal(shouldAutoSubmitStructureLayers(topOnly), true);
+    const loneCut = { ...empty, proposal_layers: [cut] };
+    assert.deepEqual(defaultStructureLayerIds(loneCut), [cut.id]);
+    assert.equal(shouldAutoSubmitStructureLayers(loneCut), true);
+    const otherCut = { id: "proposal-layer-ffffffffffffffff", name: "刀线", stroke_only_path_count: 8 };
+    const bothCuts = { ...empty, proposal_layers: [topCut, otherCut, print] };
+    assert.deepEqual(defaultStructureLayerIds(bothCuts), [topCut.id, print.id]);
+    assert.equal(shouldAutoSubmitStructureLayers(bothCuts), true);
+    const board = { ...cut, id: "proposal-layer-bbbbbbbbbbbbbb01", name: "刀版" };
     const boardOnly = { ...empty, proposal_layers: [board, crease, print] };
-    assert.deepEqual(defaultStructureLayerIds(boardOnly), [board.id]);
+    assert.deepEqual(defaultStructureLayerIds(boardOnly), [board.id, print.id]);
+    assert.equal(shouldAutoSubmitStructureLayers(boardOnly), false);
     const bothKnives = { ...empty, proposal_layers: [cut, board] };
     assert.deepEqual(defaultStructureLayerIds(bothKnives), []);
     const printOnly = { ...empty, proposal_layers: [print] };
     assert.deepEqual(defaultStructureLayerIds(printOnly), []);
+    assert.equal(shouldAutoSubmitStructureLayers(printOnly), false);
   });
 
   it("distinguishes a human confirmation from a failed mockup", () => {

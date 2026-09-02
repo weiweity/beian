@@ -159,6 +159,175 @@ test("无显式语义时已登录账号可多选本稿候选层并重跑同一�
   expect(selection?.body).toEqual({ candidate_ids: [cutId, creaseId] });
 });
 
+test("唯一上刀线时黑盒提交默认结构层，不展示选层", async ({ page, syntheticApi }) => {
+  await page.setViewportSize({ width: 1366, height: 700 });
+  const cutId = "proposal-layer-9999999999999999";
+  const printId = "proposal-layer-8888888888888888";
+  const mockup: SyntheticMockup = {
+    id: "abcdef123450",
+    title: "默认上刀线",
+    status: "review_required",
+    job_status: "waiting_input",
+    structure_status: "review_required",
+    structure_code: "structure_semantics_missing",
+    files: [],
+    structure_input: {
+      schema: "packaging-structure-input-candidates/2",
+      image_url: ARTWORK,
+      proposal_layers: [
+        { id: cutId, name: "上刀线", stroke_only_path_count: 18 },
+        { id: printId, name: "印刷", stroke_only_path_count: 4 },
+      ],
+      selected_ids: [],
+      truncated: false,
+    },
+  };
+  syntheticApi.mockups.push(mockup);
+
+  await page.goto(`/mockup/${mockup.id}`);
+  await expect(page.getByText("打样中", { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("checkbox")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "重新识别完整盒型" })).toHaveCount(0);
+  const selection = syntheticApi.calls.find(
+    (call) => call.method === "POST" && call.path === `/api/mockups/${mockup.id}/structure/input`,
+  );
+  expect(selection?.body).toEqual({ candidate_ids: [cutId, printId] });
+});
+
+test("自动提交失败后露出选层，改勾选不会再自动提交", async ({ page, syntheticApi }) => {
+  await page.setViewportSize({ width: 1366, height: 700 });
+  const cutId = "proposal-layer-7777777777777777";
+  const printId = "proposal-layer-6666666666666666";
+  const mockup: SyntheticMockup = {
+    id: "abcdef123470",
+    title: "默认上刀线失败",
+    status: "review_required",
+    job_status: "waiting_input",
+    structure_status: "review_required",
+    structure_code: "structure_semantics_missing",
+    files: [],
+    structure_input: {
+      schema: "packaging-structure-input-candidates/2",
+      image_url: ARTWORK,
+      proposal_layers: [
+        { id: cutId, name: "上刀线", stroke_only_path_count: 18 },
+        { id: printId, name: "印刷", stroke_only_path_count: 4 },
+      ],
+      selected_ids: [],
+      truncated: false,
+    },
+  };
+  syntheticApi.mockups.push(mockup);
+  let posts = 0;
+  await page.route(`**/api/mockups/${mockup.id}/structure/input`, async (route) => {
+    posts += 1;
+    await route.fulfill({
+      status: 400,
+      contentType: "application/json",
+      body: JSON.stringify({ detail: "合成结构层选择无效" }),
+    });
+  });
+
+  await page.goto(`/mockup/${mockup.id}`);
+  await expect(page.getByText("合成结构层选择无效")).toBeVisible();
+  await expect(page.getByRole("checkbox")).toHaveCount(2);
+  await expect(page.getByRole("button", { name: "重新识别完整盒型" })).toBeVisible();
+  await expect.poll(() => posts).toBe(1);
+  await page.getByText("印刷", { exact: true }).click();
+  await expect.poll(() => posts).toBe(1);
+});
+
+test("已有完整盒型时不因上刀线再自动提交结构层", async ({ page, syntheticApi }) => {
+  await page.setViewportSize({ width: 1366, height: 700 });
+  const cutId = "proposal-layer-5555555555555555";
+  const mockup: SyntheticMockup = {
+    id: "abcdef123471",
+    title: "已有展开图",
+    status: "review_required",
+    job_status: "waiting_input",
+    structure_status: "review_required",
+    files: [],
+    structure_input: {
+      schema: "packaging-structure-input-candidates/2",
+      image_url: ARTWORK,
+      proposal_layers: [
+        { id: cutId, name: "上刀线", stroke_only_path_count: 18 },
+      ],
+      selected_ids: [],
+      truncated: false,
+    },
+    structure_preview: {
+      page_size_mm: [160, 90],
+      image_url: ARTWORK,
+      faces: [
+        face("body-a", [10, 25, 40, 75]),
+        face("body-b", [40, 25, 60, 75]),
+        face("body-c", [60, 25, 90, 75]),
+        face("body-d", [90, 25, 110, 75]),
+        face("cap-top", [10, 5, 40, 25]),
+        face("cap-bottom", [10, 75, 40, 95]),
+      ],
+      net_proposals: [netProposal({
+        id: "box-net-0001",
+        body_face_ids: ["body-a", "body-b", "body-c", "body-d"],
+        cap_face_ids: ["cap-top", "cap-bottom"],
+        strip_axis: "x",
+      })],
+    },
+  };
+  syntheticApi.mockups.push(mockup);
+
+  await page.goto(`/mockup/${mockup.id}`);
+  await expect(page.getByText("先看展开图，再选产品正面")).toBeVisible();
+  const selection = syntheticApi.calls.find(
+    (call) => call.method === "POST" && call.path === `/api/mockups/${mockup.id}/structure/input`,
+  );
+  expect(selection).toBeUndefined();
+});
+
+test("没有结构确认权限时唯一上刀线也不自动提交", async ({ page, syntheticApi }) => {
+  await page.setViewportSize({ width: 1366, height: 700 });
+  const cutId = "proposal-layer-4444444444444444";
+  const mockup: SyntheticMockup = {
+    id: "abcdef123472",
+    title: "无权限上刀线",
+    status: "review_required",
+    job_status: "waiting_input",
+    structure_status: "review_required",
+    structure_code: "structure_semantics_missing",
+    files: [],
+    structure_input: {
+      schema: "packaging-structure-input-candidates/2",
+      image_url: ARTWORK,
+      proposal_layers: [
+        { id: cutId, name: "上刀线", stroke_only_path_count: 18 },
+      ],
+      selected_ids: [],
+      truncated: false,
+    },
+  };
+  syntheticApi.mockups.push(mockup);
+  await page.route("**/api/auth/me", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({
+      logged_in: true,
+      display_name: "只读访客",
+      open_id: "ou_no_confirm_layers",
+      role: "viewer",
+      perms: ["read", "export"],
+    }),
+  }));
+
+  await page.goto(`/mockup/${mockup.id}`);
+  await expect(page.getByRole("checkbox")).toHaveCount(1);
+  await expect(page.getByText("当前账号不能选择结构图层。")).toBeVisible();
+  const selection = syntheticApi.calls.find(
+    (call) => call.method === "POST" && call.path === `/api/mockups/${mockup.id}/structure/input`,
+  );
+  expect(selection).toBeUndefined();
+});
+
 test("旧单无分层预览仍可多选图层重跑", async ({ page, syntheticApi }) => {
   await page.setViewportSize({ width: 1366, height: 700 });
   const cutId = "proposal-layer-aaaaaaaaaaaaaaaa";
@@ -210,7 +379,10 @@ test("截取后的分层预览仍显示安全截取说明", async ({ page, synth
     structure_input: {
       schema: "packaging-structure-input-candidates/2",
       image_url: ARTWORK,
-      proposal_layers: [{ id: cutId, name: "刀线", stroke_only_path_count: 24 }],
+      proposal_layers: [
+        { id: cutId, name: "刀线", stroke_only_path_count: 24 },
+        { id: "proposal-layer-dddddddddddddddd", name: "折线", stroke_only_path_count: 8 },
+      ],
       selected_ids: [],
       truncated: false,
       preview: {

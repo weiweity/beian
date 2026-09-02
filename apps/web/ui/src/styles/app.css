@@ -3519,6 +3519,21 @@ html[data-theme="dark"] .notes.is-float {
   min-height: 0;
 }
 
+.mockup-studio-light {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 12px 0 0;
+  min-height: 40px;
+  color: #1c1a1f;
+  font-size: 16px;
+}
+
+.mockup-studio-light input[type="range"] {
+  width: min(280px, 100%);
+  height: 40px;
+}
+
 .mockup-sheet-frame {
   position: relative;
   flex: none;
@@ -3529,10 +3544,23 @@ html[data-theme="dark"] .notes.is-float {
   align-items: center;
   justify-content: center;
   overflow: hidden;
-  border: 1px solid rgba(40, 24, 56, 0.08);
+  border: 1px solid rgba(40, 24, 56, 0.28);
   border-radius: 20px;
-  background: #ffffff;
+  background: #ebe6f0;
   box-shadow: 0 22px 48px rgba(40, 24, 56, 0.16);
+}
+
+.mockup-sheet-frame::after {
+  content: "";
+  position: absolute;
+  inset: 8px;
+  pointer-events: none;
+  border: 1px solid rgba(28, 26, 31, 0.28);
+  border-radius: 12px;
+}
+
+.mockup-sheet-frame.mockup-sheet-glb::after {
+  content: none;
 }
 
 .mockup-sheet-cap {
@@ -3612,7 +3640,7 @@ html[data-theme="dark"] .notes.is-float {
   width: 100%;
   height: 100%;
   object-fit: contain;
-  background: #ffffff;
+  background: transparent;
 }
 
 .mockup-sheet-glb model-viewer {

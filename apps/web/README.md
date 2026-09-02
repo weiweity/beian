@@ -38,7 +38,7 @@ chmod 600 backend/.env.baidu backend/.env.secrets
 ## 结构
 
 ```text
-ui/          React 审稿台 / 打样台 / 历史 / 设置（WaitCard；核对页初始无恒等 transform，非初始状态才用 CSS transform 1–6× + rAF 拖动，不上 OpenSeadragon；核对窗 portal 到应用顶层，可盖侧栏/页头/签字/画布并拖到视口底边，窗内弹层更高；收起有动画，边框八向缩放；桌面待确认结构一屏包含预览/选项/错误/主动作；打样台只交稿，点进度进打样单一屏三图看形、下面印刷面读字；每张图右上角下载；页头「下载 PPT」且不下 PDF；点下载底部提示不挡操作；GLB 全屏居中；打样台/打样单主区白底深字，GLB 中性环境；地址 `/reviewup` `/reviewup/new` `/review/:id` `/mockup` `/mockup/new` `/mockup/:id` `/history` `/settings`；离开后看板/侧栏/历史记录仍显示阶段）
+ui/          React 审稿台 / 打样台 / 历史 / 设置（WaitCard；核对页初始无恒等 transform，非初始状态才用 CSS transform 1–6× + rAF 拖动，不上 OpenSeadragon；核对窗 portal 到应用顶层，可盖侧栏/页头/签字/画布并拖到视口底边，窗内弹层更高；收起有动画，边框八向缩放；桌面待确认结构一屏包含预览/选项/错误/主动作；打样台只交稿，点进度进打样单一屏三图看形、下面印刷面读字；白底浅底+内描边，灯光滑条调静帧和 GLB；每张图右上角下载；页头「下载 PPT」且不下 PDF；点下载底部提示不挡操作；GLB 全屏居中；打样台/打样单主区白底深字，GLB 中性环境；地址 `/reviewup` `/reviewup/new` `/review/:id` `/mockup` `/mockup/new` `/mockup/:id` `/history` `/settings`；离开后看板/侧栏/历史记录仍显示阶段）
 server/      TypeScript HTTP（jobs.ts 管对照/对红/打样入队；`/brand/*` 挂 `ui/public`）
 backend/     Python worker + 测试（cli 不写任务 JSON）
 ```
