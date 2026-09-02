@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.21.16.0] - 2026-09-02
+## [0.21.18.0] - 2026-09-02
 
 ### Added
 
@@ -14,6 +14,17 @@
 ### For contributors
 
 - `POST /api/mockups/:id/retry`：先确认旧 worker 已退出再改 queued，杀不掉就 409，避免杭州单槽叠跑。结构已 ready 的单跳过 Illustrator。静帧磁盘保留 RGBA；`png_bytes_over_white` 只给 PPT/PDF。L0 不替代杭州 L1。
+
+## [0.21.17.0] - 2026-09-02
+
+### Fixed
+
+- 打样稿里有「刀版」「刀线」等中文层名时，桌面 Illustrator 能加载导出脚本，不再报 JavaScript code was missing 后整单失败。
+- 若仍出现 JavaScript code was missing，页面会写明桌面 Illustrator 没能加载导出脚本，请关掉 Illustrator 后重试，不再只说重新打样。
+
+### For contributors
+
+- Agent 只给 runtime JSX 写 UTF-8 BOM；心跳 JSON 仍无 BOM。发版冒烟探针带同一「刀版」字面量，并 Bind 正式 `export_structure.jsx` 校验 BOM。L0 锁住这三条。不要回滚 #67 刀版第一次导出。杭州 L2：杀光 Illustrator 后用花盒试一张，膜袋 26G30A 不当桥的标准。
 
 ## [0.21.15.0] - 2026-09-02
 
