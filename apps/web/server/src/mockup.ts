@@ -1182,10 +1182,18 @@ function readKeyForPanelName(name: string): string | undefined {
   return match ? `read_${match[1]}` : undefined;
 }
 
+function stillKeyFromName(lower: string): string {
+  const ground = lower.includes("_ground");
+  if (lower.endsWith(".png") && lower.includes("front_right")) return ground ? "white_a_ground" : "white_a";
+  if (lower.endsWith(".png") && lower.includes("back_left")) return ground ? "white_b_ground" : "white_b";
+  return "";
+}
+
 export function isWhiteFile(key: string, name: string): boolean {
   const lower = name.toLowerCase();
-  if (key === "white_a") return lower.includes("front_right");
-  if (key === "white_b") return lower.includes("back_left");
+  if (key === "white_a" || key === "white_b" || key === "white_a_ground" || key === "white_b_ground") {
+    return stillKeyFromName(lower) === key;
+  }
   if (key.startsWith("read_")) return readKeyForPanelName(name) === key;
   return true;
 }
@@ -1209,15 +1217,15 @@ export function collectOutputs(root: string): MockupJob["files"] {
         if (lower.endsWith(".glb")) key = "glb";
         else if (lower.endsWith(".pptx")) key = "ppt";
         else if (lower.endsWith(".pdf") && lower.includes("white_sheet")) key = "sheet";
-        else if (lower.endsWith(".png") && lower.includes("front_right")) key = "white_a";
-        else if (lower.endsWith(".png") && lower.includes("back_left")) key = "white_b";
-        else if (lower.endsWith(".png")) {
+        else key = stillKeyFromName(lower);
+        if (!key && lower.endsWith(".png")) {
           const readKey = readKeyForPanelName(name.name);
           if (!readKey) continue;
           const rel = relative(root, p).replace(/\\/g, "/").toLowerCase();
           if (rel !== `assets/${basename(p).toLowerCase()}`) continue;
           key = readKey;
-        } else continue;
+        }
+        if (!key) continue;
         if (found.some((f) => f.key === key)) continue;
         found.push({ key, path: p, name: basename(p) });
       }
@@ -1315,6 +1323,34 @@ export function assertBlenderReady(): string {
   return blender;
 }
 
+/** Product/ground stills anywhere except assets/. Leaves assets/panel_*.png. */
+export function unlinkSameGenerationStills(jobId: string): void {
+  const root = join(mockupRoot(false), jobId);
+  if (!existsSync(root)) return;
+  const walk = (dir: string) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name === "assets" || entry.name.startsWith(".")) continue;
+        walk(path);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      if (!stillKeyFromName(entry.name.toLowerCase())) continue;
+      try {
+        unlinkSync(path);
+      } catch {
+        /* leftover check below fails the retry instead of mixing generations */
+      }
+    }
+  };
+  walk(root);
+  const leftover = collectOutputs(root).some((file) => Boolean(stillKeyFromName((file.name || "").toLowerCase())));
+  if (leftover) {
+    throw Object.assign(new Error("旧成片删不掉，请稍后再试"), { status: 409 });
+  }
+}
+
 /**
  * 打样中 / 打样失败用机上已有稿再排。不重传。进行中的 PID 由 jobs 杀掉。
  * 结构已 ready 的单跳过 Illustrator，从 Blender 再跑。
@@ -1338,6 +1374,7 @@ export function resetMockupForRetry(job: MockupJob): MockupJob {
   if (!isMockupJobFile(job.id, job.source_path)) {
     throw Object.assign(new Error("稿件不在了，请重新上传"), { status: 409 });
   }
+  unlinkSameGenerationStills(job.id);
   const resultPath = join(mockupRoot(false), job.id, "pipeline_result.json");
   if (existsSync(resultPath)) {
     try {
