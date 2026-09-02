@@ -16,6 +16,8 @@ import { structureIssueCopy, structureStatusLabel } from "./mockupStructure";
 import { liveJobLine, mockupBoardProgress, shouldShowWaitCard } from "./waitCard";
 import { stemFromFilename } from "./stemName";
 import { HUD_MS, downloadHudLine, missingPptHud } from "./mockupHud";
+import { panBy, resetZoom, zoomAt, zoomCss, type ZoomState } from "./canvasZoom";
+import { listedReadFaces, READ_FACE_LABEL, readFaceKey } from "./mockupReadFaces";
 import { deskClock, type DeskCardRow } from "./deskBoard";
 import { DeskCol } from "./DeskCol";
 import { shouldShowTaskBoard } from "./tasksBoard";
@@ -783,7 +785,7 @@ export function MockupJobPage({ jobId, canConfirmStructure, onBack }: JobProps &
           if (announced.current === key) return;
           announced.current = key;
           if (next.status === "failed") message.error(mockupFailReason(next.error || next.job_error));
-          else if (next.status === "done") message.success("打样完成。白底给备案，GLB 可全屏截图。");
+          else if (next.status === "done") message.success("打样完成。白底给备案，GLB 看形，下面印刷面读字。");
         })
         .catch((err: unknown) => {
           if (cancelled) return;
@@ -884,13 +886,14 @@ export function MockupJobPage({ jobId, canConfirmStructure, onBack }: JobProps &
   const whiteB = (job.files || []).find((f) => f.key === "white_b");
   const hasGlb = (job.files || []).some((f) => f.key === "glb");
   const hasPpt = (job.files || []).some((f) => f.key === "ppt");
+  const readFaces = listedReadFaces(job.files || []);
 
   return (
     <section className="mockup-sheet">
       <header className="page-head">
         <div>
           <h1 className="page-title">{mockTitle(job)}</h1>
-          <p className="page-lead">打样单。白底是正面+侧面、反面+侧面；GLB 全屏转一转再截图。</p>
+          <p className="page-lead">打样单。上面三张看形；下面印刷面读字，可放大。不要用 GLB 读小字。</p>
         </div>
         <div className="mockup-sheet-head-actions">
           <button type="button" className="btn-ghost" onClick={onBack}>
@@ -1002,6 +1005,30 @@ export function MockupJobPage({ jobId, canConfirmStructure, onBack }: JobProps &
           </figure>
         )}
       </div>
+      <section className="mockup-read-faces" aria-label="印刷面读字">
+        <h2 className="mockup-read-title">读字</h2>
+        <p className="page-lead">印刷面来自打样时已生成的各面图，不是 3D 截屏。滚轮或按钮可放到 6 倍。</p>
+        {readFaces.length ? (
+          <div className="mockup-read-grid">
+            {readFaces.map((role) => {
+              const fileKey = readFaceKey(role);
+              const file = (job.files || []).find((item) => item.key === fileKey);
+              return (
+                <ReadFaceShot
+                  key={fileKey}
+                  jobId={job.id}
+                  fileKey={fileKey}
+                  label={READ_FACE_LABEL[role]}
+                  downloadName={file?.name}
+                  onDownload={() => notice(downloadHudLine("印刷面"))}
+                />
+              );
+            })}
+          </div>
+        ) : (
+          <p className="page-lead">这单没有印刷面图。重新打样后才会出现，不要用 GLB 读字。</p>
+        )}
+      </section>
       {hud && typeof document !== "undefined"
         ? createPortal(
             <p className="mockup-hud" role="status" aria-live="polite">
@@ -1011,6 +1038,186 @@ export function MockupJobPage({ jobId, canConfirmStructure, onBack }: JobProps &
           )
         : null}
     </section>
+  );
+}
+
+function ReadFaceShot({
+  jobId,
+  fileKey,
+  label,
+  downloadName,
+  onDownload,
+}: {
+  jobId: string;
+  fileKey: string;
+  label: string;
+  downloadName?: string;
+  onDownload: () => void;
+}) {
+  const [bad, setBad] = useState(false);
+  const [zoom, setZoom] = useState(resetZoom);
+  const viewRef = useRef<HTMLDivElement>(null);
+  const zoomElRef = useRef<HTMLDivElement>(null);
+  const zoomRef = useRef<ZoomState>(zoom);
+  const panDrag = useRef<{ x: number; y: number } | null>(null);
+  const panRaf = useRef<number | null>(null);
+  const wheelEnd = useRef<number | null>(null);
+  zoomRef.current = zoom;
+
+  const paintZoom = (next: ZoomState) => {
+    const el = zoomElRef.current;
+    if (el) el.style.transform = zoomCss(next);
+  };
+
+  const commitZoom = (next: ZoomState) => {
+    zoomRef.current = next;
+    paintZoom(next);
+    setZoom(next);
+  };
+
+  const zoomFromCenter = (nextScale: number) => {
+    const view = viewRef.current;
+    const ox = view ? view.clientWidth / 2 : 0;
+    const oy = view ? view.clientHeight / 2 : 0;
+    commitZoom(zoomAt(zoomRef.current, nextScale, ox, oy));
+  };
+
+  useEffect(() => {
+    const el = viewRef.current;
+    if (!el || bad) return;
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      const rect = el.getBoundingClientRect();
+      const factor = event.deltaY < 0 ? 1.12 : 1 / 1.12;
+      zoomRef.current = zoomAt(
+        zoomRef.current,
+        zoomRef.current.scale * factor,
+        event.clientX - rect.left,
+        event.clientY - rect.top,
+      );
+      if (panRaf.current == null) {
+        panRaf.current = window.requestAnimationFrame(() => {
+          panRaf.current = null;
+          paintZoom(zoomRef.current);
+        });
+      }
+      if (wheelEnd.current != null) window.clearTimeout(wheelEnd.current);
+      wheelEnd.current = window.setTimeout(() => {
+        wheelEnd.current = null;
+        setZoom(zoomRef.current);
+      }, 80);
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => {
+      el.removeEventListener("wheel", onWheel);
+      if (wheelEnd.current != null) window.clearTimeout(wheelEnd.current);
+    };
+  }, [bad]);
+
+  const endPan = (target: HTMLElement) => {
+    panDrag.current = null;
+    target.classList.remove("is-panning");
+    setZoom(zoomRef.current);
+  };
+
+  return (
+    <figure className="mockup-read-face">
+      <div
+        className="mockup-read-frame"
+        ref={viewRef}
+        onDragStart={(event) => event.preventDefault()}
+        onPointerDown={(event) => {
+          if (event.button !== 0 || bad) return;
+          if ((event.target as HTMLElement).closest("button, a")) return;
+          event.preventDefault();
+          panDrag.current = { x: event.clientX, y: event.clientY };
+          event.currentTarget.classList.add("is-panning");
+          event.currentTarget.setPointerCapture(event.pointerId);
+        }}
+        onPointerMove={(event) => {
+          const drag = panDrag.current;
+          if (!drag) return;
+          event.preventDefault();
+          const next = panBy(zoomRef.current, event.clientX - drag.x, event.clientY - drag.y);
+          drag.x = event.clientX;
+          drag.y = event.clientY;
+          zoomRef.current = next;
+          if (panRaf.current == null) {
+            panRaf.current = window.requestAnimationFrame(() => {
+              panRaf.current = null;
+              paintZoom(zoomRef.current);
+            });
+          }
+        }}
+        onPointerUp={(event) => endPan(event.currentTarget)}
+        onPointerCancel={(event) => endPan(event.currentTarget)}
+        onLostPointerCapture={(event) => endPan(event.currentTarget)}
+      >
+        {bad ? (
+          <p className="page-lead">这张印刷面图坏了，重新打样后才能读字。</p>
+        ) : (
+          <div className="mockup-read-zoom" ref={zoomElRef} style={{ transform: zoomCss(zoom) }}>
+            <img
+              src={fileHref(jobId, fileKey)}
+              alt={`${label}印刷面`}
+              loading="lazy"
+              draggable={false}
+              onDragStart={(event) => event.preventDefault()}
+              onError={() => setBad(true)}
+            />
+          </div>
+        )}
+        {bad ? null : (
+          <>
+            <div className="mockup-read-tools">
+              <button
+                type="button"
+                className="mockup-dl"
+                aria-label={`缩小${label}印刷面`}
+                onClick={() => zoomFromCenter(zoomRef.current.scale / 1.25)}
+              >
+                缩小
+              </button>
+              <button
+                type="button"
+                className="mockup-dl"
+                aria-label={`恢复${label}印刷面 1 倍`}
+                onClick={() => commitZoom(resetZoom())}
+              >
+                1×
+              </button>
+              <button
+                type="button"
+                className="mockup-dl"
+                aria-label={`放大${label}印刷面`}
+                onClick={() => zoomFromCenter(zoomRef.current.scale * 1.25)}
+              >
+                放大
+              </button>
+            </div>
+            <a
+              className="mockup-dl mockup-dl-fs"
+              href={fileHref(jobId, fileKey)}
+              target="_blank"
+              rel="noreferrer"
+              aria-label={`打开${label}印刷面`}
+            >
+              原图
+            </a>
+            <a
+              className="mockup-dl mockup-dl-corner"
+              href={fileHref(jobId, fileKey, true)}
+              download={downloadName}
+              aria-label={`下载${label}印刷面`}
+              onClick={onDownload}
+            >
+              下载
+            </a>
+          </>
+        )}
+      </div>
+      <figcaption className="mockup-sheet-cap">{label}</figcaption>
+    </figure>
   );
 }
 

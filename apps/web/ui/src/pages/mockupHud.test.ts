@@ -8,6 +8,7 @@ describe("mockup download hud", () => {
     assert.equal(downloadHudLine("PPT"), "正在下载PPT");
     assert.equal(downloadHudLine("GLB"), "正在下载GLB");
     assert.equal(downloadHudLine("PDF"), "正在下载PDF");
+    assert.equal(downloadHudLine("印刷面"), "正在下载印刷面");
     assert.equal(missingPptHud(), "PPT 没写成，白底仍可下");
     assert.equal(HUD_MS, 2200);
   });

@@ -3443,6 +3443,75 @@ html[data-theme="dark"] .notes.is-float {
   min-height: 0;
 }
 
+.mockup-read-faces {
+  margin-top: 28px;
+  min-width: 0;
+}
+
+.mockup-read-title {
+  margin: 0 0 6px;
+  color: #1c1a1f;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.mockup-read-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-top: 12px;
+}
+
+.mockup-read-face {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  min-width: 0;
+}
+
+.mockup-read-frame {
+  position: relative;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 280px;
+  height: min(52vh, 560px);
+  overflow: hidden;
+  border: 1px solid rgba(40, 24, 56, 0.08);
+  border-radius: 20px;
+  background: #ffffff;
+  box-shadow: 0 22px 48px rgba(40, 24, 56, 0.16);
+  touch-action: none;
+}
+
+.mockup-read-zoom {
+  width: 100%;
+  height: 100%;
+  transform-origin: 0 0;
+}
+
+.mockup-read-zoom img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #ffffff;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.mockup-read-frame.is-panning .mockup-read-zoom {
+  will-change: transform;
+}
+
+.mockup-read-tools {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  z-index: 2;
+  display: flex;
+  gap: 6px;
+}
+
 .mockup-sheet-photo {
   display: flex;
   flex-direction: column;
@@ -3682,6 +3751,10 @@ html[data-theme="dark"] .notes.is-float {
   }
 
   .mockup-sheet-photos {
+    grid-template-columns: 1fr;
+  }
+
+  .mockup-read-grid {
     grid-template-columns: 1fr;
   }
 }
