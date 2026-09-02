@@ -253,64 +253,52 @@ def structure_input_candidates(
         proposal_layers.append(
             {"id": candidate_id, "name": name, "stroke_only_path_count": count}
         )
-        raw_paths = raw.get("preview_paths")
-        if page_size_points is None or not isinstance(raw_paths, list):
-            continue
-        preview_paths: list[dict[str, Any]] = []
-        preview_truncated = raw.get("preview_truncated") is True
-        if len(raw_paths) > MAX_PROPOSAL_PREVIEW_PATHS_PER_LAYER:
-            preview_truncated = True
-            raw_paths = raw_paths[:MAX_PROPOSAL_PREVIEW_PATHS_PER_LAYER]
-        for raw_path in raw_paths:
+        consumed = _consume_preview_paths(
+            raw,
+            candidate_id,
+            page_size_points,
+            preview_layers,
+            preview_path_count,
+            preview_point_count,
+        )
+        preview_path_count, preview_point_count = consumed
+    preview_plates: list[dict[str, Any]] = []
+    raw_plates = illustrator_result.get("preview_plate_candidates")
+    if isinstance(raw_plates, list):
+        plate_names: dict[str, int] = {}
+        plate_rows: list[tuple[str, str, dict[str, Any]]] = []
+        for raw in raw_plates[:MAX_PROPOSAL_LAYER_CANDIDATES]:
+            if not isinstance(raw, dict):
+                continue
+            raw_name = raw.get("name")
+            if not isinstance(raw_name, str):
+                continue
+            display_name = raw_name.strip()
             if (
-                preview_path_count >= MAX_PROPOSAL_PREVIEW_PATHS
-                or preview_point_count >= MAX_PROPOSAL_PREVIEW_POINTS
+                not display_name
+                or len(raw_name) > 160
+                or raw.get("ambiguous_name", False) is not False
             ):
-                preview_truncated = True
-                break
-            if not isinstance(raw_path, dict) or not isinstance(raw_path.get("closed"), bool):
-                preview_truncated = True
                 continue
-            raw_points = raw_path.get("points")
-            if (
-                not isinstance(raw_points, list)
-                or len(raw_points) < 2
-                or len(raw_points) > MAX_PROPOSAL_PREVIEW_POINTS_PER_PATH
-                or preview_point_count + len(raw_points) > MAX_PROPOSAL_PREVIEW_POINTS
-            ):
-                preview_truncated = True
+            plate_rows.append((raw_name, display_name, raw))
+            plate_names[display_name] = plate_names.get(display_name, 0) + 1
+        proposal_names = {layer["name"].strip() for layer in proposal_layers}
+        for name, display_name, raw in plate_rows:
+            if plate_names[display_name] != 1 or display_name in proposal_names:
                 continue
-            points: list[list[float]] = []
-            valid_path = True
-            for raw_point in raw_points:
-                if (
-                    not isinstance(raw_point, list)
-                    or len(raw_point) != 6
-                    or any(
-                        not isinstance(value, (int, float))
-                        or isinstance(value, bool)
-                        or not math.isfinite(float(value))
-                        or abs(float(value)) > 10_000_000
-                        for value in raw_point
-                    )
-                ):
-                    valid_path = False
-                    break
-                points.append([float(value) for value in raw_point])
-            if not valid_path:
-                preview_truncated = True
-                continue
-            preview_paths.append({"closed": raw_path["closed"], "points": points})
-            preview_path_count += 1
-            preview_point_count += len(points)
-        if preview_paths:
-            preview_layers.append(
-                {
-                    "candidate_id": candidate_id,
-                    "paths": preview_paths,
-                    "truncated": preview_truncated,
-                }
+            plate_id = "preview-plate-" + hashlib.sha256(
+                (source_sha256 + "\0" + name).encode("utf-8")
+            ).hexdigest()[:16]
+            preview_plates.append({"id": plate_id, "name": name})
+            consumed = _consume_preview_paths(
+                raw,
+                plate_id,
+                page_size_points,
+                preview_layers,
+                preview_path_count,
+                preview_point_count,
             )
+            preview_path_count, preview_point_count = consumed
     if not proposal_layers:
         return None
     result = {
@@ -322,6 +310,8 @@ def structure_input_candidates(
             or len(raw_candidates) > MAX_PROPOSAL_LAYER_CANDIDATES
         ),
     }
+    if preview_plates:
+        result["preview_plates"] = preview_plates
     if page_size_points is not None and preview_layers:
         result["preview"] = {
             "schema": STRUCTURE_INPUT_PREVIEW_SCHEMA,
@@ -329,6 +319,75 @@ def structure_input_candidates(
             "layers": preview_layers,
         }
     return result
+
+
+def _consume_preview_paths(
+    raw: dict[str, Any],
+    candidate_id: str,
+    page_size_points: list[float] | None,
+    preview_layers: list[dict[str, Any]],
+    preview_path_count: int,
+    preview_point_count: int,
+) -> tuple[int, int]:
+    raw_paths = raw.get("preview_paths")
+    if page_size_points is None or not isinstance(raw_paths, list):
+        return preview_path_count, preview_point_count
+    preview_paths: list[dict[str, Any]] = []
+    preview_truncated = raw.get("preview_truncated") is True
+    if len(raw_paths) > MAX_PROPOSAL_PREVIEW_PATHS_PER_LAYER:
+        preview_truncated = True
+        raw_paths = raw_paths[:MAX_PROPOSAL_PREVIEW_PATHS_PER_LAYER]
+    for raw_path in raw_paths:
+        if (
+            preview_path_count >= MAX_PROPOSAL_PREVIEW_PATHS
+            or preview_point_count >= MAX_PROPOSAL_PREVIEW_POINTS
+        ):
+            preview_truncated = True
+            break
+        if not isinstance(raw_path, dict) or not isinstance(raw_path.get("closed"), bool):
+            preview_truncated = True
+            continue
+        raw_points = raw_path.get("points")
+        if (
+            not isinstance(raw_points, list)
+            or len(raw_points) < 2
+            or len(raw_points) > MAX_PROPOSAL_PREVIEW_POINTS_PER_PATH
+            or preview_point_count + len(raw_points) > MAX_PROPOSAL_PREVIEW_POINTS
+        ):
+            preview_truncated = True
+            continue
+        points: list[list[float]] = []
+        valid_path = True
+        for raw_point in raw_points:
+            if (
+                not isinstance(raw_point, list)
+                or len(raw_point) != 6
+                or any(
+                    not isinstance(value, (int, float))
+                    or isinstance(value, bool)
+                    or not math.isfinite(float(value))
+                    or abs(float(value)) > 10_000_000
+                    for value in raw_point
+                )
+            ):
+                valid_path = False
+                break
+            points.append([float(value) for value in raw_point])
+        if not valid_path:
+            preview_truncated = True
+            continue
+        preview_paths.append({"closed": raw_path["closed"], "points": points})
+        preview_path_count += 1
+        preview_point_count += len(points)
+    if preview_paths:
+        preview_layers.append(
+            {
+                "candidate_id": candidate_id,
+                "paths": preview_paths,
+                "truncated": preview_truncated,
+            }
+        )
+    return preview_path_count, preview_point_count
 
 
 def is_smoke_template(path: Path) -> bool:
