@@ -137,6 +137,7 @@ const MAX_STRUCTURE_INPUT_PREVIEW_PATHS = 5_000;
 const MAX_STRUCTURE_INPUT_PREVIEW_POINTS = 20_000;
 const MAX_STRUCTURE_INPUT_PREVIEW_PATHS_PER_LAYER = 512;
 const MAX_STRUCTURE_INPUT_PREVIEW_POINTS_PER_PATH = 256;
+const MAX_STRUCTURE_INPUT_PREVIEW_RAW_LAYERS = MAX_STRUCTURE_INPUT_CANDIDATES * 2;
 const MAX_STRUCTURE_RESOLUTION_BYTES = 25 * 1024 * 1024;
 const MIN_ASSEMBLY_MEMBER_RATIO = 0.45;
 const MAX_ASSEMBLY_MEMBER_RATIO = 0.55;
@@ -441,21 +442,22 @@ function normalizeStructureInputPreview(
     || size.some((number) => number < 1 || number > 1_000_000)
     || !Array.isArray(rawLayers)
     || rawLayers.length < 1
-    || rawLayers.length > candidateIds.size
+    || rawLayers.length > MAX_STRUCTURE_INPUT_PREVIEW_RAW_LAYERS
   ) return undefined;
   const layers: StructureInputPreview["layers"] = [];
   const seen = new Set<string>();
-  let pathCount = 0;
-  let pointCount = 0;
+  let proposalPathCount = 0;
+  let proposalPointCount = 0;
+  let platePathCount = 0;
+  let platePointCount = 0;
   for (const rawLayer of rawLayers) {
     if (!rawLayer || typeof rawLayer !== "object" || Array.isArray(rawLayer)) return undefined;
     const layer = rawLayer as Record<string, unknown>;
     const candidateId = typeof layer.candidate_id === "string" ? layer.candidate_id : "";
     const rawPaths = layer.paths;
+    if (!candidateIds.has(candidateId) || seen.has(candidateId)) continue;
     if (
-      !candidateIds.has(candidateId)
-      || seen.has(candidateId)
-      || typeof layer.truncated !== "boolean"
+      typeof layer.truncated !== "boolean"
       || !Array.isArray(rawPaths)
       || rawPaths.length < 1
       || rawPaths.length > MAX_STRUCTURE_INPUT_PREVIEW_PATHS_PER_LAYER
@@ -477,17 +479,27 @@ function normalizeStructureInputPreview(
         if (!point || point.some((number) => Math.abs(number) > 10_000_000)) return undefined;
         points.push(point as StructureInputPreviewPoint);
       }
-      pathCount += 1;
-      pointCount += points.length;
-      if (
-        pathCount > MAX_STRUCTURE_INPUT_PREVIEW_PATHS
-        || pointCount > MAX_STRUCTURE_INPUT_PREVIEW_POINTS
-      ) return undefined;
+      if (candidateId.startsWith("preview-plate-")) {
+        platePathCount += 1;
+        platePointCount += points.length;
+        if (
+          platePathCount > MAX_STRUCTURE_INPUT_PREVIEW_PATHS
+          || platePointCount > MAX_STRUCTURE_INPUT_PREVIEW_POINTS
+        ) return undefined;
+      } else {
+        proposalPathCount += 1;
+        proposalPointCount += points.length;
+        if (
+          proposalPathCount > MAX_STRUCTURE_INPUT_PREVIEW_PATHS
+          || proposalPointCount > MAX_STRUCTURE_INPUT_PREVIEW_POINTS
+        ) return undefined;
+      }
       paths.push({ closed: path.closed, points });
     }
     seen.add(candidateId);
     layers.push({ candidate_id: candidateId, paths, truncated: layer.truncated });
   }
+  if (!layers.length) return undefined;
   return {
     schema: STRUCTURE_INPUT_PREVIEW_SCHEMA,
     page_size_points: size as [number, number],
@@ -566,7 +578,7 @@ function normalizePreviewPlates(
   const ids = new Set<string>();
   const names = new Set<string>();
   for (const raw of value) {
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return [];
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
     const plate = raw as Record<string, unknown>;
     const id = typeof plate.id === "string" ? plate.id : "";
     const name = typeof plate.name === "string" ? plate.name : "";
@@ -582,7 +594,7 @@ function normalizePreviewPlates(
       || names.has(displayName)
       || takenIds.has(id)
       || takenNames.has(displayName)
-    ) return [];
+    ) continue;
     ids.add(id);
     names.add(displayName);
     plates.push({ id, name });

@@ -274,6 +274,57 @@ describe("mockup structure confirmation persistence", () => {
     assert.equal("preview_plates" in publicMockupSummary(job), false);
   });
 
+  it("drops a bad process plate without taking the cut overlay with it", () => {
+    const { job, sourceHash } = structureInputJob();
+    const plate = { id: previewPlateId(sourceHash, "烫雅银"), name: "烫雅银" };
+    const resolutionPath = job.structure_resolution_path || "";
+    const resolution = JSON.parse(readFileSync(resolutionPath, "utf8"));
+    resolution.input_candidates.preview_plates = [
+      { id: "preview-plate-deadbeefdeadbeef", name: "坏板" },
+      plate,
+    ];
+    resolution.input_candidates.preview.layers.push({
+      candidate_id: plate.id,
+      paths: [{
+        closed: true,
+        points: [
+          [12, 18, 12, 18, 12, 18],
+          [30, 18, 30, 18, 30, 18],
+        ],
+      }],
+      truncated: false,
+    });
+    writeFileSync(resolutionPath, JSON.stringify(resolution));
+
+    const view = publicMockup(job);
+    assert.deepEqual(view.structure_input?.preview_plates, [plate]);
+    const ids = view.structure_input?.preview?.layers.map((layer) => layer.candidate_id) || [];
+    assert.equal(ids.includes(plate.id), true);
+    assert.equal(ids.some((id) => id.startsWith("proposal-layer-")), true);
+  });
+
+  it("ignores an unknown preview-plate layer instead of dropping the whole overlay", () => {
+    const { job, layers, sourceHash } = structureInputJob();
+    const resolutionPath = job.structure_resolution_path || "";
+    const resolution = JSON.parse(readFileSync(resolutionPath, "utf8"));
+    resolution.input_candidates.preview.layers.push({
+      candidate_id: previewPlateId(sourceHash, "幽灵板"),
+      paths: [{
+        closed: false,
+        points: [
+          [1, 2, 1, 2, 1, 2],
+          [3, 4, 3, 4, 3, 4],
+        ],
+      }],
+      truncated: false,
+    });
+    writeFileSync(resolutionPath, JSON.stringify(resolution));
+
+    const view = publicMockup(job);
+    const ids = view.structure_input?.preview?.layers.map((layer) => layer.candidate_id) || [];
+    assert.deepEqual(ids, layers.map((layer) => layer.id));
+  });
+
   it("preserves exact Illustrator names and fails whitespace-equivalent candidates closed", () => {
     const { job, layers, sourceHash } = structureInputJob();
     assert.equal(layers[1].name, " 折线 ");
@@ -336,8 +387,8 @@ describe("mockup structure confirmation persistence", () => {
     assert.equal(input?.image_url, `/api/mockups/${job.id}/structure-input-preview`);
   });
 
-  it("drops oversized, infinite, or cross-id advisory preview without blocking selection", () => {
-    const cases: Array<(preview: Record<string, unknown>, layers: Array<{ id: string }>) => void> = [
+  it("drops oversized, infinite, or malformed advisory preview without blocking selection", () => {
+    const cases: Array<(preview: Record<string, unknown>) => void> = [
       (preview) => {
         const layer = (preview.layers as Array<{ paths: unknown[] }>)[0];
         layer.paths = Array.from({ length: 513 }, () => layer.paths[0]);
@@ -350,25 +401,83 @@ describe("mockup structure confirmation persistence", () => {
         const layer = (preview.layers as Array<{ paths: Array<{ points: unknown }> }>)[0];
         layer.paths[0].points = [[0, 0], [1, 1]];
       },
-      (preview) => {
-        (preview.layers as Array<{ candidate_id: string }>)[0].candidate_id = "proposal-layer-deadbeefdeadbeef";
-      },
-      (preview, layers) => {
-        const copy = structuredClone((preview.layers as unknown[])[0]);
-        (copy as { candidate_id: string }).candidate_id = layers[0].id;
-        (preview.layers as unknown[]).push(copy);
-      },
     ];
     for (const mutate of cases) {
       const { job, layers } = structureInputJob();
       const resolutionPath = job.structure_resolution_path || "";
       const resolution = JSON.parse(readFileSync(resolutionPath, "utf8"));
-      mutate(resolution.input_candidates.preview, layers);
+      mutate(resolution.input_candidates.preview);
       writeFileSync(resolutionPath, JSON.stringify(resolution));
       const input = publicMockup(job).structure_input;
       assert.deepEqual(input?.proposal_layers, layers);
       assert.equal(input?.preview, undefined);
     }
+  });
+
+  it("skips unknown or duplicate overlay layers without dropping the rest", () => {
+    const { job, layers } = structureInputJob();
+    const resolutionPath = job.structure_resolution_path || "";
+    const resolution = JSON.parse(readFileSync(resolutionPath, "utf8"));
+    resolution.input_candidates.preview.layers[0].candidate_id = "proposal-layer-deadbeefdeadbeef";
+    const copy = structuredClone(resolution.input_candidates.preview.layers[1]);
+    copy.candidate_id = layers[1].id;
+    resolution.input_candidates.preview.layers.push(copy);
+    writeFileSync(resolutionPath, JSON.stringify(resolution));
+
+    const input = publicMockup(job).structure_input;
+    assert.deepEqual(input?.proposal_layers, layers);
+    assert.deepEqual(
+      input?.preview?.layers.map((layer) => layer.candidate_id),
+      [layers[1].id],
+    );
+  });
+
+  it("keeps process-plate overlay when knife overlay already used the proposal budget", () => {
+    const { job, layers, sourceHash } = structureInputJob();
+    const plate = { id: previewPlateId(sourceHash, "烫雅银"), name: "烫雅银" };
+    const resolutionPath = job.structure_resolution_path || "";
+    const resolution = JSON.parse(readFileSync(resolutionPath, "utf8"));
+    const point: [number, number, number, number, number, number] = [10, 20, 10, 20, 10, 20];
+    resolution.input_candidates.preview_plates = [plate];
+    resolution.input_candidates.preview.layers = [
+      {
+        candidate_id: layers[0].id,
+        truncated: false,
+        paths: Array.from({ length: 80 }, () => ({
+          closed: false,
+          points: Array.from({ length: 250 }, () => [...point]),
+        })),
+      },
+      {
+        candidate_id: plate.id,
+        truncated: false,
+        paths: [{
+          closed: true,
+          points: [
+            [12, 18, 12, 18, 12, 18],
+            [30, 18, 30, 18, 30, 18],
+          ],
+        }],
+      },
+    ];
+    writeFileSync(resolutionPath, JSON.stringify(resolution));
+
+    const ids = publicMockup(job).structure_input?.preview?.layers.map((layer) => layer.candidate_id) || [];
+    assert.deepEqual(ids, [layers[0].id, plate.id]);
+  });
+
+  it("drops advisory preview when every overlay layer is unknown", () => {
+    const { job, layers } = structureInputJob();
+    const resolutionPath = job.structure_resolution_path || "";
+    const resolution = JSON.parse(readFileSync(resolutionPath, "utf8"));
+    for (const layer of resolution.input_candidates.preview.layers) {
+      layer.candidate_id = "proposal-layer-deadbeefdeadbeef";
+    }
+    writeFileSync(resolutionPath, JSON.stringify(resolution));
+
+    const input = publicMockup(job).structure_input;
+    assert.deepEqual(input?.proposal_layers, layers);
+    assert.equal(input?.preview, undefined);
   });
 
   it("inlines a truncated advisory preview subset when the geometry is otherwise valid", () => {
