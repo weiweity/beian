@@ -57,13 +57,20 @@ function uniqueProposalLayerByName(input: StructureInput, name: string) {
   return hits.length === 1 ? hits[0] : undefined;
 }
 
+function uniqueFactoryKnifeLayer(input: StructureInput) {
+  const knives = input.proposal_layers.filter((candidate) => candidate.name === "刀版" || candidate.name === "刀线");
+  const names = new Set(knives.map((candidate) => candidate.name));
+  if (names.size !== 1 || knives.length !== 1) return undefined;
+  return knives[0];
+}
+
 export function defaultStructureLayerIds(input: StructureInput): string[] {
   if (input.selected_ids.length) return selectedStructureLayerIds(input, input.selected_ids);
-  const cut = uniqueProposalLayerByName(input, "上刀线") || uniqueProposalLayerByName(input, "刀线");
+  const cut = uniqueProposalLayerByName(input, "上刀线") || uniqueFactoryKnifeLayer(input);
   const print = uniqueProposalLayerByName(input, "印刷");
   const ids: string[] = [];
   if (cut) ids.push(cut.id);
-  if (print) ids.push(print.id);
+  if (cut && print) ids.push(print.id);
   return selectedStructureLayerIds(input, ids);
 }
 
@@ -89,7 +96,13 @@ export function structureStatusLabel(job: Pick<MockupJob, "structure_status">): 
 export function structureIssueCopy(job: Pick<MockupJob, "structure_code" | "structure_message">): string {
   const message = String(job.structure_message || "").trim();
   if (job.structure_code === "structure_semantics_missing") {
-    return "稿件里没有明确的 cut / crease 结构语义。请在 Illustrator 对象名、备注或图层上使用 packaging:cut 与 packaging:crease，再重新上传。";
+    return "稿件里没有可自动识别的刀版。请勾选「刀版」或「刀线」后重新识别；表、标注、印刷不要当结构层。";
+  }
+  if (job.structure_code === "structure_flattened_artwork") {
+    return "当前不支持（拼合稿）。请用还留着印刷/刀版分层的源稿重新打样，不要只交「图层 1」。";
+  }
+  if (job.structure_code === "structure_category_unsupported") {
+    return message || "当前不支持这类包装。打样台只做花盒展开图，膜袋、内包和标贴请不要送进来。";
   }
   if (job.structure_code === "structure_open_boundary") {
     return "刀线或折线存在断口，闭合后重新识别；系统不会自动补线。";
@@ -101,7 +114,7 @@ export function structureIssueCopy(job: Pick<MockupJob, "structure_code" | "stru
     return "结构单位不明确，请确认使用 mm、pt 或 inch 后重新导出。";
   }
   if (job.structure_code === "structure_box_net_missing") {
-    return "当前结构线还不能组成连续盒身和上下封口。请检查真实刀线/折线语义后重新上传；系统不会按颜色或白色区域猜外盒。";
+    return "这组线组不成花盒。只留刀版或刀线再识别；系统不会按颜色或白色区域猜外盒。";
   }
   if (job.structure_code === "structure_limit_exceeded" || job.structure_code === "structure_curve_complexity_exceeded") {
     return "结构线数量或曲线复杂度超过安全上限。请在 Illustrator 中只保留本次刀版的结构线并简化异常路径后重新上传。";

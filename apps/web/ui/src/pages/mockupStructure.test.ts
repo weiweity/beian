@@ -121,8 +121,8 @@ describe("mockup V2 structure UX", () => {
       [print.id],
     );
     const onlyPrint = { ...empty, proposal_layers: [print] };
-    assert.deepEqual(defaultStructureLayerIds(onlyPrint), [print.id]);
-    assert.equal(shouldAutoSubmitStructureLayers(onlyPrint), true);
+    assert.deepEqual(defaultStructureLayerIds(onlyPrint), []);
+    assert.equal(shouldAutoSubmitStructureLayers(onlyPrint), false);
     assert.equal(shouldAutoSubmitStructureLayers(already), false);
     assert.equal(shouldAutoSubmitStructureLayers({ ...empty, proposal_layers: [] }), false);
     assert.equal(shouldAutoSubmitStructureLayers({ ...empty, proposal_layers: [crease] }), false);
@@ -138,6 +138,15 @@ describe("mockup V2 structure UX", () => {
     const bothCuts = { ...empty, proposal_layers: [topCut, otherCut, print] };
     assert.deepEqual(defaultStructureLayerIds(bothCuts), [topCut.id, print.id]);
     assert.equal(shouldAutoSubmitStructureLayers(bothCuts), true);
+    const board = { ...cut, id: "proposal-layer-bbbbbbbbbbbbbb01", name: "刀版" };
+    const boardOnly = { ...empty, proposal_layers: [board, crease, print] };
+    assert.deepEqual(defaultStructureLayerIds(boardOnly), [board.id, print.id]);
+    assert.equal(shouldAutoSubmitStructureLayers(boardOnly), false);
+    const bothKnives = { ...empty, proposal_layers: [cut, board] };
+    assert.deepEqual(defaultStructureLayerIds(bothKnives), []);
+    const printOnly = { ...empty, proposal_layers: [print] };
+    assert.deepEqual(defaultStructureLayerIds(printOnly), []);
+    assert.equal(shouldAutoSubmitStructureLayers(printOnly), false);
   });
 
   it("distinguishes a human confirmation from a failed mockup", () => {
@@ -145,9 +154,17 @@ describe("mockup V2 structure UX", () => {
     assert.equal(structureStatusLabel({ structure_status: "unsupported" }), "结构暂不支持");
     assert.match(
       structureIssueCopy({ structure_code: "structure_semantics_missing" }),
-      /packaging:cut.*packaging:crease/,
+      /刀版/,
     );
-    assert.match(structureIssueCopy({ structure_code: "structure_box_net_missing" }), /不会按颜色/);
+    assert.doesNotMatch(
+      structureIssueCopy({ structure_code: "structure_semantics_missing" }),
+      /packaging:cut/,
+    );
+    assert.match(structureIssueCopy({ structure_code: "structure_box_net_missing" }), /组不成花盒/);
+    assert.match(
+      structureIssueCopy({ structure_code: "structure_flattened_artwork" }),
+      /拼合稿/,
+    );
     assert.match(structureIssueCopy({ structure_code: "structure_limit_exceeded" }), /安全上限/);
   });
 
