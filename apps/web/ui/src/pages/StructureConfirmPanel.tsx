@@ -6,6 +6,7 @@ import {
   sameStructureLayerSelection,
   selectedStructureLayerIds,
   defaultStructureLayerIds,
+  shouldAutoSubmitStructureLayers,
   selectedStructureAnchor,
   structureConfirmationErrorCopy,
   structureIssueCopy,
@@ -18,6 +19,7 @@ import {
 
 const STRUCTURE_INPUT_GUIDE_KEY = "beian:structure-input-guide:v1";
 const STRUCTURE_PREVIEW_ZOOMS = [1, 1.5, 2, 3, 4, 6] as const;
+const autoSubmittedStructureJobs = new Set<string>();
 
 type Props = {
   job: MockupJob;
@@ -48,6 +50,7 @@ export function StructureConfirmPanel({ job, canConfirmStructure, onConfirmed }:
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const submitLock = useRef(false);
+  const autoSubmitLock = useRef("");
   const proposal = proposals.find((item) => item.id === proposalId) || proposals[0];
   const proposalIndex = Math.max(0, proposals.findIndex((item) => item.id === proposal?.id));
   const proposalFaceIds = useMemo(() => new Set(proposal?.face_ids || []), [proposal]);
@@ -177,9 +180,43 @@ export function StructureConfirmPanel({ job, canConfirmStructure, onConfirmed }:
     }
   }
 
+  const layerPickerOpen = Boolean(
+    job.structure_status === "review_required"
+    && structureInput?.proposal_layers.length
+    && !proposals.length,
+  );
+  const hadSelection = currentLayerIds.length > 0;
+  const autoSubmitLayers = Boolean(
+    layerPickerOpen
+    && structureInput
+    && shouldAutoSubmitStructureLayers(structureInput)
+    && canConfirmStructure
+    && !hadSelection
+    && !layerSelectionError,
+  );
+
+  useEffect(() => {
+    if (!autoSubmitLayers || selectingLayers || !normalizedLayerIds.length || sameLayerSelection) return;
+    if (autoSubmittedStructureJobs.has(job.id) || autoSubmitLock.current === job.id) return;
+    autoSubmittedStructureJobs.add(job.id);
+    autoSubmitLock.current = job.id;
+    void submitLayers();
+  }, [autoSubmitLayers, job.id, normalizedLayerIds.length, sameLayerSelection, selectingLayers]);
+
   const issue = structureIssueCopy(job);
-  if (job.structure_status === "review_required" && structureInput?.proposal_layers.length && !proposals.length) {
-    const hadSelection = currentLayerIds.length > 0;
+  if (layerPickerOpen && structureInput) {
+    if (autoSubmitLayers) {
+      return (
+        <div className="structure-confirm">
+          <Alert
+            type="info"
+            showIcon
+            title="正在识别完整盒型"
+            description="已按本稿默认结构层处理，不展示选层。下一步请选择产品正面。"
+          />
+        </div>
+      );
+    }
     return (
       <div className="structure-confirm structure-input-confirm">
         <Alert

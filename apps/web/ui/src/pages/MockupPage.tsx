@@ -18,6 +18,7 @@ import { stemFromFilename } from "./stemName";
 import { HUD_MS, downloadHudLine, missingPptHud } from "./mockupHud";
 import { panBy, resetZoom, zoomAt, zoomCss, type ZoomState } from "./canvasZoom";
 import { listedReadFaces, READ_FACE_LABEL, readFaceKey } from "./mockupReadFaces";
+import { clampStudioLight, glbExposure, stillsFilter, STUDIO_LIGHT_DEFAULT, STUDIO_LIGHT_MAX, STUDIO_LIGHT_MIN } from "./mockupStudio";
 import { deskClock, type DeskCardRow } from "./deskBoard";
 import { DeskCol } from "./DeskCol";
 import { shouldShowTaskBoard } from "./tasksBoard";
@@ -703,6 +704,7 @@ export function MockupJobPage({ jobId, canConfirmStructure, onBack }: JobProps &
   const [error, setError] = useState<string | null>(null);
   const [hud, setHud] = useState("");
   const [glbFs, setGlbFs] = useState(false);
+  const [studioLight, setStudioLight] = useState(STUDIO_LIGHT_DEFAULT);
   const glbBox = useRef<HTMLDivElement>(null);
   const hudTimer = useRef<number | null>(null);
   const announced = useRef("");
@@ -894,6 +896,21 @@ export function MockupJobPage({ jobId, canConfirmStructure, onBack }: JobProps &
         <div>
           <h1 className="page-title">{mockTitle(job)}</h1>
           <p className="page-lead">打样单。上面三张看形；下面印刷面读字，可放大。不要用 GLB 读小字。</p>
+          <label className="mockup-studio-light">
+            灯光
+            <input
+              aria-label="灯光"
+              aria-valuemax={STUDIO_LIGHT_MAX}
+              aria-valuemin={STUDIO_LIGHT_MIN}
+              aria-valuenow={studioLight}
+              max={STUDIO_LIGHT_MAX}
+              min={STUDIO_LIGHT_MIN}
+              onChange={(event) => setStudioLight(clampStudioLight(Number(event.target.value)))}
+              step={0.02}
+              type="range"
+              value={studioLight}
+            />
+          </label>
         </div>
         <div className="mockup-sheet-head-actions">
           <button type="button" className="btn-ghost" onClick={onBack}>
@@ -928,6 +945,7 @@ export function MockupJobPage({ jobId, canConfirmStructure, onBack }: JobProps &
             alt="正面与侧面白底"
             caption="正面 + 侧面"
             downloadName={whiteA.name}
+            filter={stillsFilter(studioLight)}
             onDownload={() => notice(downloadHudLine("白底"))}
           />
         ) : (
@@ -945,6 +963,7 @@ export function MockupJobPage({ jobId, canConfirmStructure, onBack }: JobProps &
             alt="反面与侧面白底"
             caption="反面 + 侧面"
             downloadName={whiteB.name}
+            filter={stillsFilter(studioLight)}
             onDownload={() => notice(downloadHudLine("白底"))}
           />
         ) : (
@@ -962,7 +981,7 @@ export function MockupJobPage({ jobId, canConfirmStructure, onBack }: JobProps &
                 src={fileHref(job.id, "glb")}
                 camera-controls
                 environment-image="neutral"
-                exposure="0.9"
+                exposure={glbExposure(studioLight)}
                 shadow-intensity="1"
                 shadow-softness="0.25"
                 tone-mapping="commerce"
@@ -1227,6 +1246,7 @@ function WhiteShot({
   alt,
   caption,
   downloadName,
+  filter,
   onDownload,
 }: {
   jobId: string;
@@ -1234,6 +1254,7 @@ function WhiteShot({
   alt: string;
   caption: string;
   downloadName?: string;
+  filter: string;
   onDownload: () => void;
 }) {
   const [bad, setBad] = useState(false);
@@ -1243,7 +1264,7 @@ function WhiteShot({
         {bad ? (
           <p className="page-lead">这张白底图坏了，回到打样台重新打。</p>
         ) : (
-          <img src={fileHref(jobId, fileKey)} alt={alt} onError={() => setBad(true)} />
+          <img src={fileHref(jobId, fileKey)} alt={alt} onError={() => setBad(true)} style={{ filter }} />
         )}
         {bad ? null : (
           <>
