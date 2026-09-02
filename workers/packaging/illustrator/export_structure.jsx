@@ -257,11 +257,17 @@ function appendProposalPreview(candidate, item, artboardLeft, artboardTop, budge
         candidate.preview_paths = [];
         candidate.preview_truncated = false;
     }
+    if (
+        candidate.preview_paths.length >= MAX_PROPOSAL_PREVIEW_PATHS_PER_LAYER ||
+        budget.paths >= MAX_PROPOSAL_PREVIEW_PATHS ||
+        budget.points + 2 > MAX_PROPOSAL_PREVIEW_POINTS
+    ) {
+        candidate.preview_truncated = true;
+        return;
+    }
     var preview = proposalPreviewPath(item, artboardLeft, artboardTop);
     if (
         preview === null ||
-        candidate.preview_paths.length >= MAX_PROPOSAL_PREVIEW_PATHS_PER_LAYER ||
-        budget.paths >= MAX_PROPOSAL_PREVIEW_PATHS ||
         budget.points + preview.points.length > MAX_PROPOSAL_PREVIEW_POINTS
     ) {
         candidate.preview_truncated = true;
@@ -885,6 +891,8 @@ try {
     var proposalLayerKeys = [];
     var previewPlateKeys = [];
     var proposalPreviewBudget = {paths: 0, points: 0};
+    var platePreviewBudget = {paths: 0, points: 0};
+    var remainderItems = [];
     for (var pathIndex = 0; pathIndex < documentRef.pathItems.length; pathIndex += 1) {
         var item = documentRef.pathItems[pathIndex];
         if (item.clipping) {
@@ -895,25 +903,34 @@ try {
             explicitRecords.push({item: item, pathIndex: pathIndex, assignment: assignment});
         } else if (configuredProposalLayer(item, config)) {
             proposalRecords.push({item: item, pathIndex: pathIndex, assignment: "crease"});
-        } else if (recordProposalLayerCandidate(
-            result.proposal_layer_candidates,
-            proposalLayerKeys,
-            item,
-            artboard[0],
-            artboard[1],
-            proposalPreviewBudget
-        )) {
-            result.proposal_layer_candidates_truncated = true;
-        } else if (recordPreviewPlateCandidate(
-            result.preview_plate_candidates,
-            previewPlateKeys,
-            proposalLayerKeys,
-            item,
-            artboard[0],
-            artboard[1],
-            proposalPreviewBudget
-        )) {
-            result.preview_plate_candidates_truncated = true;
+        } else {
+            if (recordProposalLayerCandidate(
+                result.proposal_layer_candidates,
+                proposalLayerKeys,
+                item,
+                artboard[0],
+                artboard[1],
+                proposalPreviewBudget
+            )) {
+                result.proposal_layer_candidates_truncated = true;
+            }
+            remainderItems.push(item);
+        }
+    }
+    if (explicitRecords.length === 0) {
+        for (var plateIndex = 0; plateIndex < remainderItems.length; plateIndex += 1) {
+            if (recordPreviewPlateCandidate(
+                result.preview_plate_candidates,
+                previewPlateKeys,
+                proposalLayerKeys,
+                remainderItems[plateIndex],
+                artboard[0],
+                artboard[1],
+                platePreviewBudget
+            )) {
+                result.preview_plate_candidates_truncated = true;
+                break;
+            }
         }
     }
     if (explicitRecords.length > 0) {
