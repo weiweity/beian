@@ -52,6 +52,11 @@ export function selectedStructureLayerIds(input: StructureInput, selectedIds: st
     .map((candidate) => candidate.id);
 }
 
+function uniqueProposalLayerByName(input: StructureInput, name: string) {
+  const hits = input.proposal_layers.filter((candidate) => candidate.name === name);
+  return hits.length === 1 ? hits[0] : undefined;
+}
+
 function uniqueFactoryKnifeLayer(input: StructureInput) {
   const knives = input.proposal_layers.filter((candidate) => candidate.name === "刀版" || candidate.name === "刀线");
   const names = new Set(knives.map((candidate) => candidate.name));
@@ -61,8 +66,18 @@ function uniqueFactoryKnifeLayer(input: StructureInput) {
 
 export function defaultStructureLayerIds(input: StructureInput): string[] {
   if (input.selected_ids.length) return selectedStructureLayerIds(input, input.selected_ids);
-  const knife = uniqueFactoryKnifeLayer(input);
-  return knife ? [knife.id] : [];
+  const cut = uniqueProposalLayerByName(input, "上刀线") || uniqueFactoryKnifeLayer(input);
+  const print = uniqueProposalLayerByName(input, "印刷");
+  const ids: string[] = [];
+  if (cut) ids.push(cut.id);
+  if (cut && print) ids.push(print.id);
+  return selectedStructureLayerIds(input, ids);
+}
+
+export function shouldAutoSubmitStructureLayers(input: StructureInput): boolean {
+  if (input.selected_ids.length) return false;
+  if (!defaultStructureLayerIds(input).length) return false;
+  return Boolean(uniqueProposalLayerByName(input, "上刀线")) || input.proposal_layers.length === 1;
 }
 
 export function sameStructureLayerSelection(input: StructureInput, selectedIds: string[]): boolean {

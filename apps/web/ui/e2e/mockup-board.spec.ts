@@ -126,6 +126,18 @@ test("完成态打样单可在新窗口打开两张内联原图", async ({ page,
 
   await page.goto(`/mockup/${mockup.id}`);
 
+  const light = page.getByRole("slider", { name: "灯光" });
+  await expect(light).toBeVisible();
+  await expect(page.locator(".mockup-sheet-photo .mockup-sheet-frame img").first()).toHaveCSS(
+    "filter",
+    /contrast\(1\.12\).*brightness\(1\)/,
+  );
+  await light.fill("1.2");
+  await expect(page.locator(".mockup-sheet-photo .mockup-sheet-frame img").first()).toHaveCSS(
+    "filter",
+    /brightness\(1\.2\)/,
+  );
+
   const originalLinks = page.getByRole("link", { name: /打开.+原图/ });
   await expect(originalLinks).toHaveCount(2);
   await expect(originalLinks.nth(0)).toHaveAttribute("href", `/api/mockups/${mockup.id}/files/white_a`);
