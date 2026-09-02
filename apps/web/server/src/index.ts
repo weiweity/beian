@@ -153,7 +153,7 @@ type NodeBindings = HttpBindings | Http2Bindings;
 type Env = { Bindings: NodeBindings; Variables: { session: Session } };
 
 const app = new Hono<Env>();
-const VERSION = "0.21.15.0";
+const VERSION = "0.21.16.0";
 const STRUCTURE_INPUT_BODY_BYTES = 16 * 1024;
 
 class ApiProblem extends Error {

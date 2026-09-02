@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.21.16.0] - 2026-09-02
+
+### Added
+
+- 打样中和打样失败可以重试，用机上已有稿再排，不必重传。
+- 打样单产品和背景灯光分开调；下载白底跟当前灯光走；点原图进灯箱也能调。
+
+### Changed
+
+- 白底静帧改成透明产品层，网页再套白底，盒子和背景能分开看。PPT 和备案 PDF 导出时仍铺白。
+
+### For contributors
+
+- `POST /api/mockups/:id/retry`：先确认旧 worker 已退出再改 queued，杀不掉就 409，避免杭州单槽叠跑。结构已 ready 的单跳过 Illustrator。静帧磁盘保留 RGBA；`png_bytes_over_white` 只给 PPT/PDF。L0 不替代杭州 L1。
+
 ## [0.21.15.0] - 2026-09-02
 
 ### Changed
