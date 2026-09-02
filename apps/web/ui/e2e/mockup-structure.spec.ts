@@ -320,8 +320,9 @@ test("没有结构确认权限时唯一上刀线也不自动提交", async ({ pa
   }));
 
   await page.goto(`/mockup/${mockup.id}`);
-  await expect(page.getByRole("checkbox")).toHaveCount(1);
-  await expect(page.getByText("当前账号不能选择结构图层。")).toBeVisible();
+  await expect(page.getByRole("checkbox")).toHaveCount(0);
+  await expect(page.getByText("重新识别完整盒型")).toHaveCount(0);
+  await expect(page.getByText("打样失败。稿件里没有可自动识别的刀版。")).toBeVisible();
   const selection = syntheticApi.calls.find(
     (call) => call.method === "POST" && call.path === `/api/mockups/${mockup.id}/structure/input`,
   );
@@ -762,7 +763,7 @@ test("审稿员可以选择正面并生成打样图", async ({ page, syntheticAp
 
   await page.goto(`/mockup/${mockup.id}`);
 
-  await expect(page.getByText("确认左侧是这次要生成的包装，点击印有品名和主视觉的一面，最后点生成打样图。")).toBeVisible();
+  await expect(page.getByText("确认左侧是这次要生成的包装，点击印有品名和主视觉的一面。")).toBeVisible();
   await expect(page.locator(".structure-map")).toBeVisible();
   const frontA = page.locator(".structure-front-choices").getByRole("button", { name: "A 面" });
   await expect(frontA).toBeEnabled();

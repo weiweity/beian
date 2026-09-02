@@ -91,6 +91,7 @@ import {
   prepareStructureInputSelection,
   queueMockup,
   finishStructureConfirmation,
+  uniquePublishedNetId,
   structureConfirmationFailureStatus,
   type StructureAnchorDecision,
   type StructureConfirmationDecision,
@@ -210,6 +211,10 @@ function need(
   if (!s) throw new HTTPException(401, { message: "未登录" });
   if (!hasPerm(s.role as Role, perm)) throw new HTTPException(403, { message: deniedMessage });
   return s;
+}
+
+function publishMockup(job: Parameters<typeof publicMockup>[0], s: Session) {
+  return publicMockup(job, { structureDesk: s.role === "admin" });
 }
 
 function safeLogCause(err: unknown): string {
@@ -747,7 +752,7 @@ app.post("/api/mockups/start", async (c) => {
     const existing = findMockupBySourceReceipt(receiptId, owner);
     if (existing) {
       discardReceipt(receiptId, owner);
-      return c.json(decorateQueueAhead([publicMockup(existing)])[0]);
+      return c.json(decorateQueueAhead([publishMockup(existing, s)])[0]);
     }
     let illustratorExecutable: string;
     try {
@@ -763,7 +768,7 @@ app.post("/api/mockups/start", async (c) => {
     const claim = claimReceipt(receiptId, owner);
     if (!claim) {
       const recovered = findMockupBySourceReceipt(receiptId, owner);
-      if (recovered) return c.json(decorateQueueAhead([publicMockup(recovered)])[0]);
+      if (recovered) return c.json(decorateQueueAhead([publishMockup(recovered, s)])[0]);
       throw expiredUpload();
     }
     const rec = claim.receipt;
@@ -813,14 +818,17 @@ app.post("/api/mockups/start", async (c) => {
     } catch (err) {
       console.warn("enqueue mockup failed:", err instanceof Error ? err.message : err);
     }
-    return c.json(decorateQueueAhead([publicMockup(getJob(id) || job)])[0]);
+    return c.json(decorateQueueAhead([publishMockup(getJob(id) || job, s)])[0]);
   });
 });
 
 app.post(
   "/api/mockups/:id/structure/input",
   async (c, next) => {
-    need(c, "confirm_structure", "当前账号不能选择包装结构层");
+    const s = need(c, "confirm_structure", "当前账号不能选择包装结构层");
+    if (s.role !== "admin") {
+      throw new HTTPException(403, { message: "当前账号不能选择包装结构层" });
+    }
     await next();
   },
   bodyLimit({
@@ -847,6 +855,10 @@ app.post(
         "请选择 1–16 个当前稿件列出的结构图层",
       );
     }
+    const s = need(c, "confirm_structure", "当前账号不能选择包装结构层");
+    if (s.role !== "admin") {
+      throw new HTTPException(403, { message: "当前账号不能选择包装结构层" });
+    }
     const job = getJob(id);
     if (!job) throw new HTTPException(404, { message: "没有这单打样" });
     const currentSelection = job.structure_input_selection_ids;
@@ -854,7 +866,7 @@ app.post(
       && currentSelection.length === candidateIds.length
       && currentSelection.every((value) => candidateIds.includes(value));
     if (job.structure_status !== "review_required" || job.job_status !== "waiting_input") {
-      if (sameSelection) return c.json(decorateQueueAhead([publicMockup(job)])[0]);
+      if (sameSelection) return c.json(decorateQueueAhead([publishMockup(job, s)])[0]);
       throw new ApiProblem(
         409,
         "packaging_structure_selection_stale",
@@ -895,7 +907,7 @@ app.post(
           console.warn("enqueue selected structure input failed:", error instanceof Error ? error.message : error);
         }
       }
-      return c.json(decorateQueueAhead([publicMockup(getJob(id) || selection.job)])[0]);
+      return c.json(decorateQueueAhead([publishMockup(getJob(id) || selection.job, s)])[0]);
     } finally {
       finishStructureConfirmation(id);
     }
@@ -903,18 +915,8 @@ app.post(
 );
 
 app.post("/api/mockups/:id/structure", async (c) => {
-  need(c, "confirm_structure", "当前账号不能确认包装结构");
+  const s = need(c, "confirm_structure", "当前账号不能确认包装结构");
   const id = assertTid(c.req.param("id"));
-  const job = getJob(id);
-  if (!job) throw new HTTPException(404, { message: "没有这单打样" });
-  if (job.structure_status === "ready") {
-    // 首次确认可能已经落盘，只是响应在 Tunnel / 浏览器链路丢失。重复提交应
-    // 收敛到同一打样单，不能让用户误以为确认失败或再次执行结构 worker。
-    return c.json(decorateQueueAhead([publicMockup(job)])[0]);
-  }
-  if (job.structure_status !== "review_required" || job.job_status !== "waiting_input") {
-    throw new HTTPException(409, { message: "这单当前没有待确认的包装结构" });
-  }
   const body = (await c.req.json().catch(() => ({}))) as { anchor?: unknown };
   if (!body.anchor || typeof body.anchor !== "object" || Array.isArray(body.anchor)) {
     throw new HTTPException(400, { message: "请选择完整盒型和正面" });
@@ -932,6 +934,28 @@ app.post("/api/mockups/:id/structure", async (c) => {
     turns > 3
   ) {
     throw new HTTPException(400, { message: "完整盒型、正面或方向不对" });
+  }
+  const job = getJob(id);
+  if (!job) throw new HTTPException(404, { message: "没有这单打样" });
+  const rotatingDone = s.role === "admin"
+    && job.structure_status === "ready"
+    && (job.status === "done" || job.job_status === "succeeded");
+  if (job.structure_status === "ready" && !rotatingDone) {
+    // 非 admin 或未出图：首次确认可能已经落盘，只是响应在 Tunnel / 浏览器链路丢失。
+    // 重复提交收敛到同一打样单。admin 对已出图且 ready 的单走 rotatingDone，换正面只重 Blender。
+    return c.json(decorateQueueAhead([publishMockup(job, s)])[0]);
+  }
+  if (
+    !rotatingDone
+    && (job.structure_status !== "review_required" || job.job_status !== "waiting_input")
+  ) {
+    throw new HTTPException(409, { message: "这单当前没有待确认的包装结构" });
+  }
+  if (rotatingDone) {
+    const netId = uniquePublishedNetId(job);
+    if (!netId || netId !== proposalId) {
+      throw new HTTPException(409, { message: "当前盒型不能只换正面，请重新识别后再出图" });
+    }
   }
   const decision: StructureConfirmationDecision = {
     anchor: {
@@ -972,13 +996,22 @@ app.post("/api/mockups/:id/structure", async (c) => {
     }
     const fresh = getJob(id);
     if (!fresh) throw new HTTPException(404, { message: "打样单已删除" });
-    if (
-      fresh.structure_status !== "review_required" ||
-      fresh.structure_resolution_path !== job.structure_resolution_path ||
-      fresh.structure_source_sha256 !== job.structure_source_sha256
+    const sameSource = fresh.structure_resolution_path === job.structure_resolution_path
+      && fresh.structure_source_sha256 === job.structure_source_sha256;
+    if (rotatingDone) {
+      if (
+        fresh.structure_status !== "ready"
+        || !sameSource
+        || (fresh.status !== "done" && fresh.job_status !== "succeeded")
+      ) {
+        throw new HTTPException(409, { message: "源稿或结构状态已变化，请刷新后再确认" });
+      }
+    } else if (
+      fresh.structure_status !== "review_required"
+      || !sameSource
     ) {
       if (fresh.structure_status === "ready") {
-        return c.json(decorateQueueAhead([publicMockup(fresh)])[0]);
+        return c.json(decorateQueueAhead([publishMockup(fresh, s)])[0]);
       }
       throw new HTTPException(409, { message: "源稿或结构状态已变化，请刷新后再确认" });
     }
@@ -988,7 +1021,7 @@ app.post("/api/mockups/:id/structure", async (c) => {
     } catch (error) {
       console.warn("enqueue confirmed mockup failed:", error instanceof Error ? error.message : error);
     }
-    return c.json(decorateQueueAhead([publicMockup(getJob(id) || fresh)])[0]);
+    return c.json(decorateQueueAhead([publishMockup(getJob(id) || fresh, s)])[0]);
   } finally {
     finishStructureConfirmation(id);
   }
@@ -1274,10 +1307,10 @@ app.get("/api/mockups", (c) => {
 });
 
 app.get("/api/mockups/:id", (c) => {
-  need(c, "read");
+  const s = need(c, "read");
   const job = getJob(assertTid(c.req.param("id")));
   if (!job) throw new HTTPException(404, { message: "没有这单打样" });
-  return c.json(decorateQueueAhead([publicMockup(job)])[0]);
+  return c.json(decorateQueueAhead([publishMockup(job, s)])[0]);
 });
 
 app.delete("/api/mockups/:id", (c) => {
@@ -1298,7 +1331,7 @@ app.post("/api/mockups/:id/retry", (c) => {
   const s = need(c, "create");
   try {
     const job = retryMockup(assertTid(c.req.param("id")), viewerFromSession(s));
-    return c.json(decorateQueueAhead([publicMockup(job)])[0]);
+    return c.json(decorateQueueAhead([publishMockup(job, s)])[0]);
   } catch (e) {
     boom(e);
   }

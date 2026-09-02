@@ -50,6 +50,12 @@ describe("mockupBoardProgress", () => {
   it("maps only real packaging stages to the shared compact percentage", () => {
     assert.equal(mockupBoardProgress({ status: "queued", job_status: "queued" }), 0);
     assert.equal(mockupBoardProgress({ status: "running", job_status: "running", job_stage: "illustrator" }), 15);
+    assert.equal(mockupBoardProgress({
+      status: "running",
+      job_status: "running",
+      job_stage: "structure",
+      job_stage_label: "正在出图",
+    }), 15);
     assert.equal(mockupBoardProgress({ status: "running", job_status: "running", job_stage: "render_pdf" }), 35);
     assert.equal(mockupBoardProgress({ status: "running", job_status: "running", job_stage_label: "打样" }), 70);
     assert.equal(mockupBoardProgress({ status: "running", job_status: "running", job_stage: "export" }), 90);

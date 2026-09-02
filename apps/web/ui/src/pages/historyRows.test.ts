@@ -69,7 +69,23 @@ describe("historyTaskRow", () => {
       job_status: "waiting_input",
       files: [],
     });
-    assert.equal(row.status, "待确认结构");
+    assert.equal(row.status, "打样失败");
+    assert.equal(row.color, "error");
+    assert.equal(row.live, null);
+    assert.equal(historyCanDelete(row), true);
+  });
+
+  it("keeps a unique missing front as 待选正面 instead of a failed mockup", () => {
+    const row = historyMockRow({
+      id: "structure2",
+      title: "花盒",
+      status: "review_required",
+      structure_status: "review_required",
+      structure_code: "structure_face_mapping_incomplete",
+      job_status: "waiting_input",
+      files: [],
+    });
+    assert.equal(row.status, "待选正面");
     assert.equal(row.color, "warning");
     assert.equal(row.live, null);
     assert.equal(historyCanDelete(row), true);

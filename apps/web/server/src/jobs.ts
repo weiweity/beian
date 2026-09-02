@@ -5,14 +5,20 @@ import { compareBookkeeping } from "./billing.js";
 import { notifyJobFinished } from "./notify.js";
 import {
   assertCanManageMockup,
+  acceptStructureConfirmation,
+  beginStructureConfirmation,
   collectOutputs,
+  finishStructureConfirmation,
   isMockupJobFile,
   loadAllMockups,
   loadMockup,
   mockupStoreSnapshot,
+  prepareStructureConfirmation,
   resetMockupCache,
   resetMockupForRetry,
   saveMockup,
+  stampAutoConfirmed,
+  uniqueConfirmableAnchor,
   type MockupJob,
 } from "./mockup.js";
 import {
@@ -32,6 +38,7 @@ import {
   compareTask,
   inspectWorkerProcess,
   killTree,
+  confirmPackagingStructure,
   preflightPackaging,
   reworkTask,
   runPackaging,
@@ -42,7 +49,7 @@ import {
 import { rasterAiFile } from "./aiRaster.js";
 
 const STAGE_LABEL: Record<string, string> = {
-  structure: "识别结构",
+  structure: "正在出图",
   render_pdf: "出图",
   ingest: "识稿",
   layout: "分区",
@@ -94,6 +101,7 @@ export type JobsTestHooks = {
   runRework?: typeof reworkTask;
   runPack?: typeof runPackaging;
   runStructure?: typeof preflightPackaging;
+  confirmStructure?: typeof confirmPackagingStructure;
   runRaster?: (opts: { source: string; outDir: string }) => Promise<{ ok: boolean; png?: string; message: string }>;
   notify?: typeof notifyJobFinished;
   killTree?: typeof killTree;
@@ -101,15 +109,26 @@ export type JobsTestHooks = {
   bookkeeping?: typeof compareBookkeeping;
 };
 
-let hooks: JobsTestHooks = {};
+const TEST_MOCKUP_STOP: JobsTestHooks = {
+  runStructure: async () => ({ code: 1, stdout: "", stderr: '{"error":"test stop"}', timedOut: false }),
+  runPack: async () => ({ code: 1, stdout: "", stderr: "test stop", timedOut: false }),
+  runRaster: async () => ({ ok: false, message: "test stop" }),
+  confirmStructure: async () => ({ code: 1, stdout: "", stderr: "test stop", timedOut: false }),
+};
+
+function testHooks(overrides: JobsTestHooks = {}): JobsTestHooks {
+  return process.env.VITEST === "1" ? { ...TEST_MOCKUP_STOP, ...overrides } : overrides;
+}
+
+let hooks: JobsTestHooks = testHooks();
 let activeNotifications = 0;
 
 export function setJobsTestHooks(next: JobsTestHooks): void {
-  hooks = next;
+  hooks = testHooks(next);
 }
 
 export function resetJobsTestHooks(): void {
-  hooks = {};
+  hooks = testHooks();
   live.ocr = null;
   live.blender = null;
   live.illustrator = null;
@@ -456,21 +475,22 @@ async function runStructure(id: string, startedAt: string): Promise<void> {
       timedOut: false,
     };
   }
-  finishStructure(id, startedAt, result);
+  const next = finishStructure(id, startedAt, result);
+  if (next === "auto-confirm") await autoConfirmStructure(id, startedAt);
 }
 
-function finishStructure(id: string, startedAt: string, result: RunPythonResult): void {
+function finishStructure(id: string, startedAt: string, result: RunPythonResult): "auto-confirm" | "continue" {
   const job = loadMockup(id);
   if (!job || job.job_started_at !== startedAt) {
     tryStart();
-    return;
+    return "continue";
   }
   if (live.illustrator === id) live.illustrator = null;
   delete job.job_pid;
   job.job_finished_at = nowIso();
   if (result.timedOut) {
     markMockupFailed(job, "结构识别超时");
-    return;
+    return "continue";
   }
   const control = structureControl(result.stderr);
   if (control) {
@@ -485,7 +505,7 @@ function finishStructure(id: string, startedAt: string, result: RunPythonResult)
       controlPaths.some((path) => !isMockupJobFile(job.id, path))
     ) {
       markMockupFailed(job, "结构识别返回了无效文件");
-      return;
+      return "continue";
     }
     job.structure_status = control.structure_status;
     job.structure_code = String(control.code || "structure_review_required");
@@ -495,25 +515,38 @@ function finishStructure(id: string, startedAt: string, result: RunPythonResult)
     job.structure_artwork_path = control.details?.artwork_pdf || undefined;
     job.structure_artwork_preview_path = control.details?.artwork_preview || undefined;
     job.structure_source_sha256 = control.details?.source_sha256 || undefined;
-    job.status = control.structure_status;
-    job.job_status = "waiting_input";
     job.job_error = undefined;
     delete job.job_finished_at;
+    if (
+      control.structure_status === "review_required"
+      && job.structure_code === "structure_face_mapping_incomplete"
+      && uniqueConfirmableAnchor(job)
+    ) {
+      job.status = "queued";
+      job.job_status = "running";
+      job.job_stage = "structure";
+      job.job_stage_label = STAGE_LABEL.structure;
+      saveMockup(job);
+      live.illustrator = id;
+      return "auto-confirm";
+    }
+    job.status = control.structure_status;
+    job.job_status = "waiting_input";
     saveMockup(job);
     tryStart();
-    return;
+    return "continue";
   }
   if (result.code !== 0) {
     const failure = cliFailure(result.stderr);
     logCliFailure(`mockup ${job.id} structure`, failure);
     markMockupFailed(job, publicJobError(failure.error) || "结构识别中断");
-    return;
+    return "continue";
   }
   const payload = lastJson(result.stdout);
   const nextManifest = preparedManifest(payload);
   if (!isMockupJobFile(job.id, nextManifest)) {
     markMockupFailed(job, "结构识别没有返回可继续的作业清单");
-    return;
+    return "continue";
   }
   job.manifest_path = nextManifest;
   job.structure_status = "ready";
@@ -528,6 +561,83 @@ function finishStructure(id: string, startedAt: string, result: RunPythonResult)
   delete job.job_finished_at;
   saveMockup(job);
   tryStart();
+  return "continue";
+}
+
+async function autoConfirmStructure(id: string, startedAt: string): Promise<void> {
+  const job = loadMockup(id);
+  if (!job || job.job_started_at !== startedAt) {
+    tryStart();
+    return;
+  }
+  const anchor = uniqueConfirmableAnchor(job);
+  if (!anchor) {
+    tryStart();
+    return;
+  }
+  try {
+    beginStructureConfirmation(job);
+  } catch {
+    tryStart();
+    return;
+  }
+  try {
+    const files = prepareStructureConfirmation(job, { anchor });
+    const confirm = hooks.confirmStructure || confirmPackagingStructure;
+    const result = await confirm(files);
+    const output = lastJson(result.stdout);
+    const fresh = loadMockup(id);
+    if (!fresh || fresh.job_started_at !== startedAt) {
+      return;
+    }
+    if (
+      result.timedOut
+      || result.code !== 0
+      || output?.ok !== true
+      || typeof output.sidecar !== "string"
+      || fresh.structure_status !== "review_required"
+    ) {
+      console.warn("auto confirm packaging structure skipped", {
+        problem: "唯一可确认正面没有写成已批准结构",
+        cause: typeof output?.code === "string" ? output.code : `worker_exit_${result.code}`,
+        fix: "保留待选正面，由已登录账号点品名面",
+      });
+      holdUniqueFront(id, startedAt);
+      return;
+    }
+    acceptStructureConfirmation(fresh, output.sidecar);
+    stampAutoConfirmed(fresh, anchor);
+  } catch (error) {
+    console.warn("auto confirm packaging structure failed", {
+      problem: "唯一可确认正面自动确认抛错",
+      cause: error instanceof Error ? error.message : String(error),
+      fix: "保留待选正面",
+    });
+    holdUniqueFront(id, startedAt);
+  } finally {
+    finishStructureConfirmation(id);
+    if (live.illustrator === id) live.illustrator = null;
+    try {
+      tryStart();
+    } catch (error) {
+      console.warn("auto confirm packaging structure enqueue failed", {
+        problem: "唯一正面已确认但没有排进 Blender",
+        cause: error instanceof Error ? error.message : String(error),
+        fix: "保留 queued，等下一单或开机回收再出图",
+      });
+    }
+  }
+}
+
+function holdUniqueFront(id: string, startedAt: string): void {
+  const job = loadMockup(id);
+  if (!job || job.job_started_at !== startedAt || job.structure_status !== "review_required") return;
+  job.status = "review_required";
+  job.job_status = "waiting_input";
+  job.job_stage = undefined;
+  job.job_stage_label = undefined;
+  job.job_eta_s = undefined;
+  saveMockup(job);
 }
 
 async function runAi(id: string, startedAt: string): Promise<void> {

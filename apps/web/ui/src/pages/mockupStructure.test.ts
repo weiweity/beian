@@ -150,17 +150,46 @@ describe("mockup V2 structure UX", () => {
   });
 
   it("distinguishes a human confirmation from a failed mockup", () => {
-    assert.equal(structureStatusLabel({ structure_status: "review_required" }), "待确认结构");
+    assert.equal(structureStatusLabel({ structure_status: "analyzing" }), "正在出图");
+    assert.equal(structureStatusLabel({ structure_status: "review_required" }), "打样失败");
+    assert.equal(
+      structureStatusLabel({
+        structure_status: "review_required",
+        structure_code: "structure_face_mapping_incomplete",
+      }),
+      "待选正面",
+    );
     assert.equal(structureStatusLabel({ structure_status: "unsupported" }), "结构暂不支持");
     assert.match(
       structureIssueCopy({ structure_code: "structure_semantics_missing" }),
-      /刀版/,
+      /没有可自动识别的刀版/,
+    );
+    assert.match(
+      structureIssueCopy({ structure_code: "structure_semantics_missing" }, { desk: true }),
+      /请勾选「刀版」或「刀线」/,
     );
     assert.doesNotMatch(
       structureIssueCopy({ structure_code: "structure_semantics_missing" }),
       /packaging:cut/,
     );
-    assert.match(structureIssueCopy({ structure_code: "structure_box_net_missing" }), /组不成花盒/);
+    assert.match(structureIssueCopy({ structure_code: "structure_box_net_missing" }), /不是一个完整花盒/);
+    assert.match(
+      structureIssueCopy({ structure_code: "structure_box_net_missing" }, { desk: true }),
+      /组不成花盒/,
+    );
+    assert.match(
+      structureIssueCopy({ structure_code: "structure_multiple_components" }),
+      /有多套盒型，当前不能自动选/,
+    );
+    assert.match(
+      structureIssueCopy({ structure_code: "structure_multiple_components" }, { desk: true }),
+      /多套可成盒结构/,
+    );
+    assert.equal(structureIssueCopy({}), "这张稿现在打不了样。");
+    assert.equal(
+      structureIssueCopy({}, { desk: true }),
+      "包装结构需要人工确认后才能进入 Blender。",
+    );
     assert.match(
       structureIssueCopy({ structure_code: "structure_flattened_artwork" }),
       /拼合稿/,

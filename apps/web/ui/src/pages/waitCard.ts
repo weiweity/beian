@@ -140,7 +140,7 @@ export function mockupBoardProgress(opts: {
   if (/(^|\s)(export|导出)(\s|$)/.test(key)) return 90;
   if (/(^|\s)(blender|打样)(\s|$)/.test(key)) return 70;
   if (/(^|\s)(render_pdf|出图)(\s|$)/.test(key)) return 35;
-  if (/(^|\s)(illustrator|识别结构|结构)(\s|$)/.test(key)) return 15;
+  if (/(^|\s)(illustrator|识别结构|正在出图|结构)(\s|$)/.test(key)) return 15;
   return undefined;
 }
 

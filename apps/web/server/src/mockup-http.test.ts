@@ -46,6 +46,17 @@ function startMockup(token: string, receipt: string) {
   });
 }
 
+function pendingWorkerStop() {
+  let release: (value: { code: number; stdout: string; stderr: string; timedOut: boolean }) => void = () => {};
+  const promise = new Promise<{ code: number; stdout: string; stderr: string; timedOut: boolean }>((resolve) => {
+    release = resolve;
+  });
+  return {
+    wait: () => promise,
+    stop: () => release({ code: 1, stdout: "", stderr: "test stop", timedOut: false }),
+  };
+}
+
 function seedOwnedFile(id: string, key: string, name: string, buf: Buffer, owner = "籽烨") {
   const dir = join(DATA_DIR, "mockups", id);
   mkdirSync(dir, { recursive: true });
@@ -147,6 +158,81 @@ function seedStructureInputJob(id: string, owner: string) {
     structure_source_sha256: sourceHash,
   });
   return { artworkPreview, candidateId: candidateIds[0], candidateIds, dir };
+}
+
+function uniqueNetResolution(sourceHash: string) {
+  const faces = Array.from({ length: 7 }, (_, index) => ({
+    id: `proposal-face-${String(index + 1).padStart(4, "0")}`,
+    bounds_mm: [index * 30, 0, index * 30 + 30, 50],
+    centroid_mm: [index * 30 + 15, 25],
+    size_mm: [30, 50],
+    points_mm: [
+      [index * 30, 0],
+      [index * 30 + 30, 0],
+      [index * 30 + 30, 50],
+      [index * 30, 50],
+    ],
+    rectangular: true,
+  }));
+  const structureHash = `sha256:${"b".repeat(64)}`;
+  return {
+    structure: { structure_hash: structureHash, source: { page_size: [210, 297], sha256: sourceHash } },
+    topology: {
+      face_proposal: faces,
+      net_proposals: [{
+        schema: "box-net-proposal/3",
+        structure_hash: structureHash,
+        id: "box-net-0123456789abcdef",
+        face_ids: faces.map((face) => face.id),
+        body_face_ids: faces.slice(0, 4).map((face) => face.id),
+        cap_face_ids: [faces[4].id, faces[6].id],
+        strip_axis: "x",
+        bounds_mm: [0, 0, 180, 50],
+        dimensions_mm: { width: 30, depth: 20, height: 50 },
+        valid_anchors: [{
+          front_face_id: faces[1].id,
+          quarter_turns: [0, 2],
+          preferred_quarter_turns: 0,
+        }],
+        closure_assemblies: [
+          {
+            primary_face_id: faces[4].id,
+            side: -1,
+            extent: "full",
+            closure_kind: "assembly",
+            coverage_ratio: 1,
+            members: [
+              {
+                face_id: faces[4].id,
+                attached_body_face_id: faces[0].id,
+                extent: "partial",
+                coverage_ratio: 0.5,
+              },
+              {
+                face_id: faces[5].id,
+                attached_body_face_id: faces[2].id,
+                extent: "partial",
+                coverage_ratio: 0.5,
+              },
+            ],
+          },
+          {
+            primary_face_id: faces[6].id,
+            side: 1,
+            extent: "full",
+            closure_kind: "full",
+            coverage_ratio: 1,
+            members: [{
+              face_id: faces[6].id,
+              attached_body_face_id: faces[0].id,
+              extent: "full",
+              coverage_ratio: 1,
+            }],
+          },
+        ],
+      }],
+    },
+  };
 }
 
 describe("mockup http", () => {
@@ -443,7 +529,15 @@ describe("mockup structure input http", () => {
     };
     writeFileSync(resolutionPath, JSON.stringify(resolution));
 
-    const sess = issueSessionForTest("路人", "reviewer", "ou_preview_get");
+    const reviewer = issueSessionForTest("路人", "reviewer", "ou_preview_get");
+    const hidden = await app.request(`/api/mockups/${id}`, {
+      headers: { authorization: `Bearer ${reviewer.token}` },
+    });
+    assert.equal(hidden.status, 200);
+    const hiddenBody = (await hidden.json()) as { structure_input?: unknown };
+    assert.equal(hiddenBody.structure_input, undefined);
+
+    const sess = issueSessionForTest("管理员", "admin", "ou_preview_get_admin");
     const detail = await app.request(`/api/mockups/${id}`, {
       headers: { authorization: `Bearer ${sess.token}` },
     });
@@ -501,7 +595,7 @@ describe("mockup structure input http", () => {
     assert.equal(JSON.stringify(body).includes(artworkPreview), false);
   });
 
-  it("lets a reviewer submit current candidate ids and resumes the same job", async () => {
+  it("lets an admin submit current candidate ids and resumes the same job", async () => {
     const { setJobsTestHooks, resetJobsTestHooks } = await import("./jobs.js");
     const id = "feed1000feed";
     const ownerId = "ou_structure_input_owner";
@@ -513,7 +607,15 @@ describe("mockup structure input http", () => {
     });
     assert.equal(denied.status, 401);
 
-    const admin = issueSessionForTest("审稿", "reviewer", "ou_structure_input_admin");
+    const reviewer = issueSessionForTest("审稿", "reviewer", "ou_structure_input_reviewer");
+    const reviewerDenied = await app.request(`/api/mockups/${id}/structure/input`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${reviewer.token}`, "content-type": "application/json" },
+      body: JSON.stringify({ candidate_ids: [candidateId] }),
+    });
+    assert.equal(reviewerDenied.status, 403);
+
+    const admin = issueSessionForTest("管理员", "admin", "ou_structure_input_admin");
     const forged = await app.request(`/api/mockups/${id}/structure/input`, {
       method: "POST",
       headers: { authorization: `Bearer ${admin.token}`, "content-type": "application/json" },
@@ -836,6 +938,100 @@ describe("mockup structure confirmation http", () => {
       resetJobsTestHooks();
     }
   });
+
+  it("lets an admin rotate the front on a finished mockup without re-running Illustrator", async () => {
+    const { setJobsTestHooks, resetJobsTestHooks } = await import("./jobs.js");
+    const {
+      setConfirmPackagingStructureTestHook,
+      resetConfirmPackagingStructureTestHook,
+    } = await import("./workers.js");
+    const id = "facedd000004";
+    const ownerId = "ou_structure_rotate";
+    const dir = join(DATA_DIR, "mockups", id);
+    mkdirSync(dir, { recursive: true });
+    const source = join(dir, "source.ai");
+    const resolution = join(dir, "structure_resolution.json");
+    const artwork = join(dir, "artwork.pdf");
+    const manifest = join(dir, "manifest.json");
+    const sourceHash = "a".repeat(64);
+    writeFileSync(source, "%PDF-1.4\n");
+    writeFileSync(resolution, JSON.stringify(uniqueNetResolution(sourceHash)));
+    writeFileSync(artwork, "%PDF-1.4\n");
+    writeFileSync(manifest, JSON.stringify({ products: [{}] }));
+    saveMockup({
+      id,
+      status: "done",
+      created_at: "2026-09-02T00:00:03Z",
+      files: [],
+      owner: ownerId,
+      job_kind: "mockup",
+      job_status: "succeeded",
+      structure_engine: "v2",
+      structure_status: "ready",
+      source_path: source,
+      manifest_path: manifest,
+      structure_resolution_path: resolution,
+      structure_artwork_path: artwork,
+      structure_source_sha256: sourceHash,
+    });
+    let structureCalls = 0;
+    let packCalls = 0;
+    let confirmCalls = 0;
+    setJobsTestHooks({
+      runStructure: async () => {
+        structureCalls += 1;
+        return { code: 1, stdout: "", stderr: "should not re-identify", timedOut: false };
+      },
+      runPack: async () => {
+        packCalls += 1;
+        return { code: 1, stdout: "", stderr: "synthetic blender stop", timedOut: false };
+      },
+    });
+    setConfirmPackagingStructureTestHook(async (options) => {
+      confirmCalls += 1;
+      writeFileSync(options.output, "{}");
+      return {
+        code: 0,
+        stdout: `${JSON.stringify({ ok: true, sidecar: options.output })}\n`,
+        stderr: "",
+        timedOut: false,
+      };
+    });
+    try {
+      const reviewer = issueSessionForTest("审稿", "reviewer", ownerId);
+      const denied = await app.request(`/api/mockups/${id}/structure`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${reviewer.token}`, "content-type": "application/json" },
+        body: JSON.stringify({
+          anchor: { proposal_id: "box-net-0123456789abcdef", front_face_id: "proposal-face-0002", quarter_turns: 1 },
+        }),
+      });
+      assert.equal(denied.status, 200);
+      assert.equal(confirmCalls, 0);
+
+      const admin = issueSessionForTest("魏炜", "admin", ownerId);
+      const rotated = await app.request(`/api/mockups/${id}/structure`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${admin.token}`, "content-type": "application/json" },
+        body: JSON.stringify({
+          anchor: { proposal_id: "box-net-0123456789abcdef", front_face_id: "proposal-face-0002", quarter_turns: 1 },
+        }),
+      });
+      assert.equal(rotated.status, 200);
+      assert.equal(confirmCalls, 1);
+      assert.equal(structureCalls, 0);
+      const body = (await rotated.json()) as { structure_status?: string; status?: string };
+      assert.equal(body.structure_status, "ready");
+      assert.ok(body.status === "queued" || body.status === "running" || body.status === "done");
+      for (let index = 0; index < 50 && packCalls === 0; index += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      assert.equal(packCalls, 1);
+    } finally {
+      resetConfirmPackagingStructureTestHook();
+      resetJobsTestHooks();
+    }
+  });
 });
 
 describe("mockup post", { concurrency: false }, () => {
@@ -1049,15 +1245,10 @@ describe("mockup post", { concurrency: false }, () => {
     const prevAi = process.env.ILLUSTRATOR_EXECUTABLE;
     process.env.BLENDER_EXECUTABLE = process.execPath;
     process.env.ILLUSTRATOR_EXECUTABLE = process.execPath;
+    const occupied = pendingWorkerStop();
     setJobsTestHooks({
-      runStructure: () =>
-        new Promise(() => {
-          /* keep the V2 structure slot occupied */
-        }),
-      runPack: () =>
-        new Promise(() => {
-          /* hang */
-        }),
+      runStructure: occupied.wait,
+      runPack: occupied.wait,
     });
     try {
       const owner = issueSessionForTest("同名", "reviewer", "ou_mock_same_a");
@@ -1076,6 +1267,8 @@ describe("mockup post", { concurrency: false }, () => {
       const rows = (await list.json()) as { id?: string }[];
       assert.equal(rows.some((j) => j.id === job.id), true);
     } finally {
+      occupied.stop();
+      await new Promise<void>((resolve) => setImmediate(resolve));
       resetJobsTestHooks();
       if (prevBin !== undefined) process.env.BLENDER_EXECUTABLE = prevBin;
       else delete process.env.BLENDER_EXECUTABLE;
@@ -1140,15 +1333,10 @@ describe("mockup post", { concurrency: false }, () => {
     const prevAi = process.env.ILLUSTRATOR_EXECUTABLE;
     process.env.BLENDER_EXECUTABLE = process.execPath;
     process.env.ILLUSTRATOR_EXECUTABLE = process.execPath;
+    const occupied = pendingWorkerStop();
     setJobsTestHooks({
-      runStructure: () =>
-        new Promise(() => {
-          /* keep the V2 structure slot occupied */
-        }),
-      runPack: () =>
-        new Promise(() => {
-          /* hang until process exit */
-        }),
+      runStructure: occupied.wait,
+      runPack: occupied.wait,
     });
     try {
       const sess = issueSessionForTest("籽烨", "reviewer", "ou_mockup_post_ok");
@@ -1200,6 +1388,8 @@ describe("mockup post", { concurrency: false }, () => {
       assert.equal(retried.id, (body as { id?: string }).id);
       assert.equal("source_receipt" in retried, false);
     } finally {
+      occupied.stop();
+      await new Promise<void>((resolve) => setImmediate(resolve));
       resetJobsTestHooks();
       if (prevBin !== undefined) process.env.BLENDER_EXECUTABLE = prevBin;
       else delete process.env.BLENDER_EXECUTABLE;

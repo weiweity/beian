@@ -106,8 +106,8 @@ test("结构待确认和不支持均显示可执行状态，不伪装成打样�
     status: "review_required",
     job_status: "waiting_input",
     structure_status: "review_required",
-    structure_code: "structure_role_ambiguous",
-    structure_message: "有两个面角色需要管理员确认",
+    structure_code: "structure_face_mapping_incomplete",
+    structure_message: "请选择产品正面",
     created_at: "2026-08-27T01:23:00.000Z",
     files: [],
   };
@@ -127,7 +127,7 @@ test("结构待确认和不支持均显示可执行状态，不伪装成打样�
 
   await expect(
     page.locator(".review-card").filter({ hasText: reviewRequired.title }).locator(".review-card-summary-state"),
-  ).toHaveText("待确认结构");
+  ).toHaveText("待选正面");
   await expect(
     page.locator(".review-card").filter({ hasText: unsupported.title }).locator(".review-card-summary-state"),
   ).toHaveText("结构暂不支持");
