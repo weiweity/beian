@@ -389,14 +389,58 @@ export function publicMockupSummary(job: MockupJob) {
   return publicMockupSummaryFields(job);
 }
 
-export function publicMockup(job: MockupJob) {
+export type PublicMockupView = {
+  /** Admin structure desk. Reviewer/viewer never receive layer candidates. */
+  structureDesk?: boolean;
+};
+
+export function publicMockup(job: MockupJob, view: PublicMockupView = {}) {
   const resolution = readStructureResolution(job);
   return {
     ...publicMockupSummaryFields(job),
     files: visibleMockupFiles(job),
     structure_preview: structurePreviewFromResolution(job, resolution),
-    structure_input: publicStructureInput(job, resolution),
+    structure_input: view.structureDesk === false
+      ? undefined
+      : publicStructureInput(job, resolution),
   };
+}
+
+export function uniquePublishedNetId(job: MockupJob): string | null {
+  const preview = structurePreviewFromResolution(job, readStructureResolution(job));
+  if (!preview || preview.net_proposals.length !== 1) return null;
+  return preview.net_proposals[0].id;
+}
+
+export function uniqueConfirmableAnchor(job: MockupJob): StructureAnchorDecision | null {
+  const preview = structurePreviewFromResolution(job, readStructureResolution(job));
+  if (!preview || preview.net_proposals.length !== 1) return null;
+  const proposal = preview.net_proposals[0];
+  const anchors = proposal.valid_anchors || [];
+  if (anchors.length !== 1) return null;
+  const preferred = anchors[0].preferred_quarter_turns;
+  if (preferred === undefined || !anchors[0].quarter_turns.includes(preferred)) return null;
+  return {
+    proposal_id: proposal.id,
+    front_face_id: anchors[0].front_face_id,
+    quarter_turns: preferred,
+  };
+}
+
+export function stampAutoConfirmed(job: MockupJob, anchor: StructureAnchorDecision): void {
+  const path = job.structure_resolution_path;
+  if (!path || !existsSync(path) || !underJobDir(job.id, path)) return;
+  try {
+    const resolution = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    resolution.auto_confirmed = {
+      proposal_id: anchor.proposal_id,
+      front_face_id: anchor.front_face_id,
+      quarter_turns: anchor.quarter_turns,
+    };
+    replaceFile(path, `${JSON.stringify(resolution, null, 2)}\n`);
+  } catch {
+    // Desk logs still have structure_code; missing auto_confirmed is recoverable.
+  }
 }
 
 type StructureResolution = {
@@ -1125,6 +1169,8 @@ export function acceptStructureConfirmation(job: MockupJob, approvedSidecar: str
   job.job_error = undefined;
   job.reclaim_count = 0;
   delete job.job_finished_at;
+  delete job.notify_job_id;
+  job.notify_sent = false;
   saveMockup(job);
   return job;
 }

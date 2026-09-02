@@ -86,17 +86,25 @@ export function sameStructureLayerSelection(input: StructureInput, selectedIds: 
     && normalized.every((id, index) => id === input.selected_ids[index]);
 }
 
-export function structureStatusLabel(job: Pick<MockupJob, "structure_status">): string | null {
-  if (job.structure_status === "analyzing") return "识别结构";
-  if (job.structure_status === "review_required") return "待确认结构";
+export function structureStatusLabel(job: Pick<MockupJob, "structure_status" | "structure_code">): string | null {
+  if (job.structure_status === "analyzing") return "正在出图";
+  if (job.structure_status === "review_required") {
+    return job.structure_code === "structure_face_mapping_incomplete" ? "待选正面" : "打样失败";
+  }
   if (job.structure_status === "unsupported") return "结构暂不支持";
   return null;
 }
 
-export function structureIssueCopy(job: Pick<MockupJob, "structure_code" | "structure_message">): string {
+export function structureIssueCopy(
+  job: Pick<MockupJob, "structure_code" | "structure_message">,
+  view: { desk?: boolean } = {},
+): string {
   const message = String(job.structure_message || "").trim();
+  const desk = view.desk === true;
   if (job.structure_code === "structure_semantics_missing") {
-    return "稿件里没有可自动识别的刀版。请勾选「刀版」或「刀线」后重新识别；表、标注、印刷不要当结构层。";
+    return desk
+      ? "稿件里没有可自动识别的刀版。请勾选「刀版」或「刀线」后重新识别；表、标注、印刷不要当结构层。"
+      : "打样失败。稿件里没有可自动识别的刀版。";
   }
   if (job.structure_code === "structure_flattened_artwork") {
     return "当前不支持（拼合稿）。请用还留着印刷/刀版分层的源稿重新打样，不要只交「图层 1」。";
@@ -108,13 +116,17 @@ export function structureIssueCopy(job: Pick<MockupJob, "structure_code" | "stru
     return "刀线或折线存在断口，闭合后重新识别；系统不会自动补线。";
   }
   if (job.structure_code === "structure_multiple_components") {
-    return "稿件里检测到多套可成盒结构，请选择需要打样的完整盒型；若列表中没有外盒，请只保留正确刀版后重新上传。";
+    return desk
+      ? "稿件里检测到多套可成盒结构，请选择需要打样的完整盒型；若列表中没有外盒，请只保留正确刀版后重新上传。"
+      : "打样失败。稿件里有多套盒型，当前不能自动选。";
   }
   if (job.structure_code === "structure_units_ambiguous") {
     return "结构单位不明确，请确认使用 mm、pt 或 inch 后重新导出。";
   }
   if (job.structure_code === "structure_box_net_missing") {
-    return "这组线组不成花盒。只留刀版或刀线再识别；系统不会按颜色或白色区域猜外盒。";
+    return desk
+      ? "这组线组不成花盒。只留刀版或刀线再识别；系统不会按颜色或白色区域猜外盒。"
+      : "打样失败。这组刀线不是一个完整花盒。";
   }
   if (job.structure_code === "structure_limit_exceeded" || job.structure_code === "structure_curve_complexity_exceeded") {
     return "结构线数量或曲线复杂度超过安全上限。请在 Illustrator 中只保留本次刀版的结构线并简化异常路径后重新上传。";
@@ -122,7 +134,7 @@ export function structureIssueCopy(job: Pick<MockupJob, "structure_code" | "stru
   if (job.structure_code === "structure_confirmation_stale" || job.structure_code === "structure_source_mismatch") {
     return "结构候选已随源稿或识别版本更新，请刷新本单后重新选择。";
   }
-  return message || "包装结构需要人工确认后才能进入 Blender。";
+  return message || (desk ? "包装结构需要人工确认后才能进入 Blender。" : "这张稿现在打不了样。");
 }
 
 export function structureConfirmationErrorCopy(error: unknown): string {

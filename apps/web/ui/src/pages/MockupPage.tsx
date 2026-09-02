@@ -11,7 +11,7 @@ import { UploadProgressSlot } from "../chrome/UploadProgressSlot";
 import { UploadWell } from "../chrome/UploadWell";
 import { WaitCard } from "../chrome/WaitCard";
 import { mockupFailReason, mockupFailTag } from "./mockupError";
-import { StructureConfirmPanel } from "./StructureConfirmPanel";
+import { AdminRotateFront, StructureConfirmPanel } from "./StructureConfirmPanel";
 import { structureIssueCopy, structureStatusLabel } from "./mockupStructure";
 import { liveJobLine, mockupBoardProgress, shouldShowWaitCard } from "./waitCard";
 import { stemFromFilename } from "./stemName";
@@ -67,7 +67,11 @@ type Layout = "board" | "table";
 
 function mockLabel(row: MockupJob) {
   if (row.status === "done") return { text: "已出图", color: "success" as const };
-  if (row.structure_status === "review_required") return { text: "待确认结构", color: "warning" as const };
+  if (row.structure_status === "review_required") {
+    return row.structure_code === "structure_face_mapping_incomplete"
+      ? { text: "待选正面", color: "warning" as const }
+      : { text: "打样失败", color: "error" as const };
+  }
   if (row.structure_status === "unsupported") return { text: "结构暂不支持", color: "error" as const };
   if (row.status === "failed") return { text: mockupFailTag(), color: "error" as const };
   if (row.status === "queued" || row.status === "running") return { text: "打样中", color: "processing" as const };
@@ -77,6 +81,10 @@ function mockLabel(row: MockupJob) {
 function mockCol(row: MockupJob): "running" | "failed" | "done" {
   if (row.status === "done") return "done";
   if (row.status === "failed" || row.status === "unsupported" || row.job_status === "failed") return "failed";
+  if (row.structure_status === "unsupported") return "failed";
+  if (row.structure_status === "review_required" && row.structure_code !== "structure_face_mapping_incomplete") {
+    return "failed";
+  }
   return "running";
 }
 
@@ -95,6 +103,7 @@ export function MockupDesk({
   receiptId,
   canCreate,
   canConfirmStructure,
+  canAdmin,
   onOpenJob,
   onBack,
   onCompose,
@@ -105,6 +114,7 @@ export function MockupDesk({
   receiptId?: string | null;
   canCreate: boolean;
   canConfirmStructure: boolean;
+  canAdmin?: boolean;
   onOpenJob: (id: string) => void;
   onBack: () => void;
   onCompose?: () => void;
@@ -117,6 +127,7 @@ export function MockupDesk({
         jobId={openId}
         canCreate={canCreate}
         canConfirmStructure={canConfirmStructure}
+        canAdmin={canAdmin}
         onBack={onBack}
       />
     );
@@ -718,8 +729,9 @@ export function MockupJobPage({
   jobId,
   canCreate,
   canConfirmStructure,
+  canAdmin = false,
   onBack,
-}: JobProps & { canCreate: boolean; canConfirmStructure: boolean }) {
+}: JobProps & { canCreate: boolean; canConfirmStructure: boolean; canAdmin?: boolean }) {
   const { message } = App.useApp();
   const [job, setJob] = useState<MockupJob | null>(() => mockupHandoffFor(jobId));
   const [error, setError] = useState<string | null>(null);
@@ -910,9 +922,12 @@ export function MockupJobPage({
           <div>
             <h1 className="page-title">{mockTitle(job)}</h1>
             <p className="page-lead">
-              {job.structure_input?.proposal_layers.length
+              {canAdmin && job.structure_input?.proposal_layers.length
+                && !(job.structure_preview?.net_proposals || []).length
                 ? `${structureStatusLabel(job)}。先选择真实结构线所在图层，再识别完整盒型。`
-                : `${structureStatusLabel(job)}。看一下包装展开图，选择产品正面后即可生成。`}
+                : job.structure_status === "review_required" && (job.structure_preview?.net_proposals || []).length
+                  ? "看一下包装展开图，点印有品名的那一面。"
+                  : `${structureStatusLabel(job) || "这张稿现在打不了样"}。`}
             </p>
           </div>
           <button type="button" className="btn-ghost" onClick={onBack}>
@@ -923,6 +938,7 @@ export function MockupJobPage({
           key={job.id}
           job={job}
           canConfirmStructure={canConfirmStructure}
+          canAdmin={canAdmin}
           onConfirmed={setJob}
         />
       </section>
@@ -976,6 +992,10 @@ export function MockupJobPage({
 
       {job.status === "failed" ? (
         <Alert type="error" showIcon title={mockupFailReason(job.error || job.job_error)} />
+      ) : null}
+
+      {canAdmin && job.status === "done" ? (
+        <AdminRotateFront job={job} onConfirmed={setJob} />
       ) : null}
 
       <div className="mockup-sheet-photos">

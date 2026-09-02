@@ -20,7 +20,9 @@ const {
   publicMockup,
   publicMockupSummary,
   saveMockup,
+  stampAutoConfirmed,
   structureConfirmationFailureStatus,
+  uniqueConfirmableAnchor,
 } = await import("./mockup.js");
 
 function proposalLayerId(sourceHash: string, name: string): string {
@@ -215,6 +217,13 @@ function reviewJob() {
 }
 
 describe("mockup structure confirmation persistence", () => {
+  it("hides structure layer candidates unless the admin desk is requested", () => {
+    const { job } = structureInputJob();
+    assert.equal(publicMockup(job, { structureDesk: false }).structure_input, undefined);
+    assert.ok(publicMockup(job).structure_input?.proposal_layers.length);
+    assert.ok(publicMockup(job, { structureDesk: true }).structure_input?.proposal_layers.length);
+  });
+
   it("publishes source-bound stroke candidates only on the detail response", () => {
     const { job, layers, sourceHash } = structureInputJob();
     const view = publicMockup(job);
@@ -633,6 +642,56 @@ describe("mockup structure confirmation persistence", () => {
     assert.deepEqual(view.structure_preview?.page_size_mm, [210, 297]);
     assert.equal(view.structure_preview?.image_url, `/api/mockups/${job.id}/structure-preview`);
     assert.equal("structure_preview" in publicMockupSummary(job), false);
+    const unique = uniqueConfirmableAnchor(job);
+    assert.deepEqual(unique, {
+      proposal_id: "box-net-0123456789abcdef",
+      front_face_id: "proposal-face-0002",
+      quarter_turns: 0,
+    });
+    stampAutoConfirmed(job, unique!);
+    const stamped = JSON.parse(readFileSync(job.structure_resolution_path || "", "utf8"));
+    assert.deepEqual(stamped.auto_confirmed, unique);
+  });
+
+  it("refuses auto-confirm unless exactly one net has exactly one preferred valid anchor", () => {
+    const missingPreview = structureInputJob().job;
+    assert.equal(uniqueConfirmableAnchor(missingPreview), null);
+
+    const twoAnchors = reviewJob();
+    const twoAnchorPath = twoAnchors.job.structure_resolution_path || "";
+    const twoAnchorResolution = JSON.parse(readFileSync(twoAnchorPath, "utf8"));
+    twoAnchorResolution.topology.net_proposals[0].valid_anchors.push({
+      front_face_id: "proposal-face-0001",
+      quarter_turns: [0],
+      preferred_quarter_turns: 0,
+    });
+    writeFileSync(twoAnchorPath, JSON.stringify(twoAnchorResolution));
+    assert.equal(uniqueConfirmableAnchor(twoAnchors.job), null);
+
+    const twoNets = reviewJob();
+    const twoNetPath = twoNets.job.structure_resolution_path || "";
+    const twoNetResolution = JSON.parse(readFileSync(twoNetPath, "utf8"));
+    const clone = JSON.parse(JSON.stringify(twoNetResolution.topology.net_proposals[0]));
+    clone.id = "box-net-fedcba9876543210";
+    twoNetResolution.topology.net_proposals.push(clone);
+    writeFileSync(twoNetPath, JSON.stringify(twoNetResolution));
+    assert.equal(uniqueConfirmableAnchor(twoNets.job), null);
+    assert.equal(publicMockup(twoNets.job).structure_preview?.net_proposals.length, 2);
+  });
+
+  it("swallows a missing or corrupt resolution when stamping auto_confirmed", () => {
+    const { job } = reviewJob();
+    const anchor = {
+      proposal_id: "box-net-0123456789abcdef",
+      front_face_id: "proposal-face-0002",
+      quarter_turns: 0 as const,
+    };
+    stampAutoConfirmed({ ...job, structure_resolution_path: undefined }, anchor);
+    stampAutoConfirmed({ ...job, structure_resolution_path: "/tmp/outside-job.json" }, anchor);
+    const path = job.structure_resolution_path || "";
+    writeFileSync(path, "{not-json");
+    stampAutoConfirmed(job, anchor);
+    assert.equal(readFileSync(path, "utf8"), "{not-json");
   });
 
   it("redacts persisted worker paths and customer filenames at the shared read boundary", () => {

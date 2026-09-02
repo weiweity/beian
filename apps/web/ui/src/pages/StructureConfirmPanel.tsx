@@ -24,10 +24,11 @@ const autoSubmittedStructureJobs = new Set<string>();
 type Props = {
   job: MockupJob;
   canConfirmStructure: boolean;
+  canAdmin?: boolean;
   onConfirmed: (job: MockupJob) => void;
 };
 
-export function StructureConfirmPanel({ job, canConfirmStructure, onConfirmed }: Props) {
+export function StructureConfirmPanel({ job, canConfirmStructure, canAdmin = false, onConfirmed }: Props) {
   const { message } = App.useApp();
   const preview = job.structure_preview;
   const structureInput = job.structure_input;
@@ -181,7 +182,8 @@ export function StructureConfirmPanel({ job, canConfirmStructure, onConfirmed }:
   }
 
   const layerPickerOpen = Boolean(
-    job.structure_status === "review_required"
+    canAdmin
+    && job.structure_status === "review_required"
     && structureInput?.proposal_layers.length
     && !proposals.length,
   );
@@ -203,7 +205,7 @@ export function StructureConfirmPanel({ job, canConfirmStructure, onConfirmed }:
     void submitLayers();
   }, [autoSubmitLayers, job.id, normalizedLayerIds.length, sameLayerSelection, selectingLayers]);
 
-  const issue = structureIssueCopy(job);
+  const issue = structureIssueCopy(job, { desk: canAdmin });
   if (layerPickerOpen && structureInput) {
     if (autoSubmitLayers) {
       return (
@@ -449,8 +451,10 @@ export function StructureConfirmPanel({ job, canConfirmStructure, onConfirmed }:
         <Alert
           type="warning"
           showIcon
-          title="这单需要重新识别结构"
-          description="这单是旧版零散候选，或当前线稿还不能形成完整六面。请在 Illustrator 补齐结构语义后重新上传；系统不会继续让你逐个猜盒面。"
+          title={canAdmin ? "这单需要重新识别结构" : "打样失败"}
+          description={canAdmin
+            ? "这单是旧版零散候选，或当前线稿还不能形成完整六面。请在 Illustrator 补齐结构语义后重新上传；系统不会继续让你逐个猜盒面。"
+            : issue}
         />
       </div>
     );
@@ -463,7 +467,7 @@ export function StructureConfirmPanel({ job, canConfirmStructure, onConfirmed }:
         showIcon
         title="先看展开图，再选产品正面"
         description={canConfirmStructure
-          ? "确认左侧是这次要生成的包装，点击印有品名和主视觉的一面，最后点生成打样图。"
+          ? "确认左侧是这次要生成的包装，点击印有品名和主视觉的一面。"
           : "当前账号不能选择产品正面或生成打样图。"}
       />
       <div className="structure-confirm-layout">
@@ -613,6 +617,68 @@ export function StructureConfirmPanel({ job, canConfirmStructure, onConfirmed }:
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+export function AdminRotateFront({
+  job,
+  onConfirmed,
+}: {
+  job: MockupJob;
+  onConfirmed: (job: MockupJob) => void;
+}) {
+  const { message } = App.useApp();
+  const preview = job.structure_preview;
+  const faces = preview?.faces || [];
+  const proposals = (preview?.net_proposals || []).filter((item) => structureProposalHasRealPolygons(item, faces));
+  const proposal = proposals[0];
+  const [frontFaceId, setFrontFaceId] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const preferredTurn = preferredStructureTurn(proposal, frontFaceId);
+  const anchor = preferredTurn === null
+    ? null
+    : selectedStructureAnchor(proposal, frontFaceId, preferredTurn);
+  if (!proposal || proposals.length !== 1) return null;
+  return (
+    <div className="structure-confirm" style={{ marginTop: 16 }}>
+      <Alert
+        type="info"
+        showIcon
+        title="换正面"
+        description="只重出 Blender，不重开 Illustrator。点印有品名的那一面。"
+      />
+      <div className="structure-front-choices" aria-label="更换产品正面">
+        <div>
+          {proposal.body_face_ids.map((faceId, index) => (
+            <Button
+              key={faceId}
+              type={faceId === frontFaceId ? "primary" : "default"}
+              disabled={!validTurnsForFace(proposal, faceId).length || submitting}
+              onClick={() => setFrontFaceId(faceId)}
+            >
+              {String.fromCharCode(65 + index)} 面
+            </Button>
+          ))}
+        </div>
+      </div>
+      <Button
+        type="primary"
+        disabled={!anchor || submitting}
+        loading={submitting}
+        onClick={() => {
+          if (!anchor) return;
+          setSubmitting(true);
+          void api.confirmMockupStructure(job.id, anchor).then((next) => {
+            onConfirmed(next);
+            message.success("已更换正面，开始重新出图。");
+          }).catch((error) => {
+            message.error(structureConfirmationErrorCopy(error));
+          }).finally(() => setSubmitting(false));
+        }}
+      >
+        换正面重出
+      </Button>
     </div>
   );
 }

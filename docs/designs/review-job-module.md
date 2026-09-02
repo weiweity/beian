@@ -106,7 +106,7 @@ Python `cli.py` **不再** `save_task`。对照/对红 CLI 只把结果 JSON 打
 
 ### 权限与团队协作
 
-`users.json` 只配置 `admin/reviewer/viewer`，不存页面级权限数组。Hono 把权限拆为三层：所有已登录角色都可读取、下载团队打样单和结构预览；结构确认必须具备独立 `confirm_structure` 能力，现已授予 `admin` / `reviewer` / `viewer`；删除继续经过对象所有权校验，`reviewer` 只能删本人已结束打样单，`admin` 可删全部，`viewer` 无删除能力。审稿单仍保持原有所有者隔离。团队共享序列化必须再次脱敏旧 worker 错误里的本机绝对路径、客户稿件名和疑似凭据，只返回短摘要；列表不得为轮询读取完整结构预览。UI 只消费 `/api/auth/me.perms` 控制动作可用性，服务端继续作为最终授权边界。
+`users.json` 只配置 `admin/reviewer/viewer`，不存页面级权限数组。Hono 把权限拆为三层：所有已登录角色都可读取、下载团队打样单和结构预览；结构确认必须具备独立 `confirm_structure` 能力，现已授予 `admin` / `reviewer` / `viewer`；删除继续经过对象所有权校验，`reviewer` 只能删本人已结束打样单，`admin` 可删全部，`viewer` 无删除能力。选层是第四层：`POST /api/mockups/:id/structure/input` 只给 `admin`，即使审稿员有 `confirm_structure` 也 403；非管理员详情省略 `structure_input`。审稿单仍保持原有所有者隔离。团队共享序列化必须再次脱敏旧 worker 错误里的本机绝对路径、客户稿件名和疑似凭据，只返回短摘要；列表不得为轮询读取完整结构预览。UI 只消费 `/api/auth/me.perms` 控制动作可用性，服务端继续作为最终授权边界。
 
 打样写回：`runPackaging` 退出码 0 → 现有 `collectOutputs` 填 `files`（只公开 key/name；白底只收 `front_right` / `back_left`，不要把 `ai-raster` 或 PPT 质检 PNG 算进去；另收 `glb` / `ppt` / `sheet`，以及恰好名为 `panel_{front,back,right,left,top,bottom}.png` 的印刷面 `read_*`），`status=done`，`job_status=succeeded`。旧单 `job.files` 没有 `read_*` 时，详情读取和文件接口按磁盘现有 panel PNG 补上，不重跑 Blender。非 0 或超时 → `status=failed`，`job_status=failed`，内部 `job_error` 截 800 字；对外读取必须再走团队共享脱敏和摘要边界。不读 packaging 的内部目录当 HTTP 合同。
 
@@ -123,9 +123,10 @@ GET 必须走 `publicTask` / `publicMockup`，剥掉 `job_pid`、磁盘 `path`�
 | POST | `/api/tasks/:tid/rework` | kind=`rework`。对红门不变。已有 `job_status` 为 queued/running → 409「对红还在排队或正在跑」。 |
 | GET | `/api/tasks` / `/api/tasks/:tid` | 多返回公开作业字段。`board` 仍只看 `task.status`。 |
 | POST | `/api/mockups/start` | 领取 `.ai` 回执前先确认 Blender、Illustrator 路径，以及 Windows Session 1 Agent 的协议/Session/心跳；缺失或 Agent 离线 → **412 当场失败且不消耗回执**（不入队、不事后飞书）。接单后按 durable claim 事务写打样单，Agent 再按需启动并验证同会话可见窗口与文档列表。依赖齐全则入队，忙时仍是 `queued`；同一 `source_receipt` 的并发或重试返回原打样单。 |
-| GET | `/api/mockups` / `/:id` | 读 `job.json`。无 `path`；旧错误只返回脱敏短摘要，列表只返回摘要字段，不加载完整结构预览。详情 `publicMockup` / `fileOf` 按磁盘 `assets/panel_{front,back,right,left,top,bottom}.png` 补 `read_*`；列表 `publicMockupSummary` 不扫盘。mockup `status` 仍用现有 `queued\|running\|done\|failed`，不要改成 succeeded。 |
+| GET | `/api/mockups` / `/:id` | 读 `job.json`。无 `path`；旧错误只返回脱敏短摘要，列表只返回摘要字段，不加载完整结构预览。详情 `publicMockup` / `fileOf` 按磁盘 `assets/panel_{front,back,right,left,top,bottom}.png` 补 `read_*`；列表 `publicMockupSummary` 不扫盘。非管理员详情省略 `structure_input`。mockup `status` 仍用现有 `queued\|running\|done\|failed`，不要改成 succeeded。 |
 | POST | `/api/mockups/:id/retry` | 打样中或打样失败用机上已有稿再排。需要 `create` 且通过对象所有权。先杀掉当前 worker，确认已退出再改 queued；杀不掉、还在启动、结构确认中、已出图、待确认结构、不支持或缺稿 → 409。结构已 ready 的单跳过 Illustrator。不是取消。 |
-| POST | `/api/mockups/:id/structure/input` | 仅 `confirm_structure` 能提交当前详情返回的 1–16 个候选 ID。正文上限 16 KiB；服务端重读当前任务并复核源稿、`packaging-structure-input-candidates/2` 成员和单任务锁，先安全写成新清单与任务状态再入队。相同选择的响应丢失重试返回当前单；过期选择返回 409，准备失败保留待选择状态供原位重试。 |
+| POST | `/api/mockups/:id/structure/input` | 仅管理员能提交当前详情返回的 1–16 个候选 ID（另需 `confirm_structure`；审稿员 403）。正文上限 16 KiB；服务端重读当前任务并复核源稿、`packaging-structure-input-candidates/2` 成员和单任务锁，先安全写成新清单与任务状态再入队。相同选择的响应丢失重试返回当前单；过期选择返回 409，准备失败保留待选择状态供原位重试。 |
+| POST | `/api/mockups/:id/structure` | `confirm_structure` 提交完整盒型锚点。唯一可确认正面时 `finishStructure` 可在服务端自动走同一路径。管理员对 `done`+`ready` 且只有一套公开盒型的单可再提交，换正面只重跑 Blender、不重开 Illustrator；盒型对不上 409。 |
 | GET | `/api/mockups/:id/structure-input-preview` | 已登录团队成员可查看当前稿件的结构选层预览；只从该打样目录流式返回已验证 PNG，响应为 `private, no-store`。预览只帮助人工核对，不授权按颜色、图层名或白色区域自动选层。 |
 | GET | `/api/mockups/:id/files/:key` | 只给静帧 `front_right`/`back_left`（磁盘 RGBA 产品层；网页下载才按当前灯光合成白底）、印刷面 `read_*`（恰好 `assets/panel_{face}.png`）、GLB、PPT、打样单 PDF（`sheet`）。预览 inline，`?download=1` 才附件。`ai-raster`/PPT 质检图或坏 PNG → 415（印刷面文案不是白底文案）。流式读盘，不一次塞进内存。缺 PPT 或 PDF 时 404，不要假装能下。 |
 | GET | `/api/health` / `/api/status` | 公网 health 只给发版探活所需字段；本机或登录后的 status 才给准确作业槽、Illustrator Agent 摘要和飞书状态。Agent 摘要不得暴露路径或稿名。 |
@@ -156,7 +157,7 @@ GET 必须走 `publicTask` / `publicMockup`，剥掉 `job_pid`、磁盘 `path`�
 
 内部不返回：`job_pid` `notify_job_id` `reclaim_count`
 
-`job_stage` 白名单与汉字：`render_pdf` 出图、`ingest` 识稿、`ocr` 认字、`layout` 分区、`match` 对照、`blender` 打样、`export` 导出。未知 STAGE 忽略，不编百分比。审稿台粗粒度进度按这个顺序单调前进。
+`job_stage` 白名单与汉字：`structure` 正在出图、`render_pdf` 出图、`ingest` 识稿、`ocr` 认字、`layout` 分区、`match` 对照、`blender` 打样、`export` 导出。未知 STAGE 忽略，不编百分比。审稿台粗粒度进度按这个顺序单调前进。打样结构识别阶段对外写「正在出图」，不要再写「识别结构」。
 
 `job_eta_s` 只在 `running` 时给常数：对照/对红 40，打样 240。queued 只用 `queue_ahead`，禁止对排队中的单显示 40 秒。没有 STAGE 也用这条常数，不画百分比。
 
@@ -181,7 +182,7 @@ Windows 上 spawn 必须进 Job Object，Node 退出时杀掉子进程树。做�
 ### Worker
 
 - 对照 / 对红：`python -m app.cli compare|rework`，最后一行结果 JSON，过程中 `STAGE render_pdf|ingest|ocr|layout|match`。按 `compare-pdf-ingest-v2.md` 逐页选择 PDF 文字层或一次 OCR，再用版面区域收敛到真实单钉；不搬 `fields.py`。确认单底部工艺说明 / 颜色要求 / 版本号 / 更新内容走 `skip_sheet_field`（字段名开头），不进机审。
-- 打样：`workers/packaging`。POST 时已确认 Blender；Windows worker 不直接 COM 或启动 Illustrator，而是通过 `beian.illustrator.v1` 命名管道请求登录桌面 Agent → 现有 VBS → 唯一 JSX。所有 Agent 实例共用独占执行锁和持久故障围栏：围栏在 cscript/COM 前建立，只有成功或已证明清理完成的失败才能移除；Agent 消失、cscript 超时且退出未确认或稿件无法清空时保持 `faulted`，任何实例都不得接手，需交互管理员确认后显式恢复。错误按稳定码写清会话、窗口、未知稿件或超时原因，不统一伪装成“请关闭稿件”。stderr 打 `STAGE render_pdf|blender|export`（出图/打样/导出）。入队后 `job_stage` 从 `render_pdf` 开始，不是 `blender`。平面出图用 pymupdf（对照同一 Python），不靠 qlmanage。结构只认与源稿绑定的 `PackagingStructure` 显式语义；没有对象语义时先发布与当前源稿绑定的 `/2` 纯描边候选，已登录账号只提交候选 ID，Hono 复核后重跑同一 Illustrator/拓扑链。候选可携带与本次候选 ID 对齐的 `illustrator-layer-preview/1` 有界真实路径；刀线候选与填色工艺板分预算（各 5000 路径 / 20000 点）。它只给详情页做高清底图上的移入/勾选涂亮。未知或重复的涂亮层、坏掉的工艺板单独跳过，不把整份刀线预览清掉；超大或非法几何才关掉整份预览，同时保留合法候选。不能把涂亮颜色或快照路径直接当结构。所选线稿仍是不可信输入，必须形成完整盒身环和上下封口。拓扑有歧义时只暴露经过最终确认引擎预检的完整候选，页面用真实展开图做视觉翻页，已登录账号只选择产品正面。预检引擎为正面生成确定性的 `preferred_quarter_turns`，内部锚点仍携带候选、正面和朝向，再由连通关系推导其余五面。无语义或不安全结构不得靠颜色、图层名、零散矩形、间距、bbox 或模板猜测进入 Blender。GLB 导出后验证轴向、毫米尺寸和六个已确认面的贴图来源、方向与镜像。PPT 先用两张白底写 OOXML，不依赖 Node；写不出才试演示文稿运行时（stderr `PPT 跳过`）。两张白底合成一页 PDF。磁盘静帧保持 RGBA 产品层；`png_bytes_over_white` 只在 PPT/PDF 导出时铺白，不覆盖产品层文件。缺 PPT/PDF 时白底图和 GLB 仍 `done`/`succeeded`，不要把整单判成「Node不存在」。
+- 打样：`workers/packaging`。POST 时已确认 Blender；Windows worker 不直接 COM 或启动 Illustrator，而是通过 `beian.illustrator.v1` 命名管道请求登录桌面 Agent → 现有 VBS → 唯一 JSX。所有 Agent 实例共用独占执行锁和持久故障围栏：围栏在 cscript/COM 前建立，只有成功或已证明清理完成的失败才能移除；Agent 消失、cscript 超时且退出未确认或稿件无法清空时保持 `faulted`，任何实例都不得接手，需交互管理员确认后显式恢复。错误按稳定码写清会话、窗口、未知稿件或超时原因，不统一伪装成“请关闭稿件”。stderr 打 `STAGE render_pdf|blender|export`（出图/打样/导出）。入队后 `job_stage` 从 `render_pdf` 开始，不是 `blender`。平面出图用 pymupdf（对照同一 Python），不靠 qlmanage。结构只认与源稿绑定的 `PackagingStructure` 显式语义；没有对象语义时先发布与当前源稿绑定的 `/2` 纯描边候选，只有管理员提交候选 ID，Hono 复核后重跑同一 Illustrator/拓扑链。候选可携带与本次候选 ID 对齐的 `illustrator-layer-preview/1` 有界真实路径；刀线候选与填色工艺板分预算（各 5000 路径 / 20000 点）。它只给管理员详情页做高清底图上的移入/勾选涂亮。未知或重复的涂亮层、坏掉的工艺板单独跳过，不把整份刀线预览清掉；超大或非法几何才关掉整份预览，同时保留合法候选。不能把涂亮颜色或快照路径直接当结构。所选线稿仍是不可信输入，必须形成完整盒身环和上下封口。拓扑成功且只有一个可确认正面时 `finishStructure` 保持 Illustrator 槽并自动确认；失败再落 `waiting_input`。多面时只暴露经过最终确认引擎预检的完整候选，页面用真实展开图做视觉翻页，已登录账号只点品名面。组不成花盒时籽烨看板写打样失败。预检引擎为正面生成确定性的 `preferred_quarter_turns`，内部锚点仍携带候选、正面和朝向，再由连通关系推导其余五面。无语义或不安全结构不得靠颜色、图层名、零散矩形、间距、bbox 或模板猜测进入 Blender。GLB 导出后验证轴向、毫米尺寸和六个已确认面的贴图来源、方向与镜像。PPT 先用两张白底写 OOXML，不依赖 Node；写不出才试演示文稿运行时（stderr `PPT 跳过`）。两张白底合成一页 PDF。磁盘静帧保持 RGBA 产品层；`png_bytes_over_white` 只在 PPT/PDF 导出时铺白，不覆盖产品层文件。缺 PPT/PDF 时白底图和 GLB 仍 `done`/`succeeded`，不要把整单判成「Node不存在」。
 - 超时：对照 180s、打样 420s（已有）。超时 = failed，回收槽。
 - 取消：不做。打样重试不是取消：用机上已有稿再排。
 
@@ -199,7 +200,7 @@ Windows 上 spawn 必须进 Job Object，Node 退出时杀掉子进程树。做�
 
 - `NewTaskPage`：先上传得到回执，再调用 `/api/tasks/start`；开始接口立即返回后进入核对页。核对页见 `job_status in {queued,running}` 或 `status===comparing` 就上 WaitCard。
 - `ReviewPage`：对红 POST 返回 queued 时不要 toast「已对照第二份 PDF」；WaitCard 增加「对红」文案。
-- `MockupPage` / `MockupJobPage`：打样台只交稿和列单。点进度或已出图进打样单。唯一「上刀线」（或单层「刀线」）在还没有完整盒网时默认黑盒提交候选 ID，候选里唯一「印刷」可一并带上；失败、无 `confirm_structure` 或已有展开图不自动 POST。待确认时所有已登录角色都可看真实展开图，并凭 `confirm_structure` 选择 A–D 正面、点「生成打样图」。多候选只显示视觉翻页，不显示盒型尺寸、封口算法和阅读方向。进行中是 WaitCard，完成一屏三图看形：正面+侧面、反面+侧面、GLB，下面印刷面读字（`read_*`，现有 `canvasZoom.ts` 1–6×）；白底静帧浅底+内描边，GLB 框不画内描边；产品灯光调静帧产品层和 GLB 曝光，背景灯光调白底和 GLB 底色，不重跑 Blender。下载白底是调过光的合成图。打样中和打样失败 `POST /api/mockups/:id/retry`（先杀 worker 再 queued，杀不掉 409）。白底仍只给 `front_right` / `back_left`。每张图右上角下载；页头「下载 PPT」（没写成仍显示，点了出「PPT 没写成，白底仍可下」），不提供 PDF 下载入口；点下载底部提示不挡操作；GLB 全屏居中；截图时下载钮藏起来；全屏被拒出「全屏打不开」。不要死等 POST；打样单里轮询 GET `/api/mockups/:id`。`status=done|failed` 不当等待卡。地址 `/mockup`、`/mockup/new` 与 `/mockup/:id`。审稿台看板 `/reviewup`，工作台 `/reviewup/new`，核对页仍 `/review/:id`。
+- `MockupPage` / `MockupJobPage`：打样台只交稿和列单。点进度或已出图进打样单。籽烨看不到选层。唯一「上刀线」（或单层「刀线」）在还没有完整盒网时默认黑盒提交候选 ID，候选里唯一「印刷」可一并带上；失败对籽烨结案为打样失败，选层只给 admin。无 `confirm_structure` 或已有展开图不自动 POST。唯一可确认正面时服务端自动出图，关页也继续。多面时所有已登录角色都可看真实展开图，并凭 `confirm_structure` 点品名面。多候选只显示视觉翻页，不显示盒型尺寸、封口算法和阅读方向。管理员可在已出图且只有一套公开盒型的单上换正面。进行中是 WaitCard，完成一屏三图看形：正面+侧面、反面+侧面、GLB，下面印刷面读字（`read_*`，现有 `canvasZoom.ts` 1–6×）；白底静帧浅底+内描边，GLB 框不画内描边；产品灯光调静帧产品层和 GLB 曝光，背景灯光调白底和 GLB 底色，不重跑 Blender。下载白底是调过光的合成图。打样中和打样失败 `POST /api/mockups/:id/retry`（先杀 worker 再 queued，杀不掉 409）。白底仍只给 `front_right` / `back_left`。每张图右上角下载；页头「下载 PPT」（没写成仍显示，点了出「PPT 没写成，白底仍可下」），不提供 PDF 下载入口；点下载底部提示不挡操作；GLB 全屏居中；截图时下载钮藏起来；全屏被拒出「全屏打不开」。不要死等 POST；打样单里轮询 GET `/api/mockups/:id`。`status=done|failed` 不当等待卡。地址 `/mockup`、`/mockup/new` 与 `/mockup/:id`。审稿台看板 `/reviewup`，工作台 `/reviewup/new`，核对页仍 `/review/:id`。
 - `WaitCard`：吃 `job_stage` / `job_stage_label`、`job_eta_s`、`queue_ahead`。queued 显示「前面还有 N 单」。
 - `TasksPage`：任一 `board==comparing` 时轮询 `/api/tasks`，否则排队卡片会停在旧状态。审稿台四栏统一用紧凑明细；对照中首行显示品名和由真实阶段映射出的粗粒度百分比，下一行只放日期。WaitCard、历史行和侧栏仍用 `liveJobLine` 写阶段和大约还要，不画假精确百分比。
 - 侧栏：`liveNavPulse` 看登录后 `/api/status` 的 jobs 槽；审稿台/打样台作业在跑时有圆点。离开核对页再回看板，仍能看到阶段。
@@ -228,7 +229,9 @@ Windows 上 spawn 必须进 Job Object，Node 退出时杀掉子进程树。做�
 - 有 Blender 时忙不 409，是 queued
 - 打样文件：白底 key 只认 `front_right`/`back_left`（磁盘 RGBA 产品层）；另收 `glb` / `ppt` / `sheet` / `read_*`；`ai-raster`/PPT 质检图或坏 PNG → 415（印刷面单独文案）；详情 live-merge、列表不扫盘；`?download=1` 才附件
 - 打样重试：`POST /api/mockups/:id/retry` 先杀 worker 再 queued；杀不掉 409；结构 ready 跳过 Illustrator；done / 待确认 / 不支持 / 缺稿 409
-- 结构选层：候选成员与源稿绑定、管理员权限、1–16 层、16 KiB 正文上限、旧 `/1` 拒绝、相同选择幂等、慢正文竞态、准备失败原位重试和预览路径边界
+- 结构选层：候选成员与源稿绑定、仅管理员、1–16 层、16 KiB 正文上限、旧 `/1` 拒绝、相同选择幂等、慢正文竞态、准备失败原位重试和预览路径边界；非管理员详情省略 `structure_input`
+- 唯一正面自动确认：唯一 net + 唯一 valid_anchor 且带 `preferred_quarter_turns` 时 `finishStructure` 保持 Illustrator 槽并自动确认；失败再落待选正面
+- 管理员换正面：`done`+`ready` 且只有一套公开盒型时可再 `POST /structure`，只重跑 Blender
 - saveTask 在目标文件已存在时 replace 成功（Windows 语义）
 
 杀进程的手工脚本可留 Windows；状态机必须单测。

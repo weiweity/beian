@@ -392,6 +392,7 @@ export function App() {
             <MockupDesk
               canCreate={me.perms.includes("create")}
               canConfirmStructure={me.perms.includes("confirm_structure")}
+              canAdmin={me.role === "admin"}
               openId={view === "mockupNew" ? null : mockupId}
               composing={view === "mockupNew"}
               receiptId={receiptId}
