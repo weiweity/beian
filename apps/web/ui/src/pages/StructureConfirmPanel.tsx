@@ -185,10 +185,10 @@ export function StructureConfirmPanel({ job, canConfirmStructure, onConfirmed }:
         <Alert
           type={hadSelection ? "warning" : "info"}
           showIcon
-          title={hadSelection ? "这组结构层还不能组成完整盒型" : "请选择真实结构线所在图层"}
+          title={hadSelection ? "这组线组不成花盒" : "请选择刀版或刀线所在图层"}
           description={hadSelection
-            ? `${issue} 可以增删下方图层后重新识别；系统仍会检查连续盒身和上下封口。`
-            : "系统已盘点本稿中的纯描边图层。请选择真实刀线、折线所在的一层或多层，再交给拓扑引擎验证。烫金等工艺板只用来看，不会当成刀线。"}
+            ? `${issue} 可以只留刀版再识别；系统仍会检查连续盒身和上下封口。`
+            : "系统已盘点本稿中的刀版/刀线和描边层。请勾选「刀版」或「刀线」，再交给拓扑引擎验证。烫金等工艺板只用来看，不会当成刀线。"}
         />
         <div className="structure-confirm-layout structure-input-layout">
           <div className="structure-map-shell structure-input-preview">

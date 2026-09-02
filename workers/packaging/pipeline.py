@@ -56,7 +56,12 @@ STRUCTURE_V2_FILES = tuple(sorted((ROOT / "structure_v2").glob("*.py")))
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from dieline import PT_TO_MM, layout_to_template, parse_knife_pdf, pick_knife_layer  # noqa: E402
-from structure_v2 import render_face_assets, resolve_structure  # noqa: E402
+from structure_v2 import (  # noqa: E402
+    factory_input_hold,
+    print_layer_failure_message,
+    render_face_assets,
+    resolve_structure,
+)
 from white_background import composite_rgba_over_white  # noqa: E402
 
 DEFAULT_NODE_MODULES = Path(os.environ.get("RUNTIME_NODE_MODULES", ""))
@@ -905,10 +910,10 @@ def illustrator_export_failure(
         )
     ):
         return PipelineError(
-            "Illustrator 无法按模板隔离印刷图层，请检查稿件图层后重试",
+            print_layer_failure_message(result.get("layers") if isinstance(result, dict) else None),
             code="illustrator_artwork_layers_invalid",
             cause=cause,
-            fix="确认模板声明的顶层印刷层与稿件名称完全一致，且图层可修改",
+            fix="确认印刷层名称；没有「印刷」时只能有一层非刀版/工艺顶层。拼合「图层 1」请换未拼合源稿",
         )
     if returncode == 5 or result.get("missing_outputs"):
         return PipelineError(
@@ -1111,6 +1116,40 @@ def preflight_product_v2(
         artwork_pdf = Path(illustrator_result["print_pdf"])
         if structure_sidecar is None:
             structure_sidecar = Path(illustrator_result["structure_json"])
+            factory_hold = factory_input_hold(
+                source,
+                illustrator_result.get("layers"),
+                product,
+            )
+            if factory_hold is not None:
+                hold_code, hold_message = factory_hold
+                resolution_path = project_dir / "structure_resolution.json"
+                save_json(
+                    resolution_path,
+                    {
+                        "status": "unsupported",
+                        "code": hold_code,
+                        "message": hold_message,
+                        "source_sha256": source_sha256,
+                    },
+                )
+                artwork_preview = render_pdf_thumbnail(
+                    artwork_pdf,
+                    project_dir / "structure_preview",
+                    width_px=5_600,
+                )
+                raise PipelineHold(
+                    status="unsupported",
+                    code=hold_code,
+                    message=hold_message,
+                    resolution_path=resolution_path,
+                    details={
+                        "artwork_pdf": str(artwork_pdf),
+                        "artwork_preview": str(artwork_preview),
+                        "structure_sidecar": str(structure_sidecar),
+                        "source_sha256": source_sha256,
+                    },
+                )
     if not artwork_pdf.is_file():
         raise PipelineError(f"对象清理后的 artwork PDF 不存在：{artwork_pdf}")
 
