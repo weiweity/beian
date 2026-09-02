@@ -817,7 +817,7 @@ app.post("/api/mockups/start", async (c) => {
 app.post(
   "/api/mockups/:id/structure/input",
   async (c, next) => {
-    need(c, "confirm_structure", "只有管理员可以选择包装结构层");
+    need(c, "confirm_structure", "当前账号不能选择包装结构层");
     await next();
   },
   bodyLimit({
@@ -875,7 +875,7 @@ app.post(
           );
         }
         console.error("prepare packaging structure input failed", {
-          problem: "管理员已提交候选结构层，但源稿绑定清单没有安全写成",
+          problem: "已登录账号已提交候选结构层，但源稿绑定清单没有安全写成",
           cause: safeLogCause(error),
           fix: "保留待选择状态，检查任务目录后原位重试",
         });
@@ -900,7 +900,7 @@ app.post(
 );
 
 app.post("/api/mockups/:id/structure", async (c) => {
-  need(c, "confirm_structure", "只有管理员可以确认包装结构");
+  need(c, "confirm_structure", "当前账号不能确认包装结构");
   const id = assertTid(c.req.param("id"));
   const job = getJob(id);
   if (!job) throw new HTTPException(404, { message: "没有这单打样" });

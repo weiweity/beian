@@ -31,7 +31,8 @@ describe("GET / spa gate", () => {
     });
     assert.equal(res.status, 200);
     const body = (await res.json()) as { perms?: string[] };
-    assert.deepEqual(body.perms, ["read", "export"]);
+    assert.deepEqual(body.perms, ["read", "export", "confirm_structure"]);
+    assert.equal(body.perms?.includes("delete"), false);
   });
 
   it("restores and revalidates a real Feishu session through the HTTP boundary", async () => {

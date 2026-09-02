@@ -37,8 +37,8 @@ const PERMS: Record<Role, string[]> = {
     "confirm_structure",
     "manage_users",
   ],
-  reviewer: ["read", "create", "decide", "complete", "delete", "export", "archive", "ai_review"],
-  viewer: ["read", "export"],
+  reviewer: ["read", "create", "decide", "complete", "delete", "export", "archive", "ai_review", "confirm_structure"],
+  viewer: ["read", "export", "confirm_structure"],
 };
 
 export type Session = {

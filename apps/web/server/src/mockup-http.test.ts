@@ -501,20 +501,19 @@ describe("mockup structure input http", () => {
     assert.equal(JSON.stringify(body).includes(artworkPreview), false);
   });
 
-  it("lets only an admin submit current candidate ids and resumes the same job", async () => {
+  it("lets a reviewer submit current candidate ids and resumes the same job", async () => {
     const { setJobsTestHooks, resetJobsTestHooks } = await import("./jobs.js");
     const id = "feed1000feed";
     const ownerId = "ou_structure_input_owner";
     const { candidateId, dir } = seedStructureInputJob(id, ownerId);
-    const reviewer = issueSessionForTest("审稿", "reviewer", ownerId);
     const denied = await app.request(`/api/mockups/${id}/structure/input`, {
       method: "POST",
-      headers: { authorization: `Bearer ${reviewer.token}`, "content-type": "application/json" },
+      headers: { "content-type": "application/json" },
       body: JSON.stringify({ candidate_ids: [candidateId] }),
     });
-    assert.equal(denied.status, 403);
+    assert.equal(denied.status, 401);
 
-    const admin = issueSessionForTest("管理员", "admin", "ou_structure_input_admin");
+    const admin = issueSessionForTest("审稿", "reviewer", "ou_structure_input_admin");
     const forged = await app.request(`/api/mockups/${id}/structure/input`, {
       method: "POST",
       headers: { authorization: `Bearer ${admin.token}`, "content-type": "application/json" },
@@ -631,7 +630,7 @@ describe("mockup structure input http", () => {
 });
 
 describe("mockup structure confirmation http", () => {
-  it("requires an admin before accepting a structure anchor", async () => {
+  it("rejects an anonymous structure confirmation before touching the job", async () => {
     const id = "faceac100001";
     saveMockup({
       id,
@@ -644,17 +643,14 @@ describe("mockup structure confirmation http", () => {
       structure_engine: "v2",
       structure_status: "review_required",
     });
-    const reviewer = issueSessionForTest("审稿", "reviewer", "ou_structure_owner");
     const res = await app.request(`/api/mockups/${id}/structure`, {
       method: "POST",
-      headers: { authorization: `Bearer ${reviewer.token}`, "content-type": "application/json" },
+      headers: { "content-type": "application/json" },
       body: JSON.stringify({
         anchor: { proposal_id: "box-net-0001", front_face_id: "proposal-face-0001", quarter_turns: 0 },
       }),
     });
-    assert.equal(res.status, 403);
-    const body = (await res.json()) as { detail?: string };
-    assert.match(String(body.detail || ""), /管理员/);
+    assert.equal(res.status, 401);
   });
 
   it("rejects every malformed structure anchor before invoking the worker", async () => {
