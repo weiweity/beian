@@ -13,7 +13,7 @@
 
 ### For contributors
 
-- Blender 先出产品 RGBA 静帧，再单独跑地面 pass；地面失败不挡产品图。网页 canvas 铺 `rgb(242,242,244)` 再叠地面和产品。`*_ground` 不能当产品静帧。L0 不替代杭州 5.2 实拍。
+- Blender 先出产品 RGBA 静帧，再单独跑地面 pass；地面失败不挡产品图。网页 canvas 铺 `rgb(242,242,244)`，multiply 地面后再叠产品。`*_ground` 不能当产品静帧。L0 不替代杭州 5.2 实拍。
 
 ## [0.21.19.0] - 2026-09-02
 
