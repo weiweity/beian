@@ -3519,19 +3519,26 @@ html[data-theme="dark"] .notes.is-float {
   min-height: 0;
 }
 
+.mockup-studio-lights {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 28px;
+  margin: 12px 0 0;
+}
+
 .mockup-studio-light {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin: 12px 0 0;
   min-height: 40px;
   color: #1c1a1f;
   font-size: 16px;
 }
 
 .mockup-studio-light input[type="range"] {
-  width: min(280px, 100%);
+  width: min(220px, 100%);
   height: 40px;
+  accent-color: #805898;
 }
 
 .mockup-sheet-frame {
@@ -3647,8 +3654,8 @@ html[data-theme="dark"] .notes.is-float {
   display: block;
   width: 100%;
   height: 100%;
-  background: #ffffff;
-  --poster-color: #ffffff;
+  background: transparent;
+  --poster-color: transparent;
 }
 
 .mockup-sheet-glb:fullscreen,
@@ -3701,11 +3708,73 @@ html[data-theme="dark"] .notes.is-float {
   opacity: 1;
 }
 
+.mockup-still-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 240;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  color: #1c1a1f;
+  color-scheme: light;
+  background: rgba(28, 26, 31, 0.58);
+}
+
+.mockup-still-lightbox-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  box-sizing: border-box;
+  width: min(960px, 100%);
+  max-height: calc(100vh - 48px);
+  padding: 16px;
+  overflow: auto;
+  border-radius: 24px;
+  background: #ffffff;
+  box-shadow: 0 28px 64px rgba(40, 24, 56, 0.28);
+}
+
+.mockup-still-lightbox-stage {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 240px;
+  max-height: min(72vh, 820px);
+  overflow: auto;
+  border: 1px solid rgba(40, 24, 56, 0.28);
+  border-radius: 16px;
+}
+
+.mockup-still-lightbox-stage::after {
+  content: "";
+  position: absolute;
+  inset: 8px;
+  pointer-events: none;
+  border: 1px solid rgba(28, 26, 31, 0.28);
+  border-radius: 12px;
+}
+
+.mockup-still-lightbox-stage img {
+  display: block;
+  max-width: 100%;
+  max-height: min(72vh, 820px);
+  object-fit: contain;
+  background: transparent;
+}
+
+.mockup-still-lightbox-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .mockup-hud {
   position: fixed;
   left: 50%;
   bottom: max(28px, calc(12px + env(safe-area-inset-bottom, 0px)));
-  z-index: 120;
+  z-index: 250;
   margin: 0;
   padding: 10px 16px;
   border-radius: 999px;

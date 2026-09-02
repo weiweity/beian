@@ -18,7 +18,16 @@ import { stemFromFilename } from "./stemName";
 import { HUD_MS, downloadHudLine, missingPptHud } from "./mockupHud";
 import { panBy, resetZoom, zoomAt, zoomCss, type ZoomState } from "./canvasZoom";
 import { listedReadFaces, READ_FACE_LABEL, readFaceKey } from "./mockupReadFaces";
-import { clampStudioLight, glbExposure, stillsFilter, STUDIO_LIGHT_DEFAULT, STUDIO_LIGHT_MAX, STUDIO_LIGHT_MIN } from "./mockupStudio";
+import {
+  blobFromLitStill,
+  clampStudioLight,
+  glbExposure,
+  stillsFilter,
+  studioBackdrop,
+  STUDIO_LIGHT_DEFAULT,
+  STUDIO_LIGHT_MAX,
+  STUDIO_LIGHT_MIN,
+} from "./mockupStudio";
 import { deskClock, type DeskCardRow } from "./deskBoard";
 import { DeskCol } from "./DeskCol";
 import { shouldShowTaskBoard } from "./tasksBoard";
@@ -103,7 +112,14 @@ export function MockupDesk({
 }) {
   let content: ReactNode;
   if (openId) {
-    content = <MockupJobPage jobId={openId} canConfirmStructure={canConfirmStructure} onBack={onBack} />;
+    content = (
+      <MockupJobPage
+        jobId={openId}
+        canCreate={canCreate}
+        canConfirmStructure={canConfirmStructure}
+        onBack={onBack}
+      />
+    );
   } else if (composing) {
     content = <MockupNewPage key={receiptId || "active"} canCreate={canCreate} receiptId={receiptId} onCreated={onOpenJob} onBack={onBack} />;
   } else {
@@ -698,13 +714,20 @@ export function MockupNewPage({
   );
 }
 
-export function MockupJobPage({ jobId, canConfirmStructure, onBack }: JobProps & { canConfirmStructure: boolean }) {
+export function MockupJobPage({
+  jobId,
+  canCreate,
+  canConfirmStructure,
+  onBack,
+}: JobProps & { canCreate: boolean; canConfirmStructure: boolean }) {
   const { message } = App.useApp();
   const [job, setJob] = useState<MockupJob | null>(() => mockupHandoffFor(jobId));
   const [error, setError] = useState<string | null>(null);
   const [hud, setHud] = useState("");
   const [glbFs, setGlbFs] = useState(false);
-  const [studioLight, setStudioLight] = useState(STUDIO_LIGHT_DEFAULT);
+  const [productLight, setProductLight] = useState(STUDIO_LIGHT_DEFAULT);
+  const [backgroundLight, setBackgroundLight] = useState(STUDIO_LIGHT_DEFAULT);
+  const [retrying, setRetrying] = useState(false);
   const glbBox = useRef<HTMLDivElement>(null);
   const hudTimer = useRef<number | null>(null);
   const announced = useRef("");
@@ -716,6 +739,21 @@ export function MockupJobPage({ jobId, canConfirmStructure, onBack }: JobProps &
     setHud(text);
     if (hudTimer.current != null) window.clearTimeout(hudTimer.current);
     hudTimer.current = window.setTimeout(() => setHud(""), HUD_MS);
+  }
+
+  async function retry() {
+    if (!job || retrying) return;
+    setRetrying(true);
+    try {
+      const next = await api.retryMockup(job.id);
+      setError(null);
+      setJob(next);
+      message.success("已用机上的稿重新排队。");
+    } catch (err: unknown) {
+      message.error(err instanceof Error ? err.message : "重试失败");
+    } finally {
+      setRetrying(false);
+    }
   }
 
   useEffect(() => {
@@ -842,9 +880,16 @@ export function MockupJobPage({ jobId, canConfirmStructure, onBack }: JobProps &
             <h1 className="page-title">{mockTitle(job)}</h1>
             <p className="page-lead">打样还在跑。可以回打样台，进度仍在历史记录里。</p>
           </div>
-          <button type="button" className="btn-ghost" onClick={onBack}>
-            返回打样台
-          </button>
+          <div className="mockup-sheet-head-actions">
+            {canCreate ? (
+              <button type="button" className="btn-ghost" disabled={retrying} onClick={() => void retry()}>
+                {retrying ? "正在重试…" : "重试"}
+              </button>
+            ) : null}
+            <button type="button" className="btn-ghost" onClick={onBack}>
+              返回打样台
+            </button>
+          </div>
         </header>
         <WaitCard
           job="打样"
@@ -896,23 +941,19 @@ export function MockupJobPage({ jobId, canConfirmStructure, onBack }: JobProps &
         <div>
           <h1 className="page-title">{mockTitle(job)}</h1>
           <p className="page-lead">打样单。上面三张看形；下面印刷面读字，可放大。不要用 GLB 读小字。</p>
-          <label className="mockup-studio-light">
-            灯光
-            <input
-              aria-label="灯光"
-              aria-valuemax={STUDIO_LIGHT_MAX}
-              aria-valuemin={STUDIO_LIGHT_MIN}
-              aria-valuenow={studioLight}
-              max={STUDIO_LIGHT_MAX}
-              min={STUDIO_LIGHT_MIN}
-              onChange={(event) => setStudioLight(clampStudioLight(Number(event.target.value)))}
-              step={0.02}
-              type="range"
-              value={studioLight}
-            />
-          </label>
+          <StudioLightSliders
+            productLight={productLight}
+            backgroundLight={backgroundLight}
+            onProductLight={setProductLight}
+            onBackgroundLight={setBackgroundLight}
+          />
         </div>
         <div className="mockup-sheet-head-actions">
+          {canCreate && job.status === "failed" ? (
+            <button type="button" className="btn-ghost" disabled={retrying} onClick={() => void retry()}>
+              {retrying ? "正在重试…" : "重试"}
+            </button>
+          ) : null}
           <button type="button" className="btn-ghost" onClick={onBack}>
             返回打样台
           </button>
@@ -945,7 +986,10 @@ export function MockupJobPage({ jobId, canConfirmStructure, onBack }: JobProps &
             alt="正面与侧面白底"
             caption="正面 + 侧面"
             downloadName={whiteA.name}
-            filter={stillsFilter(studioLight)}
+            productLight={productLight}
+            backgroundLight={backgroundLight}
+            onProductLight={setProductLight}
+            onBackgroundLight={setBackgroundLight}
             onDownload={() => notice(downloadHudLine("白底"))}
           />
         ) : (
@@ -963,7 +1007,10 @@ export function MockupJobPage({ jobId, canConfirmStructure, onBack }: JobProps &
             alt="反面与侧面白底"
             caption="反面 + 侧面"
             downloadName={whiteB.name}
-            filter={stillsFilter(studioLight)}
+            productLight={productLight}
+            backgroundLight={backgroundLight}
+            onProductLight={setProductLight}
+            onBackgroundLight={setBackgroundLight}
             onDownload={() => notice(downloadHudLine("白底"))}
           />
         ) : (
@@ -976,16 +1023,24 @@ export function MockupJobPage({ jobId, canConfirmStructure, onBack }: JobProps &
         )}
         {hasGlb ? (
           <figure className="mockup-sheet-photo">
-            <div className="mockup-sheet-frame mockup-sheet-glb" ref={glbBox}>
+            <div
+              className="mockup-sheet-frame mockup-sheet-glb"
+              ref={glbBox}
+              style={{ background: studioBackdrop(backgroundLight) }}
+            >
               <model-viewer
                 src={fileHref(job.id, "glb")}
                 camera-controls
                 environment-image="neutral"
-                exposure={glbExposure(studioLight)}
+                exposure={glbExposure(productLight)}
                 shadow-intensity="1"
                 shadow-softness="0.25"
                 tone-mapping="commerce"
                 interaction-prompt="none"
+                style={{
+                  background: studioBackdrop(backgroundLight),
+                  ["--poster-color" as string]: studioBackdrop(backgroundLight),
+                }}
               />
               <button
                 type="button"
@@ -1240,13 +1295,63 @@ function ReadFaceShot({
   );
 }
 
+function StudioLightSliders({
+  productLight,
+  backgroundLight,
+  onProductLight,
+  onBackgroundLight,
+}: {
+  productLight: number;
+  backgroundLight: number;
+  onProductLight: (value: number) => void;
+  onBackgroundLight: (value: number) => void;
+}) {
+  return (
+    <div className="mockup-studio-lights">
+      <label className="mockup-studio-light">
+        产品灯光
+        <input
+          aria-label="产品灯光"
+          aria-valuemax={STUDIO_LIGHT_MAX}
+          aria-valuemin={STUDIO_LIGHT_MIN}
+          aria-valuenow={productLight}
+          max={STUDIO_LIGHT_MAX}
+          min={STUDIO_LIGHT_MIN}
+          onChange={(event) => onProductLight(clampStudioLight(Number(event.target.value)))}
+          step={0.02}
+          type="range"
+          value={productLight}
+        />
+      </label>
+      <label className="mockup-studio-light">
+        背景灯光
+        <input
+          aria-label="背景灯光"
+          aria-valuemax={STUDIO_LIGHT_MAX}
+          aria-valuemin={STUDIO_LIGHT_MIN}
+          aria-valuenow={backgroundLight}
+          max={STUDIO_LIGHT_MAX}
+          min={STUDIO_LIGHT_MIN}
+          onChange={(event) => onBackgroundLight(clampStudioLight(Number(event.target.value)))}
+          step={0.02}
+          type="range"
+          value={backgroundLight}
+        />
+      </label>
+    </div>
+  );
+}
+
 function WhiteShot({
   jobId,
   fileKey,
   alt,
   caption,
   downloadName,
-  filter,
+  productLight,
+  backgroundLight,
+  onProductLight,
+  onBackgroundLight,
   onDownload,
 }: {
   jobId: string;
@@ -1254,42 +1359,116 @@ function WhiteShot({
   alt: string;
   caption: string;
   downloadName?: string;
-  filter: string;
+  productLight: number;
+  backgroundLight: number;
+  onProductLight: (value: number) => void;
+  onBackgroundLight: (value: number) => void;
   onDownload: () => void;
 }) {
   const [bad, setBad] = useState(false);
+  const [originalOpen, setOriginalOpen] = useState(false);
+  const imgRef = useRef<HTMLImageElement>(null);
+  const exporting = useRef(false);
+  const backdrop = studioBackdrop(backgroundLight);
+  const filter = stillsFilter(productLight);
+
+  useEffect(() => {
+    if (!originalOpen) return;
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") setOriginalOpen(false);
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [originalOpen]);
+
+  async function saveLit() {
+    const img = imgRef.current;
+    if (!img || exporting.current) return;
+    exporting.current = true;
+    try {
+      const blob = await blobFromLitStill(img, { productLight, backgroundLight });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = downloadName || `${caption}.png`;
+      link.click();
+      URL.revokeObjectURL(url);
+      onDownload();
+    } catch {
+      /* 导出失败不假装已经在下载 */
+    } finally {
+      exporting.current = false;
+    }
+  }
+
   return (
     <figure className="mockup-sheet-photo">
-      <div className="mockup-sheet-frame">
+      <div className="mockup-sheet-frame" style={{ background: backdrop }}>
         {bad ? (
           <p className="page-lead">这张白底图坏了，回到打样台重新打。</p>
         ) : (
-          <img src={fileHref(jobId, fileKey)} alt={alt} onError={() => setBad(true)} style={{ filter }} />
+          <img
+            ref={imgRef}
+            src={fileHref(jobId, fileKey)}
+            alt={alt}
+            onError={() => setBad(true)}
+            style={{ filter }}
+          />
         )}
         {bad ? null : (
           <>
-            <a
+            <button
+              type="button"
               className="mockup-dl mockup-dl-fs"
-              href={fileHref(jobId, fileKey)}
-              target="_blank"
-              rel="noreferrer"
               aria-label={`打开${caption}原图`}
+              onClick={() => setOriginalOpen(true)}
             >
               原图
-            </a>
-            <a
+            </button>
+            <button
+              type="button"
               className="mockup-dl mockup-dl-corner"
-              href={fileHref(jobId, fileKey, true)}
-              download={downloadName}
               aria-label={`下载${caption}`}
-              onClick={onDownload}
+              onClick={() => void saveLit()}
             >
               下载
-            </a>
+            </button>
           </>
         )}
       </div>
       <figcaption className="mockup-sheet-cap">{caption}</figcaption>
+      {originalOpen && !bad
+        ? createPortal(
+            <div
+              className="mockup-still-lightbox"
+              role="dialog"
+              aria-modal="true"
+              aria-label={`${caption}原图`}
+              onClick={() => setOriginalOpen(false)}
+            >
+              <div className="mockup-still-lightbox-panel" onClick={(event) => event.stopPropagation()}>
+                <div className="mockup-still-lightbox-stage" style={{ background: backdrop }}>
+                  <img src={fileHref(jobId, fileKey)} alt={alt} style={{ filter }} />
+                </div>
+                <StudioLightSliders
+                  productLight={productLight}
+                  backgroundLight={backgroundLight}
+                  onProductLight={onProductLight}
+                  onBackgroundLight={onBackgroundLight}
+                />
+                <div className="mockup-still-lightbox-actions">
+                  <button type="button" className="mockup-dl" onClick={() => void saveLit()}>
+                    下载
+                  </button>
+                  <button type="button" className="mockup-dl" onClick={() => setOriginalOpen(false)}>
+                    关闭
+                  </button>
+                </div>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
     </figure>
   );
 }

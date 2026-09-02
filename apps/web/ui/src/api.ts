@@ -650,6 +650,8 @@ export const api = {
     request<TaskDetail>("/api/tasks/start", { method: "POST", body: JSON.stringify(body) }),
   startMockup: (body: { receipt: string; title?: string; product_name?: string }) =>
     request<MockupJob>("/api/mockups/start", { method: "POST", body: JSON.stringify(body) }),
+  retryMockup: (id: string) =>
+    request<MockupJob>(`/api/mockups/${id}/retry`, { method: "POST" }),
   selectMockupStructureInput: (id: string, candidateIds: string[]) =>
     request<MockupJob>(`/api/mockups/${id}/structure/input`, {
       method: "POST",

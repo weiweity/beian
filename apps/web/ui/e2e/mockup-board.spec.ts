@@ -70,6 +70,33 @@ test("打样台轮询真实阶段百分比并可点进打样单", async ({ page,
   await card.click();
   await expect(page).toHaveURL(`/mockup/${running.id}`);
   await expect(page.getByText("打样中", { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "重试" })).toBeVisible();
+  await page.getByRole("button", { name: "重试" }).click();
+  await expect(page.getByText("已用机上的稿重新排队。")).toBeVisible();
+  expect(
+    syntheticApi.calls.some((call) => call.method === "POST" && call.path === `/api/mockups/${running.id}/retry`),
+  ).toBeTruthy();
+});
+
+test("打样失败可重试同一份机上稿", async ({ page, syntheticApi }) => {
+  const failed: SyntheticMockup = {
+    id: "eeeeeeeeeeee",
+    title: "失败可重试",
+    status: "failed",
+    job_status: "failed",
+    error: "打样中断",
+    created_at: "2026-08-27T01:25:00.000Z",
+    owner: "魏炜",
+    files: [],
+  };
+  syntheticApi.mockups.push(failed);
+  await page.goto(`/mockup/${failed.id}`);
+  await expect(page.getByRole("button", { name: "重试" })).toBeVisible();
+  await page.getByRole("button", { name: "重试" }).click();
+  await expect(page.getByText("打样中", { exact: true }).first()).toBeVisible();
+  expect(
+    syntheticApi.calls.some((call) => call.method === "POST" && call.path === `/api/mockups/${failed.id}/retry`),
+  ).toBeTruthy();
 });
 
 test("结构待确认和不支持均显示可执行状态，不伪装成打样进度", async ({ page, syntheticApi }) => {
@@ -106,7 +133,7 @@ test("结构待确认和不支持均显示可执行状态，不伪装成打样�
   ).toHaveText("结构暂不支持");
 });
 
-test("完成态打样单可在新窗口打开两张内联原图", async ({ page, context, syntheticApi }) => {
+test("完成态打样单可分开调产品和背景灯光，原图灯箱也能调", async ({ page, syntheticApi }) => {
   const mockup = completedMockup("7a7b7c7d7e7f", "高清白底图");
   mockup.files = [
     { key: "white_a", name: "正面与侧面.png" },
@@ -116,9 +143,6 @@ test("完成态打样单可在新窗口打开两张内联原图", async ({ page,
   const image = "<svg xmlns='http://www.w3.org/2000/svg' width='3000' height='3600'><rect width='3000' height='3600' fill='white'/></svg>";
   for (const key of ["white_a", "white_b"]) {
     const pattern = new RegExp(`/api/mockups/${mockup.id}/files/${key}(?:\\?.*)?$`);
-    await context.route(pattern, async (route) => {
-      await route.fulfill({ status: 200, contentType: "image/svg+xml", body: image });
-    });
     await page.route(pattern, async (route) => {
       await route.fulfill({ status: 200, contentType: "image/svg+xml", body: image });
     });
@@ -126,30 +150,39 @@ test("完成态打样单可在新窗口打开两张内联原图", async ({ page,
 
   await page.goto(`/mockup/${mockup.id}`);
 
-  const light = page.getByRole("slider", { name: "灯光" });
-  await expect(light).toBeVisible();
+  const productLight = page.getByRole("slider", { name: "产品灯光" }).first();
+  const backgroundLight = page.getByRole("slider", { name: "背景灯光" }).first();
+  await expect(productLight).toBeVisible();
+  await expect(backgroundLight).toBeVisible();
   await expect(page.locator(".mockup-sheet-photo .mockup-sheet-frame img").first()).toHaveCSS(
     "filter",
     /contrast\(1\.12\).*brightness\(1\)/,
   );
-  await light.fill("1.2");
+  await productLight.fill("1.2");
   await expect(page.locator(".mockup-sheet-photo .mockup-sheet-frame img").first()).toHaveCSS(
     "filter",
     /brightness\(1\.2\)/,
   );
+  await backgroundLight.fill("0.6");
+  await expect(page.locator(".mockup-sheet-photo .mockup-sheet-frame").first()).toHaveCSS(
+    "background-color",
+    "rgb(153, 153, 153)",
+  );
 
-  const originalLinks = page.getByRole("link", { name: /打开.+原图/ });
-  await expect(originalLinks).toHaveCount(2);
-  await expect(originalLinks.nth(0)).toHaveAttribute("href", `/api/mockups/${mockup.id}/files/white_a`);
-  await expect(originalLinks.nth(0)).toHaveAttribute("target", "_blank");
-  await expect(originalLinks.nth(0)).toHaveAttribute("rel", "noreferrer");
-  await expect(originalLinks.nth(1)).toHaveAttribute("href", `/api/mockups/${mockup.id}/files/white_b`);
-
-  const [popup] = await Promise.all([page.waitForEvent("popup"), originalLinks.nth(0).click()]);
-  await popup.waitForLoadState();
-  expect(new URL(popup.url()).pathname).toBe(`/api/mockups/${mockup.id}/files/white_a`);
-  expect(new URL(popup.url()).search).toBe("");
-  await expect(popup.locator("svg")).toBeVisible();
+  const originalButtons = page.getByRole("button", { name: /打开.+原图/ });
+  await expect(originalButtons).toHaveCount(2);
+  await originalButtons.nth(0).click();
+  const dialog = page.getByRole("dialog", { name: "正面 + 侧面原图" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("slider", { name: "产品灯光" })).toBeVisible();
+  await expect(dialog.getByRole("slider", { name: "背景灯光" })).toBeVisible();
+  await dialog.getByRole("slider", { name: "产品灯光" }).fill("0.8");
+  await expect(page.locator(".mockup-sheet-photo .mockup-sheet-frame img").first()).toHaveCSS(
+    "filter",
+    /brightness\(0\.8\)/,
+  );
+  await dialog.getByRole("button", { name: "关闭" }).click();
+  await expect(dialog).toHaveCount(0);
 });
 
 test("白底图损坏时隐藏原图和下载操作", async ({ page, syntheticApi }) => {
@@ -167,6 +200,7 @@ test("白底图损坏时隐藏原图和下载操作", async ({ page, syntheticAp
   });
   await expect(shot.getByText("这张白底图坏了，回到打样台重新打。")).toBeVisible();
   await expect(shot.getByRole("link")).toHaveCount(0);
+  await expect(shot.getByRole("button")).toHaveCount(0);
 });
 
 test("完成态打样单在三图下用印刷面读字并可放大", async ({ page, context, syntheticApi }) => {
