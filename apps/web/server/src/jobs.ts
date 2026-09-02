@@ -4,12 +4,14 @@ import { DATA_DIR } from "./config.js";
 import { compareBookkeeping } from "./billing.js";
 import { notifyJobFinished } from "./notify.js";
 import {
+  assertCanManageMockup,
   collectOutputs,
   isMockupJobFile,
   loadAllMockups,
   loadMockup,
   mockupStoreSnapshot,
   resetMockupCache,
+  resetMockupForRetry,
   saveMockup,
   type MockupJob,
 } from "./mockup.js";
@@ -85,6 +87,7 @@ const MOCKUP_TIMEOUT_MS = 420_000;
 type Slot = "ocr" | "blender" | "illustrator";
 
 const live: Record<Slot, string | null> = { ocr: null, blender: null, illustrator: null };
+const activeMockupRetries = new Set<string>();
 
 export type JobsTestHooks = {
   runCompare?: typeof compareTask;
@@ -185,6 +188,45 @@ export function enqueue(opts: { kind: JobKind; id: string }): Task | MockupJob {
     return job;
   }
   return loadTask(opts.id);
+}
+
+/** 先确认旧 worker 已退出，再改成 queued。完成回调靠 job_started_at 丢弃。 */
+export function retryMockup(id: string, viewer: Viewer): MockupJob {
+  const job = loadMockup(id);
+  if (!job) throw Object.assign(new Error("没有这单打样"), { status: 404 });
+  assertCanManageMockup(job, viewer);
+  if (activeMockupRetries.has(id)) {
+    throw Object.assign(new Error("这单正在重试，请稍候"), { status: 409 });
+  }
+  const pid = job.job_pid;
+  const illustratorLive = live.illustrator === id;
+  const blenderLive = live.blender === id;
+  if ((job.job_status === "running" || job.job_status === "queued") && !pid && (illustratorLive || blenderLive)) {
+    throw Object.assign(new Error("打样还在启动，请稍后再试"), { status: 409 });
+  }
+  activeMockupRetries.add(id);
+  try {
+    if (pid) {
+      if (!clearPersistedWorker(pid, { kind: "mockup", id })) {
+        throw Object.assign(new Error("打样还在跑，暂时不能重试"), { status: 409 });
+      }
+    }
+    const fresh = loadMockup(id);
+    if (!fresh) throw Object.assign(new Error("没有这单打样"), { status: 404 });
+    resetMockupForRetry(fresh);
+    if (illustratorLive) live.illustrator = null;
+    if (blenderLive) live.blender = null;
+    try {
+      tryStart();
+    } catch (err) {
+      console.warn("retry mockup tryStart failed:", err instanceof Error ? err.message : err);
+    }
+    const next = loadMockup(id);
+    if (!next) throw Object.assign(new Error("没有这单打样"), { status: 404 });
+    return next;
+  } finally {
+    activeMockupRetries.delete(id);
+  }
 }
 
 export function reclaimOnBoot(): void {
@@ -893,9 +935,15 @@ export function launchNotification(label: string, operation: () => Promise<void>
 
 async function fireMockupNotify(job: MockupJob, ok: boolean): Promise<void> {
   if (job.notify_sent) return;
+  const key = job.notify_job_id || `${job.id}:mockup:${job.job_started_at}`;
   if (!job.notify_job_id) {
-    job.notify_job_id = `${job.id}:mockup:${job.job_started_at}`;
-    saveMockup(job);
+    const cur = loadMockup(job.id);
+    if (!cur) return;
+    if (!cur.notify_job_id) {
+      cur.notify_job_id = key;
+      cur.notify_sent = false;
+      saveMockup(cur);
+    }
   }
   const fn = hooks.notify || notifyJobFinished;
   const r = await fn({
@@ -907,10 +955,10 @@ async function fireMockupNotify(job: MockupJob, ok: boolean): Promise<void> {
   });
   if (r.ok || r.skipped) {
     const fresh = loadMockup(job.id);
-    if (fresh) {
-      fresh.notify_sent = true;
-      saveMockup(fresh);
-    }
+    if (!fresh) return;
+    if (fresh.notify_job_id && fresh.notify_job_id !== key) return;
+    fresh.notify_sent = true;
+    saveMockup(fresh);
   } else {
     console.warn("feishu mockup notify failed:", r.reason);
   }

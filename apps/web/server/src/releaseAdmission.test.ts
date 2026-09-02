@@ -53,6 +53,7 @@ test("release drain blocks every business API request except health and its cont
     ["POST", "/api/tasks/start"],
     ["POST", "/api/tasks/012345abcdef/rework"],
     ["POST", "/api/mockups/start"],
+    ["POST", "/api/mockups/012345abcdef/retry"],
     ["POST", "/api/mockups/012345abcdef/structure/input"],
     ["POST", "/api/mockups/012345abcdef/structure"],
     ["POST", "/api/tasks/012345abcdef/complete"],

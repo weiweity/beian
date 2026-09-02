@@ -51,6 +51,7 @@ export type SyntheticMockup = {
   id: string;
   status: "queued" | "running" | "review_required" | "unsupported" | "done" | "failed";
   title: string;
+  error?: string;
   created_at?: string;
   owner?: string;
   job_status?: string;
@@ -553,8 +554,20 @@ async function installSyntheticApi(page: Page, state: SyntheticApi) {
       }
 
       const mockupPath = path.match(/^\/api\/mockups\/([0-9a-f]{12})$/);
+      const retryPath = path.match(/^\/api\/mockups\/([0-9a-f]{12})\/retry$/);
       const structureInputPath = path.match(/^\/api\/mockups\/([0-9a-f]{12})\/structure\/input$/);
       const structurePath = path.match(/^\/api\/mockups\/([0-9a-f]{12})\/structure$/);
+      if (retryPath && method === "POST") {
+        const mockup = state.mockups.find((item) => item.id === retryPath[1]);
+        if (!mockup) return json(route, { detail: "合成打样不存在" }, 404);
+        if (mockup.status === "done") return json(route, { detail: "已经出图，不用重试" }, 409);
+        if (mockup.status === "review_required") return json(route, { detail: "先确认结构再打样" }, 409);
+        if (mockup.status === "unsupported") return json(route, { detail: "当前结构还不支持，不能重试" }, 409);
+        mockup.status = "queued";
+        mockup.job_status = "queued";
+        mockup.error = undefined;
+        return json(route, mockup);
+      }
       if (structureInputPath && method === "POST") {
         const mockup = state.mockups.find((item) => item.id === structureInputPath[1]);
         if (!mockup) return json(route, { detail: "合成打样不存在" }, 404);

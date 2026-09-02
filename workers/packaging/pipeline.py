@@ -62,7 +62,7 @@ from structure_v2 import (  # noqa: E402
     render_face_assets,
     resolve_structure,
 )
-from white_background import composite_rgba_over_white  # noqa: E402
+from white_background import png_bytes_over_white  # noqa: E402
 
 DEFAULT_NODE_MODULES = Path(os.environ.get("RUNTIME_NODE_MODULES", ""))
 DEFAULT_RUNTIME_BIN = Path(os.environ.get("RUNTIME_BIN_DIR", ""))
@@ -1504,12 +1504,12 @@ def run_blender_job(job: dict[str, Any], blender_executable: Path) -> dict[str, 
     log_path.write_text(process.stdout + "\n" + process.stderr, encoding="utf-8")
     if process.returncode != 0:
         raise PipelineError(f"Blender任务失败：{job['code']}，日志={log_path}")
+    # 静帧保持 RGBA 产品层。白底由打样单合成；PPT/PDF 导出时再铺白。
     if bool(job.get("render", {}).get("exact_white_background", True)):
         for key in ("front_right", "back_left"):
             output = Path(job["outputs"][key])
             if not output.is_file():
                 raise PipelineError(f"Blender未生成白底图：{output}")
-            composite_rgba_over_white(output)
     blender_result_path = project_dir / "blender_result.json"
     if not blender_result_path.is_file():
         raise PipelineError(f"Blender未生成结果清单：{blender_result_path}")
@@ -1697,7 +1697,7 @@ def write_sheet_pdf(job: dict[str, Any]) -> None:
                 front_rect = pymupdf.Rect(*_contain_rect((36, 68, 626, 688), fw, fh))
             except Exception:
                 front_rect = pymupdf.Rect(36, 68, 626, 688)
-            page.insert_image(front_rect, stream=Path(front).read_bytes(), keep_proportion=True)
+            page.insert_image(front_rect, stream=png_bytes_over_white(front), keep_proportion=True)
             if back and Path(back).is_file():
                 try:
                     with Image.open(back) as im:
@@ -1705,7 +1705,7 @@ def write_sheet_pdf(job: dict[str, Any]) -> None:
                     back_rect = pymupdf.Rect(*_contain_rect((654, 68, 1244, 688), bw, bh))
                 except Exception:
                     back_rect = pymupdf.Rect(654, 68, 1244, 688)
-                page.insert_image(back_rect, stream=Path(back).read_bytes(), keep_proportion=True)
+                page.insert_image(back_rect, stream=png_bytes_over_white(back), keep_proportion=True)
             dest.parent.mkdir(parents=True, exist_ok=True)
             tmp = dest.with_suffix(".pdf.part")
             doc.save(str(tmp))
@@ -1738,10 +1738,14 @@ def write_white_pptx(front: Path, back: Path, dest: Path, title: str = "") -> Pa
     back = Path(back)
     if not front.is_file() or not back.is_file():
         raise PipelineError("缺白底图，PPT 写不出")
-    front_bytes = front.read_bytes()
-    back_bytes = back.read_bytes()
-    if front_bytes[:8] != b"\x89PNG\r\n\x1a\n" or back_bytes[:8] != b"\x89PNG\r\n\x1a\n":
+    def png_magic(path: Path) -> bool:
+        with path.open("rb") as handle:
+            return handle.read(8) == b"\x89PNG\r\n\x1a\n"
+
+    if not png_magic(front) or not png_magic(back):
         raise PipelineError("白底不是 PNG，PPT 写不出")
+    front_bytes = png_bytes_over_white(front)
+    back_bytes = png_bytes_over_white(back)
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     heading = _xml_text((title or dest.stem)[:80])

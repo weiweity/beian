@@ -17,6 +17,7 @@ const {
   queueSnapshot,
   reclaimOnBoot,
   resetJobsTestHooks,
+  retryMockup,
   setJobsTestHooks,
 } = await import("./jobs.js");
 
@@ -1427,6 +1428,205 @@ describe("jobs dispatcher", () => {
     enqueue({ kind: "compare", id });
     await new Promise((r) => setTimeout(r, 30));
     assert.equal(loadTask(id).job_error, "对照中断");
+  });
+});
+
+describe("mockup retry", () => {
+  const viewer = { id: "籽烨", name: "籽烨", admin: false };
+
+  function writeSource(id: string): string {
+    const dir = join(process.env.WB_DATA_DIR || "", "mockups", id);
+    mkdirSync(dir, { recursive: true });
+    const source = join(dir, "art.ai");
+    writeFileSync(source, "%PDF-1.4\n");
+    return source;
+  }
+
+  it("requeues a failed job that still has the source and keeps a ready structure", async () => {
+    const { saveMockup, loadMockup } = await import("./mockup.js");
+    const id = tid(95);
+    const source = writeSource(id);
+    writeFileSync(join(process.env.WB_DATA_DIR || "", "mockups", id, "pipeline_result.json"), "{}");
+    setJobsTestHooks({
+      runPack: async () => ({ code: 1, stdout: "", stderr: "stop", timedOut: false }),
+    });
+    saveMockup({
+      id,
+      status: "failed",
+      created_at: "2026-09-02T08:00:00.000Z",
+      files: [],
+      owner: "籽烨",
+      source_path: source,
+      job_kind: "mockup",
+      job_status: "failed",
+      job_error: "打样中断",
+      error: "打样中断",
+      structure_engine: "v2",
+      structure_status: "ready",
+    });
+    const next = retryMockup(id, viewer);
+    assert.ok(next.status === "queued" || next.status === "running");
+    assert.equal(next.structure_status, "ready");
+    assert.equal(existsSync(join(process.env.WB_DATA_DIR || "", "mockups", id, "pipeline_result.json")), false);
+    for (let i = 0; i < 50 && loadMockup(id)?.job_status === "queued"; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    assert.notEqual(loadMockup(id)?.job_status, "queued");
+  });
+
+  it("kills a running mockup then requeues the same source", async () => {
+    const { saveMockup, loadMockup } = await import("./mockup.js");
+    const id = tid(96);
+    const source = writeSource(id);
+    let killed = 0;
+    let inspects = 0;
+    setJobsTestHooks({
+      runPack: (_manifest, hooks) => {
+        hooks?.onSpawn?.(4242);
+        return new Promise(() => undefined);
+      },
+      inspectWorker: (pid) => {
+        assert.equal(pid, 4242);
+        inspects += 1;
+        return inspects === 1 ? "owned" : "missing";
+      },
+      killTree: (pid, force) => {
+        assert.equal(pid, 4242);
+        assert.equal(force, true);
+        killed += 1;
+      },
+    });
+    saveMockup({
+      id,
+      status: "queued",
+      created_at: "2026-09-02T08:01:00.000Z",
+      files: [],
+      owner: "籽烨",
+      source_path: source,
+      job_kind: "mockup",
+      job_status: "queued",
+      structure_engine: "v2",
+      structure_status: "ready",
+    });
+    enqueue({ kind: "mockup", id });
+    for (let i = 0; i < 50 && loadMockup(id)?.job_pid !== 4242; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    assert.equal(loadMockup(id)?.job_pid, 4242);
+    const next = retryMockup(id, viewer);
+    assert.equal(killed, 1);
+    assert.ok(next.status === "queued" || next.status === "running");
+    assert.notEqual(next.job_started_at, undefined);
+  });
+
+  it("refuses structure-confirm and unsupported jobs", async () => {
+    const { saveMockup, loadMockup, beginStructureConfirmation, finishStructureConfirmation } = await import("./mockup.js");
+    const reviewId = tid(99);
+    saveMockup({
+      id: reviewId,
+      status: "review_required",
+      created_at: "2026-09-02T08:04:00.000Z",
+      files: [],
+      owner: "籽烨",
+      job_kind: "mockup",
+      job_status: "waiting_input",
+      structure_engine: "v2",
+      structure_status: "review_required",
+    });
+    assert.throws(() => retryMockup(reviewId, viewer), (err: unknown) => {
+      return err instanceof Error && err.message === "先确认结构再打样" && (err as { status?: number }).status === 409;
+    });
+    const unsupportedId = tid(100);
+    saveMockup({
+      id: unsupportedId,
+      status: "unsupported",
+      created_at: "2026-09-02T08:05:00.000Z",
+      files: [],
+      owner: "籽烨",
+      job_kind: "mockup",
+      job_status: "failed",
+      structure_engine: "v2",
+      structure_status: "unsupported",
+    });
+    assert.throws(() => retryMockup(unsupportedId, viewer), (err: unknown) => {
+      return err instanceof Error && err.message === "当前结构还不支持，不能重试" && (err as { status?: number }).status === 409;
+    });
+    const lockId = tid(101);
+    const source = writeSource(lockId);
+    saveMockup({
+      id: lockId,
+      status: "failed",
+      created_at: "2026-09-02T08:06:00.000Z",
+      files: [],
+      owner: "籽烨",
+      source_path: source,
+      job_kind: "mockup",
+      job_status: "failed",
+      structure_engine: "v2",
+      structure_status: "ready",
+    });
+    beginStructureConfirmation(loadMockup(lockId)!);
+    try {
+      assert.throws(() => retryMockup(lockId, viewer), (err: unknown) => {
+        return err instanceof Error && err.message === "结构正在确认，暂时不能重试" && (err as { status?: number }).status === 409;
+      });
+    } finally {
+      finishStructureConfirmation(lockId);
+    }
+  });
+
+  it("resets a v2 failed job that never reached ready back to analyzing", async () => {
+    const { saveMockup } = await import("./mockup.js");
+    const id = tid(102);
+    const source = writeSource(id);
+    setJobsTestHooks({
+      runStructure: async () => ({ code: 1, stdout: "", stderr: "stop", timedOut: false }),
+    });
+    saveMockup({
+      id,
+      status: "failed",
+      created_at: "2026-09-02T08:07:00.000Z",
+      files: [],
+      owner: "籽烨",
+      source_path: source,
+      job_kind: "mockup",
+      job_status: "failed",
+      structure_engine: "v2",
+    });
+    const next = retryMockup(id, viewer);
+    assert.equal(next.structure_status, "analyzing");
+    assert.ok(next.status === "queued" || next.status === "running");
+  });
+
+  it("refuses done jobs and missing artwork", async () => {
+    const { saveMockup } = await import("./mockup.js");
+    const doneId = tid(97);
+    saveMockup({
+      id: doneId,
+      status: "done",
+      created_at: "2026-09-02T08:02:00.000Z",
+      files: [],
+      owner: "籽烨",
+      job_kind: "mockup",
+      job_status: "succeeded",
+    });
+    assert.throws(() => retryMockup(doneId, viewer), (err: unknown) => {
+      return err instanceof Error && err.message === "已经出图，不用重试" && (err as { status?: number }).status === 409;
+    });
+    const missingId = tid(98);
+    saveMockup({
+      id: missingId,
+      status: "failed",
+      created_at: "2026-09-02T08:03:00.000Z",
+      files: [],
+      owner: "籽烨",
+      source_path: join(process.env.WB_DATA_DIR || "", "mockups", missingId, "gone.ai"),
+      job_kind: "mockup",
+      job_status: "failed",
+    });
+    assert.throws(() => retryMockup(missingId, viewer), (err: unknown) => {
+      return err instanceof Error && err.message === "稿件不在了，请重新上传" && (err as { status?: number }).status === 409;
+    });
   });
 });
 
