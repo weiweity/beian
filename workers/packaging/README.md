@@ -47,7 +47,7 @@ V2 任务在产品项中写 `"structure_engine": "v2"`。显式 sidecar 可写 `
 
 - PDF 兼容 AI 直接走高速通道，不启动 Illustrator。平面 PNG 用 pymupdf 按 MediaBox 整页出图（细 CropBox 不按可见条带放大）。杭州 Windows 与对照共用 `apps/web/backend/.venv` 里的 pymupdf，不要装 macOS Quick Look。pymupdf 失败时，本机若有 `/usr/bin/qlmanage` 才兜底。
 - 原生 AI 或非 PDF 兼容 AI 自动通过 Illustrator 导出完整稿和印刷层 PDF，再进入相同建模流程。Windows 上管理员必须保持登录，`beian-illustrator-agent` 的 Session 和心跳必须正常；Agent 接单后按需启动并验证同会话可见窗口与文档列表。生产任务与可信 `main` 发版内的 L1 请求共用同一个执行锁及持久故障围栏，执行中断或清理未确认后不能由另一请求接手；只能按 `scripts/windows/README.md` 的交互管理员流程确认并清除。心跳 busy 时新单排队，不是 412。用户注销、Agent 离线或 faulted 时开始接口返回 412，不消耗待开工回执，也不退回 Session 0。
-- Illustrator 冷启动和复杂转曲稿解析可能较慢，建议保持应用常驻。无人值守控制面：无进度 60 秒（存 PDF 300 秒）才放弃；作业墙钟 900 秒只表示 cancel_pending，外层 1260 秒。禁止在 saving 期间 Kill cscript。
+- Illustrator 冷启动和复杂转曲稿解析可能较慢，建议保持应用常驻。无人值守控制面：无进度 60 秒（存 PDF 300 秒）才放弃；作业墙钟 900 秒只表示 cancel_pending，外层 1260 秒。禁止在 saving 期间 Kill cscript。盘点前 hide 顶层、进轮廓视图（`executeMenuCommand("preview")` 只按一次）、zoom 0.0625；`eachInventoryPathItem` 走 `layer.pageItems` 并展开组和复合路径，跳过 表/标注/Dimensions/尺寸，每层 remainder 上限 512；空的隐藏集合不要把 fallback 从 `document.pathItems` 闩走。存 PDF 前 `restoreUnattendedArtwork` 必须把原可见顶层恢复，否则抛 `Cannot fully restore artwork layers`。关稿再 hide+outline+zoom 0.03125。26H21A 仍是 land 后杭州人工金标。
 - 相同结构只需新增任务记录即可并行处理；缓存键包含源稿、结构 sidecar、清理后的 artwork 和流程版本。
 - `structure_v2` 用 Shapely/GEOS 做单位归一、同源近点归一、noding、polygonize 和拓扑诊断。结构可闭合但产品正面仍有业务歧义时返回 `review_required`。网页路径上，唯一可确认正面且带 `preferred_quarter_turns` 时由服务端自动确认并继续出图；多面时已登录账号只提供一个正面锚点。系统只公开最终确认引擎接受的方向，自动带入其几何推荐，再从完整盒型推导其余五面。管理员可对已出图且只有一套公开盒型的单再提交正面，只重跑 Blender。尺寸不匹配与贴图方向不唯一使用不同错误码，不能用方向文案掩盖尺寸失败。曲线适配或结构工作量超过安全上限时返回可执行的 `unsupported`，不会进入 Blender。确认接口用 409 表示候选已过期、422 表示当前结构不能成盒；它们不是网络错误。
 - 只有 `validation.status=accepted`、源稿 SHA-256 匹配、六面角色唯一且拓扑闭合的结构才能形成 `ResolvedPackagingJob`。人工确认结果写成新的批准 sidecar，再进入现有建模、渲染、PPT 和 GLB 合同。GLB 导出后还要逐面核对已确认 artwork 绑定；底面缺图、方向错误或镜像错误都判失败。
@@ -68,8 +68,9 @@ V2 任务在产品项中写 `"structure_engine": "v2"`。显式 sidecar 可写 `
 
 - .blend：可编辑 Blender 文件；
 - .glb：可旋转查看的通用 3D 文件；六个已确认面都通过贴图来源、方向、镜像和尺寸复核后才交付；
-- 正面/右侧面和背面/左侧面静帧（RGBA 产品层；棚只提亮产品和接触阴影，不改盒子材质。磁盘文件要重新打样或加 `--force` 才会变；网页再套白底，下载图按当前灯光合成）；网页打样单下载白底只认这两张，不要把印刷面当白底；
-- 可选地面 pass：`front_right_ground.png` / `back_left_ground.png`（非发光灰平面阴影垫，不是木桌）。网页映射 `white_a_ground` / `white_b_ground`，canvas 铺 `rgb(228,228,232)` 再 multiply 地面、叠产品；`*_ground` 不能当产品静帧。地面 pass 失败时仍交付产品图；
+- 正面/右侧面和背面/左侧面静帧（RGBA 产品层；棚走 EEVEE 阴影 + 接触阴影，只提亮产品和落影，不改盒子材质。磁盘文件要重新打样或加 `--force` 才会变；网页再套白底，下载图按当前灯光合成）；网页打样单下载白底只认这两张，不要把印刷面当白底；
+- 可选地面 pass：`front_right_ground.png` / `back_left_ground.png`（非发光灰平面阴影垫，albedo 约 0.91，不是木桌）。网页映射 `white_a_ground` / `white_b_ground`，canvas 铺 `rgb(228,228,232)` 再 multiply 地面、叠产品；`*_ground` 不能当产品静帧。地面 pass 失败时仍交付产品图；
+- 可选核对卡：`*_card.png`（Blender 后最长边 1440，网页第一屏；坏了回退全图。不能当产品静帧，也不能当 `*_ground`）；
 - `assets/panel_{front,back,right,left,top,bottom}.png`：各面印刷图。网页打样单读字区用这些图，不是 GLB 截屏，也不是 3/4 白底静帧；
 - 打样单 PDF（两张白底一页，页底先铺白，槽按源图比例 contain。pymupdf 写不出且还没落盘再用已装的 Pillow，不另装包、不盖掉已写成的文件；跳过时没有，也不当失败）；
 - 独立 .pptx（一页两张白底：正面+侧面、反面+侧面；先写 OOXML，不依赖 Node。跳过 PPT 时没有这一项，也不当失败）；
