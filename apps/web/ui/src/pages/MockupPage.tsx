@@ -27,6 +27,9 @@ import {
   containRect,
   glbExposure,
   jobHasGround,
+  jobHasReviewCard,
+  loadStillImage,
+  reviewCardKey,
   stillsFilter,
   studioBackdrop,
   STUDIO_GROUND_FILL,
@@ -1020,6 +1023,7 @@ export function MockupJobPage({
             {groundA && whiteA ? (
               <GroundedShot
                 jobId={job.id}
+                files={job.files}
                 fileKey="white_a"
                 groundKey="white_a_ground"
                 alt="正面与侧面成片"
@@ -1097,6 +1101,7 @@ export function MockupJobPage({
               {groundB && whiteB ? (
                 <GroundedShot
                   jobId={job.id}
+                  files={job.files}
                   fileKey="white_b"
                   groundKey="white_b_ground"
                   alt="反面与侧面成片"
@@ -1502,8 +1507,26 @@ async function previewSource(url: string, destW: number, destH: number): Promise
   return image;
 }
 
+async function previewStill(
+  jobId: string,
+  files: Array<{ key: string }> | undefined,
+  key: "white_a" | "white_b" | "white_a_ground" | "white_b_ground",
+  destW: number,
+  destH: number,
+): Promise<PreviewSource> {
+  if (jobHasReviewCard(files, key)) {
+    try {
+      return await previewSource(fileHref(jobId, reviewCardKey(key)), destW, destH);
+    } catch {
+      /* card missing or 415: full still is still on disk */
+    }
+  }
+  return previewSource(fileHref(jobId, key), destW, destH);
+}
+
 function GroundedShot({
   jobId,
+  files,
   fileKey,
   groundKey,
   alt,
@@ -1518,6 +1541,7 @@ function GroundedShot({
   lazy,
 }: {
   jobId: string;
+  files?: Array<{ key: string }>;
   fileKey: "white_a" | "white_b";
   groundKey: "white_a_ground" | "white_b_ground";
   alt: string;
@@ -1576,9 +1600,11 @@ function GroundedShot({
     void (async () => {
       try {
         const [product, ground] = await Promise.all([
-          previewSource(fileHref(jobId, fileKey), destW, destH),
-          previewSource(fileHref(jobId, groundKey), destW, destH),
+          previewStill(jobId, files, fileKey, destW, destH),
+          previewStill(jobId, files, groundKey, destW, destH),
         ]);
+        void loadStillImage(fileHref(jobId, fileKey));
+        void loadStillImage(fileHref(jobId, groundKey));
         if (cancelled) {
           closePreviewSource(product);
           closePreviewSource(ground);
@@ -1595,7 +1621,7 @@ function GroundedShot({
     return () => {
       cancelled = true;
     };
-  }, [visible, bad, jobId, fileKey, groundKey]);
+  }, [visible, bad, jobId, files, fileKey, groundKey]);
 
   useEffect(() => {
     if (!visible || bad || !ready) return;
@@ -1633,8 +1659,8 @@ function GroundedShot({
     exporting.current = true;
     try {
       const [product, ground] = await Promise.all([
-        loadNaturalImage(fileHref(jobId, fileKey)),
-        loadNaturalImage(fileHref(jobId, groundKey)),
+        loadStillImage(fileHref(jobId, fileKey)),
+        loadStillImage(fileHref(jobId, groundKey)),
       ]);
       const blob = await blobFromStudioStill(product, ground, { productLight, backgroundLight });
       const url = URL.createObjectURL(blob);
@@ -1700,6 +1726,7 @@ function GroundedShot({
                     alt={alt}
                     productLight={productLight}
                     backgroundLight={backgroundLight}
+                    placeholder={previewRef.current}
                   />
                 </div>
                 <StudioLightSliders
@@ -1732,6 +1759,7 @@ function GroundedLightboxStill({
   alt,
   productLight,
   backgroundLight,
+  placeholder,
 }: {
   jobId: string;
   fileKey: "white_a" | "white_b";
@@ -1739,35 +1767,38 @@ function GroundedLightboxStill({
   alt: string;
   productLight: number;
   backgroundLight: number;
+  placeholder?: { product: PreviewSource; ground: PreviewSource } | null;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const sourcesRef = useRef<{ product: HTMLImageElement; ground: HTMLImageElement } | null>(null);
-  const [loaded, setLoaded] = useState(0);
+  const sourcesRef = useRef<{ product: PreviewSource; ground: PreviewSource } | null>(placeholder || null);
+  const [loaded, setLoaded] = useState(placeholder ? 1 : 0);
   useEffect(() => {
+    if (placeholder && !sourcesRef.current) sourcesRef.current = placeholder;
     let cancelled = false;
     void (async () => {
       try {
         const [product, ground] = await Promise.all([
-          loadNaturalImage(fileHref(jobId, fileKey)),
-          loadNaturalImage(fileHref(jobId, groundKey)),
+          loadStillImage(fileHref(jobId, fileKey)),
+          loadStillImage(fileHref(jobId, groundKey)),
         ]);
         if (cancelled) return;
         sourcesRef.current = { product, ground };
         setLoaded((n) => n + 1);
       } catch {
-        /* lightbox keeps the 242 stage */
+        /* lightbox keeps the card placeholder or STUDIO_GROUND_FILL stage */
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [jobId, fileKey, groundKey]);
+  }, [jobId, fileKey, groundKey, placeholder]);
   useEffect(() => {
     const canvas = canvasRef.current;
     const sources = sourcesRef.current;
     if (!canvas || !sources || !loaded) return;
-    canvas.width = sources.product.naturalWidth;
-    canvas.height = sources.product.naturalHeight;
+    canvas.width = Number(sources.product.naturalWidth || sources.product.width || 0);
+    canvas.height = Number(sources.product.naturalHeight || sources.product.height || 0);
+    if (!canvas.width || !canvas.height) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     composeStudioStill(ctx, canvas.width, canvas.height, sources.product, sources.ground, {
@@ -1777,14 +1808,6 @@ function GroundedLightboxStill({
     });
   }, [loaded, productLight, backgroundLight]);
   return <canvas ref={canvasRef} className="mockup-studio-lightbox-canvas" aria-label={alt} />;
-}
-
-async function loadNaturalImage(url: string): Promise<HTMLImageElement> {
-  const image = new Image();
-  image.crossOrigin = "anonymous";
-  image.src = url;
-  await image.decode();
-  return image;
 }
 
 function StudioLightSliders({

@@ -196,6 +196,51 @@ def apply_eevee_engine(scene):
         scene.render.engine = "BLENDER_EEVEE"
 
 
+def apply_eevee_shadows(scene):
+    """Contact/AO must be on; otherwise the ground pass is a white plane."""
+    eevee = getattr(scene, "eevee", None)
+    if eevee is None:
+        return
+    for name, value in (
+        ("use_shadows", True),
+        ("use_raytracing", True),
+        ("use_gtao", True),
+        ("use_overscan", True),
+    ):
+        if hasattr(eevee, name):
+            try:
+                setattr(eevee, name, value)
+            except Exception:
+                pass
+    if hasattr(eevee, "gtao_distance"):
+        try:
+            eevee.gtao_distance = 12.0
+        except Exception:
+            pass
+    if hasattr(eevee, "gtao_factor"):
+        try:
+            eevee.gtao_factor = 0.9
+        except Exception:
+            pass
+    if hasattr(eevee, "overscan_size"):
+        try:
+            eevee.overscan_size = 0.03
+        except Exception:
+            pass
+
+
+def enable_light_contact_shadows():
+    for light in bpy.data.lights:
+        if hasattr(light, "use_contact_shadow"):
+            light.use_contact_shadow = True
+        if hasattr(light, "contact_shadow_distance"):
+            light.contact_shadow_distance = 14.0
+        if hasattr(light, "contact_shadow_thickness"):
+            light.contact_shadow_thickness = 2.4
+        if hasattr(light, "contact_shadow_bias"):
+            light.contact_shadow_bias = 0.02
+
+
 def make_ground_material():
     material = bpy.data.materials.new("MAT_StudioGround")
     material.use_nodes = True
@@ -205,8 +250,8 @@ def make_ground_material():
         nodes.remove(node)
     output = nodes.new("ShaderNodeOutputMaterial")
     shader = nodes.new("ShaderNodeBsdfPrincipled")
-    shader.inputs["Base Color"].default_value = (1.0, 1.0, 1.0, 1.0)
-    shader.inputs["Roughness"].default_value = 0.82
+    shader.inputs["Base Color"].default_value = (0.91, 0.91, 0.93, 1.0)
+    shader.inputs["Roughness"].default_value = 0.86
     if shader.inputs.get("Emission Strength"):
         shader.inputs["Emission Strength"].default_value = 0.0
     links.new(shader.outputs["BSDF"], output.inputs["Surface"])
@@ -274,6 +319,7 @@ def add_studio(job):
     render_config = job["render"]
     exact_white_background = bool(render_config.get("exact_white_background", True))
     apply_eevee_engine(scene)
+    apply_eevee_shadows(scene)
     scene.render.resolution_x = int(render_config["resolution_x"])
     scene.render.resolution_y = int(render_config["resolution_y"])
     scene.render.resolution_percentage = 100
@@ -366,6 +412,7 @@ def add_studio(job):
     camera.data.clip_end = max(4000.0, camera.data.ortho_scale * 8)
     look_at(camera, target)
     scene.camera = camera
+    enable_light_contact_shadows()
     return camera
 
 

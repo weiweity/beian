@@ -232,6 +232,10 @@ describe("collectOutputs", () => {
     assert.equal(isWhiteFile("white_a", "pack_front_right_background.png"), true);
     assert.equal(isWhiteFile("white_a_ground", "pack_front_right_background.png"), false);
     assert.equal(isWhiteFile("white_a_ground", "pack_back_left_ground.png"), false);
+    assert.equal(isWhiteFile("white_a_card", "pack_front_right_white_card.png"), true);
+    assert.equal(isWhiteFile("white_a", "pack_front_right_white_card.png"), false);
+    assert.equal(isWhiteFile("white_a_ground_card", "pack_front_right_ground_card.png"), true);
+    assert.equal(isWhiteFile("white_a_ground", "pack_front_right_ground_card.png"), false);
   });
 
   it("classifies ground before product when ground is listed first", () => {
@@ -245,6 +249,19 @@ describe("collectOutputs", () => {
     assert.equal(files.find((f) => f.key === "white_a_ground")?.name, "pack_front_right_ground.png");
     assert.equal(files.find((f) => f.key === "white_b")?.name, "pack_back_left_white.png");
     assert.equal(files.find((f) => f.key === "white_b_ground")?.name, "pack_back_left_ground.png");
+  });
+
+  it("classifies review cards without stealing the full stills", () => {
+    const root = makeTestTempDir("beian-pack-review-card-");
+    writeFileSync(join(root, "pack_front_right_white.png"), "p");
+    writeFileSync(join(root, "pack_front_right_white_card.png"), "c");
+    writeFileSync(join(root, "pack_front_right_ground.png"), "g");
+    writeFileSync(join(root, "pack_front_right_ground_card.png"), "gc");
+    const files = collectOutputs(root);
+    assert.equal(files.find((f) => f.key === "white_a")?.name, "pack_front_right_white.png");
+    assert.equal(files.find((f) => f.key === "white_a_card")?.name, "pack_front_right_white_card.png");
+    assert.equal(files.find((f) => f.key === "white_a_ground")?.name, "pack_front_right_ground.png");
+    assert.equal(files.find((f) => f.key === "white_a_ground_card")?.name, "pack_front_right_ground_card.png");
   });
 
   it("classifies ground before product when product is listed first", () => {

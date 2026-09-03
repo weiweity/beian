@@ -156,7 +156,7 @@ test("完成态打样单可分开调产品和背景灯光，原图灯箱也能�
   await expect(backgroundLight).toBeVisible();
   await expect(page.locator(".mockup-sheet-photo .mockup-sheet-frame img").first()).toHaveCSS(
     "filter",
-    /contrast\(1\.12\).*brightness\(1\)/,
+    /contrast\(1\.04\).*brightness\(1\)/,
   );
   await productLight.fill("1.2");
   await expect(page.locator(".mockup-sheet-photo .mockup-sheet-frame img").first()).toHaveCSS(
@@ -372,7 +372,7 @@ test("无 ground 的已出图单保持 CSS 滤镜、描边和 PPT", async ({ pag
   await page.goto(`/mockup/${mockup.id}`);
   await expect(page.locator(".mockup-sheet-photo .mockup-sheet-frame img").first()).toHaveCSS(
     "filter",
-    /contrast\(1\.12\).*brightness\(1\)/,
+    /contrast\(1\.04\).*brightness\(1\)/,
   );
   await expect(page.getByRole("link", { name: "下载 PPT" })).toBeVisible();
   await expect(page.getByRole("button", { name: "调灯" })).toHaveCount(0);

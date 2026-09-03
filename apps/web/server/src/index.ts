@@ -8,6 +8,7 @@ import {
   readFileSync,
   readSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -154,7 +155,7 @@ type NodeBindings = HttpBindings | Http2Bindings;
 type Env = { Bindings: NodeBindings; Variables: { session: Session } };
 
 const app = new Hono<Env>();
-const VERSION = "0.21.21.0";
+const VERSION = "0.21.22.0";
 
 const STRUCTURE_INPUT_BODY_BYTES = 16 * 1024;
 
@@ -250,6 +251,11 @@ function boom(err: unknown): never {
   if (status >= 400 && status < 500) throw new HTTPException(status as 400, { message });
   console.error(`request failed: problem=业务请求异常 cause=${safeLogCause(err)} fix=查看服务端日志定位`);
   throw new HTTPException(500, { message: "服务器错误" });
+}
+
+function fileEtag(path: string): string {
+  const st = statSync(path);
+  return `W/"${st.size.toString(16)}-${Math.trunc(st.mtimeMs).toString(16)}"`;
 }
 
 function pngMagicAt(path: string): boolean {
@@ -1363,11 +1369,24 @@ app.get("/api/mockups/:id/files/:key", (c) => {
   const forceAttach = c.req.query("download") === "1";
   const disposition =
     forceAttach || !(type.startsWith("image/") || type.startsWith("model/")) ? "attachment" : "inline";
+  const etag = fileEtag(f.path);
+  const cacheControl = forceAttach ? "private, no-store" : "private, no-cache";
+  if (!forceAttach && c.req.header("if-none-match") === etag) {
+    return new Response(null, {
+      status: 304,
+      headers: {
+        ETag: etag,
+        "Cache-Control": cacheControl,
+        "X-Content-Type-Options": "nosniff",
+      },
+    });
+  }
   return new Response(Readable.toWeb(createReadStream(f.path)) as ReadableStream, {
     headers: {
       "Content-Type": type,
       "X-Content-Type-Options": "nosniff",
-      "Cache-Control": "private, no-store",
+      ETag: etag,
+      "Cache-Control": cacheControl,
       "Content-Disposition": `${disposition}; filename="${ascii}"; filename*=UTF-8''${encoded}`,
     },
   });
@@ -1381,11 +1400,19 @@ app.get("/api/mockups/:id/structure-preview", (c) => {
   if (!isMockupJobFile(job.id, path) || !pngMagicAt(path)) {
     throw new HTTPException(404, { message: "结构原稿预览还没有" });
   }
+  const etag = fileEtag(path);
+  if (c.req.header("if-none-match") === etag) {
+    return new Response(null, {
+      status: 304,
+      headers: { ETag: etag, "Cache-Control": "private, no-cache", "X-Content-Type-Options": "nosniff" },
+    });
+  }
   return new Response(Readable.toWeb(createReadStream(path)) as ReadableStream, {
     headers: {
       "Content-Type": "image/png",
       "X-Content-Type-Options": "nosniff",
-      "Cache-Control": "private, no-store",
+      ETag: etag,
+      "Cache-Control": "private, no-cache",
       "Content-Disposition": "inline",
     },
   });
@@ -1399,11 +1426,19 @@ app.get("/api/mockups/:id/structure-input-preview", (c) => {
   if (!isMockupJobFile(job.id, path) || !pngMagicAt(path)) {
     throw new HTTPException(404, { message: "结构层原稿预览还没有" });
   }
+  const etag = fileEtag(path);
+  if (c.req.header("if-none-match") === etag) {
+    return new Response(null, {
+      status: 304,
+      headers: { ETag: etag, "Cache-Control": "private, no-cache", "X-Content-Type-Options": "nosniff" },
+    });
+  }
   return new Response(Readable.toWeb(createReadStream(path)) as ReadableStream, {
     headers: {
       "Content-Type": "image/png",
       "X-Content-Type-Options": "nosniff",
-      "Cache-Control": "private, no-store",
+      ETag: etag,
+      "Cache-Control": "private, no-cache",
       "Content-Disposition": "inline",
     },
   });
