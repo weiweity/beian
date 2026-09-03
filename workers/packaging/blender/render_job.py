@@ -19,6 +19,7 @@ from camera_frame import (
     camera_target_mm,
     ground_plane_size,
     ground_plane_z,
+    white_set_wall_y_mm,
 )
 from glb_verify import (
     SEMANTIC_FACES,
@@ -269,10 +270,59 @@ def add_studio_ground():
     return ground
 
 
+def make_set_material(name, color, roughness):
+    material = bpy.data.materials.new(name)
+    material.use_nodes = True
+    nodes = material.node_tree.nodes
+    links = material.node_tree.links
+    for node in list(nodes):
+        nodes.remove(node)
+    output = nodes.new("ShaderNodeOutputMaterial")
+    shader = nodes.new("ShaderNodeBsdfPrincipled")
+    shader.inputs["Base Color"].default_value = color
+    shader.inputs["Roughness"].default_value = roughness
+    if shader.inputs.get("Emission Strength"):
+        shader.inputs["Emission Strength"].default_value = 0.0
+    links.new(shader.outputs["BSDF"], output.inputs["Surface"])
+    if hasattr(material, "blend_method"):
+        material.blend_method = "OPAQUE"
+    return material
+
+
+def add_white_set():
+    table_z = ground_plane_z(box_bottom_z_mm())
+    bpy.ops.mesh.primitive_plane_add(size=1, location=(0.0, 0.0, table_z))
+    table = bpy.context.object
+    table.name = "WhiteSetTable"
+    table.data.materials.append(make_set_material("MAT_WhiteSetTable", (0.91, 0.91, 0.93, 1.0), 0.86))
+    table.hide_render = True
+    bpy.ops.mesh.primitive_plane_add(size=1, location=(0.0, 40.0, 200.0))
+    wall = bpy.context.object
+    wall.name = "WhiteSetWall"
+    wall.rotation_euler = (math.radians(90.0), 0.0, 0.0)
+    wall.data.materials.append(make_set_material("MAT_WhiteSetWall", (0.96, 0.96, 0.95, 1.0), 0.78))
+    wall.hide_render = True
+    return [table, wall]
+
+
 def fit_ground_plane(ground, ortho_scale):
     size = ground_plane_size(ortho_scale)
     ground.scale = (size, size, 1.0)
     ground.location = (0.0, 0.0, ground_plane_z(box_bottom_z_mm()))
+
+
+def fit_white_set(set_objects, ortho_scale, depth):
+    table, wall = set_objects
+    size = ground_plane_size(ortho_scale)
+    table.scale = (size, size, 1.0)
+    table.location = (0.0, 0.0, ground_plane_z(box_bottom_z_mm()))
+    wall.location = (0.0, white_set_wall_y_mm(depth, ortho_scale), size * 0.35)
+    wall.scale = (size, size * 0.7, 1.0)
+
+
+def set_set_visible(set_objects, visible):
+    for obj in set_objects:
+        obj.hide_render = not visible
 
 
 def set_product_holdout(model_objects, holdout):
@@ -289,14 +339,16 @@ def render_still(scene, path):
     bpy.ops.render.render(write_still=True)
 
 
-def render_view_pair(scene, camera, job, yaw_rad, product_key, ground_key, root, model_objects, ground):
-    # product RGBA, then isolated ground; restore visibility in finally
+def render_view_pair(scene, camera, job, yaw_rad, product_key, ground_key, set_key, root, model_objects, ground, set_objects):
+    # product RGBA, then isolated ground, then white-set; restore visibility in finally
     root.rotation_euler.z = yaw_rad
     bpy.context.view_layer.update()
     apply_camera_fit(camera, job, yaw_rad)
     fit_ground_plane(ground, camera.data.ortho_scale)
+    fit_white_set(set_objects, camera.data.ortho_scale, float(job["dimensions_mm"]["depth"]))
     set_product_holdout(model_objects, False)
     ground.hide_render = True
+    set_set_visible(set_objects, False)
     scene.render.film_transparent = True
     scene.render.image_settings.color_mode = "RGBA"
     render_still(scene, job["outputs"][product_key])
@@ -311,6 +363,27 @@ def render_view_pair(scene, camera, job, yaw_rad, product_key, ground_key, root,
     finally:
         set_product_holdout(model_objects, False)
         ground.hide_render = True
+    try:
+        set_product_holdout(model_objects, True)
+        ground.hide_render = True
+        set_set_visible(set_objects, True)
+        dest = job["outputs"].get(set_key)
+        if dest:
+            scene.render.film_transparent = False
+            render_still(scene, dest)
+    except Exception as err:
+        print(f"set pass failed {set_key}: {err}", file=sys.stderr)
+        dest = job["outputs"].get(set_key)
+        if dest:
+            try:
+                Path(dest).unlink()
+            except OSError:
+                pass
+    finally:
+        set_product_holdout(model_objects, False)
+        set_set_visible(set_objects, False)
+        ground.hide_render = True
+        scene.render.film_transparent = True
 
 
 
@@ -433,16 +506,36 @@ def apply_camera_fit(camera, job, yaw_rad):
     look_at(camera, target)
 
 
-def render_views(job, root, model_objects, ground):
+def render_views(job, root, model_objects, ground, set_objects):
     scene = bpy.context.scene
     camera = scene.camera
     front_rotation = math.radians(float(job["render"].get("front_rotation_deg", 0)))
     back_rotation = math.radians(float(job["render"].get("back_rotation_deg", 180)))
     render_view_pair(
-        scene, camera, job, front_rotation, "front_right", "front_right_ground", root, model_objects, ground
+        scene,
+        camera,
+        job,
+        front_rotation,
+        "front_right",
+        "front_right_ground",
+        "front_right_set",
+        root,
+        model_objects,
+        ground,
+        set_objects,
     )
     render_view_pair(
-        scene, camera, job, back_rotation, "back_left", "back_left_ground", root, model_objects, ground
+        scene,
+        camera,
+        job,
+        back_rotation,
+        "back_left",
+        "back_left_ground",
+        "back_left_set",
+        root,
+        model_objects,
+        ground,
+        set_objects,
     )
     root.rotation_euler.z = 0.0
 
@@ -653,7 +746,8 @@ def main():
     root, model_objects = add_box(job)
     add_studio(job)
     ground = add_studio_ground()
-    render_views(job, root, model_objects, ground)
+    set_objects = add_white_set()
+    render_views(job, root, model_objects, ground, set_objects)
     export_model(job, root, model_objects)
     dimension_report = verify_glb(job)
     measured_sorted = sorted(dimension_report["measured_mm"].values())

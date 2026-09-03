@@ -42,6 +42,7 @@ STRUCTURE_INPUT_CANDIDATES_SCHEMA = "packaging-structure-input-candidates/2"
 STRUCTURE_INPUT_PREVIEW_SCHEMA = "illustrator-layer-preview/1"
 ROOT = Path(__file__).resolve().parent
 BLENDER_SCRIPT = ROOT / "blender" / "render_job.py"
+CAMERA_FRAME = ROOT / "camera_frame.py"
 PPT_SCRIPT = ROOT / "ppt" / "build_product_ppt.mjs"
 ILLUSTRATOR_WORKER = ROOT / "illustrator" / "illustrator_worker.py"
 ILLUSTRATOR_JSX = ROOT / "illustrator" / "export_ai.jsx"
@@ -486,6 +487,7 @@ def job_fingerprint(
     for pipeline_file in (
         Path(__file__).resolve(),
         BLENDER_SCRIPT,
+        CAMERA_FRAME,
         PPT_SCRIPT,
         ILLUSTRATOR_WORKER,
         ILLUSTRATOR_JSX,
@@ -1279,6 +1281,8 @@ def preflight_product_v2(
             "back_left": str(project_dir / f"{code}_{slug}_back_left_white.png"),
             "front_right_ground": str(project_dir / f"{code}_{slug}_front_right_ground.png"),
             "back_left_ground": str(project_dir / f"{code}_{slug}_back_left_ground.png"),
+            "front_right_set": str(project_dir / f"{code}_{slug}_front_right_set.png"),
+            "back_left_set": str(project_dir / f"{code}_{slug}_back_left_set.png"),
         },
     }
     resolved_path = project_dir / "resolved_job.json"
@@ -1486,6 +1490,8 @@ def preflight_product(
             "back_left": str(project_dir / f"{code}_{slug}_back_left_white.png"),
             "front_right_ground": str(project_dir / f"{code}_{slug}_front_right_ground.png"),
             "back_left_ground": str(project_dir / f"{code}_{slug}_back_left_ground.png"),
+            "front_right_set": str(project_dir / f"{code}_{slug}_front_right_set.png"),
+            "back_left_set": str(project_dir / f"{code}_{slug}_back_left_set.png"),
         },
     }
     resolved_path = project_dir / "resolved_job.json"
@@ -1532,6 +1538,8 @@ def write_review_cards(job: dict[str, Any]) -> None:
         ("back_left", "back_left_card"),
         ("front_right_ground", "front_right_ground_card"),
         ("back_left_ground", "back_left_ground_card"),
+        ("front_right_set", "front_right_set_card"),
+        ("back_left_set", "back_left_set_card"),
     ):
         raw = outputs.get(src_key)
         if not raw:
@@ -1540,7 +1548,12 @@ def write_review_cards(job: dict[str, Any]) -> None:
         if not source.is_file():
             continue
         dest = source.with_name(f"{source.stem}_card.png")
-        write_review_card(source, dest)
+        try:
+            write_review_card(source, dest)
+        except Exception:
+            if src_key.endswith("_ground") or src_key.endswith("_set"):
+                continue
+            raise
         outputs[dest_key] = str(dest)
 
 

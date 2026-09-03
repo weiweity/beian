@@ -58,3 +58,8 @@ def ground_plane_z(bottom_z: float, offset: float = GROUND_PLANE_OFFSET_MM) -> f
 def ground_plane_size(ortho_scale: float) -> float:
     """Cover the ortho frustum; never smaller than the legacy 600mm floor."""
     return max(600.0, 2.5 * float(ortho_scale))
+
+
+def white_set_wall_y_mm(depth: float, ortho_scale: float) -> float:
+    """Wall sits in +Y, behind the carton from the -Y camera, inside the frustum."""
+    return max(float(depth) / 2.0 + 8.0, 0.22 * float(ortho_scale))

@@ -11,6 +11,8 @@ import {
   glbExposure,
   jobHasGround,
   jobHasReviewCard,
+  jobHasSet,
+  stillSetKey,
   loadStillImage,
   parseBackdropPreset,
   readBackdropPreset,
@@ -147,6 +149,83 @@ describe("composeStudioStill", () => {
     assert.equal(reviewCardKey("white_a"), "white_a_card");
     assert.equal(jobHasReviewCard([{ key: "white_a" }], "white_a"), false);
     assert.equal(jobHasReviewCard([{ key: "white_a" }, { key: "white_a_card" }], "white_a"), true);
+    assert.equal(stillSetKey("white_a"), "white_a_set");
+    assert.equal(stillSetKey("white_b"), "white_b_set");
+    assert.equal(jobHasSet([{ key: "white_a" }], "white_a"), false);
+    assert.equal(jobHasSet([{ key: "white_a_set" }], "white_a"), true);
+    assert.equal(jobHasSet([{ key: "white_b_set" }], "white_b"), true);
+  });
+
+  it("draws set then product for white_set and skips ground multiply", () => {
+    const ctx = fakeCtx();
+    composeStudioStill(
+      ctx as unknown as CanvasRenderingContext2D,
+      600,
+      800,
+      { id: "product", naturalWidth: 3000, naturalHeight: 3600 },
+      { id: "ground", naturalWidth: 3000, naturalHeight: 3600 },
+      {
+        productLight: STUDIO_LIGHT_DEFAULT,
+        backgroundLight: STUDIO_LIGHT_DEFAULT,
+        backdrop: "white_set",
+        set: { id: "set", naturalWidth: 3000, naturalHeight: 3600 },
+        filterSupported: true,
+      },
+    );
+    const images = ctx.calls.filter((call) => call[0] === "drawImage");
+    assert.equal(images.length, 2);
+    assert.equal(images[0]?.[1], "set");
+    assert.equal(images[0]?.[7], "source-over");
+    assert.equal(images[1]?.[1], "product");
+    assert.equal(images.some((call) => call[1] === "ground"), false);
+    const fills = ctx.calls.filter((call) => call[0] === "fillRect");
+    assert.equal(fills.length, 1);
+    assert.equal(fills[0]?.[1], STUDIO_GROUND_FILL);
+    assert.equal(
+      fills.some((call) => String(call[1]).includes("rgba(40, 24, 56")),
+      false,
+    );
+  });
+
+  it("keeps CSS wall and ground when white_set has no set still", () => {
+    const ctx = fakeCtx();
+    composeStudioStill(
+      ctx as unknown as CanvasRenderingContext2D,
+      600,
+      800,
+      { id: "product", naturalWidth: 3000, naturalHeight: 3600 },
+      { id: "ground", naturalWidth: 3000, naturalHeight: 3600 },
+      {
+        productLight: STUDIO_LIGHT_DEFAULT,
+        backgroundLight: STUDIO_LIGHT_DEFAULT,
+        backdrop: "white_set",
+        filterSupported: true,
+      },
+    );
+    const images = ctx.calls.filter((call) => call[0] === "drawImage");
+    assert.equal(images[0]?.[1], "ground");
+    assert.equal(images[0]?.[7], "multiply");
+  });
+
+  it("ignores set stills on silver", () => {
+    const ctx = fakeCtx();
+    composeStudioStill(
+      ctx as unknown as CanvasRenderingContext2D,
+      600,
+      800,
+      { id: "product", naturalWidth: 3000, naturalHeight: 3600 },
+      { id: "ground", naturalWidth: 3000, naturalHeight: 3600 },
+      {
+        productLight: STUDIO_LIGHT_DEFAULT,
+        backgroundLight: STUDIO_LIGHT_DEFAULT,
+        backdrop: "silver",
+        set: { id: "set", naturalWidth: 3000, naturalHeight: 3600 },
+        filterSupported: true,
+      },
+    );
+    const images = ctx.calls.filter((call) => call[0] === "drawImage");
+    assert.equal(images.length, 1);
+    assert.equal(images[0]?.[1], "product");
   });
 
   it("loadStillImage reuses the same in-flight request", async () => {

@@ -55,6 +55,26 @@ def test_render_job_isolates_ground_pass_and_prefers_eevee_next():
     assert "ground pass failed" in source[except_at:finally_at]
     assert "set_product_holdout(model_objects, False)" in source[finally_at:]
     assert "ground.hide_render = True" in source[finally_at:]
+    set_try = source.index("try:", finally_at + 1)
+    set_except = source.index("except Exception", set_try)
+    set_finally = source.index("finally:", set_except)
+    set_body = source[set_try:set_except]
+    set_err = source[set_except:set_finally]
+    set_fin = source[set_finally : source.index("def add_studio(job)", set_finally)]
+    assert product_at < set_try
+    assert "set_set_visible(set_objects, False)" in source[:product_at]
+    assert "set_product_holdout(model_objects, True)" in set_body
+    assert "set_set_visible(set_objects, True)" in set_body
+    assert "film_transparent = False" in set_body
+    assert "if dest:" in set_body
+    assert "set pass failed" in set_err
+    assert "Path(dest).unlink()" in set_err
+    assert "except OSError" in set_err
+    assert "set_set_visible(set_objects, False)" in set_fin
+    assert "film_transparent = True" in set_fin
+    assert '"front_right_set"' in source
+    assert '"back_left_set"' in source
+    assert "def add_white_set" in source
     assert source.index("BLENDER_EEVEE_NEXT") < source.index('scene.render.engine = "BLENDER_EEVEE"')
     assert "def apply_eevee_shadows" in source
     assert "def enable_light_contact_shadows" in source
@@ -78,6 +98,12 @@ def test_ground_plane_size_covers_ortho_frustum():
     assert cam.ground_plane_size(240) == pytest.approx(600.0)
     assert cam.ground_plane_size(flower_scale) == pytest.approx(603.5)
     assert cam.ground_plane_size(400) == pytest.approx(1000.0)
+
+
+def test_white_set_wall_sits_behind_carton_inside_frustum():
+    cam = camera_frame()
+    assert cam.white_set_wall_y_mm(47.5, 241.4) == pytest.approx(max(47.5 / 2 + 8.0, 0.22 * 241.4))
+    assert cam.white_set_wall_y_mm(200.0, 80.0) == pytest.approx(108.0)
 
 
 def test_camera_fit_after_front_back_rotation():
@@ -651,12 +677,22 @@ def test_all_output_files_exist_without_ppt(tmp_path: Path):
     assert p.all_output_files_exist({"outputs": files}, False) is True
 
 
+def test_job_fingerprint_hashes_camera_frame():
+    source = (PACKAGING / "pipeline.py").read_text(encoding="utf-8")
+    start = source.index("def job_fingerprint")
+    body = source[start : source.index("def optional_content_layers")]
+    assert "CAMERA_FRAME" in body
+
+
 def test_preflight_output_dicts_declare_optional_ground_keys():
     source = (PACKAGING / "pipeline.py").read_text(encoding="utf-8")
     assert source.count('"front_right_ground"') >= 2
     assert source.count('"back_left_ground"') >= 2
+    assert source.count('"front_right_set"') >= 2
+    assert source.count('"back_left_set"') >= 2
     required = (PACKAGING / "pipeline.py").read_text(encoding="utf-8")
     start = required.index("def all_output_files_exist")
     body = required[start : required.index("def main")]
     assert "front_right_ground" not in body
+    assert "front_right_set" not in body
     assert 'keys = ["blend", "glb", "front_right", "back_left"]' in body

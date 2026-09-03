@@ -31,7 +31,9 @@ import {
   glbExposure,
   jobHasGround,
   jobHasReviewCard,
+  jobHasSet,
   loadStillImage,
+  stillSetKey,
   parseBackdropPreset,
   readBackdropPreset,
   reviewCardKey,
@@ -1527,7 +1529,7 @@ async function previewSource(url: string, destW: number, destH: number): Promise
 async function previewStill(
   jobId: string,
   files: Array<{ key: string }> | undefined,
-  key: "white_a" | "white_b" | "white_a_ground" | "white_b_ground",
+  key: "white_a" | "white_b" | "white_a_ground" | "white_b_ground" | "white_a_set" | "white_b_set",
   destW: number,
   destH: number,
 ): Promise<PreviewSource> {
@@ -1580,7 +1582,7 @@ function GroundedShot({
   const [visible, setVisible] = useState(!lazy);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const frameRef = useRef<HTMLDivElement>(null);
-  const previewRef = useRef<{ product: PreviewSource; ground: PreviewSource } | null>(null);
+  const previewRef = useRef<{ product: PreviewSource; ground: PreviewSource; set: PreviewSource | null } | null>(null);
   const exporting = useRef(false);
 
   useEffect(() => {
@@ -1617,23 +1619,36 @@ function GroundedShot({
     setReady(false);
     let cancelled = false;
     void (async () => {
+      let product: PreviewSource | null = null;
+      let ground: PreviewSource | null = null;
+      let set: PreviewSource | null = null;
       try {
-        const [product, ground] = await Promise.all([
+        const setKey = stillSetKey(fileKey);
+        [product, ground, set] = await Promise.all([
           previewStill(jobId, files, fileKey, destW, destH),
           previewStill(jobId, files, groundKey, destW, destH),
+          jobHasSet(files, fileKey)
+            ? previewStill(jobId, files, setKey, destW, destH).catch(() => null)
+            : Promise.resolve(null),
         ]);
         void loadStillImage(fileHref(jobId, fileKey));
         void loadStillImage(fileHref(jobId, groundKey));
+        if (set) void loadStillImage(fileHref(jobId, setKey));
         if (cancelled) {
           closePreviewSource(product);
           closePreviewSource(ground);
+          closePreviewSource(set);
           return;
         }
         closePreviewSource(previewRef.current?.product);
         closePreviewSource(previewRef.current?.ground);
-        previewRef.current = { product, ground };
+        closePreviewSource(previewRef.current?.set);
+        previewRef.current = { product, ground, set };
         setReady(true);
       } catch {
+        closePreviewSource(product);
+        closePreviewSource(ground);
+        closePreviewSource(set);
         if (!cancelled) setBad(true);
       }
     })();
@@ -1653,6 +1668,7 @@ function GroundedShot({
       productLight,
       backgroundLight,
       backdrop,
+      set: sources.set,
       filterSupported: canvasFilterSupported(ctx),
     });
   }, [visible, bad, ready, productLight, backgroundLight, backdrop]);
@@ -1661,6 +1677,7 @@ function GroundedShot({
     return () => {
       closePreviewSource(previewRef.current?.product);
       closePreviewSource(previewRef.current?.ground);
+      closePreviewSource(previewRef.current?.set);
       previewRef.current = null;
     };
   }, []);
@@ -1678,11 +1695,15 @@ function GroundedShot({
     if (!ready || exporting.current) return;
     exporting.current = true;
     try {
-      const [product, ground] = await Promise.all([
+      const setKey = stillSetKey(fileKey);
+      const [product, ground, set] = await Promise.all([
         loadStillImage(fileHref(jobId, fileKey)),
         loadStillImage(fileHref(jobId, groundKey)),
+        jobHasSet(files, fileKey)
+          ? loadStillImage(fileHref(jobId, setKey)).catch(() => null)
+          : Promise.resolve(null),
       ]);
-      const blob = await blobFromStudioStill(product, ground, { productLight, backgroundLight, backdrop });
+      const blob = await blobFromStudioStill(product, ground, { productLight, backgroundLight, backdrop, set });
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
@@ -1748,6 +1769,7 @@ function GroundedShot({
                 >
                   <GroundedLightboxStill
                     jobId={jobId}
+                    files={files}
                     fileKey={fileKey}
                     groundKey={groundKey}
                     alt={alt}
@@ -1782,6 +1804,7 @@ function GroundedShot({
 
 function GroundedLightboxStill({
   jobId,
+  files,
   fileKey,
   groundKey,
   alt,
@@ -1791,28 +1814,35 @@ function GroundedLightboxStill({
   placeholder,
 }: {
   jobId: string;
+  files?: Array<{ key: string }>;
   fileKey: "white_a" | "white_b";
   groundKey: "white_a_ground" | "white_b_ground";
   alt: string;
   productLight: number;
   backgroundLight: number;
   backdrop: BackdropPreset;
-  placeholder?: { product: PreviewSource; ground: PreviewSource } | null;
+  placeholder?: { product: PreviewSource; ground: PreviewSource; set: PreviewSource | null } | null;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const sourcesRef = useRef<{ product: PreviewSource; ground: PreviewSource } | null>(placeholder || null);
+  const sourcesRef = useRef<{ product: PreviewSource; ground: PreviewSource; set: PreviewSource | null } | null>(
+    placeholder || null,
+  );
   const [loaded, setLoaded] = useState(placeholder ? 1 : 0);
   useEffect(() => {
     if (placeholder && !sourcesRef.current) sourcesRef.current = placeholder;
     let cancelled = false;
     void (async () => {
       try {
-        const [product, ground] = await Promise.all([
+        const setKey = stillSetKey(fileKey);
+        const [product, ground, set] = await Promise.all([
           loadStillImage(fileHref(jobId, fileKey)),
           loadStillImage(fileHref(jobId, groundKey)),
+          jobHasSet(files, fileKey)
+            ? loadStillImage(fileHref(jobId, setKey)).catch(() => null)
+            : Promise.resolve(null),
         ]);
         if (cancelled) return;
-        sourcesRef.current = { product, ground };
+        sourcesRef.current = { product, ground, set };
         setLoaded((n) => n + 1);
       } catch {
         /* lightbox keeps the card placeholder or STUDIO_GROUND_FILL stage */
@@ -1821,7 +1851,7 @@ function GroundedLightboxStill({
     return () => {
       cancelled = true;
     };
-  }, [jobId, fileKey, groundKey, placeholder]);
+  }, [jobId, files, fileKey, groundKey, placeholder]);
   useEffect(() => {
     const canvas = canvasRef.current;
     const sources = sourcesRef.current;
@@ -1835,6 +1865,7 @@ function GroundedLightboxStill({
       productLight,
       backgroundLight,
       backdrop,
+      set: sources.set,
       filterSupported: canvasFilterSupported(ctx),
     });
   }, [loaded, productLight, backgroundLight, backdrop]);
