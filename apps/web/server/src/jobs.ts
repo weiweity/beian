@@ -47,9 +47,16 @@ import {
   type WorkerProcessState,
 } from "./workers.js";
 import { rasterAiFile } from "./aiRaster.js";
+import { readIllustratorAgentStatus } from "./illustratorAgent.js";
 
 const STAGE_LABEL: Record<string, string> = {
   structure: "正在出图",
+  illustrator_opening: "打开稿件",
+  illustrator_inventory: "盘点图层",
+  illustrator_saving_full_pdf: "保存整页 PDF",
+  illustrator_saving_artwork_pdf: "保存印刷 PDF",
+  illustrator_writing_result: "写出结构",
+  illustrator_closing: "关闭文档",
   render_pdf: "出图",
   ingest: "识稿",
   layout: "分区",
@@ -89,7 +96,7 @@ const MERGE_ALLOW = new Set([
 ]);
 
 const OCR_TIMEOUT_MS = 180_000;
-const MOCKUP_TIMEOUT_MS = 420_000;
+const MOCKUP_TIMEOUT_MS = 1_260_000;
 
 type Slot = "ocr" | "blender" | "illustrator";
 
@@ -265,6 +272,38 @@ export function reclaimOnBoot(): void {
     }
   }
   tryStart();
+  ensureIllustratorBusyPoll();
+}
+
+function illustratorSlotBusy(): boolean {
+  const status = readIllustratorAgentStatus();
+  return status.required === true && status.ready === true && status.state === "busy";
+}
+
+let illustratorBusyPoll: ReturnType<typeof setInterval> | undefined;
+let illustratorBusyPollWasBusy = false;
+
+function ensureIllustratorBusyPoll(): void {
+  if (illustratorBusyPoll || process.env.VITEST === "1") return;
+  illustratorBusyPoll = setInterval(() => {
+    try {
+      const busy = illustratorSlotBusy();
+      if (illustratorBusyPollWasBusy && !busy && !live.illustrator) {
+        for (const job of loadAllMockups()) {
+          if (
+            (job.job_status === "running" || job.job_status === "queued") &&
+            needsIllustrator(job)
+          ) {
+            reclaimMockup(job);
+          }
+        }
+        tryStart();
+      }
+      illustratorBusyPollWasBusy = busy;
+    } catch {
+      /* next tick */
+    }
+  }, 5_000);
 }
 
 export function tryStart(): void {
@@ -272,7 +311,7 @@ export function tryStart(): void {
     const next = oldestOcrQueued();
     if (next) claimOcr(next);
   }
-  if (!live.illustrator) {
+  if (!live.illustrator && !illustratorSlotBusy()) {
     const next = oldestAiQueued();
     if (next) claimAi(next);
   }
@@ -395,7 +434,8 @@ function claimAi(job: MockupJob): void {
   const structure = needsStructure(job);
   job.job_stage = structure ? "structure" : "illustrator";
   job.job_stage_label = structure ? STAGE_LABEL.structure : "转图";
-  job.job_eta_s = structure ? 120 : 60;
+  if (structure) delete job.job_eta_s;
+  else job.job_eta_s = 60;
   job.job_error = undefined;
   delete job.job_finished_at;
   saveMockup(job);
@@ -458,12 +498,15 @@ async function runStructure(id: string, startedAt: string): Promise<void> {
       },
       onStderrLine: (line) => {
         const match = /^STAGE\s+(\S+)/.exec(line);
-        if (!match || match[1] !== "structure") return;
+        if (!match) return;
+        const stage = match[1];
+        const label = STAGE_LABEL[stage];
+        if (!label) return;
         const current = loadMockup(id);
         if (!current || current.job_started_at !== startedAt) return;
-        current.job_stage = "structure";
-        current.job_stage_label = STAGE_LABEL.structure;
-        current.job_eta_s = 120;
+        current.job_stage = stage;
+        current.job_stage_label = label;
+        if (stage.startsWith("illustrator_")) delete current.job_eta_s;
         saveMockup(current);
       },
     });
@@ -489,7 +532,7 @@ function finishStructure(id: string, startedAt: string, result: RunPythonResult)
   delete job.job_pid;
   job.job_finished_at = nowIso();
   if (result.timedOut) {
-    markMockupFailed(job, "结构识别超时");
+    markMockupFailed(job, "这一单结构识别超时，请稍后重试");
     return "continue";
   }
   const control = structureControl(result.stderr);
@@ -1147,6 +1190,9 @@ function reclaimTask(task: Task): void {
 }
 
 function reclaimMockup(job: MockupJob): void {
+  if (illustratorSlotBusy() && (job.job_status === "running" || job.job_status === "queued") && needsIllustrator(job)) {
+    return;
+  }
   if (job.status === "done") {
     if (job.job_status === "running" || job.job_status === "queued") {
       job.job_status = "succeeded";

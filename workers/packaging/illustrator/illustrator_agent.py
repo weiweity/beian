@@ -16,6 +16,11 @@ import uuid
 from typing import Any
 
 
+_AGENT_DIR = Path(__file__).resolve().parent
+if str(_AGENT_DIR) not in sys.path:
+    sys.path.insert(0, str(_AGENT_DIR))
+from unattended_wait import clamp_timeout_ms
+
 PROTOCOL = "beian.illustrator.v1"
 DEFAULT_PIPE_NAME = "beian-illustrator-v1"
 MAX_RESPONSE_BYTES = 64 * 1024
@@ -63,7 +68,7 @@ def encode_request(
         "protocol": PROTOCOL,
         "id": request_id,
         "command": command,
-        "timeout_ms": max(30_000, min(600_000, int(timeout_seconds * 1000))),
+        "timeout_ms": clamp_timeout_ms(timeout_seconds),
     }
     if command == "run":
         if not config_path:
@@ -367,10 +372,19 @@ def request_agent(
     )
     selected_pipe = pipe_name or os.environ.get("BEIAN_ILLUSTRATOR_PIPE") or DEFAULT_PIPE_NAME
     expected_server_pid = _expected_agent_pid(heartbeat_name, selected_pipe) if sys.platform == "win32" else 0
+    pipe_connect_timeout = float(connect_timeout_seconds)
+    if sys.platform == "win32":
+        heartbeat_path = Path(os.environ.get("WB_DATA_DIR") or r"C:\supply\data") / "runtime" / heartbeat_name
+        try:
+            heartbeat = json.loads(heartbeat_path.read_text(encoding="utf-8"))
+            if str(heartbeat.get("state") or "") == "busy":
+                pipe_connect_timeout = max(pipe_connect_timeout, float(timeout_seconds))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+            pass
     response = _exchange(
         selected_pipe,
         request,
-        connect_timeout_seconds,
+        pipe_connect_timeout,
         timeout_seconds,
         expected_server_pid,
     )

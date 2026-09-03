@@ -6,6 +6,7 @@ import json
 import math
 from pathlib import Path
 import subprocess
+import threading
 
 import pytest
 
@@ -57,8 +58,212 @@ def test_structure_export_is_opt_in_and_legacy_worker_is_unchanged(tmp_path: Pat
     source = runtime.read_text(encoding="utf-8")
     assert runtime.parent == tmp_path
     assert '#include "curve_flatten.js"' not in source
+    assert '#include "unattended_host.jsx"' not in source
     assert source.count("function flattenCubicSegment") == 1
     assert "flattenCubicSegment(" in source
+    assert "function applyUnattendedHost(" in source
+
+
+def load_unattended_wait():
+    spec = importlib.util.spec_from_file_location(
+        "packaging_unattended_wait",
+        PACKAGING / "illustrator" / "unattended_wait.py",
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_unattended_wait_never_kills_during_saving_and_ignores_torn_json():
+    wait = load_unattended_wait()
+    assert wait.PIPE_TIMEOUT_MS_MAX == 1_260_000
+    assert wait.clamp_timeout_ms(9999) == 1_260_000
+    assert wait.parse_job_sidecar("{", "abc") is None
+    assert wait.parse_job_sidecar('{"attempt_id":"old","stage":"saving_artwork_pdf"}', "abc") is None
+    assert wait.parse_job_sidecar('{"attempt_id":"abc","stage":"opening"}', "abc") is None
+    payload = wait.parse_job_sidecar(
+        '{"schema":"illustrator-job-progress/1","attempt_id":"abc","stage":"saving_artwork_pdf"}',
+        "abc",
+    )
+    assert wait.progress_stage(payload) == "saving_artwork_pdf"
+    assert wait.wait_decision(
+        elapsed_s=400,
+        stage="saving_artwork_pdf",
+        progress_age_s=400,
+        has_matching_result=False,
+        process_exited=False,
+    ) == "wait"
+    assert wait.wait_decision(
+        elapsed_s=427,
+        stage="writing_result",
+        progress_age_s=1,
+        has_matching_result=True,
+        process_exited=False,
+    ) == "wait"
+    assert wait.wait_decision(
+        elapsed_s=10,
+        stage="opening",
+        progress_age_s=61,
+        has_matching_result=False,
+        process_exited=False,
+    ) == "wait"
+    assert wait.wait_decision(
+        elapsed_s=901,
+        stage="inventory",
+        progress_age_s=1,
+        has_matching_result=False,
+        process_exited=False,
+    ) == "wait"
+    assert wait.wait_decision(
+        elapsed_s=10,
+        stage="",
+        progress_age_s=61,
+        has_matching_result=False,
+        process_exited=False,
+    ) == "kill"
+    assert wait.wait_decision(
+        elapsed_s=901,
+        stage="saving_full_pdf",
+        progress_age_s=301,
+        has_matching_result=False,
+        process_exited=False,
+    ) == "wait"
+    assert wait.wait_decision(
+        elapsed_s=10,
+        stage="saving_artwork_pdf",
+        progress_age_s=400,
+        has_matching_result=False,
+        process_exited=True,
+    ) == "done"
+    assert wait.wait_decision(
+        elapsed_s=10,
+        stage="closing",
+        progress_age_s=61,
+        has_matching_result=True,
+        process_exited=False,
+    ) == "wait"
+    assert wait.wait_decision(
+        elapsed_s=10,
+        stage="closing",
+        progress_age_s=1,
+        has_matching_result=True,
+        process_exited=False,
+    ) == "wait"
+    assert wait.parse_job_sidecar(None, "abc") is None
+    assert wait.parse_job_sidecar("[]", "abc") is None
+    assert wait.parse_job_sidecar('{"stage":"opening"}', "") is None
+    assert wait.progress_stage(None) == ""
+    assert wait.worker_exit_during_saving_must_not_fence("saving_artwork_pdf") is True
+    assert wait.worker_exit_during_saving_must_not_fence("opening") is True
+    assert wait.worker_exit_during_saving_must_not_fence("") is False
+
+
+def test_windows_worker_emits_illustrator_stage_lines():
+    source = WORKER.read_text(encoding="utf-8")
+    assert "STAGE illustrator_{stage}" in source
+    assert "emit_illustrator_progress_stages" in source
+    assert "result attempt_id does not match this job" in source
+    assert 'encoding="utf-8-sig"' in source
+
+
+def test_hono_packaging_timeout_matches_outer_ceiling():
+    workers = (PACKAGING.parents[1] / "apps" / "web" / "server" / "src" / "workers.ts").read_text(
+        encoding="utf-8"
+    )
+    jobs = (PACKAGING.parents[1] / "apps" / "web" / "server" / "src" / "jobs.ts").read_text(
+        encoding="utf-8"
+    )
+    assert workers.count("timeoutMs: 1_260_000") >= 2
+    assert "MOCKUP_TIMEOUT_MS = 1_260_000" in jobs
+    assert 'job_eta_s = structure ? 120 : 60' not in jobs
+    assert 'current.job_eta_s = 120' not in jobs
+    assert "illustrator_saving_artwork_pdf" in jobs
+    assert "illustratorSlotBusy" in jobs
+    pipeline_source = PIPELINE.read_text(encoding="utf-8")
+    assert pipeline_source.count('get("timeout_seconds", 1260)') == 2
+    assert 'get("timeout_seconds", 180)' not in pipeline_source
+    assert 'get("timeout_seconds", 420)' not in pipeline_source
+
+
+def test_bind_runtime_inlines_unattended_host_for_mac_and_legacy(tmp_path: Path):
+    worker = load_worker()
+    structure = worker.bind_runtime_jsx(tmp_path / "structure.json", {"structure_json": "structure.json"})
+    legacy = worker.bind_runtime_jsx(tmp_path / "legacy.json", {})
+    structure_source = structure.read_text(encoding="utf-8")
+    legacy_source = legacy.read_text(encoding="utf-8")
+    assert structure.name == "export_structure.runtime.jsx"
+    assert legacy.name == "export_ai.runtime.jsx"
+    for source in (structure_source, legacy_source):
+        assert '#include "unattended_host.jsx"' not in source
+        assert "function applyUnattendedHost(" in source
+        assert "function writeJobProgress(" in source
+    assert '#include "curve_flatten.js"' not in structure_source
+    assert "function flattenCubicSegment" in structure_source
+    assert "function flattenCubicSegment" not in legacy_source
+
+
+def test_bind_runtime_jsx_rejects_missing_unattended_host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    worker = load_worker()
+    monkeypatch.setattr(worker, "UNATTENDED_HOST_INCLUDE", '#include "missing_host.jsx"')
+    with pytest.raises(RuntimeError, match="invalid unattended host binding"):
+        worker.bind_runtime_jsx(tmp_path / "job.json", {"structure_json": "structure.json"})
+
+
+def test_emit_illustrator_progress_stages_dedupes_and_ignores_foreign_attempts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    worker = load_worker()
+    debug_log = tmp_path / "jsx_debug.log"
+    debug_log.write_text("", encoding="utf-8")
+    progress = tmp_path / "illustrator_progress.json"
+    progress.write_text(
+        json.dumps(
+            {
+                "schema": "illustrator-job-progress/1",
+                "attempt_id": "abc",
+                "stage": "saving_artwork_pdf",
+            }
+        ),
+        encoding="utf-8",
+    )
+    stop = threading.Event()
+    ticks = {"n": 0}
+
+    def fake_wait(_timeout=None):
+        ticks["n"] += 1
+        if ticks["n"] == 1:
+            progress.write_text("{", encoding="utf-8")
+            return False
+        if ticks["n"] == 2:
+            progress.write_text(
+                json.dumps(
+                    {
+                        "schema": "illustrator-job-progress/1",
+                        "attempt_id": "old",
+                        "stage": "opening",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            return False
+        stop.set()
+        return True
+
+    monkeypatch.setattr(stop, "wait", fake_wait)
+    worker.emit_illustrator_progress_stages(
+        {"debug_log": str(debug_log), "attempt_id": "abc"},
+        stop,
+    )
+    err = capsys.readouterr().err
+    assert err.count("STAGE illustrator_saving_artwork_pdf") == 1
+    assert "STAGE illustrator_opening" not in err
+
+    worker.emit_illustrator_progress_stages({"debug_log": "", "attempt_id": "abc"}, threading.Event())
+    worker.emit_illustrator_progress_stages({"debug_log": str(debug_log), "attempt_id": ""}, threading.Event())
+    assert capsys.readouterr().err == ""
 
 
 def test_mac_worker_reports_runtime_jsx_binding_failure_without_traceback(
@@ -634,6 +839,34 @@ process.stdout.write(JSON.stringify({
         "restoredHidden": False,
         "restoredLocked": True,
     }
+
+
+def test_exporters_commit_result_before_close_and_include_unattended_host():
+    structure = EXPORTER.read_text(encoding="utf-8")
+    legacy = (PACKAGING / "illustrator" / "export_ai.jsx").read_text(encoding="utf-8")
+    host = (PACKAGING / "illustrator" / "unattended_host.jsx").read_text(encoding="utf-8")
+    assert "function applyUnattendedHost(" in host
+    assert "function writeJobProgress(" in host
+    assert 'pathValue + ".tmp"' in host
+    assert "illustrator-job-progress/1" in host
+    assert 'setBooleanPreference("LiveEdit_State_Machine", false)' in host
+    assert 'executeMenuCommand("outline")' not in host
+    assert 'executeMenuCommand("preview")' in host
+    assert "unattended host must not fail-closed" in host
+    for source in (structure, legacy):
+        assert '#include "unattended_host.jsx"' in source
+        assert "applyUnattendedHost(documentRef)" in source
+        assert "commitResult()" in source
+        assert source.index("commitResult()") < source.index("documentRef.close")
+        assert 'writeJobProgress(config, "saving_full_pdf")' in source
+        assert 'writeJobProgress(config, "saving_artwork_pdf")' in source
+        assert source.index('writeJobProgress(config, "saving_full_pdf")') < source.index(
+            "savePdf(documentRef, config.full_pdf)"
+        )
+        assert source.index('writeJobProgress(config, "saving_artwork_pdf")') < source.index(
+            "savePdf(documentRef, config.print_pdf)"
+        )
+        assert "attempt_id: config.attempt_id" in source
 
 
 def test_structure_export_flattens_curves_with_a_bounded_audited_adapter():
@@ -1359,6 +1592,7 @@ def test_structure_export_passes_explicit_print_layers_to_illustrator(
             json.dumps(
                 {
                     "success": True,
+                    "attempt_id": config.get("attempt_id"),
                     "full_pdf": config["full_pdf"],
                     "print_pdf": config["print_pdf"],
                     "structure_json": config["structure_json"],
@@ -1383,6 +1617,51 @@ def test_structure_export_passes_explicit_print_layers_to_illustrator(
     assert captured["source_sha256"] == source_sha256
     assert captured["proposal_layers"] == ["供应商结构候选"]
     assert captured["print_layers"] == ["印刷"]
+
+
+def test_structure_export_writes_attempt_id_and_defaults_timeout_to_outer_ceiling(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    pipeline = load_pipeline()
+    source = tmp_path / "source.ai"
+    source.write_bytes(b"ai")
+    illustrator = tmp_path / "Illustrator.app"
+    illustrator.mkdir()
+    captured: dict[str, object] = {}
+
+    def fake_run(command, capture_output, text):
+        config_path = Path(command[2])
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        captured["timeout"] = command[command.index("--timeout") + 1]
+        captured["attempt_id"] = config.get("attempt_id")
+        for key in ("full_pdf", "print_pdf", "structure_json"):
+            Path(config[key]).write_bytes(b"output")
+        Path(config["result_json"]).write_text(
+            json.dumps(
+                {
+                    "success": True,
+                    "attempt_id": config.get("attempt_id"),
+                    "full_pdf": config["full_pdf"],
+                    "print_pdf": config["print_pdf"],
+                    "structure_json": config["structure_json"],
+                }
+            ),
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(command, 0, "ok", "")
+
+    monkeypatch.setattr(pipeline.subprocess, "run", fake_run)
+    pipeline.run_illustrator_structure_export(
+        source,
+        tmp_path / "project",
+        {"application": str(illustrator)},
+        print_layers=["印刷"],
+        source_sha256=pipeline.file_sha256(source),
+    )
+
+    assert captured["timeout"] == "1260"
+    assert isinstance(captured["attempt_id"], str) and len(str(captured["attempt_id"])) == 32
 
 
 @pytest.mark.parametrize("print_layers", [None, [], "印刷"])
@@ -2282,7 +2561,64 @@ def test_windows_pipe_contract_clamps_timeout_to_agent_bounds():
     _, maximum = client.encode_request("probe", timeout_seconds=9999, request_id="maximum")
 
     assert json.loads(minimum)["timeout_ms"] == 30_000
-    assert json.loads(maximum)["timeout_ms"] == 600_000
+    assert json.loads(maximum)["timeout_ms"] == 1_260_000
+
+
+def test_request_agent_extends_connect_timeout_when_heartbeat_is_busy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    client = load_agent_client()
+    agent_script = tmp_path / "illustrator-agent.ps1"
+    version_file = tmp_path / "VERSION"
+    agent_script.write_text("agent-v1", encoding="utf-8")
+    version_file.write_text("0.20.0.0\n", encoding="utf-8")
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    heartbeat_name = "illustrator-agent-test.json"
+    captured: dict[str, float] = {}
+
+    def write_state(state: str) -> None:
+        runtime.joinpath(heartbeat_name).write_text(
+            json.dumps(
+                {
+                    "protocol": client.PROTOCOL,
+                    "pipe": client.DEFAULT_PIPE_NAME,
+                    "pid": 4321,
+                    "session_id": 1,
+                    "state": state,
+                    "updated_at": "2099-01-01T00:00:00+00:00",
+                    "script_sha256": client._file_sha256(agent_script),
+                    "release_version": "0.20.0.0",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def fake_exchange(_pipe, request, connect_timeout, timeout_seconds, _expected_pid):
+        captured["connect"] = connect_timeout
+        captured["timeout"] = timeout_seconds
+        req = json.loads(request.decode("utf-8"))
+        return (
+            json.dumps({"protocol": client.PROTOCOL, "id": req["id"], "ok": True}) + "\n"
+        ).encode("utf-8")
+
+    monkeypatch.setenv("WB_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(client, "AGENT_SCRIPT", agent_script)
+    monkeypatch.setattr(client, "VERSION_FILE", version_file)
+    monkeypatch.setattr(client.sys, "platform", "win32")
+    monkeypatch.setattr(client.time, "time", lambda: 4070908800.0)
+    monkeypatch.setattr(client, "_exchange", fake_exchange)
+
+    write_state("idle")
+    client.request_agent("probe", timeout_seconds=1260, connect_timeout_seconds=15, heartbeat_name=heartbeat_name)
+    assert captured["connect"] == 15
+    assert captured["timeout"] == 1260
+
+    write_state("busy")
+    client.request_agent("probe", timeout_seconds=1260, connect_timeout_seconds=15, heartbeat_name=heartbeat_name)
+    assert captured["connect"] == 1260
+    assert captured["timeout"] == 1260
 
 
 @pytest.mark.parametrize(
@@ -2324,6 +2660,7 @@ def test_windows_worker_records_agent_success_without_running_a_second_bridge(
                 "print_pdf": str(print_pdf),
                 "structure_json": str(structure_json),
                 "result_json": str(result_path),
+                "attempt_id": "attempt-success-1",
             }
         ),
         encoding="utf-8",
@@ -2338,6 +2675,7 @@ def test_windows_worker_records_agent_success_without_running_a_second_bridge(
             json.dumps(
                 {
                     "success": True,
+                    "attempt_id": "attempt-success-1",
                     "full_pdf": str(full_pdf),
                     "print_pdf": str(print_pdf),
                     "structure_json": str(structure_json),
@@ -2423,14 +2761,17 @@ def test_agent_and_curve_adapter_changes_invalidate_pipeline_cache(
     client = tmp_path / "illustrator_agent.py"
     server = tmp_path / "illustrator-agent.ps1"
     curve_helper = tmp_path / "curve_flatten.js"
+    host_helper = tmp_path / "unattended_host.jsx"
     source.write_bytes(b"ai")
     template.write_text("{}", encoding="utf-8")
     client.write_text("client-v1", encoding="utf-8")
     server.write_text("server-v1", encoding="utf-8")
     curve_helper.write_text("curve-v1", encoding="utf-8")
+    host_helper.write_text("host-v1", encoding="utf-8")
     monkeypatch.setattr(pipeline, "ILLUSTRATOR_AGENT_CLIENT", client)
     monkeypatch.setattr(pipeline, "ILLUSTRATOR_AGENT_SERVER", server)
     monkeypatch.setattr(pipeline, "ILLUSTRATOR_CURVE_HELPER", curve_helper)
+    monkeypatch.setattr(pipeline, "ILLUSTRATOR_UNATTENDED_HOST", host_helper)
 
     first = pipeline.job_fingerprint(source, template, {"structure_engine": "v2"})
     client.write_text("client-v2", encoding="utf-8")
@@ -2439,10 +2780,13 @@ def test_agent_and_curve_adapter_changes_invalidate_pipeline_cache(
     third = pipeline.job_fingerprint(source, template, {"structure_engine": "v2"})
     curve_helper.write_text("curve-v2", encoding="utf-8")
     fourth = pipeline.job_fingerprint(source, template, {"structure_engine": "v2"})
+    host_helper.write_text("host-v2", encoding="utf-8")
+    fifth = pipeline.job_fingerprint(source, template, {"structure_engine": "v2"})
 
     assert first != second
     assert second != third
     assert third != fourth
+    assert fourth != fifth
 
 
 def test_windows_worker_has_no_session_zero_launch_or_direct_com_path():
@@ -2504,6 +2848,39 @@ def test_session_one_agent_is_acl_bounded_timeout_safe_and_fixed_exporter_only()
     )
     assert "$process.Kill()" in source
     assert "$process.WaitForExit(5000)" in source
+    assert "function Invoke-JobCscript" in source
+    assert "function Test-KillForbiddenStage" in source
+    assert '"opening"' in source
+    assert '"inventory"' in source
+    assert '"saving_full_pdf"' in source
+    assert '"saving_artwork_pdf"' in source
+    assert '"writing_result"' in source
+    assert '"closing"' in source
+    invoke_job = source[source.index("function Invoke-JobCscript") : source.index("function Invoke-BridgeProbe")]
+    assert invoke_job.index("Test-KillForbiddenStage") < invoke_job.index("$process.Kill()")
+    assert "saving_full_pdf" in invoke_job
+    assert "saving_artwork_pdf" in invoke_job
+    assert "LeftRunning" in invoke_job
+    invoke_run = source[source.index("function Invoke-RunRequest") : source.index("function Invoke-ProbeRequest")]
+    assert "Invoke-JobCscript" in invoke_run
+    assert "Test-KillForbiddenStage" in invoke_run
+    assert 'Get-JsonProperty $config "attempt_id" $true' in invoke_run
+    assert "$thisAttemptSucceeded" in invoke_run
+    assert "$jobResult.success -eq $true" in invoke_run
+    timed_out_branch = invoke_run[invoke_run.index("elseif ($run.TimedOut") :]
+    assert timed_out_branch.index("Test-KillForbiddenStage") < timed_out_branch.index(
+        'Throw-AgentFailure "illustrator_timeout"'
+    )
+    assert "Write-AgentFaultFence" not in invoke_job
+    assert "Write-AgentFaultFence" not in invoke_run
+    assert "Stop-MatchingIllustrator" in invoke_run
+    assert "still running after writing this attempt's result" in invoke_run
+    assert "$UnattendedOuterMs = 1260000" in source
+    assert "$UnattendedMaxJobMs = 900000" in source
+    assert "$UnattendedStallMs = 60000" in source
+    deadline_fn = source[source.index("function Get-RequestDeadline") : source.index("function Get-SessionIllustratorProcesses")]
+    assert "$UnattendedOuterMs" in deadline_fn
+    assert "600000" not in deadline_fn
     invoke_cscript = source[source.index("function Invoke-Cscript") : source.index("function Convert-ProbeOutput")]
     assert "try {" in invoke_cscript
     assert "} finally {" in invoke_cscript
@@ -2549,7 +2926,13 @@ def test_session_one_agent_is_acl_bounded_timeout_safe_and_fixed_exporter_only()
     assert '"export_structure.jsx"' in source
     assert '"export_ai.jsx"' in source
     assert 'Join-Path $ExporterRoot "curve_flatten.js"' in source
-    assert "$source.Replace($include, $helper)" in source
+    assert 'Join-Path $ExporterRoot "unattended_host.jsx"' in source
+    assert "$source.Replace([string]$item.needle, $helper)" in source
+    bind_fn = source[source.index("function Bind-RuntimeJsx") : source.index("function Stop-MatchingIllustrator")]
+    assert '$fileName -eq "export_structure.jsx" -or $fileName -eq "export_ai.jsx"' in bind_fn
+    assert 'Bind-RuntimeJsx (Join-Path $ExporterRoot "runner_probe.jsx")' in source
+    probe = (PACKAGING / "illustrator" / "runner_probe.jsx").read_text(encoding="utf-8")
+    assert '#include "unattended_host.jsx"' not in probe
     assert "DoJavaScriptFile" not in source
     assert "Illustrator.Application" not in source
 
@@ -2779,7 +3162,7 @@ def test_agent_client_rejects_faulted_heartbeat(
     [
         (6, "Illustrator COM unavailable", "illustrator_unavailable", "没有启动成功"),
         (2, "Illustrator semantic export requires no other open documents", "illustrator_documents_open", "其他稿件"),
-        (3, "Illustrator export timed out after 30s", "illustrator_timeout", "处理超时"),
+        (3, "Illustrator export timed out after 30s", "illustrator_timeout", "这一单处理超时"),
         (
             6,
             '{"kind":"illustrator_agent_error","ok":false,"code":"illustrator_agent_offline","message":"pipe unavailable","details":{}}',
@@ -2840,6 +3223,25 @@ def test_structure_export_failure_has_actionable_public_contract(
         assert "请关掉 Illustrator" in payload["error"]
         assert "请重新打样" not in payload["error"]
         assert "C:\\" not in payload["error"]
+
+
+def test_illustrator_agent_busy_is_not_mapped_to_timeout():
+    pipeline = load_pipeline()
+    error = pipeline.illustrator_export_failure(
+        operation="structure",
+        returncode=2,
+        stderr=json.dumps(
+            {
+                "kind": "illustrator_agent_error",
+                "ok": False,
+                "code": "illustrator_agent_busy",
+                "message": "agent is busy",
+                "details": {},
+            }
+        ),
+    )
+    assert error.as_dict()["code"] != "illustrator_timeout"
+    assert "处理超时" not in error.as_dict()["error"]
 
 
 def test_legacy_normalize_uses_the_same_agent_failure_contract_without_structure_wording():

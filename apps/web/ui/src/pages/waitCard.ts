@@ -89,9 +89,13 @@ export function liveJobLine(opts: {
   if (opts.job_status === "queued") return queueLine(opts.queue_ahead);
   if (opts.job_status !== "running") return null;
   const stage = (opts.job_stage_label || "").trim();
+  if (typeof opts.job_eta_s === "number" && opts.job_eta_s > 0) {
+    const eta = formatEta(opts.job_eta_s);
+    return stage ? `${stage} · ${eta}` : eta;
+  }
+  if (stage) return stage;
   const fallback = opts.kind === "mockup" ? 240 : 40;
-  const eta = formatEta(opts.job_eta_s || fallback);
-  return stage ? `${stage} · ${eta}` : eta;
+  return formatEta(fallback);
 }
 
 /**
@@ -140,6 +144,7 @@ export function mockupBoardProgress(opts: {
   if (/(^|\s)(export|导出)(\s|$)/.test(key)) return 90;
   if (/(^|\s)(blender|打样)(\s|$)/.test(key)) return 70;
   if (/(^|\s)(render_pdf|出图)(\s|$)/.test(key)) return 35;
+  if (/(illustrator_|打开稿件|盘点图层|保存整页|保存印刷|写出结构|关闭文档)/.test(key)) return 15;
   if (/(^|\s)(illustrator|识别结构|正在出图|结构)(\s|$)/.test(key)) return 15;
   return undefined;
 }
@@ -199,9 +204,11 @@ export function waitCardCopy(opts: WaitCardCopyOpts): { title: string; eta: stri
     return { title, eta: q, hint: `${q}。${leave}` };
   }
   const fallback = opts.kind === "mockup" ? 240 : 40;
-  const etaS = opts.job_eta_s || fallback;
-  const eta = formatEta(etaS);
   const stage = (opts.job_stage_label || "").trim();
+  const eta =
+    typeof opts.job_eta_s === "number" && opts.job_eta_s > 0
+      ? formatEta(opts.job_eta_s)
+      : stage || formatEta(fallback);
   const body = stage || figmaWaitBody(opts.kind);
   const hint = opts.feishuReady ? `${body} ${leave}` : body;
   return { title, eta, hint };

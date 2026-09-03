@@ -40,7 +40,7 @@ Start-ScheduledTask -TaskName "beian-illustrator-agent"
 
 等 10 秒，确认任务变为 `Running`、心跳 PID 已更新且进程仍活，再跑只读 probe。永久修复不能只靠这一次手工启动。
 
-Agent 只做会话桥：UTF-8 JSON 命名管道 `beian.illustrator.v1` → 现有 `cscript run_export.vbs` → 唯一 `export_structure.jsx`。结构 exporter 引用的固定 `curve_flatten.js` 会由 Agent 在 job 目录生成 runtime JSX 时确定性内联；不依赖 cscript 当前目录，也不维护 Windows 专用曲线实现。COM 仍留在 VBS；PowerShell 不加载 `Illustrator.Application`。管道 ACL 只允许 LocalSystem 与注册的管理员，心跳绑定 SID、脚本哈希、版本、checkout、管道和 PID；客户端再核对实际管道服务 PID。协议只接受固定的 `probe` / `run` / `smoke`，不执行调用方传来的任意命令或脚本。PS5/cscript 的 GBK 输出由 Agent 在边界内按系统代码页解码，再编码为 UTF-8 JSON。
+Agent 只做会话桥：UTF-8 JSON 命名管道 `beian.illustrator.v1` → 现有 `cscript run_export.vbs` → 唯一 `export_structure.jsx`。结构 exporter 引用的固定 `curve_flatten.js` 与 `unattended_host.jsx` 会由 Agent 在 job 目录生成 runtime JSX 时确定性内联。COM 仍留在 VBS；PowerShell 不加载 `Illustrator.Application`。完工信号是本代 `illustrator_result.json`，不是墙钟 Kill；`saving_full_pdf` / `saving_artwork_pdf` / `writing_result` 期间禁止 Kill cscript。围栏 `illustrator-fault.json` 只在进程重启后仍有不明文档时落下。管道 ACL 只允许 LocalSystem 与注册的管理员，心跳绑定 SID、脚本哈希、版本、checkout、管道和 PID；客户端再核对实际管道服务 PID。协议只接受固定的 `probe` / `run` / `smoke`，不执行调用方传来的任意命令或脚本。PS5/cscript 的 GBK 输出由 Agent 在边界内按系统代码页解码，再编码为 UTF-8 JSON。
 
 运行证据写到 `$env:WB_DATA_DIR\runtime\illustrator-agent.json`，日志在 `$env:WB_DATA_DIR\logs\illustrator-agent.jsonl`。从 `D:\beian` 只读探测：
 
@@ -48,7 +48,7 @@ Agent 只做会话桥：UTF-8 JSON 命名管道 `beian.illustrator.v1` → 现�
 & $env:WB_PYTHON workers\packaging\illustrator\illustrator_agent.py probe --timeout 120
 ```
 
-返回必须包含 `ok=true`、`session_id>0`、可见窗口、Illustrator PID 与空文档名列表。Session 0、无窗口、心跳过期或未知已开稿都不能继续打样。每次执行在 cscript/COM 前写 `$env:WB_DATA_DIR\runtime\illustrator-fault.json` 持久围栏，正常完成或已证明清理完成才删除；Agent 崩溃、cscript 未确认退出或文档清不干净时，所有 Agent 实例都保持 `faulted`，发版和新任务一并拒绝。不能编辑心跳把它改回 idle，也不能靠重启/升版自动清围栏。
+返回必须包含 `ok=true`、`session_id>0`、可见窗口、Illustrator PID 与空文档名列表。Session 0、无窗口、心跳过期或未知已开稿都不能继续打样。每次执行在 cscript/COM 前把 `$env:WB_DATA_DIR\runtime\illustrator-fault.json` 写成 `active` 作业围栏，正常完成或已证明清理完成才删除。心跳 `busy` 只表示正在干活，新打样单排队，不是离线，也不要把 busy 清成围栏。`faulted` 只在进程重启后仍有不明文档、或 Illustrator 无法再启动时落下；saving 超时不得因此锁死全厂。不能编辑心跳把它改回 idle，也不能靠重启/升版自动清 `faulted`。
 
 管理员确认桌面无稿，并确认 Illustrator、AIRobin、cscript、wscript 及其他临时 Agent 都已退出后，在**交互式、已提升权限**的 PowerShell 运行下列显式恢复；脚本会再次核对会话、管理员身份、任务和进程，随后清围栏并重装登录任务。LocalSystem、Session 0、仍有桌面自动化进程或普通卸载都不能清除：
 
