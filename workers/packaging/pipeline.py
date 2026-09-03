@@ -16,7 +16,7 @@ import tempfile
 import time
 import uuid
 import zipfile
-from typing import Any
+from typing import Any, Mapping
 
 from PIL import Image
 
@@ -31,6 +31,7 @@ except ImportError:
 
 
 PIPELINE_VERSION = "1.4.0"
+PAPER_ALBEDO_LINEAR = 0.70
 MAX_RASTER_PIXELS = 32_000_000
 MAX_EXPLICIT_PROPOSAL_LAYERS = 16
 MAX_PROPOSAL_LAYER_CANDIDATES = 128
@@ -61,6 +62,7 @@ if str(ROOT) not in sys.path:
 from dieline import PT_TO_MM, layout_to_template, parse_knife_pdf, pick_knife_layer  # noqa: E402
 from structure_v2 import (  # noqa: E402
     factory_input_hold,
+    pouch_marker_hint,
     print_layer_failure_message,
     render_face_assets,
     resolve_structure,
@@ -1179,10 +1181,16 @@ def preflight_product_v2(
     if not artwork_pdf.is_file():
         raise PipelineError(f"对象清理后的 artwork PDF 不存在：{artwork_pdf}")
 
+    pouch_hint = pouch_marker_hint(
+        source,
+        illustrator_result.get("layers") if illustrator_result else [],
+        product,
+    )
     resolution = resolve_structure(
         source,
         sidecar=structure_sidecar,
         cache_dir=project_dir / "structure_cache",
+        pouch_hint=pouch_hint,
     )
     resolution_path = project_dir / "structure_resolution.json"
     resolution_payload = resolution.as_dict()
@@ -1252,7 +1260,8 @@ def preflight_product_v2(
         "project_dir": str(project_dir),
         "assets_dir": str(assets_dir),
         "dimensions_mm": structure_job["dimensions_mm"],
-        "render": template["render"],
+        "render": overlay_studio_profile(template.get("render") or {}),
+        "packaging_family": structure_job.get("packaging_family"),
         "glb_tolerance_mm": template.get("glb_tolerance_mm", 0.5),
         "page_size_points": page_size,
         "layers": illustrator_result.get("layers", []) if illustrator_result else [],
@@ -1953,6 +1962,97 @@ def write_white_pptx_for_job(job: dict[str, Any]) -> None:
     outputs["pptx"] = str(dest)
 
 
+def overlay_studio_profile(render: Mapping[str, Any] | dict[str, Any]) -> dict[str, Any]:
+    next_render = dict(render)
+    next_render["substrate_rgba"] = [PAPER_ALBEDO_LINEAR, PAPER_ALBEDO_LINEAR, PAPER_ALBEDO_LINEAR, 1.0]
+    return next_render
+
+
+def atomic_replace_file(src: Path, dest: Path) -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    handle, temp_name = tempfile.mkstemp(prefix=dest.name + ".", suffix=".tmp", dir=str(dest.parent))
+    os.close(handle)
+    temp_path = Path(temp_name)
+    try:
+        shutil.copyfile(src, temp_path)
+        os.replace(temp_path, dest)
+    except Exception:
+        try:
+            temp_path.unlink()
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def load_blender_only_jobs(
+    products: list[dict[str, Any]],
+    _manifest_dir: Path,
+    output_root: Path,
+) -> list[dict[str, Any]]:
+    jobs: list[dict[str, Any]] = []
+    for product in products:
+        code = str(product["code"])
+        project_dir = (output_root / code).resolve()
+        resolved_path = project_dir / "resolved_job.json"
+        if not resolved_path.is_file():
+            raise PipelineError("这单没有已出图棚，不能只重渲 Blender。")
+        job = load_json(resolved_path)
+        assets = job.get("assets") or {}
+        missing = [
+            face
+            for face in ("front", "right", "back", "left", "top", "bottom")
+            if not Path(str(assets.get(face) or "")).is_file()
+        ]
+        if missing:
+            raise PipelineError("这单缺少印刷面贴图，不能重渲棚。")
+        job["render"] = overlay_studio_profile(job.get("render") or {})
+        job["cache_hit"] = False
+        job["project_dir"] = str(project_dir)
+        job["resolved_job_path"] = str(resolved_path)
+        jobs.append(job)
+    if not jobs:
+        raise PipelineError("任务清单没有products")
+    return jobs
+
+
+def run_blender_relight(job: dict[str, Any], blender_executable: Path) -> dict[str, Any]:
+    original_outputs = dict(job.get("outputs") or {})
+    if not original_outputs.get("front_right") or not original_outputs.get("back_left"):
+        raise PipelineError("这单没有可用成片路径，不能重渲棚。")
+    original_resolved = Path(job["resolved_job_path"])
+    with tempfile.TemporaryDirectory(prefix="beian-relight.") as tmp:
+        tmp_path = Path(tmp)
+        remapped = deepcopy(job)
+        remapped["outputs"] = {
+            key: str(tmp_path / Path(str(path)).name)
+            for key, path in original_outputs.items()
+        }
+        remapped["project_dir"] = str(tmp_path)
+        remapped_path = tmp_path / "resolved_job.json"
+        remapped["resolved_job_path"] = str(remapped_path)
+        remapped["cache_hit"] = False
+        save_json(remapped_path, remapped)
+        rendered = run_blender_job(remapped, blender_executable)
+        rendered_outputs = rendered.get("outputs") or remapped["outputs"]
+        required = ["front_right", "back_left"]
+        for key in required:
+            src = Path(str(rendered_outputs.get(key) or ""))
+            if not src.is_file():
+                raise PipelineError("重渲棚没有写成片，保留原图。")
+        dest_dir = Path(str(original_outputs["front_right"])).parent
+        for key, src_value in rendered_outputs.items():
+            src = Path(str(src_value))
+            if not src.is_file():
+                continue
+            dest = Path(str(original_outputs[key])) if key in original_outputs else dest_dir / src.name
+            atomic_replace_file(src, dest)
+            original_outputs[key] = str(dest)
+        job["render"] = remapped["render"]
+        job["outputs"] = original_outputs
+        save_json(original_resolved, job)
+        return job
+
+
 def all_output_files_exist(job: dict[str, Any], generate_ppt: bool) -> bool:
     outputs = job.get("outputs", {})
     keys = ["blend", "glb", "front_right", "back_left"]
@@ -1976,6 +2076,11 @@ def main() -> int:
         action="store_true",
         help="只做结构、贴图和作业预检，不启动 Blender/PPT",
     )
+    parser.add_argument(
+        "--blender-only",
+        action="store_true",
+        help="跳过 Illustrator，用已有 resolved 和贴图重渲棚",
+    )
     args = parser.parse_args()
 
     pipeline_started = time.perf_counter()
@@ -1998,6 +2103,25 @@ def main() -> int:
         raise PipelineError(f"找不到Blender：{blender_executable}")
     generate_ppt = bool(manifest.get("generate_ppt", True)) and not args.no_ppt
     illustrator_config = manifest.get("illustrator", {"enabled": True})
+    if args.blender_only and args.preflight_only:
+        raise PipelineError("不能同时 --blender-only 和 --preflight-only")
+    if args.blender_only:
+        emit_stage("blender")
+        jobs = load_blender_only_jobs(products, manifest_dir, output_root)
+        for job in jobs:
+            run_blender_relight(job, blender_executable)
+        pipeline_elapsed = round(time.perf_counter() - pipeline_started, 4)
+        report = {
+            "pipeline_version": PIPELINE_VERSION,
+            "mode": "blender_only",
+            "manifest": str(manifest_path),
+            "products": jobs,
+            "elapsed_s": pipeline_elapsed,
+            "success": True,
+        }
+        save_json(output_root / "pipeline_report.json", report)
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return 0
 
     if args.preflight_only:
         emit_stage("structure")

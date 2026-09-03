@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.21.25.0] - 2026-09-04
+
+### Changed
+
+- 白盒成片默认背景约 RGB 238，不再顶成纯白；3D 贴图乘纸白，读字 PNG 不乘。
+- 已出图单页头可「重渲棚」：只重跑 Blender 换纸面和灯，不重开 Illustrator。失败保留原图，看板仍是已出图。
+- 有打样权限的人可以给任意已出图单补印刷面，不限主人。
+- 文件名、标题或层名带「膜袋」，花盒折不通且恰好两块相近刀线时，点品名面后出薄盒。袋装花盒和「面膜」货号不当袋。没有杭州金标不得宣称膜袋产品存在。
+
+### Fixed
+
+- 补印刷面不再对同组有打样权限的人回 403。
+- 点成片下的面芯片会滚到对应读字并高亮。
+
+### For contributors
+
+- `POST /api/mockups/:id/relight`：create 可重渲任意已出图单；占用 blender 槽；`--blender-only` 原子替换静帧，不 `unlink`、不 `resetMockupForRetry`，status 保持 `done`。
+- `factory_input_hold` 不再拦「膜袋」。先 carton `box_net`；失败且两块相近闭合刀线才 `pouch-net-proposal/1`，侧面 `paper_only`，深 3mm。不要复活 `dieline.py`。内包/标贴仍 hold。
+- 模板 `substrate_rgba` 出图时覆写为线性 0.70。Rim 在相机远侧。
+
 ## [0.21.24.0] - 2026-09-03
 
 ### Changed

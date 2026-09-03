@@ -23,12 +23,16 @@ function face(
 }
 
 type NetProposal = NonNullable<SyntheticMockup["structure_preview"]>["net_proposals"][number];
+type CartonNet = Omit<NetProposal, "schema" | "face_ids" | "closure_assemblies"> & {
+  cap_face_ids: [string, string];
+  body_face_ids: [string, string, string, string] | string[];
+};
 
-function netProposal(input: Omit<NetProposal, "schema" | "face_ids" | "closure_assemblies">): NetProposal {
+function netProposal(input: CartonNet): NetProposal {
   const top = input.cap_face_ids[0];
   const bottom = input.cap_face_ids[1];
   const attached = input.body_face_ids[0];
-  const closure = (primary_face_id: string, side: -1 | 1): NetProposal["closure_assemblies"][number] => ({
+  const closure = (primary_face_id: string, side: -1 | 1): NonNullable<NetProposal["closure_assemblies"]>[number] => ({
     primary_face_id,
     side,
     extent: "full",

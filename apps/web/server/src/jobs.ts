@@ -15,6 +15,7 @@ import {
   mockupStoreSnapshot,
   prepareStructureConfirmation,
   printFaceRepairSource,
+  relightStudioSource,
   requiredPrintFacesReady,
   resetMockupCache,
   resetMockupForRetry,
@@ -44,6 +45,7 @@ import {
   preflightPackaging,
   reworkTask,
   runPackaging,
+  runPackagingBlenderOnly,
   runPrintFaceRepair,
   type RunPythonResult,
   type WorkerProcessIdentity,
@@ -107,6 +109,7 @@ const live: Record<Slot, string | null> = { ocr: null, blender: null, illustrato
 const activeMockupRetries = new Set<string>();
 const printFaceRepairJobs = new Set<string>();
 let printFaceRepairBusy: string | null = null;
+const relightStudioJobs = new Set<string>();
 
 export type JobsTestHooks = {
   runCompare?: typeof compareTask;
@@ -115,6 +118,7 @@ export type JobsTestHooks = {
   runStructure?: typeof preflightPackaging;
   confirmStructure?: typeof confirmPackagingStructure;
   runPrintFaceRepair?: typeof runPrintFaceRepair;
+  runRelight?: typeof runPackagingBlenderOnly;
   runRaster?: (opts: { source: string; outDir: string }) => Promise<{ ok: boolean; png?: string; message: string }>;
   notify?: typeof notifyJobFinished;
   killTree?: typeof killTree;
@@ -128,6 +132,7 @@ const TEST_MOCKUP_STOP: JobsTestHooks = {
   runRaster: async () => ({ ok: false, message: "test stop" }),
   confirmStructure: async () => ({ code: 1, stdout: "", stderr: "test stop", timedOut: false }),
   runPrintFaceRepair: async () => ({ code: 1, stdout: "", stderr: "test stop", timedOut: false }),
+  runRelight: async () => ({ code: 1, stdout: "", stderr: "test stop", timedOut: false }),
 };
 
 function testHooks(overrides: JobsTestHooks = {}): JobsTestHooks {
@@ -148,6 +153,7 @@ export function resetJobsTestHooks(): void {
   live.illustrator = null;
   printFaceRepairJobs.clear();
   printFaceRepairBusy = null;
+  relightStudioJobs.clear();
   resetMockupCache();
 }
 
@@ -278,7 +284,7 @@ function persistPrintFaceFiles(job: MockupJob): MockupJob {
 export async function repairMockupPrintFaces(id: string, viewer: Viewer): Promise<MockupJob> {
   const job = loadMockup(id);
   if (!job) throw Object.assign(new Error("没有这单打样"), { status: 404 });
-  assertCanManageMockup(job, viewer);
+  // Team-shared read already; create may repair any job. Viewer is rejected at HTTP.
   if (live.blender === id || job.status === "queued" || job.status === "running") {
     throw Object.assign(new Error("出图还在跑，现在不能补切面。"), { status: 409 });
   }
@@ -313,10 +319,59 @@ export async function repairMockupPrintFaces(id: string, viewer: Viewer): Promis
     if (!fresh) throw Object.assign(new Error("没有这单打样"), { status: 404 });
     fresh.status = "done";
     fresh.job_status = "succeeded";
+    fresh.print_faces_repaired_by = viewer.id;
+    fresh.print_faces_repaired_at = nowIso();
     return persistPrintFaceFiles(fresh);
   } finally {
     printFaceRepairJobs.delete(id);
     if (printFaceRepairBusy === id) printFaceRepairBusy = null;
+  }
+}
+
+export async function relightMockupStudio(id: string, viewer: Viewer): Promise<MockupJob> {
+  const job = loadMockup(id);
+  if (!job) throw Object.assign(new Error("没有这单打样"), { status: 404 });
+  if (live.blender || job.status === "queued" || job.status === "running") {
+    throw Object.assign(new Error("出图还在跑，现在不能重渲棚。"), { status: 409 });
+  }
+  if (job.status !== "done") {
+    throw Object.assign(new Error("只有已出图的纸盒才能重渲棚。"), { status: 409 });
+  }
+  if (relightStudioJobs.has(id)) {
+    throw Object.assign(new Error("正在重渲棚，不要重复点。"), { status: 409 });
+  }
+  const source = relightStudioSource(job);
+  if (!source) {
+    throw Object.assign(new Error("这单没有可用棚底稿，无法重渲。请重新打样。"), { status: 409 });
+  }
+  relightStudioJobs.add(id);
+  live.blender = id;
+  try {
+    const run = hooks.runRelight || runPackagingBlenderOnly;
+    const result = await run(source.manifest);
+    if (result.timedOut) {
+      throw Object.assign(new Error("重渲棚超时，原图还在。"), { status: 409 });
+    }
+    if (result.code !== 0) {
+      throw Object.assign(new Error("重渲棚失败，原图还在。"), { status: 409 });
+    }
+    const fresh = loadMockup(id);
+    if (!fresh) throw Object.assign(new Error("没有这单打样"), { status: 404 });
+    fresh.status = "done";
+    fresh.job_status = "succeeded";
+    fresh.studio_relit_by = viewer.id;
+    fresh.studio_relit_at = nowIso();
+    fresh.files = collectOutputs(join(DATA_DIR, "mockups", fresh.id));
+    saveMockup(fresh);
+    return fresh;
+  } finally {
+    relightStudioJobs.delete(id);
+    if (live.blender === id) live.blender = null;
+    try {
+      tryStart();
+    } catch (err) {
+      console.warn("relight tryStart failed:", err instanceof Error ? err.message : err);
+    }
   }
 }
 

@@ -654,6 +654,8 @@ export const api = {
     request<MockupJob>(`/api/mockups/${id}/retry`, { method: "POST" }),
   repairMockupPrintFaces: (id: string) =>
     request<MockupJob>(`/api/mockups/${id}/print-faces`, { method: "POST" }),
+  relightMockupStudio: (id: string) =>
+    request<MockupJob>(`/api/mockups/${id}/relight`, { method: "POST" }),
   selectMockupStructureInput: (id: string, candidateIds: string[]) =>
     request<MockupJob>(`/api/mockups/${id}/structure/input`, {
       method: "POST",
@@ -790,6 +792,9 @@ export type MockupJob = {
   owner?: string;
   files: { key: string; name: string }[];
   can_repair_print_faces?: boolean;
+  can_relight_studio?: boolean;
+  studio_relit_by?: string;
+  studio_relit_at?: string;
   job_kind?: string;
   job_status?: string;
   job_stage?: string;
@@ -831,12 +836,13 @@ export type MockupJob = {
     page_size_mm?: [number, number];
     image_url?: string;
     net_proposals: Array<{
-      schema: "box-net-proposal/3";
+      schema: "box-net-proposal/3" | "pouch-net-proposal/1";
       id: string;
       face_ids: string[];
-      body_face_ids: [string, string, string, string];
-      cap_face_ids: [string, string];
-      strip_axis: "x" | "y";
+      body_face_ids: string[];
+      cap_face_ids?: [string, string];
+      strip_axis?: "x" | "y";
+      packaging_family?: "pouch";
       bounds_mm?: [number, number, number, number];
       dimensions_mm?: { width: number; depth: number; height: number };
       valid_anchors?: Array<{
@@ -844,7 +850,7 @@ export type MockupJob = {
         quarter_turns: Array<0 | 1 | 2 | 3>;
         preferred_quarter_turns?: 0 | 1 | 2 | 3;
       }>;
-      closure_assemblies: Array<{
+      closure_assemblies?: Array<{
         primary_face_id: string;
         side: -1 | 1;
         extent: "full" | "partial";
