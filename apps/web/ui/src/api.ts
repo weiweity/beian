@@ -652,6 +652,8 @@ export const api = {
     request<MockupJob>("/api/mockups/start", { method: "POST", body: JSON.stringify(body) }),
   retryMockup: (id: string) =>
     request<MockupJob>(`/api/mockups/${id}/retry`, { method: "POST" }),
+  repairMockupPrintFaces: (id: string) =>
+    request<MockupJob>(`/api/mockups/${id}/print-faces`, { method: "POST" }),
   selectMockupStructureInput: (id: string, candidateIds: string[]) =>
     request<MockupJob>(`/api/mockups/${id}/structure/input`, {
       method: "POST",
@@ -787,6 +789,7 @@ export type MockupJob = {
   created_at?: string;
   owner?: string;
   files: { key: string; name: string }[];
+  can_repair_print_faces?: boolean;
   job_kind?: string;
   job_status?: string;
   job_stage?: string;

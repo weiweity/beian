@@ -1692,3 +1692,296 @@ describe("mockup retry http", { concurrency: false }, () => {
     assert.equal(forbidden.status, 403);
   });
 });
+
+function resolvedPackagingPayload() {
+  return {
+    status: "ready",
+    cache_hit: false,
+    resolved: {
+      schema: "resolved-packaging-job/3",
+      dimensions_mm: { width: 30, depth: 20, height: 50 },
+      faces: {
+        front: {},
+        back: {},
+        left: {},
+        right: {},
+        top: {},
+        bottom: {},
+      },
+    },
+  };
+}
+
+function seedPrintFaceJob(
+  id: string,
+  owner: string,
+  opts: {
+    status?: "done" | "failed" | "running" | "queued" | "review_required";
+    faces?: Array<"front" | "back" | "left" | "right">;
+    artwork?: boolean;
+    resolved?: boolean;
+    engine?: "v2";
+  } = {},
+) {
+  const dir = join(DATA_DIR, "mockups", id);
+  mkdirSync(join(dir, "assets"), { recursive: true });
+  const artwork = join(dir, "artwork.pdf");
+  const resolution = join(dir, "structure_resolution.json");
+  if (opts.artwork !== false) writeFileSync(artwork, "%PDF-1.4\n");
+  if (opts.resolved !== false) writeFileSync(resolution, JSON.stringify(resolvedPackagingPayload()));
+  for (const face of opts.faces || []) {
+    writeFileSync(join(dir, "assets", `panel_${face}.png`), PNG_MAGIC);
+  }
+  const status = opts.status || "done";
+  saveMockup({
+    id,
+    status,
+    created_at: "2026-09-03T00:00:00Z",
+    files: (opts.faces || []).map((face) => ({
+      key: `read_${face}`,
+      path: join(dir, "assets", `panel_${face}.png`),
+      name: `panel_${face}.png`,
+    })),
+    owner,
+    job_kind: "mockup",
+    job_status: status === "done" ? "succeeded" : status === "failed" ? "failed" : status === "review_required" ? "waiting_input" : status,
+    structure_engine: opts.engine === undefined ? "v2" : opts.engine,
+    structure_status: status === "review_required" ? "review_required" : "ready",
+    structure_artwork_path: opts.artwork === false ? undefined : artwork,
+    structure_resolution_path: opts.resolved === false ? undefined : resolution,
+  });
+  return { dir, artwork, resolution };
+}
+
+function writeRequiredFaces(assets: string) {
+  mkdirSync(assets, { recursive: true });
+  for (const face of ["front", "back", "left", "right"] as const) {
+    writeFileSync(join(assets, `panel_${face}.png`), PNG_MAGIC);
+  }
+}
+
+describe("mockup print-faces http", { concurrency: false }, () => {
+  it("GET detail returns can_repair without paths; list does not scan", async () => {
+    seedPrintFaceJob("aa01aa01aa01", "ou_pf_get");
+    const sess = issueSessionForTest("籽烨", "reviewer", "ou_pf_get");
+    const detail = await app.request("/api/mockups/aa01aa01aa01", {
+      headers: { authorization: `Bearer ${sess.token}` },
+    });
+    assert.equal(detail.status, 200);
+    const body = (await detail.json()) as Record<string, unknown>;
+    assert.equal(body.can_repair_print_faces, true);
+    assert.equal(body.status, "done");
+    assert.equal(JSON.stringify(body).includes("artwork.pdf"), false);
+    assert.equal(JSON.stringify(body).includes("structure_resolution"), false);
+    assert.equal(JSON.stringify(body).includes(DATA_DIR), false);
+    const list = await app.request("/api/mockups", {
+      headers: { authorization: `Bearer ${sess.token}` },
+    });
+    assert.equal(list.status, 200);
+    const rows = (await list.json()) as Array<Record<string, unknown>>;
+    const row = rows.find((item) => item.id === "aa01aa01aa01");
+    assert.ok(row);
+    assert.equal("can_repair_print_faces" in (row || {}), false);
+  });
+
+  it("GET detail is false when source is missing", async () => {
+    seedPrintFaceJob("aa02aa02aa02", "ou_pf_nosrc", { artwork: false, resolved: false });
+    const sess = issueSessionForTest("籽烨", "reviewer", "ou_pf_nosrc");
+    const detail = await app.request("/api/mockups/aa02aa02aa02", {
+      headers: { authorization: `Bearer ${sess.token}` },
+    });
+    const body = (await detail.json()) as { can_repair_print_faces?: boolean };
+    assert.equal(body.can_repair_print_faces, false);
+  });
+
+  it("POST writes four read faces and keeps status done", async () => {
+    const { setJobsTestHooks, resetJobsTestHooks } = await import("./jobs.js");
+    seedPrintFaceJob("aa03aa03aa03", "ou_pf_ok");
+    setJobsTestHooks({
+      runPrintFaceRepair: async (opts) => {
+        writeRequiredFaces(opts.assets);
+        return { code: 0, stdout: '{"ok":true}', stderr: "", timedOut: false };
+      },
+    });
+    try {
+      const sess = issueSessionForTest("籽烨", "reviewer", "ou_pf_ok");
+      const res = await app.request("/api/mockups/aa03aa03aa03/print-faces", {
+        method: "POST",
+        headers: { authorization: `Bearer ${sess.token}` },
+      });
+      assert.equal(res.status, 200);
+      const body = (await res.json()) as {
+        status?: string;
+        can_repair_print_faces?: boolean;
+        files?: Array<{ key: string }>;
+      };
+      assert.equal(body.status, "done");
+      assert.equal(body.can_repair_print_faces, false);
+      const keys = new Set((body.files || []).map((file) => file.key));
+      assert.equal(keys.has("read_front"), true);
+      assert.equal(keys.has("read_back"), true);
+      assert.equal(keys.has("read_left"), true);
+      assert.equal(keys.has("read_right"), true);
+    } finally {
+      resetJobsTestHooks();
+    }
+  });
+
+  it("POST with all four valid faces is 200 and does not recrop", async () => {
+    const { setJobsTestHooks, resetJobsTestHooks } = await import("./jobs.js");
+    seedPrintFaceJob("aa04aa04aa04", "ou_pf_idem", {
+      faces: ["front", "back", "left", "right"],
+    });
+    let called = 0;
+    setJobsTestHooks({
+      runPrintFaceRepair: async () => {
+        called += 1;
+        return { code: 1, stdout: "", stderr: "should not recrop", timedOut: false };
+      },
+    });
+    try {
+      const sess = issueSessionForTest("籽烨", "reviewer", "ou_pf_idem");
+      const res = await app.request("/api/mockups/aa04aa04aa04/print-faces", {
+        method: "POST",
+        headers: { authorization: `Bearer ${sess.token}` },
+      });
+      assert.equal(res.status, 200);
+      const body = (await res.json()) as { status?: string; can_repair_print_faces?: boolean };
+      assert.equal(body.status, "done");
+      assert.equal(body.can_repair_print_faces, false);
+      assert.equal(called, 0);
+    } finally {
+      resetJobsTestHooks();
+    }
+  });
+
+  it("POST without source is 409 Chinese detail", async () => {
+    seedPrintFaceJob("aa05aa05aa05", "ou_pf_nopdf", { artwork: false, resolved: false });
+    const sess = issueSessionForTest("籽烨", "reviewer", "ou_pf_nopdf");
+    const res = await app.request("/api/mockups/aa05aa05aa05/print-faces", {
+      method: "POST",
+      headers: { authorization: `Bearer ${sess.token}` },
+    });
+    assert.equal(res.status, 409);
+    const body = (await res.json()) as { detail?: string };
+    assert.equal(body.detail, "这单没有可用底稿，无法补生成。请重新打样。");
+  });
+
+  it("POST rejects viewer, failed, running, and blender-live jobs", async () => {
+    const { setJobsLiveForTest, resetJobsTestHooks } = await import("./jobs.js");
+    seedPrintFaceJob("aa06aa06aa06", "ou_pf_deny");
+    seedPrintFaceJob("aa07aa07aa07", "ou_pf_fail", { status: "failed" });
+    seedPrintFaceJob("aa08aa08aa08", "ou_pf_run", { status: "running" });
+    seedPrintFaceJob("aa09aa09aa09", "ou_pf_live");
+    const viewer = issueSessionForTest("只看", "viewer", "ou_pf_view");
+    const forbidden = await app.request("/api/mockups/aa06aa06aa06/print-faces", {
+      method: "POST",
+      headers: { authorization: `Bearer ${viewer.token}` },
+    });
+    assert.equal(forbidden.status, 403);
+    const failed = await app.request("/api/mockups/aa07aa07aa07/print-faces", {
+      method: "POST",
+      headers: { authorization: `Bearer ${issueSessionForTest("籽烨", "reviewer", "ou_pf_fail").token}` },
+    });
+    assert.equal(failed.status, 409);
+    const failedBody = (await failed.json()) as { detail?: string };
+    assert.match(String(failedBody.detail), /已出图的纸盒/);
+    const running = await app.request("/api/mockups/aa08aa08aa08/print-faces", {
+      method: "POST",
+      headers: { authorization: `Bearer ${issueSessionForTest("籽烨", "reviewer", "ou_pf_run").token}` },
+    });
+    assert.equal(running.status, 409);
+    const runningBody = (await running.json()) as { detail?: string };
+    assert.equal(runningBody.detail, "出图还在跑，现在不能补切面。");
+    setJobsLiveForTest("blender", "aa09aa09aa09");
+    try {
+      const live = await app.request("/api/mockups/aa09aa09aa09/print-faces", {
+        method: "POST",
+        headers: { authorization: `Bearer ${issueSessionForTest("籽烨", "reviewer", "ou_pf_live").token}` },
+      });
+      assert.equal(live.status, 409);
+      const liveBody = (await live.json()) as { detail?: string };
+      assert.equal(liveBody.detail, "出图还在跑，现在不能补切面。");
+    } finally {
+      resetJobsTestHooks();
+    }
+  });
+
+  it("same-job second POST is 409; another job is 429", async () => {
+    const { setJobsTestHooks, resetJobsTestHooks } = await import("./jobs.js");
+    seedPrintFaceJob("aa10aa10aa10", "ou_pf_hold");
+    seedPrintFaceJob("aa11aa11aa11", "ou_pf_wait");
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started: () => void = () => {};
+    const startedAt = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    setJobsTestHooks({
+      runPrintFaceRepair: async (opts) => {
+        started();
+        await gate;
+        writeRequiredFaces(opts.assets);
+        return { code: 0, stdout: '{"ok":true}', stderr: "", timedOut: false };
+      },
+    });
+    try {
+      const firstOwner = issueSessionForTest("籽烨", "reviewer", "ou_pf_hold");
+      const secondOwner = issueSessionForTest("籽烨", "reviewer", "ou_pf_wait");
+      const first = app.request("/api/mockups/aa10aa10aa10/print-faces", {
+        method: "POST",
+        headers: { authorization: `Bearer ${firstOwner.token}` },
+      });
+      await startedAt;
+      const again = await app.request("/api/mockups/aa10aa10aa10/print-faces", {
+        method: "POST",
+        headers: { authorization: `Bearer ${firstOwner.token}` },
+      });
+      assert.equal(again.status, 409);
+      const againBody = (await again.json()) as { detail?: string };
+      assert.equal(againBody.detail, "正在切，不要重复点。");
+      const other = await app.request("/api/mockups/aa11aa11aa11/print-faces", {
+        method: "POST",
+        headers: { authorization: `Bearer ${secondOwner.token}` },
+      });
+      assert.equal(other.status, 429);
+      const otherBody = (await other.json()) as { detail?: string };
+      assert.equal(otherBody.detail, "前面还有切面在跑，请稍后再试。");
+      release();
+      const done = await first;
+      assert.equal(done.status, 200);
+    } finally {
+      release();
+      resetJobsTestHooks();
+    }
+  });
+
+  it("crop failure leaves existing assets and does not change status", async () => {
+    const { setJobsTestHooks, resetJobsTestHooks } = await import("./jobs.js");
+    const { dir } = seedPrintFaceJob("aa12aa12aa12", "ou_pf_failcrop", { faces: ["front"] });
+    const before = readFileSync(join(dir, "assets", "panel_front.png"));
+    setJobsTestHooks({
+      runPrintFaceRepair: async () => ({ code: 1, stdout: "", stderr: "boom", timedOut: false }),
+    });
+    try {
+      const sess = issueSessionForTest("籽烨", "reviewer", "ou_pf_failcrop");
+      const res = await app.request("/api/mockups/aa12aa12aa12/print-faces", {
+        method: "POST",
+        headers: { authorization: `Bearer ${sess.token}` },
+      });
+      assert.equal(res.status, 409);
+      const body = (await res.json()) as { detail?: string };
+      assert.equal(body.detail, "切面失败，请稍后再试。");
+      assert.deepEqual(readFileSync(join(dir, "assets", "panel_front.png")), before);
+      const detail = await app.request("/api/mockups/aa12aa12aa12", {
+        headers: { authorization: `Bearer ${sess.token}` },
+      });
+      const next = (await detail.json()) as { status?: string };
+      assert.equal(next.status, "done");
+    } finally {
+      resetJobsTestHooks();
+    }
+  });
+});
