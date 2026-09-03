@@ -377,7 +377,7 @@ def render_view_pair(scene, camera, job, yaw_rad, product_key, ground_key, set_k
         if dest:
             try:
                 Path(dest).unlink()
-            except FileNotFoundError:
+            except OSError:
                 pass
     finally:
         set_product_holdout(model_objects, False)

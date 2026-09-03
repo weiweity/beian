@@ -69,6 +69,7 @@ def test_render_job_isolates_ground_pass_and_prefers_eevee_next():
     assert "if dest:" in set_body
     assert "set pass failed" in set_err
     assert "Path(dest).unlink()" in set_err
+    assert "except OSError" in set_err
     assert "set_set_visible(set_objects, False)" in set_fin
     assert "film_transparent = True" in set_fin
     assert '"front_right_set"' in source
