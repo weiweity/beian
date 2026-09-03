@@ -1183,15 +1183,29 @@ function readKeyForPanelName(name: string): string | undefined {
 }
 
 function stillKeyFromName(lower: string): string {
+  const card = lower.includes("_card.png");
   const ground = lower.includes("_ground");
-  if (lower.endsWith(".png") && lower.includes("front_right")) return ground ? "white_a_ground" : "white_a";
-  if (lower.endsWith(".png") && lower.includes("back_left")) return ground ? "white_b_ground" : "white_b";
-  return "";
+  let base = "";
+  if (lower.endsWith(".png") && lower.includes("front_right")) base = ground ? "white_a_ground" : "white_a";
+  else if (lower.endsWith(".png") && lower.includes("back_left")) base = ground ? "white_b_ground" : "white_b";
+  if (!base) return "";
+  return card ? `${base}_card` : base;
 }
+
+const STILL_FILE_KEYS = new Set([
+  "white_a",
+  "white_b",
+  "white_a_ground",
+  "white_b_ground",
+  "white_a_card",
+  "white_b_card",
+  "white_a_ground_card",
+  "white_b_ground_card",
+]);
 
 export function isWhiteFile(key: string, name: string): boolean {
   const lower = name.toLowerCase();
-  if (key === "white_a" || key === "white_b" || key === "white_a_ground" || key === "white_b_ground") {
+  if (STILL_FILE_KEYS.has(key)) {
     return stillKeyFromName(lower) === key;
   }
   if (key.startsWith("read_")) return readKeyForPanelName(name) === key;

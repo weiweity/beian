@@ -118,6 +118,11 @@ try {
         documentRef = app.open(new File(config.source_ai));
     }
     hostState = applyUnattendedHost(documentRef);
+    appendUtf8(
+        debugPath,
+        "host outline_ok=" + (hostState.outline ? "1" : "0") +
+            " view=" + String(hostState.viewMode || "")
+    );
     writeJobProgress(config, "inventory");
     appendUtf8(debugPath, "03 source opened");
     if (documentRef.artboards.length < 1) {
@@ -136,6 +141,7 @@ try {
         visibility.push(documentRef.layers[layerIndex].visible);
     }
 
+    restoreUnattendedArtwork(documentRef, hostState);
     writeJobProgress(config, "saving_full_pdf");
     appendUtf8(debugPath, "04 saving full pdf");
     savePdf(documentRef, config.full_pdf);
@@ -170,6 +176,11 @@ try {
     appendUtf8(debugPath, "09 closing document");
     if (documentRef !== null) {
         try {
+            prepareUnattendedClose(documentRef, hostState);
+        } catch (closePrepError) {
+            result.close_prep_error = closePrepError.message;
+        }
+        try {
             documentRef.close(SaveOptions.DONOTSAVECHANGES);
         } catch (closeError) {
             result.close_error = closeError.message;
@@ -181,7 +192,7 @@ try {
         result.host_restore_error = hostRestoreError.message;
     }
     app.userInteractionLevel = previousInteractionLevel;
-    if (!resultCommitted || result.close_error || result.host_restore_error) {
+    if (!resultCommitted || result.close_error || result.close_prep_error || result.host_restore_error) {
         try {
             commitResult();
         } catch (finalResultError) {

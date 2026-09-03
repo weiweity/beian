@@ -1,7 +1,7 @@
 export const STUDIO_LIGHT_MIN = 0.6;
 export const STUDIO_LIGHT_MAX = 1.4;
 export const STUDIO_LIGHT_DEFAULT = 1;
-export const STUDIO_GROUND_FILL = "rgb(242, 242, 244)";
+export const STUDIO_GROUND_FILL = "rgb(228, 228, 232)";
 
 export function clampStudioLight(value: number): number {
   if (!Number.isFinite(value)) return STUDIO_LIGHT_DEFAULT;
@@ -10,7 +10,7 @@ export function clampStudioLight(value: number): number {
 
 export function stillsFilter(light: number): string {
   const next = clampStudioLight(light);
-  return `contrast(1.12) brightness(${next})`;
+  return `contrast(1.04) brightness(${next})`;
 }
 
 export function glbExposure(light: number): string {
@@ -25,6 +25,20 @@ export function studioBackdrop(light: number): string {
 
 export function jobHasGround(files: Array<{ key: string }> | undefined): boolean {
   return (files || []).some((file) => file.key === "white_a_ground" || file.key === "white_b_ground");
+}
+
+export function reviewCardKey(
+  key: "white_a" | "white_b" | "white_a_ground" | "white_b_ground",
+): string {
+  return `${key}_card`;
+}
+
+export function jobHasReviewCard(
+  files: Array<{ key: string }> | undefined,
+  key: "white_a" | "white_b" | "white_a_ground" | "white_b_ground",
+): boolean {
+  const card = reviewCardKey(key);
+  return (files || []).some((file) => file.key === card);
 }
 
 export function containRect(
@@ -71,7 +85,7 @@ export function composeStudioStill(
   ground: SizedSource | null,
   opts: ComposeStudioOpts,
 ): void {
-  // fill 242 → multiply ground matte → product; contain, never cover.
+  // STUDIO_GROUND_FILL → multiply ground matte → product; contain, never cover.
   const productSize = product ? sourceSize(product) : { width: 0, height: 0 };
   const groundSize = ground ? sourceSize(ground) : { width: 0, height: 0 };
   const srcW = productSize.width || groundSize.width;
@@ -150,6 +164,28 @@ export async function blobFromLitStill(
   return await new Promise((resolve, reject) => {
     canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error("导出失败"))), "image/png");
   });
+}
+
+const stillLoads = new Map<string, Promise<HTMLImageElement>>();
+
+export function loadStillImage(url: string): Promise<HTMLImageElement> {
+  const existing = stillLoads.get(url);
+  if (existing) return existing;
+  const pending = (async () => {
+    if (typeof Image === "undefined") {
+      throw new Error("load");
+    }
+    const image = new Image();
+    image.crossOrigin = "anonymous";
+    image.src = url;
+    await image.decode();
+    return image;
+  })().catch((error) => {
+    stillLoads.delete(url);
+    throw error;
+  });
+  stillLoads.set(url, pending);
+  return pending;
 }
 
 export async function blobFromStudioStill(

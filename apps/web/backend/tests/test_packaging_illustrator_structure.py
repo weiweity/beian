@@ -852,12 +852,26 @@ def test_exporters_commit_result_before_close_and_include_unattended_host():
     assert 'setBooleanPreference("LiveEdit_State_Machine", false)' in host
     assert 'executeMenuCommand("outline")' not in host
     assert 'executeMenuCommand("preview")' in host
+    assert "function prepareUnattendedClose(" in host
+    assert "function restoreUnattendedArtwork(" in host
+    assert "getViewMode" in host
+    assert "0.03125" in host
+    assert "Cannot fully restore artwork layers" in host
     assert "unattended host must not fail-closed" in host
     for source in (structure, legacy):
         assert '#include "unattended_host.jsx"' in source
         assert "applyUnattendedHost(documentRef)" in source
+        assert "restoreUnattendedArtwork(documentRef, hostState)" in source
+        assert "prepareUnattendedClose(documentRef, hostState)" in source
         assert "commitResult()" in source
         assert source.index("commitResult()") < source.index("documentRef.close")
+        assert source.index("restoreUnattendedArtwork(documentRef, hostState)") < source.index(
+            "savePdf(documentRef, config.full_pdf)"
+        )
+        assert source.index("prepareUnattendedClose(documentRef, hostState)") < source.index(
+            "documentRef.close(SaveOptions.DONOTSAVECHANGES)"
+        )
+        assert "close_prep_error" in source
         assert 'writeJobProgress(config, "saving_full_pdf")' in source
         assert 'writeJobProgress(config, "saving_artwork_pdf")' in source
         assert source.index('writeJobProgress(config, "saving_full_pdf")') < source.index(
@@ -1317,13 +1331,15 @@ def test_explicit_semantics_suppress_inapplicable_layer_candidates():
 
 def test_preview_plates_use_a_second_pass_and_separate_budget():
     source = EXPORTER.read_text(encoding="utf-8")
-    first_loop = source.index("for (var pathIndex = 0;")
+    first_loop = source.index("var remainderItems = [];")
     plate_pass = source.index("if (explicitRecords.length === 0)")
     suppression = source.index("if (explicitRecords.length > 0)")
     plate_body = source[plate_pass:suppression]
     assert first_loop < plate_pass < suppression
     assert "recordProposalLayerCandidate(" in source[first_loop:plate_pass]
     assert "proposalPreviewBudget" in source[first_loop:plate_pass]
+    assert "eachInventoryPathItem(" in source[first_loop:plate_pass]
+    assert "uniqueFactoryKnifeLayerName(result.layers)" in source[first_loop:plate_pass]
     assert "recordPreviewPlateCandidate(" not in source[first_loop:plate_pass]
     assert "platePreviewBudget" not in source[first_loop:plate_pass]
     assert "recordPreviewPlateCandidate(" in plate_body
@@ -1474,6 +1490,229 @@ process.stdout.write(JSON.stringify(filledKnife));
         "names": ["刀版"],
         "plateNames": ["击凹"],
         "defaultKnife": ["刀版"],
+    }
+
+
+def test_inventory_walks_layer_path_items_and_skips_annotation_layers():
+    source = EXPORTER.read_text(encoding="utf-8")
+    assign_start = source.index("function exactAssignment")
+    assign_end = source.index("function proposalLayerKey")
+    loop_start = source.index("    var proposalLayerKeys = [];")
+    suppression = source.index("    if (explicitRecords.length > 0) {")
+    program = _structure_preview_helpers() + source[assign_start:assign_end] + r"""
+function pathItem(layer, filled) {
+    var anchor = [0, 80];
+    return {
+        layer: layer,
+        stroked: !filled,
+        filled: filled,
+        closed: filled,
+        clipping: false,
+        pathPoints: [
+            {anchor: anchor, leftDirection: anchor.slice(), rightDirection: anchor.slice()},
+            {anchor: [40, 80], leftDirection: [40, 80], rightDirection: [40, 80]}
+        ]
+    };
+}
+function harvest(documentRef) {
+    var config = {proposal_layers: []};
+    var artboard = [0, 100, 160, 0];
+    var explicitRecords = [];
+    var proposalRecords = [];
+    var result = {
+        layers: ["刀版", "印刷", "表", "标注", "击凹"],
+        proposal_layer_candidates: [],
+        preview_plate_candidates: [],
+        proposal_layer_candidates_truncated: false,
+        preview_plate_candidates_truncated: false
+    };
+""" + source[loop_start:suppression] + r"""
+    return {
+        proposalCount: proposalRecords.length,
+        remainderCount: remainderItems.length,
+        names: result.proposal_layer_candidates.map(function (row) { return row.name; }),
+        plateNames: result.preview_plate_candidates.map(function (row) { return row.name; }),
+        visitedPrint: documentRef.printLayer.visited,
+        visitedTable: documentRef.tableLayer.visited,
+        visitedNotes: documentRef.noteLayer.visited
+    };
+}
+var documentRef = {typename: "Document"};
+function layer(name, z, filled, count) {
+    var item = {name: name, typename: "Layer", parent: documentRef, zOrderPosition: z, visited: 0};
+    var paths = [];
+    var index;
+    for (index = 0; index < count; index += 1) {
+        paths.push(pathItem(item, filled));
+    }
+    item.pathItems = {length: count};
+    for (index = 0; index < count; index += 1) {
+        (function (i, path) {
+            Object.defineProperty(item.pathItems, String(i), {
+                get: function () {
+                    item.visited += 1;
+                    return path;
+                }
+            });
+        })(index, paths[index]);
+    }
+    return item;
+}
+documentRef.knifeLayer = layer("刀版", 0, true, 2);
+documentRef.printLayer = layer("印刷", 1, true, 800);
+documentRef.tableLayer = layer("表", 2, true, 400);
+documentRef.noteLayer = layer("标注", 3, false, 400);
+documentRef.foilLayer = layer("击凹", 4, true, 3);
+documentRef.layers = [
+    documentRef.knifeLayer,
+    documentRef.printLayer,
+    documentRef.tableLayer,
+    documentRef.noteLayer,
+    documentRef.foilLayer
+];
+process.stdout.write(JSON.stringify(harvest(documentRef)));
+"""
+    completed = subprocess.run(["node", "-e", program], check=True, capture_output=True, text=True)
+    payload = json.loads(completed.stdout)
+    assert payload["proposalCount"] == 2
+    assert payload["names"] == ["刀版"]
+    assert payload["plateNames"] == ["印刷", "击凹"]
+    assert payload["visitedTable"] == 0
+    assert payload["visitedNotes"] == 0
+    assert payload["visitedPrint"] == 512
+    assert payload["remainderCount"] == 515
+
+
+def test_restore_unattended_artwork_throws_when_visible_layers_stay_hidden():
+    host = (PACKAGING / "illustrator" / "unattended_host.jsx").read_text(encoding="utf-8")
+    start = host.index("function captureTopLayerVisibility")
+    end = host.index("function restoreUnattendedHost")
+    program = host[start:end] + r"""
+var hidden = {visible: false};
+var stuck = {};
+Object.defineProperty(stuck, "visible", {get: function () { return false; }, set: function () {}});
+var threw = false;
+try {
+    restoreUnattendedArtwork({layers: [stuck]}, {layers: [{layer: stuck, visible: true}], zoom: null});
+} catch (err) {
+    threw = String(err.message).indexOf("Cannot fully restore artwork layers") >= 0;
+}
+restoreUnattendedArtwork({layers: [hidden]}, {layers: [{layer: hidden, visible: false}], zoom: null});
+var ok = {visible: true};
+var mixedThrew = false;
+try {
+    restoreUnattendedArtwork(
+        {layers: [ok, stuck]},
+        {layers: [{layer: ok, visible: true}, {layer: stuck, visible: true}], zoom: null}
+    );
+} catch (mixedErr) {
+    mixedThrew = String(mixedErr.message).indexOf("Cannot fully restore artwork layers") >= 0;
+}
+process.stdout.write(JSON.stringify({threw: threw, hiddenStill: hidden.visible, mixedThrew: mixedThrew}));
+"""
+    completed = subprocess.run(["node", "-e", program], check=True, capture_output=True, text=True)
+    assert json.loads(completed.stdout) == {"threw": True, "hiddenStill": False, "mixedThrew": True}
+
+
+def test_enter_outline_view_fail_open_and_does_not_toggle_twice():
+    host = (PACKAGING / "illustrator" / "unattended_host.jsx").read_text(encoding="utf-8")
+    start = host.index("function viewModeOf")
+    end = host.index("function setUnattendedZoom")
+    program = host[start:end] + r"""
+var presses = 0;
+var app = {executeMenuCommand: function () { presses += 1; throw new Error("no menu"); }};
+var missing = enterOutlineView({getViewMode: function () { return "preview"; }});
+var already = enterOutlineView({getViewMode: function () { return "Outline"; }});
+var chinese = enterOutlineView({getViewMode: function () { return "轮廓"; }});
+process.stdout.write(JSON.stringify({missing: missing, already: already, chinese: chinese, presses: presses}));
+"""
+    completed = subprocess.run(["node", "-e", program], check=True, capture_output=True, text=True)
+    payload = json.loads(completed.stdout)
+    assert payload["presses"] == 1
+    assert payload["missing"] == {"ok": False, "via": "preview", "mode": "preview"}
+    assert payload["already"] == {"ok": True, "via": "already", "mode": "Outline"}
+    assert payload["chinese"] == {"ok": True, "via": "already", "mode": "轮廓"}
+
+
+def test_inventory_document_path_items_fallback_honors_stop_and_skips():
+    source = EXPORTER.read_text(encoding="utf-8")
+    skip_start = source.index("function shouldSkipInventoryLayerName")
+    skip_end = source.index("function isPrintFallbackEligibleLayerName")
+    walk_start = source.index("function eachInventoryPathItem")
+    walk_end = source.index("function samePoint")
+    program = source[skip_start:skip_end] + source[walk_start:walk_end] + r"""
+var seen = [];
+var items = [
+    {layer: {name: "表"}},
+    {layer: {name: "刀版"}},
+    {layer: {name: "印刷"}}
+];
+var documentRef = {pathItems: {length: 3, 0: items[0], 1: items[1], 2: items[2]}};
+eachInventoryPathItem(documentRef, function (item) {
+    if (item.layer.name === "表") {
+        return;
+    }
+    seen.push(item.layer.name);
+    if (item.layer.name === "刀版") {
+        return false;
+    }
+});
+process.stdout.write(JSON.stringify(seen));
+"""
+    completed = subprocess.run(["node", "-e", program], check=True, capture_output=True, text=True)
+    assert json.loads(completed.stdout) == ["刀版"]
+
+
+def test_inventory_walks_group_and_compound_page_items():
+    source = EXPORTER.read_text(encoding="utf-8")
+    skip_start = source.index("function shouldSkipInventoryLayerName")
+    skip_end = source.index("function isPrintFallbackEligibleLayerName")
+    walk_start = source.index("function inventoryItemType")
+    walk_end = source.index("function samePoint")
+    program = source[skip_start:skip_end] + source[walk_start:walk_end] + r"""
+var seen = [];
+function path(name) {
+    return {typename: "PathItem", layer: {name: name}, name: name};
+}
+var knife = {
+    name: "刀版",
+    pageItems: {
+        length: 2,
+        0: {typename: "GroupItem", pageItems: {length: 1, 0: path("grouped")}},
+        1: {typename: "CompoundPathItem", pathItems: {length: 1, 0: path("compound")}}
+    },
+    pathItems: {length: 0}
+};
+var notes = {name: "标注", pageItems: {length: 1, 0: path("note")}, pathItems: {length: 1, 0: path("note")}};
+eachInventoryPathItem({layers: {length: 2, 0: knife, 1: notes}}, function (item) {
+    seen.push(item.name);
+});
+process.stdout.write(JSON.stringify(seen));
+"""
+    completed = subprocess.run(["node", "-e", program], check=True, capture_output=True, text=True)
+    assert json.loads(completed.stdout) == ["grouped", "compound"]
+
+
+def test_should_skip_inventory_dimension_layer_names():
+    source = EXPORTER.read_text(encoding="utf-8")
+    start = source.index("function shouldSkipInventoryLayerName")
+    end = source.index("function isPrintFallbackEligibleLayerName")
+    program = source[start:end] + r"""
+process.stdout.write(JSON.stringify({
+    table: shouldSkipInventoryLayerName("表"),
+    note: shouldSkipInventoryLayerName("尺寸标注"),
+    dim: shouldSkipInventoryLayerName("Dimensions"),
+    size: shouldSkipInventoryLayerName("成品尺寸"),
+    knife: shouldSkipInventoryLayerName("刀版")
+}));
+"""
+    completed = subprocess.run(["node", "-e", program], check=True, capture_output=True, text=True)
+    assert json.loads(completed.stdout) == {
+        "table": True,
+        "note": True,
+        "dim": True,
+        "size": True,
+        "knife": False,
     }
 
 

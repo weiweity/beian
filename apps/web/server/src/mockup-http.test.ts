@@ -444,7 +444,14 @@ describe("mockup structure artwork preview", () => {
     });
     assert.equal(own.status, 200);
     assert.equal(own.headers.get("content-type"), "image/png");
+    assert.equal(own.headers.get("cache-control"), "private, no-cache");
+    assert.match(own.headers.get("etag") || "", /^W\/"/);
     assert.deepEqual(Buffer.from(await own.arrayBuffer()), PNG_MAGIC);
+    const cached = await app.request(`/api/mockups/${id}/structure-preview`, {
+      headers: { authorization: `Bearer ${owner.token}`, "if-none-match": own.headers.get("etag") || "" },
+    });
+    assert.equal(cached.status, 304);
+    assert.equal(cached.headers.get("etag"), own.headers.get("etag"));
 
     const stranger = issueSessionForTest("其他审核员", "reviewer", "ou_preview_other");
     const shared = await app.request(`/api/mockups/${id}/structure-preview`, {
@@ -482,7 +489,12 @@ describe("mockup structure artwork preview", () => {
       headers: { authorization: `Bearer ${viewer.token}` },
     });
     assert.equal(response.status, 200);
+    assert.match(response.headers.get("etag") || "", /^W\/"/);
     assert.deepEqual(Buffer.from(await response.arrayBuffer()), inputBytes);
+    const cached = await app.request(`/api/mockups/${id}/structure-input-preview`, {
+      headers: { authorization: `Bearer ${viewer.token}`, "if-none-match": response.headers.get("etag") || "" },
+    });
+    assert.equal(cached.status, 304);
   });
 });
 
@@ -1425,7 +1437,8 @@ describe("mockup file bytes", () => {
     assert.equal(res.status, 200);
     assert.equal(res.headers.get("content-type"), "image/png");
     assert.equal(res.headers.get("x-content-type-options"), "nosniff");
-    assert.equal(res.headers.get("cache-control"), "private, no-store");
+    assert.equal(res.headers.get("cache-control"), "private, no-cache");
+    assert.match(res.headers.get("etag") || "", /^W\/"/);
     const disp = res.headers.get("content-disposition") || "";
     assert.match(disp, /^inline;/);
     assert.match(disp, /filename="_____front_right.png"/);
@@ -1433,6 +1446,10 @@ describe("mockup file bytes", () => {
     const buf = Buffer.from(await res.arrayBuffer());
     assert.equal(buf[0], 0x89);
     assert.equal(buf[1], 0x50);
+    const again = await app.request("/api/mockups/bb22bb22bb22/files/white_a", {
+      headers: { authorization: `Bearer ${sess.token}`, "if-none-match": res.headers.get("etag") || "" },
+    });
+    assert.equal(again.status, 304);
   });
 
   it("serves glb inline and ppt as attachment", async () => {
@@ -1482,10 +1499,15 @@ describe("mockup file bytes", () => {
     });
     assert.match(preview.headers.get("content-disposition") || "", /^inline;/);
     const dl = await app.request("/api/mockups/ee55ee55ee55/files/white_a?download=1", {
-      headers: { authorization: `Bearer ${sess.token}` },
+      headers: {
+        authorization: `Bearer ${sess.token}`,
+        "if-none-match": preview.headers.get("etag") || "",
+      },
     });
     assert.equal(dl.status, 200);
+    assert.equal(dl.headers.get("cache-control"), "private, no-store");
     assert.match(dl.headers.get("content-disposition") || "", /^attachment;/);
+    assert.ok((await dl.arrayBuffer()).byteLength > 0);
   });
 
   it("serves an on-disk panel png as read_front even when job.files omitted it", async () => {

@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.21.22.0] - 2026-09-03
+
+### Changed
+
+- 重稿盘点时先把图层藏起来、进轮廓视图、缩小视口，关稿前不再把脏预览重新画一遍。
+- 白盒成片地面带接触阴影；台面灰底改成 `rgb(228,228,232)`，对比度从 1.12 降到 1.04，顶面不容易洗白。
+- 打样单第一屏先出 1440 核对卡，点原图再换全图；预览带 ETag，同一张图不用整包再下。
+
+### Fixed
+
+- 组和复合路径会进盘点，不会只扫图层上裸露的线。
+- 图层没恢复就不出 PDF；失败走已有的印刷层恢复映射，不再说成语义标记问题。
+- 下载原图不会被 304 空文件带走。核对卡坏了会回退全图，不会整张「白底图坏了」。
+
+### For contributors
+
+- `executeMenuCommand("preview")` 只按一次。盘点走 `layer.pageItems` 并展开 Group/Compound；表/标注/Dimensions/尺寸整层跳过。`restoreUnattendedArtwork` 任一原可见顶层仍隐藏则抛 `Cannot fully restore artwork layers`。Blender 后写 `*_card.png`。26H21A 仍是 land 后杭州人工金标。
+
 ## [0.21.21.0] - 2026-09-03
 
 ### Added
