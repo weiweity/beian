@@ -1279,6 +1279,8 @@ def preflight_product_v2(
             "back_left": str(project_dir / f"{code}_{slug}_back_left_white.png"),
             "front_right_ground": str(project_dir / f"{code}_{slug}_front_right_ground.png"),
             "back_left_ground": str(project_dir / f"{code}_{slug}_back_left_ground.png"),
+            "front_right_set": str(project_dir / f"{code}_{slug}_front_right_set.png"),
+            "back_left_set": str(project_dir / f"{code}_{slug}_back_left_set.png"),
         },
     }
     resolved_path = project_dir / "resolved_job.json"
@@ -1486,6 +1488,8 @@ def preflight_product(
             "back_left": str(project_dir / f"{code}_{slug}_back_left_white.png"),
             "front_right_ground": str(project_dir / f"{code}_{slug}_front_right_ground.png"),
             "back_left_ground": str(project_dir / f"{code}_{slug}_back_left_ground.png"),
+            "front_right_set": str(project_dir / f"{code}_{slug}_front_right_set.png"),
+            "back_left_set": str(project_dir / f"{code}_{slug}_back_left_set.png"),
         },
     }
     resolved_path = project_dir / "resolved_job.json"
@@ -1532,6 +1536,8 @@ def write_review_cards(job: dict[str, Any]) -> None:
         ("back_left", "back_left_card"),
         ("front_right_ground", "front_right_ground_card"),
         ("back_left_ground", "back_left_ground_card"),
+        ("front_right_set", "front_right_set_card"),
+        ("back_left_set", "back_left_set_card"),
     ):
         raw = outputs.get(src_key)
         if not raw:

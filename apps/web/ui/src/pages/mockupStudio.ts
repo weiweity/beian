@@ -102,15 +102,33 @@ export function jobHasGround(files: Array<{ key: string }> | undefined): boolean
   return (files || []).some((file) => file.key === "white_a_ground" || file.key === "white_b_ground");
 }
 
-export function reviewCardKey(
-  key: "white_a" | "white_b" | "white_a_ground" | "white_b_ground",
-): string {
+export type StudioStillKey =
+  | "white_a"
+  | "white_b"
+  | "white_a_ground"
+  | "white_b_ground"
+  | "white_a_set"
+  | "white_b_set";
+
+export function stillSetKey(fileKey: "white_a" | "white_b"): "white_a_set" | "white_b_set" {
+  return fileKey === "white_a" ? "white_a_set" : "white_b_set";
+}
+
+export function jobHasSet(
+  files: Array<{ key: string }> | undefined,
+  fileKey: "white_a" | "white_b",
+): boolean {
+  const key = stillSetKey(fileKey);
+  return (files || []).some((file) => file.key === key);
+}
+
+export function reviewCardKey(key: StudioStillKey): string {
   return `${key}_card`;
 }
 
 export function jobHasReviewCard(
   files: Array<{ key: string }> | undefined,
-  key: "white_a" | "white_b" | "white_a_ground" | "white_b_ground",
+  key: StudioStillKey,
 ): boolean {
   const card = reviewCardKey(key);
   return (files || []).some((file) => file.key === card);
@@ -151,6 +169,7 @@ export type ComposeStudioOpts = {
   backgroundLight: number;
   filterSupported?: boolean;
   backdrop?: BackdropPreset;
+  set?: SizedSource | null;
 };
 
 export function composeStudioStill(
@@ -161,26 +180,40 @@ export function composeStudioStill(
   ground: SizedSource | null,
   opts: ComposeStudioOpts,
 ): void {
-  // Backdrop fill → optional wall/table → multiply ground matte → product; contain, never cover.
+  // Backdrop fill → set still (white_set) or CSS wall + optional ground multiply → product.
   const preset = parseBackdropPreset(opts.backdrop ?? BACKDROP_DEFAULT);
   const productSize = product ? sourceSize(product) : { width: 0, height: 0 };
   const groundSize = ground ? sourceSize(ground) : { width: 0, height: 0 };
-  const srcW = productSize.width || groundSize.width;
-  const srcH = productSize.height || groundSize.height;
+  const set = opts.set || null;
+  const setSize = set ? sourceSize(set) : { width: 0, height: 0 };
+  const useSet = preset === "white_set" && Boolean(set && setSize.width && setSize.height);
+  const srcW = productSize.width || setSize.width || groundSize.width;
+  const srcH = productSize.height || setSize.height || groundSize.height;
   const rect = containRect(destW, destH, srcW, srcH);
   ctx.save();
   ctx.filter = "none";
   ctx.globalCompositeOperation = "source-over";
-  paintStudioSet(ctx, destW, destH, preset, opts.backgroundLight);
-  if (usesContactShadow(preset) && ground && groundSize.width && groundSize.height) {
+  if (useSet) {
+    ctx.fillStyle = studioBackdrop(opts.backgroundLight, preset);
+    ctx.fillRect(0, 0, destW, destH);
     const background = clampStudioLight(opts.backgroundLight);
     if (background !== STUDIO_LIGHT_DEFAULT && opts.filterSupported !== false) {
       ctx.filter = `brightness(${background})`;
     }
-    ctx.globalCompositeOperation = "multiply";
-    ctx.drawImage(ground as CanvasImageSource, rect.x, rect.y, rect.w, rect.h);
+    ctx.drawImage(set as CanvasImageSource, rect.x, rect.y, rect.w, rect.h);
     ctx.filter = "none";
-    ctx.globalCompositeOperation = "source-over";
+  } else {
+    paintStudioSet(ctx, destW, destH, preset, opts.backgroundLight);
+    if (usesContactShadow(preset) && ground && groundSize.width && groundSize.height) {
+      const background = clampStudioLight(opts.backgroundLight);
+      if (background !== STUDIO_LIGHT_DEFAULT && opts.filterSupported !== false) {
+        ctx.filter = `brightness(${background})`;
+      }
+      ctx.globalCompositeOperation = "multiply";
+      ctx.drawImage(ground as CanvasImageSource, rect.x, rect.y, rect.w, rect.h);
+      ctx.filter = "none";
+      ctx.globalCompositeOperation = "source-over";
+    }
   }
   if (product && productSize.width && productSize.height) {
     if (opts.filterSupported !== false) {
@@ -267,7 +300,7 @@ export function loadStillImage(url: string): Promise<HTMLImageElement> {
 export async function blobFromStudioStill(
   product: SizedSource,
   ground: SizedSource | null,
-  opts: { productLight: number; backgroundLight: number; backdrop?: BackdropPreset },
+  opts: { productLight: number; backgroundLight: number; backdrop?: BackdropPreset; set?: SizedSource | null },
 ): Promise<Blob> {
   const width = Number(product.naturalWidth || product.width || 0);
   const height = Number(product.naturalHeight || product.height || 0);

@@ -387,6 +387,9 @@ test("有 ground 的已出图单走 canvas 成片，不显示 PPT，调灯默认
   expect(syntheticApi.calls.filter((call) => call.method === "POST").length).toBe(postsBefore);
   await switcher.getByText("白底", { exact: true }).click();
   await expect(page.locator(".mockup-sheet-frame").first()).toHaveClass(/is-backdrop-white/);
+  await switcher.getByText("白桌白墙", { exact: true }).click();
+  await expect(page.locator(".mockup-sheet-frame").first()).toHaveClass(/is-backdrop-white-set/);
+  expect(syntheticApi.calls.filter((call) => call.method === "POST").length).toBe(postsBefore);
   await page.getByRole("button", { name: "调灯" }).click();
   await expect(page.getByRole("slider", { name: "产品灯光" })).toBeVisible();
   await page.getByRole("button", { name: /打开正面/ }).click();

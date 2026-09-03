@@ -104,6 +104,11 @@ def test_write_review_card_caps_longest_edge_and_keeps_alpha(tmp_path):
     pipe.write_review_cards(job)
     assert Path(job["outputs"]["front_right_card"]).name == "front_right_white_card.png"
     assert Path(job["outputs"]["front_right_ground_card"]).name == "front_right_ground_card.png"
+    set_still = tmp_path / "front_right_set.png"
+    image.save(set_still)
+    job["outputs"]["front_right_set"] = str(set_still)
+    pipe.write_review_cards(job)
+    assert Path(job["outputs"]["front_right_set_card"]).name == "front_right_set_card.png"
     assert "write_review_cards(job)" in PIPE.read_text(encoding="utf-8")
 
 

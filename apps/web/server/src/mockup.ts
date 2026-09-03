@@ -1256,10 +1256,14 @@ function readKeyForPanelName(name: string): string | undefined {
 
 function stillKeyFromName(lower: string): string {
   const card = lower.includes("_card.png");
-  const ground = lower.includes("_ground");
+  const set = lower.includes("_set");
+  const ground = !set && lower.includes("_ground");
   let base = "";
-  if (lower.endsWith(".png") && lower.includes("front_right")) base = ground ? "white_a_ground" : "white_a";
-  else if (lower.endsWith(".png") && lower.includes("back_left")) base = ground ? "white_b_ground" : "white_b";
+  if (lower.endsWith(".png") && lower.includes("front_right")) {
+    base = set ? "white_a_set" : ground ? "white_a_ground" : "white_a";
+  } else if (lower.endsWith(".png") && lower.includes("back_left")) {
+    base = set ? "white_b_set" : ground ? "white_b_ground" : "white_b";
+  }
   if (!base) return "";
   return card ? `${base}_card` : base;
 }
@@ -1269,10 +1273,14 @@ const STILL_FILE_KEYS = new Set([
   "white_b",
   "white_a_ground",
   "white_b_ground",
+  "white_a_set",
+  "white_b_set",
   "white_a_card",
   "white_b_card",
   "white_a_ground_card",
   "white_b_ground_card",
+  "white_a_set_card",
+  "white_b_set_card",
 ]);
 
 export function isWhiteFile(key: string, name: string): boolean {

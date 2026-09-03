@@ -55,6 +55,9 @@ def test_render_job_isolates_ground_pass_and_prefers_eevee_next():
     assert "ground pass failed" in source[except_at:finally_at]
     assert "set_product_holdout(model_objects, False)" in source[finally_at:]
     assert "ground.hide_render = True" in source[finally_at:]
+    assert "set pass failed" in source
+    assert 'job["outputs"].get(set_key)' in source
+    assert "def add_white_set" in source
     assert source.index("BLENDER_EEVEE_NEXT") < source.index('scene.render.engine = "BLENDER_EEVEE"')
     assert "def apply_eevee_shadows" in source
     assert "def enable_light_contact_shadows" in source
@@ -78,6 +81,12 @@ def test_ground_plane_size_covers_ortho_frustum():
     assert cam.ground_plane_size(240) == pytest.approx(600.0)
     assert cam.ground_plane_size(flower_scale) == pytest.approx(603.5)
     assert cam.ground_plane_size(400) == pytest.approx(1000.0)
+
+
+def test_white_set_wall_sits_behind_carton_inside_frustum():
+    cam = camera_frame()
+    assert cam.white_set_wall_y_mm(47.5, 241.4) == pytest.approx(max(47.5 / 2 + 8.0, 0.22 * 241.4))
+    assert cam.white_set_wall_y_mm(200.0, 80.0) == pytest.approx(108.0)
 
 
 def test_camera_fit_after_front_back_rotation():
@@ -655,8 +664,11 @@ def test_preflight_output_dicts_declare_optional_ground_keys():
     source = (PACKAGING / "pipeline.py").read_text(encoding="utf-8")
     assert source.count('"front_right_ground"') >= 2
     assert source.count('"back_left_ground"') >= 2
+    assert source.count('"front_right_set"') >= 2
+    assert source.count('"back_left_set"') >= 2
     required = (PACKAGING / "pipeline.py").read_text(encoding="utf-8")
     start = required.index("def all_output_files_exist")
     body = required[start : required.index("def main")]
     assert "front_right_ground" not in body
+    assert "front_right_set" not in body
     assert 'keys = ["blend", "glb", "front_right", "back_left"]' in body

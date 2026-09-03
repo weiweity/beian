@@ -70,6 +70,7 @@ V2 任务在产品项中写 `"structure_engine": "v2"`。显式 sidecar 可写 `
 - .glb：可旋转查看的通用 3D 文件；六个已确认面都通过贴图来源、方向、镜像和尺寸复核后才交付；
 - 正面/右侧面和背面/左侧面静帧（RGBA 产品层；棚走 EEVEE 阴影 + 接触阴影，只提亮产品和落影，不改盒子材质。磁盘文件要重新打样或加 `--force` 才会变；网页再套白底，下载图按当前灯光合成）；网页打样单下载白底只认这两张，不要把印刷面当白底；
 - 可选地面 pass：`front_right_ground.png` / `back_left_ground.png`（非发光灰平面阴影垫，albedo 约 0.91，不是木桌）。网页映射 `white_a_ground` / `white_b_ground`，canvas 铺 `rgb(228,228,232)` 再 multiply 地面、叠产品；`*_ground` 不能当产品静帧。地面 pass 失败时仍交付产品图；
+- 可选白墙白台 set pass：`front_right_set.png` / `back_left_set.png`（产品 holdout，白台+白墙）。网页映射 `white_a_set` / `white_b_set`。`white_set` 有 set 时画 set+产品，不再 CSS 墙、不再乘旧 ground；缺则回退 CSS。`*_set` 不能当产品静帧。set pass 失败不挡 `done`；
 - 可选核对卡：`*_card.png`（Blender 后最长边 1440，网页第一屏；坏了回退全图。不能当产品静帧，也不能当 `*_ground`）；
 - `assets/panel_{front,back,right,left,top,bottom}.png`：各面印刷图。网页打样单读字区用这些图，不是 GLB 截屏，也不是 3/4 白底静帧。已出图缺面时 `repair_print_faces.py` 走 V2 `render_face_assets` 写到 `.print-faces-tmp` 再原子替换，不跑 `pipeline.py` / Blender；
 - 打样单 PDF（两张白底一页，页底先铺白，槽按源图比例 contain。pymupdf 写不出且还没落盘再用已装的 Pillow，不另装包、不盖掉已写成的文件；跳过时没有，也不当失败）；

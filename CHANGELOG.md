@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.21.24.0] - 2026-09-03
+
+### Changed
+
+- 白桌白墙有 Blender 白台+白墙静帧时用那张棚，不再画 CSS 墙、也不再乘旧地面。没有这张图的旧单仍用原来的近似。
+
+### For contributors
+
+- 同一 `render_job` 多渲 `front_right_set` / `back_left_set`（产品 holdout）。失败不挡 `done`。`stillKeyFromName` 先认 `_set`，再 `_ground`，再产品。切背景仍不 enqueue。真金属地、木桌、膜袋 3D、涂层仍 hold。
+
 ## [0.21.23.0] - 2026-09-03
 
 ### Changed
