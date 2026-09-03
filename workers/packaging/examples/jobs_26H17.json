@@ -6,7 +6,7 @@
   "illustrator": {
     "enabled": true,
     "application": "/Applications/Adobe Illustrator 2026/Adobe Illustrator.app",
-    "timeout_seconds": 420
+    "timeout_seconds": 1260
   },
   "generate_ppt": true,
   "products": [

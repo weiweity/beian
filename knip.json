@@ -9,6 +9,7 @@
         "workers/packaging/ppt/build_product_ppt.mjs!",
         "workers/packaging/illustrator/export_ai.jsx!",
         "workers/packaging/illustrator/export_structure.jsx!",
+        "workers/packaging/illustrator/unattended_host.jsx!",
         "workers/packaging/illustrator/curve_flatten.js!",
         "workers/packaging/illustrator/runner_probe.jsx!"
       ],

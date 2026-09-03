@@ -16,6 +16,18 @@ $MaxRequestBytes = 65536
 $RequestReadTimeoutMs = 15000
 $HeartbeatIntervalMs = 5000
 $CleanupReserveMs = 30000
+$UnattendedStallMs = 60000
+$UnattendedSavingStallMs = 300000
+$UnattendedMaxJobMs = 900000
+$UnattendedOuterMs = 1260000
+$UnattendedKillForbiddenStages = @(
+  "opening",
+  "inventory",
+  "saving_full_pdf",
+  "saving_artwork_pdf",
+  "writing_result",
+  "closing"
+)
 $Utf8NoBom = [System.Text.UTF8Encoding]::new($false, $true)
 $Utf8Bom = [System.Text.UTF8Encoding]::new($true, $true)
 $FactoryKnifeLiteral = [string]([char]0x5200) + [char]0x7248
@@ -355,7 +367,7 @@ function Get-RemainingMilliseconds(
 
 function Get-RequestDeadline([object]$Request) {
   $timeoutMs = [Math]::Min(
-    600000,
+    $UnattendedOuterMs,
     [Math]::Max(30000, [int](Get-JsonProperty $Request "timeout_ms" $true))
   )
   $now = [DateTime]::UtcNow
@@ -517,6 +529,170 @@ function Convert-ProbeOutput([string]$Output) {
   }
 }
 
+function Test-KillForbiddenStage([string]$Stage) {
+  return [bool]($UnattendedKillForbiddenStages -contains $Stage)
+}
+
+function Read-JobSidecar([string]$Path, [string]$AttemptId) {
+  if (-not $Path -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
+  try {
+    $raw = [System.IO.File]::ReadAllText($Path, $Utf8NoBom)
+    if (-not $raw.Trim()) { return $null }
+    $json = $raw | ConvertFrom-Json
+    if ($AttemptId -and [string]$json.attempt_id -ne $AttemptId) { return $null }
+    return $json
+  } catch {
+    return $null
+  }
+}
+
+function Get-JobProgressPath([object]$Config) {
+  $debugLog = [string](Get-JsonProperty $Config "debug_log")
+  if (-not $debugLog) { return "" }
+  return Join-Path ([System.IO.Path]::GetDirectoryName($debugLog)) "illustrator_progress.json"
+}
+
+function Invoke-JobCscript(
+  [string]$RuntimePath,
+  [object]$Config,
+  [DateTime]$OuterDeadline
+) {
+  if (-not (Test-Path -LiteralPath $CscriptPath -PathType Leaf)) {
+    Throw-AgentFailure "illustrator_bridge_missing" "cscript.exe was not found"
+  }
+  if (-not (Test-Path -LiteralPath $RunnerPath -PathType Leaf)) {
+    Throw-AgentFailure "illustrator_bridge_missing" "run_export.vbs was not found"
+  }
+  $attemptId = [string](Get-JsonProperty $Config "attempt_id" $true)
+  $resultPath = [string](Get-JsonProperty $Config "result_json" $true)
+  $progressPath = Get-JobProgressPath $Config
+  $jobStarted = [DateTime]::UtcNow
+  $allArguments = @("//Nologo", $RunnerPath, "run", $RuntimePath)
+  $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+  $startInfo.FileName = $CscriptPath
+  $startInfo.Arguments = (($allArguments | ForEach-Object { ConvertTo-CommandLineArgument ([string]$_) }) -join " ")
+  $startInfo.UseShellExecute = $false
+  $startInfo.CreateNoWindow = $true
+  $startInfo.RedirectStandardOutput = $true
+  $startInfo.RedirectStandardError = $true
+  $startInfo.StandardOutputEncoding = [System.Text.Encoding]::Default
+  $startInfo.StandardErrorEncoding = [System.Text.Encoding]::Default
+  $process = New-Object System.Diagnostics.Process
+  $process.StartInfo = $startInfo
+  $processStarted = $false
+  $exitProven = $false
+  $allowKill = $false
+  try {
+    if (-not $process.Start()) {
+      Throw-AgentFailure "illustrator_bridge_failed" "cscript.exe did not start"
+    }
+    $processStarted = $true
+    $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+    $stderrTask = $process.StandardError.ReadToEndAsync()
+    $finished = $false
+    while (-not $finished) {
+      $progress = Read-JobSidecar $progressPath $attemptId
+      $result = Read-JobSidecar $resultPath $attemptId
+      $stage = if ($progress) { [string]$progress.stage } else { "" }
+      $progressAgeMs = $null
+      if ($progress -and $progress.updated_at) {
+        try {
+          $updated = [DateTimeOffset]::Parse([string]$progress.updated_at).UtcDateTime
+          $progressAgeMs = [int]([DateTime]::UtcNow - $updated).TotalMilliseconds
+        } catch { $progressAgeMs = $null }
+      }
+      $elapsedMs = [int]([DateTime]::UtcNow - $jobStarted).TotalMilliseconds
+      $hasResult = [bool]$result
+      if (Test-KillForbiddenStage $stage) {
+        # saving_full_pdf / saving_artwork_pdf / writing_result: forbid Kill
+        $allowKill = $false
+      } elseif ($hasResult) {
+        $allowKill = [bool]($null -ne $progressAgeMs -and $progressAgeMs -ge $UnattendedStallMs)
+      } elseif (
+        ($null -ne $progressAgeMs -and $progressAgeMs -ge $UnattendedStallMs) -or
+        $elapsedMs -ge $UnattendedMaxJobMs
+      ) {
+        $allowKill = $true
+      } else {
+        $allowKill = $false
+      }
+      $sliceMs = 2000
+      if ($allowKill) { break }
+      $finished = $process.WaitForExit($sliceMs)
+      if (-not $finished) { Write-Heartbeat "busy" }
+    }
+    if (-not $finished) {
+      $progress = Read-JobSidecar $progressPath $attemptId
+      $stage = if ($progress) { [string]$progress.stage } else { "" }
+      if (Test-KillForbiddenStage $stage) {
+        $allowKill = $false
+      }
+      if ($allowKill -and -not $process.HasExited) { $process.Kill() }
+      if ($allowKill) {
+        if (-not $process.WaitForExit(5000)) {
+          Throw-AgentFailure "illustrator_recovery_failed" "Timed-out cscript.exe did not exit after termination"
+        }
+      } else {
+        while (-not $process.HasExited) {
+          Write-Heartbeat "busy"
+          [void]$process.WaitForExit(2000)
+          $progress = Read-JobSidecar $progressPath $attemptId
+          $stage = if ($progress) { [string]$progress.stage } else { "" }
+          if (-not (Test-KillForbiddenStage $stage) -and $allowKill) { break }
+        }
+        if (-not $process.HasExited -and -not (Test-KillForbiddenStage $stage) -and $allowKill) {
+          $process.Kill()
+          if (-not $process.WaitForExit(5000)) {
+            Throw-AgentFailure "illustrator_recovery_failed" "Timed-out cscript.exe did not exit after termination"
+          }
+        }
+        if (-not $process.HasExited) {
+          $exitProven = $true
+          return [PSCustomObject]@{
+            ExitCode = -1
+            Stdout = ""
+            Stderr = ""
+            TimedOut = $true
+            LeftRunning = $true
+          }
+        }
+      }
+    }
+    $exitProven = $true
+    $process.WaitForExit()
+    $stdout = Get-Tail ([string]$stdoutTask.Result)
+    $stderr = Get-Tail ([string]$stderrTask.Result)
+    $exitCode = if ($finished) { [int]$process.ExitCode } else { -1 }
+    return [PSCustomObject]@{
+      ExitCode = $exitCode
+      Stdout = $stdout.Trim()
+      Stderr = $stderr.Trim()
+      TimedOut = (-not $finished)
+      LeftRunning = $false
+    }
+  } finally {
+    if ($processStarted -and -not $exitProven) {
+      $progress = Read-JobSidecar $progressPath $attemptId
+      $stage = if ($progress) { [string]$progress.stage } else { "" }
+      $cleanupProven = $true
+      try {
+        if (-not (Test-KillForbiddenStage $stage) -and -not $process.HasExited) {
+          $process.Kill()
+          $cleanupProven = $process.WaitForExit(5000)
+        }
+      } catch {
+        $cleanupProven = $false
+      }
+      $process.Dispose()
+      if (-not $cleanupProven -and -not (Test-KillForbiddenStage $stage)) {
+        Throw-AgentFailure "illustrator_recovery_failed" "cscript.exe could not be terminated safely after an agent-side failure"
+      }
+    } else {
+      $process.Dispose()
+    }
+  }
+}
+
 function Invoke-BridgeProbe([DateTime]$Deadline, [int]$ReserveMs = 0) {
   $probe = Invoke-Cscript @("probe") $Deadline $ReserveMs
   if ($probe.TimedOut) {
@@ -594,15 +770,29 @@ function Bind-RuntimeJsx([string]$ExporterPath, [string]$ConfigPath) {
   $runtimePath = Join-Path ([System.IO.Path]::GetDirectoryName($ConfigPath)) (([System.IO.Path]::GetFileNameWithoutExtension($ExporterPath)) + ".runtime.jsx")
   $configLiteral = ConvertTo-Json ([string]$ConfigPath) -Compress
   $source = [System.IO.File]::ReadAllText($ExporterPath, $Utf8NoBom)
-  if ([System.IO.Path]::GetFileName($ExporterPath) -eq "export_structure.jsx") {
-    $include = '#include "curve_flatten.js"'
-    $matches = [regex]::Matches($source, [regex]::Escape($include))
-    $helperPath = Join-Path $ExporterRoot "curve_flatten.js"
-    if ($matches.Count -ne 1 -or -not (Test-Path -LiteralPath $helperPath -PathType Leaf)) {
-      Throw-AgentFailure "illustrator_bridge_missing" "fixed curve helper binding was not found"
+  $fileName = [System.IO.Path]::GetFileName($ExporterPath)
+  $includes = @()
+  if ($fileName -eq "export_structure.jsx" -or $fileName -eq "export_ai.jsx") {
+    $includes += [ordered]@{
+      needle = '#include "unattended_host.jsx"'
+      path = Join-Path $ExporterRoot "unattended_host.jsx"
+      missing = "fixed unattended host binding was not found"
     }
-    $helper = [System.IO.File]::ReadAllText($helperPath, $Utf8NoBom)
-    $source = $source.Replace($include, $helper)
+  }
+  if ($fileName -eq "export_structure.jsx") {
+    $includes += [ordered]@{
+      needle = '#include "curve_flatten.js"'
+      path = Join-Path $ExporterRoot "curve_flatten.js"
+      missing = "fixed curve helper binding was not found"
+    }
+  }
+  foreach ($item in $includes) {
+    $matches = [regex]::Matches($source, [regex]::Escape([string]$item.needle))
+    if ($matches.Count -ne 1 -or -not (Test-Path -LiteralPath ([string]$item.path) -PathType Leaf)) {
+      Throw-AgentFailure "illustrator_bridge_missing" ([string]$item.missing)
+    }
+    $helper = [System.IO.File]::ReadAllText([string]$item.path, $Utf8NoBom)
+    $source = $source.Replace([string]$item.needle, $helper)
   }
   $source = "var PIPELINE_CONFIG_PATH = $configLiteral;`n" + $source
   Write-Utf8BomFile $runtimePath $source
@@ -611,6 +801,19 @@ function Bind-RuntimeJsx([string]$ExporterPath, [string]$ConfigPath) {
     Throw-AgentFailure "illustrator_bridge_failed" "Illustrator runtime JSX is missing UTF-8 BOM"
   }
   return $runtimePath
+}
+
+function Stop-MatchingIllustrator([string]$Executable, [DateTime]$Deadline) {
+  $items = @(Get-SessionIllustratorProcesses $Executable | Where-Object { $_.matches_executable })
+  foreach ($item in $items) {
+    try { Stop-Process -Id ([int]$item.pid) -Force -ErrorAction Stop } catch { }
+  }
+  while ([DateTime]::UtcNow -lt $Deadline) {
+    Write-Heartbeat "busy"
+    $left = @(Get-SessionIllustratorProcesses $Executable | Where-Object { $_.matches_executable })
+    if ($left.Count -eq 0) { return }
+    Start-Sleep -Milliseconds 500
+  }
 }
 
 function Restore-OwnedDocumentState(
@@ -668,12 +871,48 @@ function Invoke-RunRequest([object]$Request, [DateTime]$Deadline) {
   $exporterName = if ($exporter -eq "structure") { "export_structure.jsx" } else { "export_ai.jsx" }
   $runtimePath = Bind-RuntimeJsx (Join-Path $ExporterRoot $exporterName) $configPath
   $sourcePath = [string](Get-JsonProperty $config "source_ai" $true)
-  $run = Invoke-Cscript @("run", $runtimePath) $Deadline $CleanupReserveMs
-  if ($run.TimedOut) {
-    Restore-OwnedDocumentState $sourcePath $Deadline "illustrator_timeout" | Out-Null
+  $attemptId = [string](Get-JsonProperty $config "attempt_id" $true)
+  $resultPath = [string](Get-JsonProperty $config "result_json" $true)
+  $progressPath = Get-JobProgressPath $config
+  $run = Invoke-JobCscript $runtimePath $config $Deadline
+  $jobResult = Read-JobSidecar $resultPath $attemptId
+  $progress = Read-JobSidecar $progressPath $attemptId
+  $stage = if ($progress) { [string]$progress.stage } else { "" }
+  $thisAttemptSucceeded = [bool]($jobResult -and $jobResult.success -eq $true)
+  if ($thisAttemptSucceeded) {
+    if ($run.LeftRunning) {
+      Throw-AgentFailure "illustrator_timeout" "Illustrator JSX is still running after writing this attempt's result"
+    }
+  } elseif ($run.TimedOut -or $run.LeftRunning) {
+    if (Test-KillForbiddenStage $stage -or $run.LeftRunning) {
+      Throw-AgentFailure "illustrator_timeout" "Illustrator JSX execution timed out"
+    }
+    try {
+      Restore-OwnedDocumentState $sourcePath $Deadline "illustrator_timeout" | Out-Null
+    } catch {
+      $recoveryCode = [string]$_.Exception.Data["AgentCode"]
+      if ($recoveryCode -eq "illustrator_recovery_failed") {
+        Stop-MatchingIllustrator $executable $Deadline
+        $restarted = Ensure-Illustrator $executable $Deadline 0
+        if ([int]$restarted.document_count -eq 0) {
+          if ($thisAttemptSucceeded) {
+            return [ordered]@{
+              illustrator_version = [string]$probe.illustrator_version
+              warmup_elapsed_ms = [int]$probe.warmup_elapsed_ms
+              document_count = 0
+              documents = @()
+              session_id = $AgentSessionId
+              window_title = [string](@($probe.processes | Where-Object { $_.window_handle -ne 0 })[0].window_title)
+            }
+          }
+          Throw-AgentFailure "illustrator_timeout" "Illustrator JSX execution timed out"
+        }
+      }
+      throw
+    }
     Throw-AgentFailure "illustrator_timeout" "Illustrator JSX execution timed out"
   }
-  if ($run.ExitCode -ne 0) {
+  if ($run.ExitCode -ne 0 -and -not $thisAttemptSucceeded) {
     if ($run.ExitCode -eq 12) {
       $blocked = Invoke-BridgeProbe $Deadline $CleanupReserveMs
       Throw-AgentFailure "illustrator_documents_open" "Illustrator has open documents" @{
@@ -686,21 +925,32 @@ function Invoke-RunRequest([object]$Request, [DateTime]$Deadline) {
       diagnostic = ($run.Stderr + " " + $run.Stdout).Trim()
     }
   }
+  if ($thisAttemptSucceeded) {
+    $Deadline = [DateTime]::UtcNow.AddSeconds(60)
+  }
   try {
     $after = Invoke-BridgeProbe $Deadline $CleanupReserveMs
   } catch {
     $original = $_.Exception
     $originalCode = [string]$original.Data["AgentCode"]
     if ($originalCode -eq "illustrator_recovery_failed") {
-      # The bridge process may still own COM. Do not launch close-owned or any
-      # second cscript; let the outer request keep the fault fence armed.
       throw
     }
     Restore-OwnedDocumentState $sourcePath $Deadline "illustrator_agent_protocol_error" | Out-Null
     throw $original
   }
   if ([int]$after.document_count -ne 0) {
-    $after = Restore-OwnedDocumentState $sourcePath $Deadline "illustrator_documents_open"
+    try {
+      $after = Restore-OwnedDocumentState $sourcePath $Deadline "illustrator_documents_open"
+    } catch {
+      Stop-MatchingIllustrator $executable $Deadline
+      $restarted = Ensure-Illustrator $executable $Deadline 0
+      if ([int]$restarted.document_count -eq 0) {
+        $after = $restarted
+      } else {
+        throw
+      }
+    }
   }
   $after["processes"] = @(Get-SessionIllustratorProcesses $executable)
   Assert-IllustratorProcessIdentity @($after.processes) $executable
