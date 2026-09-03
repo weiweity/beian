@@ -370,3 +370,28 @@ export async function confirmPackagingStructure(opts: ConfirmPackagingStructureO
     timeoutMs: 30_000,
   });
 }
+
+export type PrintFaceRepairOpts = {
+  jobDir: string;
+  artwork: string;
+  resolved: string;
+  assets: string;
+};
+
+export async function runPrintFaceRepair(opts: PrintFaceRepairOpts): Promise<RunPythonResult> {
+  return runPython({
+    args: [
+      "repair_print_faces.py",
+      "--job-dir",
+      opts.jobDir,
+      "--artwork",
+      opts.artwork,
+      "--resolved",
+      opts.resolved,
+      "--assets",
+      opts.assets,
+    ],
+    cwd: PACKAGING,
+    timeoutMs: 60_000,
+  });
+}

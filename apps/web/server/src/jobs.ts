@@ -14,6 +14,8 @@ import {
   loadMockup,
   mockupStoreSnapshot,
   prepareStructureConfirmation,
+  printFaceRepairSource,
+  requiredPrintFacesReady,
   resetMockupCache,
   resetMockupForRetry,
   saveMockup,
@@ -42,6 +44,7 @@ import {
   preflightPackaging,
   reworkTask,
   runPackaging,
+  runPrintFaceRepair,
   type RunPythonResult,
   type WorkerProcessIdentity,
   type WorkerProcessState,
@@ -102,6 +105,8 @@ type Slot = "ocr" | "blender" | "illustrator";
 
 const live: Record<Slot, string | null> = { ocr: null, blender: null, illustrator: null };
 const activeMockupRetries = new Set<string>();
+const printFaceRepairJobs = new Set<string>();
+let printFaceRepairBusy: string | null = null;
 
 export type JobsTestHooks = {
   runCompare?: typeof compareTask;
@@ -109,6 +114,7 @@ export type JobsTestHooks = {
   runPack?: typeof runPackaging;
   runStructure?: typeof preflightPackaging;
   confirmStructure?: typeof confirmPackagingStructure;
+  runPrintFaceRepair?: typeof runPrintFaceRepair;
   runRaster?: (opts: { source: string; outDir: string }) => Promise<{ ok: boolean; png?: string; message: string }>;
   notify?: typeof notifyJobFinished;
   killTree?: typeof killTree;
@@ -121,6 +127,7 @@ const TEST_MOCKUP_STOP: JobsTestHooks = {
   runPack: async () => ({ code: 1, stdout: "", stderr: "test stop", timedOut: false }),
   runRaster: async () => ({ ok: false, message: "test stop" }),
   confirmStructure: async () => ({ code: 1, stdout: "", stderr: "test stop", timedOut: false }),
+  runPrintFaceRepair: async () => ({ code: 1, stdout: "", stderr: "test stop", timedOut: false }),
 };
 
 function testHooks(overrides: JobsTestHooks = {}): JobsTestHooks {
@@ -139,7 +146,14 @@ export function resetJobsTestHooks(): void {
   live.ocr = null;
   live.blender = null;
   live.illustrator = null;
+  printFaceRepairJobs.clear();
+  printFaceRepairBusy = null;
   resetMockupCache();
+}
+
+export function setJobsLiveForTest(slot: Slot, id: string | null): void {
+  if (process.env.VITEST !== "1") throw new Error("作业槽测试钩子只能在 VITEST 使用");
+  live[slot] = id;
 }
 
 export function notificationSnapshot(): { active: number } {
@@ -252,6 +266,57 @@ export function retryMockup(id: string, viewer: Viewer): MockupJob {
     return next;
   } finally {
     activeMockupRetries.delete(id);
+  }
+}
+
+function persistPrintFaceFiles(job: MockupJob): MockupJob {
+  job.files = collectOutputs(join(DATA_DIR, "mockups", job.id));
+  saveMockup(job);
+  return job;
+}
+
+export async function repairMockupPrintFaces(id: string, viewer: Viewer): Promise<MockupJob> {
+  const job = loadMockup(id);
+  if (!job) throw Object.assign(new Error("没有这单打样"), { status: 404 });
+  assertCanManageMockup(job, viewer);
+  if (live.blender === id || job.status === "queued" || job.status === "running") {
+    throw Object.assign(new Error("出图还在跑，现在不能补切面。"), { status: 409 });
+  }
+  if (job.status !== "done") {
+    throw Object.assign(new Error("只有已出图的纸盒才能补印刷面。"), { status: 409 });
+  }
+  if (printFaceRepairJobs.has(id)) {
+    throw Object.assign(new Error("正在切，不要重复点。"), { status: 409 });
+  }
+  if (printFaceRepairBusy) {
+    throw Object.assign(new Error("前面还有切面在跑，请稍后再试。"), { status: 429 });
+  }
+  if (requiredPrintFacesReady(id)) {
+    return persistPrintFaceFiles(job);
+  }
+  const source = printFaceRepairSource(job);
+  if (!source) {
+    throw Object.assign(new Error("这单没有可用底稿，无法补生成。请重新打样。"), { status: 409 });
+  }
+  printFaceRepairJobs.add(id);
+  printFaceRepairBusy = id;
+  try {
+    const run = hooks.runPrintFaceRepair || runPrintFaceRepair;
+    const result = await run(source);
+    if (result.timedOut) {
+      throw Object.assign(new Error("切面超时，请稍后再试。"), { status: 409 });
+    }
+    if (result.code !== 0 || !requiredPrintFacesReady(id)) {
+      throw Object.assign(new Error("切面失败，请稍后再试。"), { status: 409 });
+    }
+    const fresh = loadMockup(id);
+    if (!fresh) throw Object.assign(new Error("没有这单打样"), { status: 404 });
+    fresh.status = "done";
+    fresh.job_status = "succeeded";
+    return persistPrintFaceFiles(fresh);
+  } finally {
+    printFaceRepairJobs.delete(id);
+    if (printFaceRepairBusy === id) printFaceRepairBusy = null;
   }
 }
 

@@ -2,6 +2,16 @@ export const STUDIO_LIGHT_MIN = 0.6;
 export const STUDIO_LIGHT_MAX = 1.4;
 export const STUDIO_LIGHT_DEFAULT = 1;
 export const STUDIO_GROUND_FILL = "rgb(228, 228, 232)";
+export const BACKDROP_PRESETS = ["white", "silver", "white_set"] as const;
+export type BackdropPreset = (typeof BACKDROP_PRESETS)[number];
+export const BACKDROP_DEFAULT: BackdropPreset = "white_set";
+export const BACKDROP_LABEL: Record<BackdropPreset, string> = {
+  white: "白底",
+  silver: "银底",
+  white_set: "白桌白墙",
+};
+const BACKDROP_STORAGE_KEY = "beian.mockup.backdrop";
+const WHITE_SET_HORIZON = 0.58;
 
 export function clampStudioLight(value: number): number {
   if (!Number.isFinite(value)) return STUDIO_LIGHT_DEFAULT;
@@ -17,10 +27,75 @@ export function glbExposure(light: number): string {
   return String(Math.round(0.9 * clampStudioLight(light) * 100) / 100);
 }
 
-/** 0.6 灰底 → 1.0 及更亮为纯白。透明产品层叠在这层上面。 */
-export function studioBackdrop(light: number): string {
+export function parseBackdropPreset(value: unknown): BackdropPreset {
+  return value === "white" || value === "silver" || value === "white_set" ? value : BACKDROP_DEFAULT;
+}
+
+export function readBackdropPreset(): BackdropPreset {
+  try {
+    if (typeof localStorage === "undefined") return BACKDROP_DEFAULT;
+    return parseBackdropPreset(localStorage.getItem(BACKDROP_STORAGE_KEY));
+  } catch {
+    return BACKDROP_DEFAULT;
+  }
+}
+
+export function writeBackdropPreset(preset: BackdropPreset): void {
+  try {
+    if (typeof localStorage === "undefined") return;
+    localStorage.setItem(BACKDROP_STORAGE_KEY, preset);
+  } catch {
+    /* quota / private mode */
+  }
+}
+
+export function usesContactShadow(preset: BackdropPreset): boolean {
+  return preset === "white_set";
+}
+
+export function backdropFrameClass(preset: BackdropPreset): string {
+  if (preset === "silver") return "is-backdrop-silver";
+  if (preset === "white_set") return "is-backdrop-white-set";
+  return "is-backdrop-white";
+}
+
+function litChannel(base: number, light: number): number {
+  return Math.round(Math.min(255, Math.max(0, base * clampStudioLight(light))));
+}
+
+function silverFill(light: number): string {
+  return `rgb(${litChannel(196, light)}, ${litChannel(201, light)}, ${litChannel(208, light)})`;
+}
+
+function whiteSetWallFill(light: number): string {
+  return `rgb(${litChannel(245, light)}, ${litChannel(245, light)}, ${litChannel(243, light)})`;
+}
+
+/** 白底：0.6 灰 → 1.0 及更亮为纯白。银底浅银。白桌白墙用台面灰，墙面另画。 */
+export function studioBackdrop(light: number, preset: BackdropPreset = "white"): string {
+  if (preset === "silver") return silverFill(light);
+  if (preset === "white_set") {
+    return `rgb(${litChannel(228, light)}, ${litChannel(228, light)}, ${litChannel(232, light)})`;
+  }
   const value = Math.round(255 * Math.min(1, clampStudioLight(light)));
   return `rgb(${value}, ${value}, ${value})`;
+}
+
+function paintStudioSet(
+  ctx: CanvasRenderingContext2D,
+  destW: number,
+  destH: number,
+  preset: BackdropPreset,
+  backgroundLight: number,
+): void {
+  ctx.fillStyle = studioBackdrop(backgroundLight, preset);
+  ctx.fillRect(0, 0, destW, destH);
+  if (preset !== "white_set" || destH <= 0) return;
+  const horizon = Math.round(destH * WHITE_SET_HORIZON);
+  ctx.fillStyle = whiteSetWallFill(backgroundLight);
+  ctx.fillRect(0, 0, destW, horizon);
+  ctx.fillStyle = "rgba(40, 24, 56, 0.12)";
+  ctx.fillRect(0, horizon, destW, Math.max(1, Math.round(destH * 0.004)));
 }
 
 export function jobHasGround(files: Array<{ key: string }> | undefined): boolean {
@@ -75,6 +150,7 @@ export type ComposeStudioOpts = {
   productLight: number;
   backgroundLight: number;
   filterSupported?: boolean;
+  backdrop?: BackdropPreset;
 };
 
 export function composeStudioStill(
@@ -85,7 +161,8 @@ export function composeStudioStill(
   ground: SizedSource | null,
   opts: ComposeStudioOpts,
 ): void {
-  // STUDIO_GROUND_FILL → multiply ground matte → product; contain, never cover.
+  // Backdrop fill → optional wall/table → multiply ground matte → product; contain, never cover.
+  const preset = parseBackdropPreset(opts.backdrop ?? BACKDROP_DEFAULT);
   const productSize = product ? sourceSize(product) : { width: 0, height: 0 };
   const groundSize = ground ? sourceSize(ground) : { width: 0, height: 0 };
   const srcW = productSize.width || groundSize.width;
@@ -94,9 +171,8 @@ export function composeStudioStill(
   ctx.save();
   ctx.filter = "none";
   ctx.globalCompositeOperation = "source-over";
-  ctx.fillStyle = STUDIO_GROUND_FILL;
-  ctx.fillRect(0, 0, destW, destH);
-  if (ground && groundSize.width && groundSize.height) {
+  paintStudioSet(ctx, destW, destH, preset, opts.backgroundLight);
+  if (usesContactShadow(preset) && ground && groundSize.width && groundSize.height) {
     const background = clampStudioLight(opts.backgroundLight);
     if (background !== STUDIO_LIGHT_DEFAULT && opts.filterSupported !== false) {
       ctx.filter = `brightness(${background})`;
@@ -147,7 +223,7 @@ export function canvasFilterSupported(ctx: CanvasRenderingContext2D): boolean {
 
 export async function blobFromLitStill(
   image: SizedSource,
-  opts: { productLight: number; backgroundLight: number },
+  opts: { productLight: number; backgroundLight: number; backdrop?: BackdropPreset },
 ): Promise<Blob> {
   const width = Number(image.naturalWidth || image.width || 0);
   const height = Number(image.naturalHeight || image.height || 0);
@@ -157,10 +233,10 @@ export async function blobFromLitStill(
   canvas.height = height;
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("这台浏览器不能导出白底图");
-  ctx.fillStyle = studioBackdrop(opts.backgroundLight);
-  ctx.fillRect(0, 0, width, height);
-  ctx.filter = stillsFilter(opts.productLight);
-  ctx.drawImage(image as CanvasImageSource, 0, 0, width, height);
+  composeStudioStill(ctx, width, height, image, null, {
+    ...opts,
+    filterSupported: canvasFilterSupported(ctx),
+  });
   return await new Promise((resolve, reject) => {
     canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error("导出失败"))), "image/png");
   });
@@ -191,7 +267,7 @@ export function loadStillImage(url: string): Promise<HTMLImageElement> {
 export async function blobFromStudioStill(
   product: SizedSource,
   ground: SizedSource | null,
-  opts: { productLight: number; backgroundLight: number },
+  opts: { productLight: number; backgroundLight: number; backdrop?: BackdropPreset },
 ): Promise<Blob> {
   const width = Number(product.naturalWidth || product.width || 0);
   const height = Number(product.naturalHeight || product.height || 0);

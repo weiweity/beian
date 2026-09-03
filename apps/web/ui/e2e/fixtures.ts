@@ -58,6 +58,7 @@ export type SyntheticMockup = {
   job_stage?: string;
   job_stage_label?: string;
   queue_ahead?: number;
+  can_repair_print_faces?: boolean;
   structure_status?: "analyzing" | "review_required" | "unsupported" | "ready";
   structure_code?: string;
   structure_message?: string;
@@ -555,6 +556,7 @@ async function installSyntheticApi(page: Page, state: SyntheticApi) {
 
       const mockupPath = path.match(/^\/api\/mockups\/([0-9a-f]{12})$/);
       const retryPath = path.match(/^\/api\/mockups\/([0-9a-f]{12})\/retry$/);
+      const printFacesPath = path.match(/^\/api\/mockups\/([0-9a-f]{12})\/print-faces$/);
       const structureInputPath = path.match(/^\/api\/mockups\/([0-9a-f]{12})\/structure\/input$/);
       const structurePath = path.match(/^\/api\/mockups\/([0-9a-f]{12})\/structure$/);
       if (retryPath && method === "POST") {
@@ -566,6 +568,25 @@ async function installSyntheticApi(page: Page, state: SyntheticApi) {
         mockup.status = "queued";
         mockup.job_status = "queued";
         mockup.error = undefined;
+        return json(route, mockup);
+      }
+      if (printFacesPath && method === "POST") {
+        const mockup = state.mockups.find((item) => item.id === printFacesPath[1]);
+        if (!mockup) return json(route, { detail: "合成打样不存在" }, 404);
+        if (mockup.status !== "done") return json(route, { detail: "只有已出图的纸盒才能补印刷面。" }, 409);
+        if (!mockup.can_repair_print_faces) {
+          return json(route, { detail: "这单没有可用底稿，无法补生成。请重新打样。" }, 409);
+        }
+        const nextFiles = [...(mockup.files || [])];
+        for (const face of ["front", "back", "left", "right"] as const) {
+          const key = `read_${face}`;
+          if (!nextFiles.some((file) => file.key === key)) {
+            nextFiles.push({ key, name: `panel_${face}.png` });
+          }
+        }
+        mockup.files = nextFiles;
+        mockup.can_repair_print_faces = false;
+        mockup.status = "done";
         return json(route, mockup);
       }
       if (structureInputPath && method === "POST") {
