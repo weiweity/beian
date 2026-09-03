@@ -69,7 +69,7 @@ V2 任务在产品项中写 `"structure_engine": "v2"`。显式 sidecar 可写 `
 - .blend：可编辑 Blender 文件；
 - .glb：可旋转查看的通用 3D 文件；六个已确认面都通过贴图来源、方向、镜像和尺寸复核后才交付；
 - 正面/右侧面和背面/左侧面静帧（RGBA 产品层；棚只提亮产品和接触阴影，不改盒子材质。磁盘文件要重新打样或加 `--force` 才会变；网页再套白底，下载图按当前灯光合成）；网页打样单下载白底只认这两张，不要把印刷面当白底；
-- 可选地面 pass：`front_right_ground.png` / `back_left_ground.png`（非发光灰平面阴影垫，不是木桌）。网页映射 `white_a_ground` / `white_b_ground`，canvas 铺 `rgb(242,242,244)` 再 multiply 地面、叠产品；`*_ground` 不能当产品静帧。地面 pass 失败时仍交付产品图；
+- 可选地面 pass：`front_right_ground.png` / `back_left_ground.png`（非发光灰平面阴影垫，不是木桌）。网页映射 `white_a_ground` / `white_b_ground`，canvas 铺 `rgb(228,228,232)` 再 multiply 地面、叠产品；`*_ground` 不能当产品静帧。地面 pass 失败时仍交付产品图；
 - `assets/panel_{front,back,right,left,top,bottom}.png`：各面印刷图。网页打样单读字区用这些图，不是 GLB 截屏，也不是 3/4 白底静帧；
 - 打样单 PDF（两张白底一页，页底先铺白，槽按源图比例 contain。pymupdf 写不出且还没落盘再用已装的 Pillow，不另装包、不盖掉已写成的文件；跳过时没有，也不当失败）；
 - 独立 .pptx（一页两张白底：正面+侧面、反面+侧面；先写 OOXML，不依赖 Node。跳过 PPT 时没有这一项，也不当失败）；
