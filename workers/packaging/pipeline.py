@@ -42,6 +42,7 @@ STRUCTURE_INPUT_CANDIDATES_SCHEMA = "packaging-structure-input-candidates/2"
 STRUCTURE_INPUT_PREVIEW_SCHEMA = "illustrator-layer-preview/1"
 ROOT = Path(__file__).resolve().parent
 BLENDER_SCRIPT = ROOT / "blender" / "render_job.py"
+CAMERA_FRAME = ROOT / "camera_frame.py"
 PPT_SCRIPT = ROOT / "ppt" / "build_product_ppt.mjs"
 ILLUSTRATOR_WORKER = ROOT / "illustrator" / "illustrator_worker.py"
 ILLUSTRATOR_JSX = ROOT / "illustrator" / "export_ai.jsx"
@@ -486,6 +487,7 @@ def job_fingerprint(
     for pipeline_file in (
         Path(__file__).resolve(),
         BLENDER_SCRIPT,
+        CAMERA_FRAME,
         PPT_SCRIPT,
         ILLUSTRATOR_WORKER,
         ILLUSTRATOR_JSX,
@@ -1546,7 +1548,12 @@ def write_review_cards(job: dict[str, Any]) -> None:
         if not source.is_file():
             continue
         dest = source.with_name(f"{source.stem}_card.png")
-        write_review_card(source, dest)
+        try:
+            write_review_card(source, dest)
+        except Exception:
+            if src_key.endswith("_ground") or src_key.endswith("_set"):
+                continue
+            raise
         outputs[dest_key] = str(dest)
 
 

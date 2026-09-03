@@ -6,9 +6,14 @@
 
 - 白桌白墙有 Blender 白台+白墙静帧时用那张棚，不再画 CSS 墙、也不再乘旧地面。没有这张图的旧单仍用原来的近似。
 
+### Fixed
+
+- 文件名里带 `gift_set` 这类词时，不会再把产品图当成白台白墙静帧。
+- 白台白墙那一趟渲染失败时删掉残文件，避免成片用到半截图。
+
 ### For contributors
 
-- 同一 `render_job` 多渲 `front_right_set` / `back_left_set`（产品 holdout）。失败不挡 `done`。`stillKeyFromName` 先认 `_set`，再 `_ground`，再产品。切背景仍不 enqueue。真金属地、木桌、膜袋 3D、涂层仍 hold。
+- 同一 `render_job` 多渲 `front_right_set` / `back_left_set`（产品 holdout）。失败不挡 `done`，并 `unlink` 残 PNG。`stillKeyFromName` 只认 `front_right_set` / `back_left_set` 后缀，slug 里的 `_set` 不算。`write_review_cards` 对 ground/set 卡解码失败不打红整单。`job_fingerprint` 含 `camera_frame.py`。切背景仍不 enqueue。真金属地、木桌、膜袋 3D、涂层仍 hold。
 
 ## [0.21.23.0] - 2026-09-03
 

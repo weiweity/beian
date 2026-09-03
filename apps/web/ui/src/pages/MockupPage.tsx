@@ -1619,23 +1619,21 @@ function GroundedShot({
     setReady(false);
     let cancelled = false;
     void (async () => {
+      let product: PreviewSource | null = null;
+      let ground: PreviewSource | null = null;
+      let set: PreviewSource | null = null;
       try {
-        const [product, ground] = await Promise.all([
+        const setKey = stillSetKey(fileKey);
+        [product, ground, set] = await Promise.all([
           previewStill(jobId, files, fileKey, destW, destH),
           previewStill(jobId, files, groundKey, destW, destH),
+          jobHasSet(files, fileKey)
+            ? previewStill(jobId, files, setKey, destW, destH).catch(() => null)
+            : Promise.resolve(null),
         ]);
         void loadStillImage(fileHref(jobId, fileKey));
         void loadStillImage(fileHref(jobId, groundKey));
-        let set: PreviewSource | null = null;
-        const setKey = stillSetKey(fileKey);
-        if (jobHasSet(files, fileKey)) {
-          try {
-            set = await previewStill(jobId, files, setKey, destW, destH);
-            void loadStillImage(fileHref(jobId, setKey));
-          } catch {
-            set = null;
-          }
-        }
+        if (set) void loadStillImage(fileHref(jobId, setKey));
         if (cancelled) {
           closePreviewSource(product);
           closePreviewSource(ground);
@@ -1648,6 +1646,9 @@ function GroundedShot({
         previewRef.current = { product, ground, set };
         setReady(true);
       } catch {
+        closePreviewSource(product);
+        closePreviewSource(ground);
+        closePreviewSource(set);
         if (!cancelled) setBad(true);
       }
     })();
@@ -1694,18 +1695,14 @@ function GroundedShot({
     if (!ready || exporting.current) return;
     exporting.current = true;
     try {
-      const [product, ground] = await Promise.all([
+      const setKey = stillSetKey(fileKey);
+      const [product, ground, set] = await Promise.all([
         loadStillImage(fileHref(jobId, fileKey)),
         loadStillImage(fileHref(jobId, groundKey)),
+        jobHasSet(files, fileKey)
+          ? loadStillImage(fileHref(jobId, setKey)).catch(() => null)
+          : Promise.resolve(null),
       ]);
-      let set: HTMLImageElement | null = null;
-      if (jobHasSet(files, fileKey)) {
-        try {
-          set = await loadStillImage(fileHref(jobId, stillSetKey(fileKey)));
-        } catch {
-          set = null;
-        }
-      }
       const blob = await blobFromStudioStill(product, ground, { productLight, backgroundLight, backdrop, set });
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
@@ -1836,18 +1833,14 @@ function GroundedLightboxStill({
     let cancelled = false;
     void (async () => {
       try {
-        const [product, ground] = await Promise.all([
+        const setKey = stillSetKey(fileKey);
+        const [product, ground, set] = await Promise.all([
           loadStillImage(fileHref(jobId, fileKey)),
           loadStillImage(fileHref(jobId, groundKey)),
+          jobHasSet(files, fileKey)
+            ? loadStillImage(fileHref(jobId, setKey)).catch(() => null)
+            : Promise.resolve(null),
         ]);
-        let set: PreviewSource | null = null;
-        if (jobHasSet(files, fileKey)) {
-          try {
-            set = await loadStillImage(fileHref(jobId, stillSetKey(fileKey)));
-          } catch {
-            set = null;
-          }
-        }
         if (cancelled) return;
         sourcesRef.current = { product, ground, set };
         setLoaded((n) => n + 1);

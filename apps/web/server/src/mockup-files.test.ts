@@ -242,6 +242,11 @@ describe("collectOutputs", () => {
     assert.equal(isWhiteFile("white_a", "pack_front_right_set_card.png"), false);
     assert.equal(isWhiteFile("white_a_set_card", "pack_front_right_set_card.png"), true);
     assert.equal(isWhiteFile("white_a_set", "pack_front_right_set_card.png"), false);
+    assert.equal(isWhiteFile("white_a", "gift_set_front_right_white.png"), true);
+    assert.equal(isWhiteFile("white_a_set", "gift_set_front_right_white.png"), false);
+    assert.equal(isWhiteFile("white_a_set", "gift_set_front_right_set.png"), true);
+    assert.equal(isWhiteFile("white_a_set", "pack_front_right_settings.png"), false);
+    assert.equal(isWhiteFile("white_a", "pack_front_right_settings.png"), true);
   });
 
   it("classifies ground before product when ground is listed first", () => {

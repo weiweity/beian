@@ -112,6 +112,18 @@ def test_write_review_card_caps_longest_edge_and_keeps_alpha(tmp_path):
     assert "write_review_cards(job)" in PIPE.read_text(encoding="utf-8")
 
 
+def test_write_review_cards_optional_set_decode_failure_does_not_raise(tmp_path):
+    pipe = _load()
+    product = tmp_path / "front_right_white.png"
+    Image.new("RGB", (8, 8), (255, 255, 255)).save(product)
+    bad = tmp_path / "front_right_set.png"
+    bad.write_bytes(b"not a png")
+    job = {"outputs": {"front_right": str(product), "front_right_set": str(bad)}}
+    pipe.write_review_cards(job)
+    assert "front_right_card" in job["outputs"]
+    assert "front_right_set_card" not in job["outputs"]
+
+
 def test_write_review_cards_skips_missing_source(tmp_path):
     pipe = _load()
     source = tmp_path / "front_right_white.png"

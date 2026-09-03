@@ -150,8 +150,10 @@ describe("composeStudioStill", () => {
     assert.equal(jobHasReviewCard([{ key: "white_a" }], "white_a"), false);
     assert.equal(jobHasReviewCard([{ key: "white_a" }, { key: "white_a_card" }], "white_a"), true);
     assert.equal(stillSetKey("white_a"), "white_a_set");
+    assert.equal(stillSetKey("white_b"), "white_b_set");
     assert.equal(jobHasSet([{ key: "white_a" }], "white_a"), false);
     assert.equal(jobHasSet([{ key: "white_a_set" }], "white_a"), true);
+    assert.equal(jobHasSet([{ key: "white_b_set" }], "white_b"), true);
   });
 
   it("draws set then product for white_set and skips ground multiply", () => {
@@ -176,6 +178,13 @@ describe("composeStudioStill", () => {
     assert.equal(images[0]?.[7], "source-over");
     assert.equal(images[1]?.[1], "product");
     assert.equal(images.some((call) => call[1] === "ground"), false);
+    const fills = ctx.calls.filter((call) => call[0] === "fillRect");
+    assert.equal(fills.length, 1);
+    assert.equal(fills[0]?.[1], STUDIO_GROUND_FILL);
+    assert.equal(
+      fills.some((call) => String(call[1]).includes("rgba(40, 24, 56")),
+      false,
+    );
   });
 
   it("keeps CSS wall and ground when white_set has no set still", () => {

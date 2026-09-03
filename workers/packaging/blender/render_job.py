@@ -373,6 +373,12 @@ def render_view_pair(scene, camera, job, yaw_rad, product_key, ground_key, set_k
             render_still(scene, dest)
     except Exception as err:
         print(f"set pass failed {set_key}: {err}", file=sys.stderr)
+        dest = job["outputs"].get(set_key)
+        if dest:
+            try:
+                Path(dest).unlink()
+            except FileNotFoundError:
+                pass
     finally:
         set_product_holdout(model_objects, False)
         set_set_visible(set_objects, False)
