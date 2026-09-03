@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { makeTestTempDir } from "./testTemp.js";
 
@@ -19,7 +19,15 @@ const {
   resetJobsTestHooks,
   retryMockup,
   setJobsTestHooks,
+  tryStart,
 } = await import("./jobs.js");
+const {
+  ILLUSTRATOR_AGENT_HEARTBEAT,
+  ILLUSTRATOR_AGENT_PIPE,
+  ILLUSTRATOR_AGENT_PROTOCOL,
+  ILLUSTRATOR_AGENT_RELEASE_VERSION,
+  ILLUSTRATOR_AGENT_SCRIPT_SHA256,
+} = await import("./illustratorAgent.js");
 
 function wipeJobDisk() {
   const root = process.env.WB_DATA_DIR || "";
@@ -1114,6 +1122,208 @@ describe("jobs dispatcher", () => {
     assert.equal(job?.job_status, "running");
     assert.equal(job?.job_stage, "structure");
     assert.equal(job?.job_stage_label, "正在出图");
+    assert.equal(job?.job_eta_s, undefined);
+  });
+
+  it("stderr STAGE illustrator_saving_artwork_pdf becomes 保存印刷 PDF without a fake eta", async () => {
+    const { saveMockup, loadMockup } = await import("./mockup.js");
+    setJobsTestHooks({
+      runStructure: async (_manifest, opts) => {
+        opts?.onStderrLine?.("STAGE illustrator_unknown");
+        opts?.onStderrLine?.("STAGE illustrator_saving_artwork_pdf");
+        return new Promise(() => {
+          /* keep the illustrator slot occupied */
+        });
+      },
+    });
+    saveMockup({
+      id: tid(201),
+      status: "queued",
+      created_at: "2026-09-03T00:00:00.000Z",
+      files: [],
+      job_kind: "mockup",
+      job_status: "queued",
+      structure_engine: "v2",
+      structure_status: "analyzing",
+      job_eta_s: 120,
+    });
+    enqueue({ kind: "mockup", id: tid(201) });
+    for (let index = 0; index < 50 && loadMockup(tid(201))?.job_stage !== "illustrator_saving_artwork_pdf"; index += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    const job = loadMockup(tid(201));
+    assert.equal(job?.job_stage, "illustrator_saving_artwork_pdf");
+    assert.equal(job?.job_stage_label, "保存印刷 PDF");
+    assert.equal(job?.job_eta_s, undefined);
+  });
+
+  it("V2 structure timedOut uses the this-job timeout copy", async () => {
+    const { saveMockup, loadMockup } = await import("./mockup.js");
+    setJobsTestHooks({
+      runStructure: async () => ({ code: 1, stdout: "", stderr: "", timedOut: true }),
+    });
+    saveMockup({
+      id: tid(202),
+      status: "queued",
+      created_at: "2026-09-03T00:00:01.000Z",
+      files: [],
+      job_kind: "mockup",
+      job_status: "queued",
+      structure_engine: "v2",
+      structure_status: "analyzing",
+    });
+    enqueue({ kind: "mockup", id: tid(202) });
+    for (let index = 0; index < 50 && loadMockup(tid(202))?.job_status !== "failed"; index += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(loadMockup(tid(202))?.job_error, "这一单结构识别超时，请稍后重试");
+    assert.doesNotMatch(loadMockup(tid(202))?.job_error || "", /围栏|弹窗/);
+  });
+
+  it("busy desktop agent does not claim a queued AI job", async () => {
+    const { saveMockup, loadMockup } = await import("./mockup.js");
+    let claimed = 0;
+    setJobsTestHooks({
+      runStructure: () => {
+        claimed += 1;
+        return new Promise(() => {
+          /* must not start while the Session 1 agent is busy */
+        });
+      },
+    });
+    saveMockup({
+      id: tid(203),
+      status: "queued",
+      created_at: "2026-09-03T00:00:02.000Z",
+      files: [],
+      job_kind: "mockup",
+      job_status: "queued",
+      structure_engine: "v2",
+      structure_status: "analyzing",
+    });
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+    mkdirSync(dirname(ILLUSTRATOR_AGENT_HEARTBEAT), { recursive: true });
+    writeFileSync(ILLUSTRATOR_AGENT_HEARTBEAT, JSON.stringify({
+      protocol: ILLUSTRATOR_AGENT_PROTOCOL,
+      pid: 24068,
+      session_id: 1,
+      user_sid: "S-1-5-21-1000-500",
+      pipe: ILLUSTRATOR_AGENT_PIPE,
+      state: "busy",
+      updated_at: new Date().toISOString(),
+      script_sha256: ILLUSTRATOR_AGENT_SCRIPT_SHA256,
+      release_version: ILLUSTRATOR_AGENT_RELEASE_VERSION,
+    }));
+    try {
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      enqueue({ kind: "mockup", id: tid(203) });
+      assert.equal(loadMockup(tid(203))?.job_status, "queued");
+      assert.equal(claimed, 0);
+      assert.equal(queueSnapshot().illustrator.queued, 1);
+      assert.equal(queueSnapshot().illustrator.running, 0);
+    } finally {
+      if (originalPlatform) Object.defineProperty(process, "platform", originalPlatform);
+      rmSync(ILLUSTRATOR_AGENT_HEARTBEAT, { force: true });
+    }
+  });
+
+  it("reclaimOnBoot keeps a running AI job while the desktop agent is busy", async () => {
+    const { saveMockup, loadMockup } = await import("./mockup.js");
+    let claimed = 0;
+    setJobsTestHooks({
+      runStructure: () => {
+        claimed += 1;
+        return new Promise(() => {
+          /* reclaim must not start a second attempt */
+        });
+      },
+    });
+    saveMockup({
+      id: tid(204),
+      status: "running",
+      created_at: "2026-09-03T00:00:03.000Z",
+      files: [],
+      job_kind: "mockup",
+      job_status: "running",
+      job_started_at: new Date().toISOString(),
+      structure_engine: "v2",
+      structure_status: "analyzing",
+    });
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+    mkdirSync(dirname(ILLUSTRATOR_AGENT_HEARTBEAT), { recursive: true });
+    writeFileSync(ILLUSTRATOR_AGENT_HEARTBEAT, JSON.stringify({
+      protocol: ILLUSTRATOR_AGENT_PROTOCOL,
+      pid: 24068,
+      session_id: 1,
+      user_sid: "S-1-5-21-1000-500",
+      pipe: ILLUSTRATOR_AGENT_PIPE,
+      state: "busy",
+      updated_at: new Date().toISOString(),
+      script_sha256: ILLUSTRATOR_AGENT_SCRIPT_SHA256,
+      release_version: ILLUSTRATOR_AGENT_RELEASE_VERSION,
+    }));
+    try {
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      reclaimOnBoot();
+      const job = loadMockup(tid(204));
+      assert.equal(job?.job_status, "running");
+      assert.equal(job?.reclaim_count, undefined);
+      assert.equal(claimed, 0);
+    } finally {
+      if (originalPlatform) Object.defineProperty(process, "platform", originalPlatform);
+      rmSync(ILLUSTRATOR_AGENT_HEARTBEAT, { force: true });
+    }
+  });
+
+  it("claims a queued AI job after the desktop agent returns to idle", async () => {
+    const { saveMockup, loadMockup } = await import("./mockup.js");
+    let claimed = 0;
+    setJobsTestHooks({
+      runStructure: () => {
+        claimed += 1;
+        return new Promise(() => {
+          /* keep the illustrator slot occupied after idle resume */
+        });
+      },
+    });
+    saveMockup({
+      id: tid(205),
+      status: "queued",
+      created_at: "2026-09-03T00:00:04.000Z",
+      files: [],
+      job_kind: "mockup",
+      job_status: "queued",
+      structure_engine: "v2",
+      structure_status: "analyzing",
+    });
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+    mkdirSync(dirname(ILLUSTRATOR_AGENT_HEARTBEAT), { recursive: true });
+    const beat = {
+      protocol: ILLUSTRATOR_AGENT_PROTOCOL,
+      pid: 24068,
+      session_id: 1,
+      user_sid: "S-1-5-21-1000-500",
+      pipe: ILLUSTRATOR_AGENT_PIPE,
+      updated_at: new Date().toISOString(),
+      script_sha256: ILLUSTRATOR_AGENT_SCRIPT_SHA256,
+      release_version: ILLUSTRATOR_AGENT_RELEASE_VERSION,
+    };
+    try {
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      writeFileSync(ILLUSTRATOR_AGENT_HEARTBEAT, JSON.stringify({ ...beat, state: "busy" }));
+      enqueue({ kind: "mockup", id: tid(205) });
+      assert.equal(claimed, 0);
+      writeFileSync(ILLUSTRATOR_AGENT_HEARTBEAT, JSON.stringify({ ...beat, state: "idle" }));
+      tryStart();
+      for (let index = 0; index < 50 && claimed === 0; index += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      assert.equal(loadMockup(tid(205))?.job_status, "running");
+      assert.equal(claimed, 1);
+    } finally {
+      if (originalPlatform) Object.defineProperty(process, "platform", originalPlatform);
+      rmSync(ILLUSTRATOR_AGENT_HEARTBEAT, { force: true });
+    }
   });
 
   it("auto-confirms a unique preferred front and hands Blender the approved sidecar", async () => {

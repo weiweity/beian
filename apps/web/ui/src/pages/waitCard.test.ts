@@ -56,6 +56,12 @@ describe("mockupBoardProgress", () => {
       job_stage: "structure",
       job_stage_label: "正在出图",
     }), 15);
+    assert.equal(mockupBoardProgress({
+      status: "running",
+      job_status: "running",
+      job_stage: "illustrator_saving_artwork_pdf",
+      job_stage_label: "保存印刷 PDF",
+    }), 15);
     assert.equal(mockupBoardProgress({ status: "running", job_status: "running", job_stage: "render_pdf" }), 35);
     assert.equal(mockupBoardProgress({ status: "running", job_status: "running", job_stage_label: "打样" }), 70);
     assert.equal(mockupBoardProgress({ status: "running", job_status: "running", job_stage: "export" }), 90);
@@ -167,6 +173,16 @@ describe("waitCardCopy", () => {
     assert.equal(copy.eta, "大约还要 2 分钟");
   });
 
+  it("mockup structure stage does not invent a 120 second budget", () => {
+    const copy = waitCardCopy({
+      kind: "mockup",
+      job_status: "running",
+      job_stage_label: "保存印刷 PDF",
+    });
+    assert.equal(copy.eta, "保存印刷 PDF");
+    assert.doesNotMatch(copy.eta, /分钟|秒/);
+  });
+
   it("feishuReady true tells her she can leave", () => {
     const copy = waitCardCopy({ kind: "compare", job_status: "running", feishuReady: true });
     assert.match(copy.hint, /可以离开，完了飞书叫你/);
@@ -226,6 +242,16 @@ describe("liveJobLine", () => {
     assert.equal(line, "认字 · 大约还要 40 秒");
     assert.doesNotMatch(line || "", /%/);
     assert.equal(liveJobLine({ job_status: "running", kind: "mockup" }), "大约还要 4 分钟");
+  });
+
+  it("running structure stage without job_eta_s does not invent minutes", () => {
+    const line = liveJobLine({
+      job_status: "running",
+      kind: "mockup",
+      job_stage_label: "保存印刷 PDF",
+    });
+    assert.equal(line, "保存印刷 PDF");
+    assert.doesNotMatch(line || "", /分钟|秒/);
   });
 });
 
