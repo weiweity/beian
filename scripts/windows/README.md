@@ -48,7 +48,7 @@ Agent 只做会话桥：UTF-8 JSON 命名管道 `beian.illustrator.v1` → 现�
 & $env:WB_PYTHON workers\packaging\illustrator\illustrator_agent.py probe --timeout 120
 ```
 
-返回必须包含 `ok=true`、`session_id>0`、可见窗口、Illustrator PID 与空文档名列表。Session 0、无窗口、心跳过期或未知已开稿都不能继续打样。每次执行在 cscript/COM 前写 `$env:WB_DATA_DIR\runtime\illustrator-fault.json` 持久围栏，正常完成或已证明清理完成才删除；Agent 崩溃、cscript 未确认退出或文档清不干净时，所有 Agent 实例都保持 `faulted`，发版和新任务一并拒绝。不能编辑心跳把它改回 idle，也不能靠重启/升版自动清围栏。
+返回必须包含 `ok=true`、`session_id>0`、可见窗口、Illustrator PID 与空文档名列表。Session 0、无窗口、心跳过期或未知已开稿都不能继续打样。每次执行在 cscript/COM 前把 `$env:WB_DATA_DIR\runtime\illustrator-fault.json` 写成 `active` 作业围栏，正常完成或已证明清理完成才删除。心跳 `busy` 只表示正在干活，新打样单排队，不是离线，也不要把 busy 清成围栏。`faulted` 只在进程重启后仍有不明文档、或 Illustrator 无法再启动时落下；saving 超时不得因此锁死全厂。不能编辑心跳把它改回 idle，也不能靠重启/升版自动清 `faulted`。
 
 管理员确认桌面无稿，并确认 Illustrator、AIRobin、cscript、wscript 及其他临时 Agent 都已退出后，在**交互式、已提升权限**的 PowerShell 运行下列显式恢复；脚本会再次核对会话、管理员身份、任务和进程，随后清围栏并重装登录任务。LocalSystem、Session 0、仍有桌面自动化进程或普通卸载都不能清除：
 
