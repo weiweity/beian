@@ -40,6 +40,7 @@ import {
   publicTask,
   queueSnapshot,
   reclaimOnBoot,
+  repairMockupPrintFaces,
   retryMockup,
 } from "./jobs.js";
 import {
@@ -155,7 +156,7 @@ type NodeBindings = HttpBindings | Http2Bindings;
 type Env = { Bindings: NodeBindings; Variables: { session: Session } };
 
 const app = new Hono<Env>();
-const VERSION = "0.21.22.0";
+const VERSION = "0.21.23.0";
 
 const STRUCTURE_INPUT_BODY_BYTES = 16 * 1024;
 
@@ -1337,6 +1338,16 @@ app.post("/api/mockups/:id/retry", (c) => {
   const s = need(c, "create");
   try {
     const job = retryMockup(assertTid(c.req.param("id")), viewerFromSession(s));
+    return c.json(decorateQueueAhead([publishMockup(job, s)])[0]);
+  } catch (e) {
+    boom(e);
+  }
+});
+
+app.post("/api/mockups/:id/print-faces", async (c) => {
+  const s = need(c, "create");
+  try {
+    const job = await repairMockupPrintFaces(assertTid(c.req.param("id")), viewerFromSession(s));
     return c.json(decorateQueueAhead([publishMockup(job, s)])[0]);
   } catch (e) {
     boom(e);

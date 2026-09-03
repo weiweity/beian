@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.21.23.0] - 2026-09-03
+
+### Changed
+
+- 打样单成片改回一屏三列：正面+侧面、反面+侧面、GLB 并排，不要一张大图压在上面。
+- 调灯收到页头折叠钮后面，默认关，不挡三张成片。
+
+### Added
+
+- 已出图但缺印刷面时，事故条在三图之上。有底稿可以「补印刷面」，不用重跑 3D，看板仍显示已出图。
+
+### For contributors
+
+- 详情 `can_repair_print_faces`；`POST /api/mockups/:id/print-faces` 走 V2 `render_face_assets`，原子四面，全机一锁。禁止 `pipeline.py` / Blender 槽。换背景是下一楔。
+
 ## [0.21.22.0] - 2026-09-03
 
 ### Changed

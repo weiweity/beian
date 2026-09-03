@@ -749,6 +749,7 @@ export function MockupJobPage({
   const [productLight, setProductLight] = useState(STUDIO_LIGHT_DEFAULT);
   const [backgroundLight, setBackgroundLight] = useState(STUDIO_LIGHT_DEFAULT);
   const [retrying, setRetrying] = useState(false);
+  const [repairing, setRepairing] = useState(false);
   const [lightsOpen, setLightsOpen] = useState(false);
   const glbBox = useRef<HTMLDivElement>(null);
   const hudTimer = useRef<number | null>(null);
@@ -775,6 +776,30 @@ export function MockupJobPage({
       message.error(err instanceof Error ? err.message : "重试失败");
     } finally {
       setRetrying(false);
+    }
+  }
+
+  async function repairPrintFaces() {
+    if (!job || repairing) return;
+    setRepairing(true);
+    notice("正在补印刷面");
+    try {
+      const next = await api.repairMockupPrintFaces(job.id);
+      setError(null);
+      setJob(next);
+      notice("印刷面已补上");
+    } catch (err: unknown) {
+      const status = err instanceof ApiError ? err.status : 0;
+      notice("");
+      message.error(
+        status === 404
+          ? "这版还不能补切面"
+          : err instanceof Error
+            ? err.message
+            : "补印刷面失败",
+      );
+    } finally {
+      setRepairing(false);
     }
   }
 
@@ -963,27 +988,32 @@ export function MockupJobPage({
   const hasPpt = (job.files || []).some((f) => f.key === "ppt");
   const grounded = jobHasGround(job.files);
   const readFaces = listedReadFaces(job.files || []);
+  const missingRequired = (["front", "back", "left", "right"] as const).filter((role) => !readFaces.includes(role));
+  const canRepairPrint = Boolean(job.can_repair_print_faces);
+  const showPrintAlert = job.status === "done" && missingRequired.length > 0;
+  const printAlertCopy = canRepairPrint && canCreate
+    ? "缺少印刷面图。可从已保存底稿补生成，不会重新打样。"
+    : canCreate
+      ? "这单没有可用底稿，无法补生成。请重新打样。"
+      : "这单没有印刷面图。请联系能打样的人补或重打。";
 
   return (
     <section className="mockup-sheet">
       <header className="page-head">
         <div>
           <h1 className="page-title">{mockTitle(job)}</h1>
-          <p className="page-lead">
-            {grounded
-              ? "打样单。上面成片交差；下面印刷面读字。不要用 GLB 读小字。"
-              : "打样单。上面三张看形；下面印刷面读字，可放大。不要用 GLB 读小字。"}
-          </p>
-          {grounded ? null : (
-            <StudioLightSliders
-              productLight={productLight}
-              backgroundLight={backgroundLight}
-              onProductLight={setProductLight}
-              onBackgroundLight={setBackgroundLight}
-            />
-          )}
+          <p className="page-lead">打样单。上面三张看形；下面印刷面读字。不要用 GLB 读小字。</p>
         </div>
         <div className="mockup-sheet-head-actions">
+          <button
+            type="button"
+            className="btn-ghost"
+            aria-expanded={lightsOpen}
+            aria-controls="mockup-studio-lights"
+            onClick={() => setLightsOpen((open) => !open)}
+          >
+            {lightsOpen ? "收起调灯" : "调灯"}
+          </button>
           {canCreate && job.status === "failed" ? (
             <button type="button" className="btn-ghost" disabled={retrying} onClick={() => void retry()}>
               {retrying ? "正在重试…" : "重试"}
@@ -1001,13 +1031,23 @@ export function MockupJobPage({
             >
               下载 PPT
             </a>
-          ) : (
+          ) : grounded ? null : (
             <button type="button" className="btn-ghost" onClick={() => notice(missingPptHud())}>
               下载 PPT
             </button>
           )}
         </div>
       </header>
+      {lightsOpen ? (
+        <div id="mockup-studio-lights">
+          <StudioLightSliders
+            productLight={productLight}
+            backgroundLight={backgroundLight}
+            onProductLight={setProductLight}
+            onBackgroundLight={setBackgroundLight}
+          />
+        </div>
+      ) : null}
 
       {job.status === "failed" ? (
         <Alert type="error" showIcon title={mockupFailReason(job.error || job.job_error)} />
@@ -1017,47 +1057,42 @@ export function MockupJobPage({
         <AdminRotateFront job={job} onConfirmed={setJob} />
       ) : null}
 
-      <div className={grounded ? "mockup-sheet-photos is-studio-hero" : "mockup-sheet-photos"}>
-        {grounded ? (
-          <div className="mockup-sheet-hero">
-            {groundA && whiteA ? (
-              <GroundedShot
-                jobId={job.id}
-                files={job.files}
-                fileKey="white_a"
-                groundKey="white_a_ground"
-                alt="正面与侧面成片"
-                caption="正面 + 侧面"
-                downloadName={whiteA.name}
-                productLight={productLight}
-                backgroundLight={backgroundLight}
-                onProductLight={setProductLight}
-                onBackgroundLight={setBackgroundLight}
-                onDownload={() => notice(downloadHudLine("成片"))}
-                onError={() => notice("导出失败")}
-              />
-            ) : whiteA ? (
-              <WhiteShot
-                jobId={job.id}
-                fileKey="white_a"
-                alt="正面与侧面白底"
-                caption="正面 + 侧面"
-                downloadName={whiteA.name}
-                productLight={productLight}
-                backgroundLight={backgroundLight}
-                onProductLight={setProductLight}
-                onBackgroundLight={setBackgroundLight}
-                onDownload={() => notice(downloadHudLine("白底"))}
-              />
-            ) : (
-              <figure className="mockup-sheet-photo">
-                <div className="mockup-sheet-frame is-studio-ground">
-                  <p className="page-lead">还没有正面+侧面。</p>
-                </div>
-                <figcaption className="mockup-sheet-cap">正面 + 侧面</figcaption>
-              </figure>
-            )}
-          </div>
+      {showPrintAlert ? (
+        <div className="mockup-print-alert" role="status" aria-live="polite">
+          <p className="mockup-print-alert-copy">
+            {repairing ? "正在补印刷面" : printAlertCopy}
+          </p>
+          {canRepairPrint && canCreate ? (
+            <button
+              type="button"
+              className="btn-ghost"
+              disabled={repairing}
+              aria-busy={repairing || undefined}
+              onClick={() => void repairPrintFaces()}
+            >
+              {repairing ? "正在补印刷面" : "补印刷面"}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
+      <div className={grounded ? "mockup-sheet-photos is-grounded" : "mockup-sheet-photos"}>
+        {groundA && whiteA ? (
+          <GroundedShot
+            jobId={job.id}
+            files={job.files}
+            fileKey="white_a"
+            groundKey="white_a_ground"
+            alt="正面与侧面成片"
+            caption="正面 + 侧面"
+            downloadName={whiteA.name}
+            productLight={productLight}
+            backgroundLight={backgroundLight}
+            onProductLight={setProductLight}
+            onBackgroundLight={setBackgroundLight}
+            onDownload={() => notice(downloadHudLine("成片"))}
+            onError={() => notice("导出失败")}
+          />
         ) : whiteA ? (
           <WhiteShot
             jobId={job.id}
@@ -1073,88 +1108,28 @@ export function MockupJobPage({
           />
         ) : (
           <figure className="mockup-sheet-photo">
-            <div className="mockup-sheet-frame">
+            <div className={`mockup-sheet-frame${grounded ? " is-studio-ground" : ""}`}>
               <p className="page-lead">还没有正面+侧面。</p>
             </div>
             <figcaption className="mockup-sheet-cap">正面 + 侧面</figcaption>
           </figure>
         )}
-        {grounded ? (
-          <>
-            <button
-              type="button"
-              className="mockup-dl mockup-studio-toggle"
-              aria-expanded={lightsOpen}
-              onClick={() => setLightsOpen((open) => !open)}
-            >
-              {lightsOpen ? "收起调灯" : "调灯"}
-            </button>
-            {lightsOpen ? (
-              <StudioLightSliders
-                productLight={productLight}
-                backgroundLight={backgroundLight}
-                onProductLight={setProductLight}
-                onBackgroundLight={setBackgroundLight}
-              />
-            ) : null}
-            <div className="mockup-sheet-secondary">
-              {groundB && whiteB ? (
-                <GroundedShot
-                  jobId={job.id}
-                  files={job.files}
-                  fileKey="white_b"
-                  groundKey="white_b_ground"
-                  alt="反面与侧面成片"
-                  caption="反面 + 侧面"
-                  downloadName={whiteB.name}
-                  productLight={productLight}
-                  backgroundLight={backgroundLight}
-                  onProductLight={setProductLight}
-                  onBackgroundLight={setBackgroundLight}
-                  onDownload={() => notice(downloadHudLine("成片"))}
-                  onError={() => notice("导出失败")}
-                  lazy
-                />
-              ) : whiteB ? (
-                <WhiteShot
-                  jobId={job.id}
-                  fileKey="white_b"
-                  alt="反面与侧面白底"
-                  caption="反面 + 侧面"
-                  downloadName={whiteB.name}
-                  productLight={productLight}
-                  backgroundLight={backgroundLight}
-                  onProductLight={setProductLight}
-                  onBackgroundLight={setBackgroundLight}
-                  onDownload={() => notice(downloadHudLine("白底"))}
-                />
-              ) : (
-                <figure className="mockup-sheet-photo">
-                  <div className="mockup-sheet-frame is-studio-ground">
-                    <p className="page-lead">还没有反面+侧面。</p>
-                  </div>
-                  <figcaption className="mockup-sheet-cap">反面 + 侧面</figcaption>
-                </figure>
-              )}
-              {hasGlb ? (
-                <GlbShot
-                  jobId={job.id}
-                  boxRef={glbBox}
-                  backgroundLight={backgroundLight}
-                  productLight={productLight}
-                  glbFs={glbFs}
-                  onNotice={notice}
-                />
-              ) : (
-                <figure className="mockup-sheet-photo">
-                  <div className="mockup-sheet-frame">
-                    <Empty description={job.status === "done" ? "没有 GLB。看上面的失败原因。" : "GLB 还没出"} />
-                  </div>
-                  <figcaption className="mockup-sheet-cap">GLB</figcaption>
-                </figure>
-              )}
-            </div>
-          </>
+        {groundB && whiteB ? (
+          <GroundedShot
+            jobId={job.id}
+            files={job.files}
+            fileKey="white_b"
+            groundKey="white_b_ground"
+            alt="反面与侧面成片"
+            caption="反面 + 侧面"
+            downloadName={whiteB.name}
+            productLight={productLight}
+            backgroundLight={backgroundLight}
+            onProductLight={setProductLight}
+            onBackgroundLight={setBackgroundLight}
+            onDownload={() => notice(downloadHudLine("成片"))}
+            onError={() => notice("导出失败")}
+          />
         ) : whiteB ? (
           <WhiteShot
             jobId={job.id}
@@ -1170,13 +1145,13 @@ export function MockupJobPage({
           />
         ) : (
           <figure className="mockup-sheet-photo">
-            <div className="mockup-sheet-frame">
+            <div className={`mockup-sheet-frame${grounded ? " is-studio-ground" : ""}`}>
               <p className="page-lead">还没有反面+侧面。</p>
             </div>
             <figcaption className="mockup-sheet-cap">反面 + 侧面</figcaption>
           </figure>
         )}
-        {grounded ? null : hasGlb ? (
+        {hasGlb ? (
           <GlbShot
             jobId={job.id}
             boxRef={glbBox}
@@ -1188,7 +1163,7 @@ export function MockupJobPage({
         ) : (
           <figure className="mockup-sheet-photo">
             <div className="mockup-sheet-frame">
-              <Empty description={job.status === "done" ? "没有 GLB。看上面的失败原因。" : "GLB 还没出"} />
+              <Empty description={job.status === "done" ? "没有立体模型" : "GLB 还没出"} />
             </div>
             <figcaption className="mockup-sheet-cap">GLB</figcaption>
           </figure>
@@ -1214,8 +1189,8 @@ export function MockupJobPage({
               );
             })}
           </div>
-        ) : (
-          <p className="page-lead">这单没有印刷面图。重新打样后才会出现，不要用 GLB 读字。</p>
+        ) : showPrintAlert ? null : (
+          <p className="page-lead">这单没有印刷面图。要读字请重新打样。</p>
         )}
       </section>
       {hud && typeof document !== "undefined"

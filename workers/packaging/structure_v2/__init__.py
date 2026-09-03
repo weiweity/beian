@@ -9,6 +9,7 @@ from .model import (
 )
 from .adapters import AdaptationResult, StructureAdapterError, adapt_structure
 from .artwork import ArtworkMappingError, render_face_assets
+from .repair import REQUIRED_PRINT_FACES, repair_print_faces
 from .confirmation import StructureConfirmationError, confirm_structure
 from .factory_layers import factory_input_hold, print_layer_failure_message
 from .resolver import ResolutionResult, resolve_structure, resolve_structure_payload
@@ -42,5 +43,7 @@ __all__ = [
     "resolve_structure",
     "resolve_structure_payload",
     "render_face_assets",
+    "REQUIRED_PRINT_FACES",
+    "repair_print_faces",
     "structure_cache_key",
 ]

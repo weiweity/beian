@@ -1,4 +1,16 @@
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync } from "node:fs";
+import {
+  closeSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  readSync,
+  rmSync,
+  statSync,
+  unlinkSync,
+} from "node:fs";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -399,6 +411,7 @@ export function publicMockup(job: MockupJob, view: PublicMockupView = {}) {
   return {
     ...publicMockupSummaryFields(job),
     files: visibleMockupFiles(job),
+    can_repair_print_faces: canRepairPrintFaces(job),
     structure_preview: structurePreviewFromResolution(job, resolution),
     structure_input: view.structureDesk === false
       ? undefined
@@ -1176,6 +1189,65 @@ export function acceptStructureConfirmation(job: MockupJob, approvedSidecar: str
 }
 
 const READ_PANEL_NAME = /^panel_(front|back|right|left|top|bottom)\.png$/;
+const REQUIRED_PRINT_FACES = ["front", "back", "left", "right"] as const;
+const RESOLVED_PACKAGING_SCHEMA = "resolved-packaging-job/3";
+const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+function pngMagicAtPath(path: string): boolean {
+  let fd: number | undefined;
+  try {
+    fd = openSync(path, "r");
+    const buf = Buffer.alloc(8);
+    const n = readSync(fd, buf, 0, 8, 0);
+    return n >= 8 && buf.equals(PNG_MAGIC);
+  } catch {
+    return false;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+function hasResolvedPackagingJob(path: string): boolean {
+  try {
+    const data = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    const resolved = data.schema === RESOLVED_PACKAGING_SCHEMA ? data : data.resolved;
+    if (!resolved || typeof resolved !== "object" || Array.isArray(resolved)) return false;
+    const payload = resolved as Record<string, unknown>;
+    return payload.schema === RESOLVED_PACKAGING_SCHEMA && Boolean(payload.faces) && typeof payload.faces === "object";
+  } catch {
+    return false;
+  }
+}
+
+export function requiredPrintFacesReady(jobId: string): boolean {
+  if (!isTid(jobId)) return false;
+  for (const face of REQUIRED_PRINT_FACES) {
+    const path = join(mockupRoot(false), jobId, "assets", `panel_${face}.png`);
+    if (!existsSync(path) || !underJobDir(jobId, path) || !pngMagicAtPath(path)) return false;
+  }
+  return true;
+}
+
+export type PrintFaceRepairSource = {
+  jobDir: string;
+  artwork: string;
+  resolved: string;
+  assets: string;
+};
+
+export function printFaceRepairSource(job: MockupJob): PrintFaceRepairSource | null {
+  if (job.structure_engine !== "v2") return null;
+  const artwork = job.structure_artwork_path;
+  const resolved = job.structure_resolution_path;
+  if (!isMockupJobFile(job.id, artwork) || !isMockupJobFile(job.id, resolved)) return null;
+  if (!hasResolvedPackagingJob(resolved)) return null;
+  const jobDir = join(mockupRoot(false), job.id);
+  return { jobDir, artwork, resolved, assets: join(jobDir, "assets") };
+}
+
+function canRepairPrintFaces(job: MockupJob): boolean {
+  return job.status === "done" && !requiredPrintFacesReady(job.id) && printFaceRepairSource(job) !== null;
+}
 
 function readKeyForPanelName(name: string): string | undefined {
   const match = basename(name).toLowerCase().match(READ_PANEL_NAME);

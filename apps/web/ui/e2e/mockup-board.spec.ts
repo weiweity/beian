@@ -150,10 +150,14 @@ test("完成态打样单可分开调产品和背景灯光，原图灯箱也能�
 
   await page.goto(`/mockup/${mockup.id}`);
 
+  await expect(page.getByRole("button", { name: "调灯" })).toBeVisible();
+  await expect(page.getByRole("slider", { name: "产品灯光" })).toHaveCount(0);
+  await page.getByRole("button", { name: "调灯" }).click();
   const productLight = page.getByRole("slider", { name: "产品灯光" }).first();
   const backgroundLight = page.getByRole("slider", { name: "背景灯光" }).first();
   await expect(productLight).toBeVisible();
   await expect(backgroundLight).toBeVisible();
+  await expect(page.locator(".mockup-sheet-photos [role='slider']")).toHaveCount(0);
   await expect(page.locator(".mockup-sheet-photo .mockup-sheet-frame img").first()).toHaveCSS(
     "filter",
     /contrast\(1\.04\).*brightness\(1\)/,
@@ -270,10 +274,53 @@ test("完成态打样单没有印刷面时提示重新打样，不用 GLB 读字
   await page.goto(`/mockup/${mockup.id}`);
 
   const read = page.getByRole("region", { name: "印刷面读字" });
-  await expect(read.getByText("这单没有印刷面图。重新打样后才会出现，不要用 GLB 读字。")).toBeVisible();
+  const alert = page.locator(".mockup-print-alert");
+  await expect(alert).toContainText("这单没有可用底稿，无法补生成。请重新打样。");
+  const alertBox = await alert.boundingBox();
+  const photosBox = await page.locator(".mockup-sheet-photos").boundingBox();
+  expect(alertBox && photosBox && alertBox.y < photosBox.y).toBeTruthy();
+  await expect(page.getByRole("button", { name: "补印刷面" })).toHaveCount(0);
   await expect(read.getByRole("img")).toHaveCount(0);
   await expect(read.getByRole("link")).toHaveCount(0);
   await expect(page.getByRole("img", { name: "正面与侧面白底" })).toBeVisible();
+});
+
+test("缺印刷面且可补时点补印刷面后读字出现，看板仍已出图", async ({ page, syntheticApi }) => {
+  const mockup = completedMockup("cc11dd22ee33", "可补印刷盒");
+  mockup.files = [
+    { key: "white_a", name: "正面与侧面.png" },
+    { key: "white_b", name: "反面与侧面.png" },
+    { key: "glb", name: "box.glb" },
+  ];
+  mockup.can_repair_print_faces = true;
+  syntheticApi.mockups.push(mockup);
+  const image = "<svg xmlns='http://www.w3.org/2000/svg' width='800' height='1200'><rect width='800' height='1200' fill='white'/><text x='40' y='80' font-size='28'>8pt</text></svg>";
+  for (const key of ["white_a", "white_b", "read_front", "read_back", "read_left", "read_right"]) {
+    await page.route(new RegExp(`/api/mockups/${mockup.id}/files/${key}(?:\\?.*)?$`), async (route) => {
+      await route.fulfill({ status: 200, contentType: "image/svg+xml", body: image });
+    });
+  }
+  await page.route(new RegExp(`/api/mockups/${mockup.id}/files/glb(?:\\?.*)?$`), async (route) => {
+    await route.fulfill({ status: 200, contentType: "model/gltf-binary", body: "glTF" });
+  });
+  await page.goto(`/mockup/${mockup.id}`);
+
+  const alert = page.locator(".mockup-print-alert");
+  await expect(alert).toContainText("缺少印刷面图。可从已保存底稿补生成，不会重新打样。");
+  const photos = page.locator(".mockup-sheet-photos");
+  const alertBox = await alert.boundingBox();
+  const photosBox = await photos.boundingBox();
+  expect(alertBox && photosBox && alertBox.y < photosBox.y).toBeTruthy();
+  await expect(page.getByRole("button", { name: "补印刷面" })).toBeEnabled();
+  await expect(page.getByText("打样中", { exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "补印刷面" }).click();
+  await expect(page.locator(".mockup-print-alert")).toHaveCount(0);
+  await expect(page.getByRole("img", { name: "正面印刷面" })).toBeVisible();
+  expect(
+    syntheticApi.calls.some((call) => call.method === "POST" && call.path === `/api/mockups/${mockup.id}/print-faces`),
+  ).toBeTruthy();
+  await expect(page.getByRole("heading", { name: mockup.title })).toBeVisible();
+  await expect(page.locator(".wait-card")).toHaveCount(0);
 });
 
 test("印刷面图损坏时隐藏原图和下载操作", async ({ page, syntheticApi }) => {
@@ -318,13 +365,16 @@ test("有 ground 的已出图单走 canvas 成片，不显示 PPT，调灯默认
 
   await page.goto(`/mockup/${mockup.id}`);
 
-  await expect(page.locator(".mockup-sheet-hero canvas").first()).toBeVisible();
-  await expect(page.locator(".mockup-sheet-hero .mockup-sheet-frame img")).toHaveCount(0);
+  await expect(page.locator(".mockup-sheet-photos.is-grounded canvas").first()).toBeVisible();
+  await expect(page.locator(".mockup-sheet-photos.is-grounded .mockup-sheet-frame img")).toHaveCount(0);
+  await expect(page.locator(".mockup-sheet-hero")).toHaveCount(0);
+  await expect(page.locator(".mockup-sheet-photos.is-grounded > *")).toHaveCount(3);
+  await expect(page.locator(".mockup-sheet-photos [role='slider']")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "调灯" })).toBeVisible();
   await expect(page.getByRole("slider", { name: "产品灯光" })).toHaveCount(0);
   await expect(page.getByRole("link", { name: "下载 PPT" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "下载 PPT" })).toHaveCount(0);
-  await expect(page.locator(".mockup-sheet-hero .mockup-sheet-frame").first()).toHaveCSS("aspect-ratio", /5\s*\/\s*6/);
+  await expect(page.locator(".mockup-sheet-photos.is-grounded .mockup-sheet-frame").first()).toHaveCSS("aspect-ratio", /5\s*\/\s*6/);
   await page.getByRole("button", { name: "调灯" }).click();
   await expect(page.getByRole("slider", { name: "产品灯光" })).toBeVisible();
   await page.getByRole("button", { name: /打开正面/ }).click();
@@ -350,7 +400,7 @@ test("成片 ground 损坏时隐藏原图和下载", async ({ page, syntheticApi
     await route.fulfill({ status: 404, contentType: "text/plain", body: "missing" });
   });
   await page.goto(`/mockup/${mockup.id}`);
-  const shot = page.locator(".mockup-sheet-hero");
+  const shot = page.locator(".mockup-sheet-photos.is-grounded .mockup-sheet-photo").first();
   await expect(shot.getByText("这张白底图坏了，回到打样台重新打。")).toBeVisible();
   await expect(shot.getByRole("button", { name: /原图|下载/ })).toHaveCount(0);
 });
@@ -375,6 +425,7 @@ test("无 ground 的已出图单保持 CSS 滤镜、描边和 PPT", async ({ pag
     /contrast\(1\.04\).*brightness\(1\)/,
   );
   await expect(page.getByRole("link", { name: "下载 PPT" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "调灯" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "调灯" })).toBeVisible();
+  await expect(page.getByRole("slider", { name: "产品灯光" })).toHaveCount(0);
   await expect(page.locator(".mockup-sheet-hero")).toHaveCount(0);
 });
