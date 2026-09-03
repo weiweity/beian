@@ -56,6 +56,11 @@ def test_render_job_isolates_ground_pass_and_prefers_eevee_next():
     assert "set_product_holdout(model_objects, False)" in source[finally_at:]
     assert "ground.hide_render = True" in source[finally_at:]
     assert source.index("BLENDER_EEVEE_NEXT") < source.index('scene.render.engine = "BLENDER_EEVEE"')
+    assert "def apply_eevee_shadows" in source
+    assert "def enable_light_contact_shadows" in source
+    assert source.index("apply_eevee_engine(scene)") < source.index("apply_eevee_shadows(scene)")
+    assert "enable_light_contact_shadows()" in source
+    assert "use_contact_shadow" in source
     assert "for obj in model_objects" in source
 
 

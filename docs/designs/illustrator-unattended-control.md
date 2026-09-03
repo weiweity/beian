@@ -208,6 +208,15 @@ sequenceDiagram
 
 `finally` 尝试恢复 LiveEdit；失败进 `result.host_restore_error`，不失败作业、不写围栏。
 
+### 0.21.22.0 inventory host（已交代码，不是控制面验收）
+
+C-D7 的 LiveEdit / 中文 Outline 失败仍只记日志。下面是盘点性能补丁，**未跑 26H21A 不得宣称控制面已换**：
+
+- 盘点前 hide 顶层、`enterOutlineView` 只按一次 menu `"preview"`，用 `getViewMode` 认 Outline/轮廓，zoom `0.0625`
+- 存 PDF 前 `restoreUnattendedArtwork`：任一原可见顶层仍隐藏则抛 `Cannot fully restore artwork layers`，失败走已有印刷层恢复映射
+- 关稿 `prepareUnattendedClose`：再 hide + outline + zoom `0.03125`
+- `eachInventoryPathItem` 走 `layer.pageItems` 并展开 GroupItem / CompoundPathItem；跳过 表 / 标注 / Dimensions / 尺寸；每层 remainder 上限 512；空的隐藏集合不要把 fallback 从 `document.pathItems` 闩走
+
 ### Agent wait（替换绝对 390s Kill）
 
 `Invoke-Cscript` 在 saving_* 且未 stall、或 `cancel_pending` 仍在 saving 时：**不得**走 `$process.Kill()`。`Get-RequestDeadline` 钳到 ≥ 1260000。Python `encode_request` 同样。

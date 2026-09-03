@@ -8,6 +8,9 @@ import {
   containRect,
   glbExposure,
   jobHasGround,
+  jobHasReviewCard,
+  loadStillImage,
+  reviewCardKey,
   stillsFilter,
   studioBackdrop,
   STUDIO_GROUND_FILL,
@@ -20,7 +23,7 @@ describe("mockup studio light", () => {
     assert.equal(clampStudioLight(0), 0.6);
     assert.equal(clampStudioLight(9), 1.4);
     assert.equal(clampStudioLight(Number.NaN), 1);
-    assert.equal(stillsFilter(1), "contrast(1.12) brightness(1)");
+    assert.equal(stillsFilter(1), "contrast(1.04) brightness(1)");
     assert.equal(glbExposure(1), "0.9");
     assert.equal(glbExposure(1.4), "1.26");
     assert.equal(glbExposure(0.6), "0.54");
@@ -61,7 +64,7 @@ describe("composeStudioStill", () => {
     assert.deepEqual(containRect(600, 800, 3000, 3600), { x: 0, y: 40, w: 600, h: 720 });
   });
 
-  it("fills 242 then multiplies ground then draws product", () => {
+  it("fills STUDIO_GROUND_FILL then multiplies ground then draws product", () => {
     const ctx = fakeCtx();
     const product = { id: "product", naturalWidth: 3000, naturalHeight: 3600 };
     const ground = { id: "ground", naturalWidth: 3000, naturalHeight: 3600 };
@@ -121,6 +124,19 @@ describe("composeStudioStill", () => {
     assert.equal(jobHasGround([{ key: "white_a" }]), false);
     assert.equal(jobHasGround([{ key: "white_a" }, { key: "white_a_ground" }]), true);
     assert.equal(jobHasGround([{ key: "white_b_ground" }]), true);
+    assert.equal(reviewCardKey("white_a"), "white_a_card");
+    assert.equal(jobHasReviewCard([{ key: "white_a" }], "white_a"), false);
+    assert.equal(jobHasReviewCard([{ key: "white_a" }, { key: "white_a_card" }], "white_a"), true);
+  });
+
+  it("loadStillImage reuses the same in-flight request", async () => {
+    const first = loadStillImage("/api/mockups/x/files/white_a");
+    const second = loadStillImage("/api/mockups/x/files/white_a");
+    assert.equal(first, second);
+    await assert.rejects(first, /load/);
+    const again = loadStillImage("/api/mockups/x/files/white_a");
+    assert.notEqual(again, first);
+    await assert.rejects(again, /load/);
   });
 
   it("returns dest box when source or dest size is zero", () => {

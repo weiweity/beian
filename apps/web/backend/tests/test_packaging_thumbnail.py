@@ -79,3 +79,45 @@ def test_render_pdf_thumbnail_uses_pymupdf(tmp_path):
     with Image.open(out) as im:
         assert im.size[0] == 400
         assert im.size[1] == 200
+
+
+def test_write_review_card_caps_longest_edge_and_keeps_alpha(tmp_path):
+    pipe = _load()
+    source = tmp_path / "front_right_white.png"
+    image = Image.new("RGBA", (3000, 3600), (255, 255, 255, 0))
+    image.putpixel((10, 10), (117, 35, 46, 255))
+    image.save(source)
+    dest = tmp_path / "front_right_white_card.png"
+    pipe.write_review_card(source, dest, max_edge=1440)
+    with Image.open(dest) as card:
+        assert max(card.size) == 1440
+        assert card.size == (1200, 1440)
+        assert "A" in card.getbands()
+    ground = tmp_path / "front_right_ground.png"
+    image.save(ground)
+    job = {
+        "outputs": {
+            "front_right": str(source),
+            "front_right_ground": str(ground),
+        }
+    }
+    pipe.write_review_cards(job)
+    assert Path(job["outputs"]["front_right_card"]).name == "front_right_white_card.png"
+    assert Path(job["outputs"]["front_right_ground_card"]).name == "front_right_ground_card.png"
+    assert "write_review_cards(job)" in PIPE.read_text(encoding="utf-8")
+
+
+def test_write_review_cards_skips_missing_source(tmp_path):
+    pipe = _load()
+    source = tmp_path / "front_right_white.png"
+    Image.new("RGB", (8, 8), (255, 255, 255)).save(source)
+    job = {
+        "outputs": {
+            "front_right": str(source),
+            "back_left": str(tmp_path / "gone.png"),
+        }
+    }
+    pipe.write_review_cards(job)
+    assert "front_right_card" in job["outputs"]
+    assert "back_left_card" not in job["outputs"]
+    assert "front_right_ground_card" not in job["outputs"]

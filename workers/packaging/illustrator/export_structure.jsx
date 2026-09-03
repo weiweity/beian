@@ -158,6 +158,20 @@ function isNeverDefaultProposalLayerName(name) {
     return n.indexOf("印刷") >= 0 || n === "表" || n.indexOf("标注") >= 0 || n.indexOf("码") >= 0;
 }
 
+function shouldSkipInventoryLayerName(name) {
+    var n = String(name || "");
+    if (n === "表") {
+        return true;
+    }
+    if (n.indexOf("标注") >= 0) {
+        return true;
+    }
+    if (n === "Dimensions" || n.indexOf("尺寸") >= 0) {
+        return true;
+    }
+    return false;
+}
+
 function isPrintFallbackEligibleLayerName(name) {
     return name.length > 0 &&
         !isFactoryKnifeLayerName(name) &&
@@ -434,6 +448,104 @@ function recordPreviewPlateCandidate(plates, plateKeys, proposalLayerKeys, item,
     plates.push(plate);
     plateKeys.push(layerKey);
     return false;
+}
+
+function inventoryItemType(item) {
+    try {
+        return String(item.typename || "");
+    } catch (typeError) {
+        return "";
+    }
+}
+
+function inventoryCollection(item, name) {
+    try {
+        return item[name];
+    } catch (readError) {
+        return null;
+    }
+}
+
+function visitInventoryCollection(items, visit) {
+    if (!items || typeof items.length !== "number") {
+        return;
+    }
+    var count = items.length;
+    var index;
+    for (index = 0; index < count; index += 1) {
+        if (visitInventoryNode(items[index], visit) === false) {
+            return false;
+        }
+    }
+}
+
+function visitInventoryNode(item, visit) {
+    if (!item) {
+        return;
+    }
+    var type = inventoryItemType(item);
+    if (type === "GroupItem") {
+        return visitInventoryCollection(
+            inventoryCollection(item, "pageItems") || inventoryCollection(item, "pathItems"),
+            visit
+        );
+    }
+    if (type === "CompoundPathItem") {
+        return visitInventoryCollection(inventoryCollection(item, "pathItems"), visit);
+    }
+    return visit(item);
+}
+
+function eachInventoryPathItem(documentRef, visit) {
+    var usedLayerItems = false;
+    function walkLayer(layer) {
+        if (!layer) {
+            return;
+        }
+        var layerName = "";
+        try {
+            layerName = String(layer.name || "");
+        } catch (nameError) {
+            layerName = "";
+        }
+        if (shouldSkipInventoryLayerName(layerName)) {
+            return;
+        }
+        var pageItems = inventoryCollection(layer, "pageItems");
+        var pathItems = inventoryCollection(layer, "pathItems");
+        if (pageItems && typeof pageItems.length === "number" && pageItems.length > 0) {
+            usedLayerItems = true;
+            visitInventoryCollection(pageItems, visit);
+        } else if (pathItems && typeof pathItems.length === "number" && pathItems.length > 0) {
+            usedLayerItems = true;
+            visitInventoryCollection(pathItems, visit);
+        }
+        var nested = inventoryCollection(layer, "layers");
+        if (nested && nested.length) {
+            var nestedCount = nested.length;
+            var nestedIndex;
+            for (nestedIndex = 0; nestedIndex < nestedCount; nestedIndex += 1) {
+                walkLayer(nested[nestedIndex]);
+            }
+        }
+    }
+    if (documentRef && documentRef.layers && documentRef.layers.length) {
+        var topCount = documentRef.layers.length;
+        var topIndex;
+        for (topIndex = 0; topIndex < topCount; topIndex += 1) {
+            walkLayer(documentRef.layers[topIndex]);
+        }
+    }
+    if (!usedLayerItems && documentRef && documentRef.pathItems) {
+        var all = documentRef.pathItems;
+        var total = all.length;
+        var pathIndex;
+        for (pathIndex = 0; pathIndex < total; pathIndex += 1) {
+            if (visit(all[pathIndex]) === false) {
+                break;
+            }
+        }
+    }
 }
 
 function samePoint(left, right) {
@@ -962,6 +1074,11 @@ try {
         documentRef = app.open(new File(config.source_ai));
     }
     hostState = applyUnattendedHost(documentRef);
+    appendUtf8(
+        debugPath,
+        "host outline_ok=" + (hostState.outline ? "1" : "0") +
+            " view=" + String(hostState.viewMode || "")
+    );
     writeJobProgress(config, "inventory");
     if (documentRef.artboards.length < 1) {
         throw new Error("Document has no artboard");
@@ -1009,17 +1126,32 @@ try {
     var proposalPreviewBudget = {paths: 0, points: 0};
     var platePreviewBudget = {paths: 0, points: 0};
     var remainderItems = [];
-    for (var pathIndex = 0; pathIndex < documentRef.pathItems.length; pathIndex += 1) {
-        var item = documentRef.pathItems[pathIndex];
+    if (!config.proposal_layers || config.proposal_layers.length < 1) {
+        var earlyKnife = uniqueFactoryKnifeLayerName(result.layers);
+        if (earlyKnife !== null) {
+            config.proposal_layers = [earlyKnife];
+        }
+    }
+    var inventoryPathIndex = 0;
+    var remainderLayerName = "";
+    var remainderLayerCount = 0;
+    function visitInventoryItem(item) {
+        var pathIndex = inventoryPathIndex;
+        inventoryPathIndex += 1;
         if (item.clipping) {
-            continue;
+            return;
+        }
+        var layerName = item.layer ? String(item.layer.name || "") : "";
+        if (shouldSkipInventoryLayerName(layerName)) {
+            return;
         }
         var assignment = assignmentOf(item, config);
         if (assignment !== null) {
             explicitRecords.push({item: item, pathIndex: pathIndex, assignment: assignment});
-        } else if (configuredProposalLayer(item, config)) {
+            return;
+        }
+        if (configuredProposalLayer(item, config)) {
             proposalRecords.push({item: item, pathIndex: pathIndex, assignment: "crease"});
-        } else {
             if (recordProposalLayerCandidate(
                 result.proposal_layer_candidates,
                 proposalLayerKeys,
@@ -1030,7 +1162,39 @@ try {
             )) {
                 result.proposal_layer_candidates_truncated = true;
             }
-            remainderItems.push({item: item, pathIndex: pathIndex});
+            if (
+                result.proposal_layer_candidates_truncated ||
+                proposalPreviewBudget.paths >= MAX_PROPOSAL_PREVIEW_PATHS
+            ) {
+                return false;
+            }
+            return;
+        }
+        if (recordProposalLayerCandidate(
+            result.proposal_layer_candidates,
+            proposalLayerKeys,
+            item,
+            artboard[0],
+            artboard[1],
+            proposalPreviewBudget
+        )) {
+            result.proposal_layer_candidates_truncated = true;
+        }
+        if (layerName !== remainderLayerName) {
+            remainderLayerName = layerName;
+            remainderLayerCount = 0;
+        }
+        remainderLayerCount += 1;
+        remainderItems.push({item: item, pathIndex: pathIndex});
+        if (remainderLayerCount >= MAX_PROPOSAL_PREVIEW_PATHS_PER_LAYER) {
+            return false;
+        }
+    }
+    if (typeof eachInventoryPathItem === "function") {
+        eachInventoryPathItem(documentRef, visitInventoryItem);
+    } else {
+        for (var pathIndex = 0; pathIndex < documentRef.pathItems.length; pathIndex += 1) {
+            visitInventoryItem(documentRef.pathItems[pathIndex]);
         }
     }
     if (
@@ -1115,6 +1279,7 @@ try {
     }
     uniquePush(structure.validation.errors, "structure_face_mapping_incomplete");
 
+    restoreUnattendedArtwork(documentRef, hostState);
     writeJobProgress(config, "saving_full_pdf");
     appendUtf8(debugPath, "v2 02 saving full pdf");
     savePdf(documentRef, config.full_pdf);
@@ -1143,6 +1308,11 @@ try {
     writeJobProgress(config, "closing");
     if (documentRef !== null) {
         try {
+            prepareUnattendedClose(documentRef, hostState);
+        } catch (closePrepError) {
+            result.close_prep_error = closePrepError.message;
+        }
+        try {
             documentRef.close(SaveOptions.DONOTSAVECHANGES);
         } catch (closeError) {
             result.close_error = closeError.message;
@@ -1154,7 +1324,7 @@ try {
         result.host_restore_error = hostRestoreError.message;
     }
     app.userInteractionLevel = previousInteractionLevel;
-    if (!resultCommitted || result.close_error || result.host_restore_error) {
+    if (!resultCommitted || result.close_error || result.close_prep_error || result.host_restore_error) {
         try {
             commitResult();
         } catch (finalResultError) {

@@ -1494,6 +1494,56 @@ def preflight_product(
     return resolved
 
 
+REVIEW_CARD_MAX_EDGE = 1440
+
+
+def write_review_card(source: Path, dest: Path, max_edge: int = REVIEW_CARD_MAX_EDGE) -> None:
+    """Card-sized PNG for the desk. Full stills stay on disk for 原图."""
+    source = Path(source)
+    dest = Path(dest)
+    with Image.open(source) as opened:
+        image = opened.convert("RGBA") if "A" in opened.getbands() else opened.convert("RGB")
+        width, height = image.size
+        longest = max(width, height, 1)
+        if longest > max_edge:
+            scale = max_edge / float(longest)
+            image = image.resize(
+                (max(1, round(width * scale)), max(1, round(height * scale))),
+                Image.Resampling.LANCZOS,
+            )
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        handle, temp_name = tempfile.mkstemp(prefix="beian-card.", suffix=".tmp", dir=dest.parent)
+        os.close(handle)
+        try:
+            image.save(temp_name, format="PNG", compress_level=6, optimize=True)
+            os.replace(temp_name, dest)
+        except Exception:
+            try:
+                os.unlink(temp_name)
+            except FileNotFoundError:
+                pass
+            raise
+
+
+def write_review_cards(job: dict[str, Any]) -> None:
+    outputs = job.setdefault("outputs", {})
+    for src_key, dest_key in (
+        ("front_right", "front_right_card"),
+        ("back_left", "back_left_card"),
+        ("front_right_ground", "front_right_ground_card"),
+        ("back_left_ground", "back_left_ground_card"),
+    ):
+        raw = outputs.get(src_key)
+        if not raw:
+            continue
+        source = Path(raw)
+        if not source.is_file():
+            continue
+        dest = source.with_name(f"{source.stem}_card.png")
+        write_review_card(source, dest)
+        outputs[dest_key] = str(dest)
+
+
 def run_blender_job(job: dict[str, Any], blender_executable: Path) -> dict[str, Any]:
     if job.get("cache_hit"):
         return job
@@ -1524,6 +1574,7 @@ def run_blender_job(job: dict[str, Any], blender_executable: Path) -> dict[str, 
         raise PipelineError(f"Blender未生成结果清单：{blender_result_path}")
     blender_result = load_json(blender_result_path)
     job.update(blender_result)
+    write_review_cards(job)
     job["blender_process_elapsed_s"] = round(time.perf_counter() - started, 4)
     return job
 
