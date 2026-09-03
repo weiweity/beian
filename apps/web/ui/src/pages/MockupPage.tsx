@@ -19,6 +19,9 @@ import { HUD_MS, downloadHudLine, missingPptHud } from "./mockupHud";
 import { panBy, resetZoom, zoomAt, zoomCss, type ZoomState } from "./canvasZoom";
 import { listedReadFaces, READ_FACE_LABEL, readFaceKey } from "./mockupReadFaces";
 import {
+  BACKDROP_LABEL,
+  BACKDROP_PRESETS,
+  backdropFrameClass,
   blobFromLitStill,
   blobFromStudioStill,
   canvasFilterSupported,
@@ -29,10 +32,13 @@ import {
   jobHasGround,
   jobHasReviewCard,
   loadStillImage,
+  parseBackdropPreset,
+  readBackdropPreset,
   reviewCardKey,
   stillsFilter,
   studioBackdrop,
-  STUDIO_GROUND_FILL,
+  writeBackdropPreset,
+  type BackdropPreset,
   STUDIO_LIGHT_DEFAULT,
   STUDIO_LIGHT_MAX,
   STUDIO_LIGHT_MIN,
@@ -751,6 +757,7 @@ export function MockupJobPage({
   const [retrying, setRetrying] = useState(false);
   const [repairing, setRepairing] = useState(false);
   const [lightsOpen, setLightsOpen] = useState(false);
+  const [backdrop, setBackdrop] = useState<BackdropPreset>(readBackdropPreset);
   const glbBox = useRef<HTMLDivElement>(null);
   const hudTimer = useRef<number | null>(null);
   const announced = useRef("");
@@ -1038,6 +1045,24 @@ export function MockupJobPage({
           )}
         </div>
       </header>
+      <div className="mockup-backdrop-switch">
+        <span className="mockup-backdrop-label" id="mockup-backdrop-label">
+          背景
+        </span>
+        <Segmented
+          aria-labelledby="mockup-backdrop-label"
+          options={BACKDROP_PRESETS.map((preset) => ({
+            label: BACKDROP_LABEL[preset],
+            value: preset,
+          }))}
+          value={backdrop}
+          onChange={(value) => {
+            const next = parseBackdropPreset(value);
+            setBackdrop(next);
+            writeBackdropPreset(next);
+          }}
+        />
+      </div>
       {lightsOpen ? (
         <div id="mockup-studio-lights">
           <StudioLightSliders
@@ -1088,6 +1113,7 @@ export function MockupJobPage({
             downloadName={whiteA.name}
             productLight={productLight}
             backgroundLight={backgroundLight}
+            backdrop={backdrop}
             onProductLight={setProductLight}
             onBackgroundLight={setBackgroundLight}
             onDownload={() => notice(downloadHudLine("成片"))}
@@ -1102,13 +1128,17 @@ export function MockupJobPage({
             downloadName={whiteA.name}
             productLight={productLight}
             backgroundLight={backgroundLight}
+            backdrop={backdrop}
             onProductLight={setProductLight}
             onBackgroundLight={setBackgroundLight}
             onDownload={() => notice(downloadHudLine("白底"))}
           />
         ) : (
           <figure className="mockup-sheet-photo">
-            <div className={`mockup-sheet-frame${grounded ? " is-studio-ground" : ""}`}>
+            <div
+              className={`mockup-sheet-frame${grounded ? " is-studio-ground" : ""} ${backdropFrameClass(backdrop)}`}
+              style={{ background: studioBackdrop(backgroundLight, backdrop) }}
+            >
               <p className="page-lead">还没有正面+侧面。</p>
             </div>
             <figcaption className="mockup-sheet-cap">正面 + 侧面</figcaption>
@@ -1125,6 +1155,7 @@ export function MockupJobPage({
             downloadName={whiteB.name}
             productLight={productLight}
             backgroundLight={backgroundLight}
+            backdrop={backdrop}
             onProductLight={setProductLight}
             onBackgroundLight={setBackgroundLight}
             onDownload={() => notice(downloadHudLine("成片"))}
@@ -1139,13 +1170,17 @@ export function MockupJobPage({
             downloadName={whiteB.name}
             productLight={productLight}
             backgroundLight={backgroundLight}
+            backdrop={backdrop}
             onProductLight={setProductLight}
             onBackgroundLight={setBackgroundLight}
             onDownload={() => notice(downloadHudLine("白底"))}
           />
         ) : (
           <figure className="mockup-sheet-photo">
-            <div className={`mockup-sheet-frame${grounded ? " is-studio-ground" : ""}`}>
+            <div
+              className={`mockup-sheet-frame${grounded ? " is-studio-ground" : ""} ${backdropFrameClass(backdrop)}`}
+              style={{ background: studioBackdrop(backgroundLight, backdrop) }}
+            >
               <p className="page-lead">还没有反面+侧面。</p>
             </div>
             <figcaption className="mockup-sheet-cap">反面 + 侧面</figcaption>
@@ -1157,6 +1192,7 @@ export function MockupJobPage({
             boxRef={glbBox}
             backgroundLight={backgroundLight}
             productLight={productLight}
+            backdrop={backdrop}
             glbFs={glbFs}
             onNotice={notice}
           />
@@ -1390,6 +1426,7 @@ function GlbShot({
   boxRef,
   backgroundLight,
   productLight,
+  backdrop,
   glbFs,
   onNotice,
 }: {
@@ -1397,13 +1434,18 @@ function GlbShot({
   boxRef: { current: HTMLDivElement | null };
   backgroundLight: number;
   productLight: number;
+  backdrop: BackdropPreset;
   glbFs: boolean;
   onNotice: (text: string) => void;
 }) {
-  const backdrop = studioBackdrop(backgroundLight);
+  const fill = studioBackdrop(backgroundLight, backdrop);
   return (
     <figure className="mockup-sheet-photo">
-      <div className="mockup-sheet-frame mockup-sheet-glb" ref={boxRef} style={{ background: backdrop }}>
+      <div
+        className={`mockup-sheet-frame mockup-sheet-glb ${backdropFrameClass(backdrop)}`}
+        ref={boxRef}
+        style={{ background: fill }}
+      >
         <model-viewer
           src={fileHref(jobId, "glb")}
           camera-controls
@@ -1414,8 +1456,8 @@ function GlbShot({
           tone-mapping="commerce"
           interaction-prompt="none"
           style={{
-            background: backdrop,
-            ["--poster-color" as string]: backdrop,
+            background: fill,
+            ["--poster-color" as string]: fill,
           }}
         />
         <button
@@ -1509,6 +1551,7 @@ function GroundedShot({
   downloadName,
   productLight,
   backgroundLight,
+  backdrop,
   onProductLight,
   onBackgroundLight,
   onDownload,
@@ -1524,6 +1567,7 @@ function GroundedShot({
   downloadName?: string;
   productLight: number;
   backgroundLight: number;
+  backdrop: BackdropPreset;
   onProductLight: (value: number) => void;
   onBackgroundLight: (value: number) => void;
   onDownload: () => void;
@@ -1568,7 +1612,7 @@ function GroundedShot({
       setBad(true);
       return;
     }
-    ctx.fillStyle = STUDIO_GROUND_FILL;
+    ctx.fillStyle = studioBackdrop(backgroundLight, backdrop);
     ctx.fillRect(0, 0, destW, destH);
     setReady(false);
     let cancelled = false;
@@ -1608,9 +1652,10 @@ function GroundedShot({
     composeStudioStill(ctx, canvas.width, canvas.height, sources.product, sources.ground, {
       productLight,
       backgroundLight,
+      backdrop,
       filterSupported: canvasFilterSupported(ctx),
     });
-  }, [visible, bad, ready, productLight, backgroundLight]);
+  }, [visible, bad, ready, productLight, backgroundLight, backdrop]);
 
   useEffect(() => {
     return () => {
@@ -1637,7 +1682,7 @@ function GroundedShot({
         loadStillImage(fileHref(jobId, fileKey)),
         loadStillImage(fileHref(jobId, groundKey)),
       ]);
-      const blob = await blobFromStudioStill(product, ground, { productLight, backgroundLight });
+      const blob = await blobFromStudioStill(product, ground, { productLight, backgroundLight, backdrop });
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
@@ -1654,7 +1699,11 @@ function GroundedShot({
 
   return (
     <figure className="mockup-sheet-photo">
-      <div className="mockup-sheet-frame is-studio-ground" ref={frameRef} style={{ background: STUDIO_GROUND_FILL }}>
+      <div
+        className={`mockup-sheet-frame is-studio-ground ${backdropFrameClass(backdrop)}`}
+        ref={frameRef}
+        style={{ background: studioBackdrop(backgroundLight, backdrop) }}
+      >
         {bad ? (
           <p className="page-lead">这张白底图坏了，回到打样台重新打。</p>
         ) : (
@@ -1693,7 +1742,10 @@ function GroundedShot({
               onClick={() => setOriginalOpen(false)}
             >
               <div className="mockup-still-lightbox-panel" onClick={(event) => event.stopPropagation()}>
-                <div className="mockup-still-lightbox-stage is-studio-ground" style={{ background: STUDIO_GROUND_FILL }}>
+                <div
+                  className={`mockup-still-lightbox-stage is-studio-ground ${backdropFrameClass(backdrop)}`}
+                  style={{ background: studioBackdrop(backgroundLight, backdrop) }}
+                >
                   <GroundedLightboxStill
                     jobId={jobId}
                     fileKey={fileKey}
@@ -1701,6 +1753,7 @@ function GroundedShot({
                     alt={alt}
                     productLight={productLight}
                     backgroundLight={backgroundLight}
+                    backdrop={backdrop}
                     placeholder={previewRef.current}
                   />
                 </div>
@@ -1734,6 +1787,7 @@ function GroundedLightboxStill({
   alt,
   productLight,
   backgroundLight,
+  backdrop,
   placeholder,
 }: {
   jobId: string;
@@ -1742,6 +1796,7 @@ function GroundedLightboxStill({
   alt: string;
   productLight: number;
   backgroundLight: number;
+  backdrop: BackdropPreset;
   placeholder?: { product: PreviewSource; ground: PreviewSource } | null;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -1779,9 +1834,10 @@ function GroundedLightboxStill({
     composeStudioStill(ctx, canvas.width, canvas.height, sources.product, sources.ground, {
       productLight,
       backgroundLight,
+      backdrop,
       filterSupported: canvasFilterSupported(ctx),
     });
-  }, [loaded, productLight, backgroundLight]);
+  }, [loaded, productLight, backgroundLight, backdrop]);
   return <canvas ref={canvasRef} className="mockup-studio-lightbox-canvas" aria-label={alt} />;
 }
 
@@ -1840,6 +1896,7 @@ function WhiteShot({
   downloadName,
   productLight,
   backgroundLight,
+  backdrop,
   onProductLight,
   onBackgroundLight,
   onDownload,
@@ -1851,6 +1908,7 @@ function WhiteShot({
   downloadName?: string;
   productLight: number;
   backgroundLight: number;
+  backdrop: BackdropPreset;
   onProductLight: (value: number) => void;
   onBackgroundLight: (value: number) => void;
   onDownload: () => void;
@@ -1859,7 +1917,7 @@ function WhiteShot({
   const [originalOpen, setOriginalOpen] = useState(false);
   const imgRef = useRef<HTMLImageElement>(null);
   const exporting = useRef(false);
-  const backdrop = studioBackdrop(backgroundLight);
+  const fill = studioBackdrop(backgroundLight, backdrop);
   const filter = stillsFilter(productLight);
 
   useEffect(() => {
@@ -1876,7 +1934,7 @@ function WhiteShot({
     if (!img || exporting.current) return;
     exporting.current = true;
     try {
-      const blob = await blobFromLitStill(img, { productLight, backgroundLight });
+      const blob = await blobFromLitStill(img, { productLight, backgroundLight, backdrop });
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
@@ -1893,7 +1951,7 @@ function WhiteShot({
 
   return (
     <figure className="mockup-sheet-photo">
-      <div className="mockup-sheet-frame" style={{ background: backdrop }}>
+      <div className={`mockup-sheet-frame ${backdropFrameClass(backdrop)}`} style={{ background: fill }}>
         {bad ? (
           <p className="page-lead">这张白底图坏了，回到打样台重新打。</p>
         ) : (
@@ -1937,7 +1995,10 @@ function WhiteShot({
               onClick={() => setOriginalOpen(false)}
             >
               <div className="mockup-still-lightbox-panel" onClick={(event) => event.stopPropagation()}>
-                <div className="mockup-still-lightbox-stage" style={{ background: backdrop }}>
+                <div
+                  className={`mockup-still-lightbox-stage ${backdropFrameClass(backdrop)}`}
+                  style={{ background: fill }}
+                >
                   <img src={fileHref(jobId, fileKey)} alt={alt} style={{ filter }} />
                 </div>
                 <StudioLightSliders

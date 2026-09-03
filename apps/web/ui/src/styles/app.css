@@ -3542,6 +3542,40 @@ html[data-theme="dark"] .notes.is-float {
   min-height: 0;
 }
 
+.mockup-backdrop-switch {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 16px;
+  min-height: 44px;
+}
+
+.mockup-backdrop-label {
+  color: #1c1a1f;
+  font-size: 16px;
+}
+
+.mockup-backdrop-switch .ant-segmented {
+  min-height: 44px;
+}
+
+.mockup-backdrop-switch .ant-segmented-item {
+  min-height: 44px;
+  padding-inline: 14px;
+}
+
+.mockup-sheet-frame.is-backdrop-silver,
+.mockup-still-lightbox-stage.is-backdrop-silver {
+  background: linear-gradient(180deg, #d7dbe0 0%, #c5c9ce 52%, #e4e7eb 100%);
+}
+
+.mockup-sheet-frame.is-backdrop-white-set,
+.mockup-still-lightbox-stage.is-backdrop-white-set {
+  background:
+    linear-gradient(#f5f5f3 0%, #ecece8 57.5%, #d0d0cc 58%, #f3f3ef 58%, #e8e8e4 100%);
+}
+
 .mockup-studio-lights {
   display: flex;
   flex-wrap: wrap;

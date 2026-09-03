@@ -6,6 +6,7 @@
 
 - 打样单成片改回一屏三列：正面+侧面、反面+侧面、GLB 并排，不要一张大图压在上面。
 - 调灯收到页头折叠钮后面，默认关，不挡三张成片。
+- 打样单可切白底 / 银底 / 白桌白墙。浏览器当场合成，不排队重跑 3D。白桌白墙是白墙加白台面，不是木桌。
 
 ### Added
 
@@ -13,7 +14,8 @@
 
 ### For contributors
 
-- 详情 `can_repair_print_faces`；`POST /api/mockups/:id/print-faces` 走 V2 `render_face_assets`，原子四面，全机一锁。禁止 `pipeline.py` / Blender 槽。换背景是下一楔。
+- 详情 `can_repair_print_faces`；`POST /api/mockups/:id/print-faces` 走 V2 `render_face_assets`，原子四面，全机一锁。禁止 `pipeline.py` / Blender 槽。
+- 换背景是 compositor：`white` / `silver` / `white_set`。白/银不乘地面；白桌白墙才用接触影。真金属地、真桌子几何、木桌仍 hold。
 
 ## [0.21.22.0] - 2026-09-03
 

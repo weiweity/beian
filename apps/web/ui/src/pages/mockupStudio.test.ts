@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  BACKDROP_DEFAULT,
+  backdropFrameClass,
   blobFromStudioStill,
   canvasFilterSupported,
   clampStudioLight,
@@ -10,9 +12,12 @@ import {
   jobHasGround,
   jobHasReviewCard,
   loadStillImage,
+  parseBackdropPreset,
+  readBackdropPreset,
   reviewCardKey,
   stillsFilter,
   studioBackdrop,
+  usesContactShadow,
   STUDIO_GROUND_FILL,
   STUDIO_LIGHT_DEFAULT,
 } from "./mockupStudio.js";
@@ -34,6 +39,21 @@ describe("mockup studio light", () => {
     assert.equal(studioBackdrop(1.4), "rgb(255, 255, 255)");
     assert.equal(studioBackdrop(0.6), "rgb(153, 153, 153)");
     assert.equal(studioBackdrop(Number.NaN), "rgb(255, 255, 255)");
+  });
+
+  it("maps silver and white-set fills without leaving the compositor", () => {
+    assert.equal(studioBackdrop(1, "silver"), "rgb(196, 201, 208)");
+    assert.equal(studioBackdrop(1, "white_set"), STUDIO_GROUND_FILL);
+    assert.equal(studioBackdrop(0.6, "white_set"), "rgb(137, 137, 139)");
+    assert.equal(usesContactShadow("white_set"), true);
+    assert.equal(usesContactShadow("white"), false);
+    assert.equal(usesContactShadow("silver"), false);
+    assert.equal(parseBackdropPreset("silver"), "silver");
+    assert.equal(parseBackdropPreset("nope"), BACKDROP_DEFAULT);
+    assert.equal(readBackdropPreset(), BACKDROP_DEFAULT);
+    assert.equal(backdropFrameClass("silver"), "is-backdrop-silver");
+    assert.equal(backdropFrameClass("white_set"), "is-backdrop-white-set");
+    assert.equal(backdropFrameClass("white"), "is-backdrop-white");
   });
 });
 
@@ -159,6 +179,56 @@ describe("composeStudioStill", () => {
     assert.equal(images[0]?.[6], "brightness(0.6)");
     assert.equal(images[0]?.[7], "multiply");
     assert.equal(images[1]?.[6], stillsFilter(1));
+  });
+
+  it("white and silver skip the ground pass so catalog fills stay clean", () => {
+    const ctx = fakeCtx();
+    composeStudioStill(
+      ctx as unknown as CanvasRenderingContext2D,
+      600,
+      800,
+      { id: "product", naturalWidth: 3000, naturalHeight: 3600 },
+      { id: "ground", naturalWidth: 3000, naturalHeight: 3600 },
+      { productLight: 1, backgroundLight: 1, filterSupported: true, backdrop: "white" },
+    );
+    const images = ctx.calls.filter((call) => call[0] === "drawImage");
+    assert.equal(images.length, 1);
+    assert.equal(images[0]?.[1], "product");
+    const fill = ctx.calls.find((call) => call[0] === "fillRect");
+    assert.equal(fill?.[1], "rgb(255, 255, 255)");
+  });
+
+  it("silver fills a cool gray and does not multiply ground", () => {
+    const ctx = fakeCtx();
+    composeStudioStill(
+      ctx as unknown as CanvasRenderingContext2D,
+      600,
+      800,
+      { id: "product", naturalWidth: 3000, naturalHeight: 3600 },
+      { id: "ground", naturalWidth: 3000, naturalHeight: 3600 },
+      { productLight: 1, backgroundLight: 1, filterSupported: true, backdrop: "silver" },
+    );
+    assert.equal(ctx.calls.find((call) => call[0] === "fillRect")?.[1], "rgb(196, 201, 208)");
+    assert.equal(ctx.calls.filter((call) => call[0] === "drawImage").length, 1);
+  });
+
+  it("white-set paints a wall above the table then multiplies ground", () => {
+    const ctx = fakeCtx();
+    composeStudioStill(
+      ctx as unknown as CanvasRenderingContext2D,
+      600,
+      800,
+      { id: "product", naturalWidth: 3000, naturalHeight: 3600 },
+      { id: "ground", naturalWidth: 3000, naturalHeight: 3600 },
+      { productLight: 1, backgroundLight: 1, filterSupported: true, backdrop: "white_set" },
+    );
+    const fills = ctx.calls.filter((call) => call[0] === "fillRect");
+    assert.equal(fills[0]?.[1], STUDIO_GROUND_FILL);
+    assert.ok(fills.length >= 2);
+    const images = ctx.calls.filter((call) => call[0] === "drawImage");
+    assert.equal(images[0]?.[1], "ground");
+    assert.equal(images[0]?.[7], "multiply");
+    assert.equal(images[1]?.[1], "product");
   });
 
   it("skips empty product or ground sources", () => {

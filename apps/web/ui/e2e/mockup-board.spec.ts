@@ -152,6 +152,7 @@ test("完成态打样单可分开调产品和背景灯光，原图灯箱也能�
 
   await expect(page.getByRole("button", { name: "调灯" })).toBeVisible();
   await expect(page.getByRole("slider", { name: "产品灯光" })).toHaveCount(0);
+  await page.locator(".mockup-backdrop-switch").getByText("白底", { exact: true }).click();
   await page.getByRole("button", { name: "调灯" }).click();
   const productLight = page.getByRole("slider", { name: "产品灯光" }).first();
   const backgroundLight = page.getByRole("slider", { name: "背景灯光" }).first();
@@ -375,6 +376,17 @@ test("有 ground 的已出图单走 canvas 成片，不显示 PPT，调灯默认
   await expect(page.getByRole("link", { name: "下载 PPT" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "下载 PPT" })).toHaveCount(0);
   await expect(page.locator(".mockup-sheet-photos.is-grounded .mockup-sheet-frame").first()).toHaveCSS("aspect-ratio", /5\s*\/\s*6/);
+  const switcher = page.locator(".mockup-backdrop-switch");
+  await expect(switcher.getByText("白底", { exact: true })).toBeVisible();
+  await expect(switcher.getByText("银底", { exact: true })).toBeVisible();
+  await expect(switcher.getByText("白桌白墙", { exact: true })).toBeVisible();
+  const postsBefore = syntheticApi.calls.filter((call) => call.method === "POST").length;
+  await switcher.getByText("银底", { exact: true }).click();
+  await expect(page.locator(".mockup-sheet-photos.is-grounded canvas").first()).toBeVisible();
+  await expect(page.locator(".mockup-sheet-frame").first()).toHaveClass(/is-backdrop-silver/);
+  expect(syntheticApi.calls.filter((call) => call.method === "POST").length).toBe(postsBefore);
+  await switcher.getByText("白底", { exact: true }).click();
+  await expect(page.locator(".mockup-sheet-frame").first()).toHaveClass(/is-backdrop-white/);
   await page.getByRole("button", { name: "调灯" }).click();
   await expect(page.getByRole("slider", { name: "产品灯光" })).toBeVisible();
   await page.getByRole("button", { name: /打开正面/ }).click();
