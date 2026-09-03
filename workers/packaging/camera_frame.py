@@ -1,4 +1,4 @@
-"""白底静帧取景。不碰 add_box。给 render_job 和测试共用。"""
+"""白底静帧取景与地面放置。BOX_PANEL_GAP_MM 与 add_box 对齐，不改盒子几何。"""
 
 from __future__ import annotations
 
@@ -39,3 +39,22 @@ def camera_fit_after_yaw(
         camera_target_mm(span_w, span_d, span_h),
         camera_ortho_scale_mm(span_w, span_d, span_h),
     )
+
+
+# Keep in sync with add_box panel gap. Do not rewrite add_box.
+BOX_PANEL_GAP_MM = 0.065
+GROUND_PLANE_OFFSET_MM = 0.2
+
+
+def box_bottom_z_mm(gap: float = BOX_PANEL_GAP_MM) -> float:
+    return 0.0 - float(gap)
+
+
+def ground_plane_z(bottom_z: float, offset: float = GROUND_PLANE_OFFSET_MM) -> float:
+    """Ground sits offset mm below the carton bottom panel."""
+    return float(bottom_z) - float(offset)
+
+
+def ground_plane_size(ortho_scale: float) -> float:
+    """Cover the ortho frustum; never smaller than the legacy 600mm floor."""
+    return max(600.0, 2.5 * float(ortho_scale))

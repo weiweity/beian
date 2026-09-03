@@ -42,6 +42,39 @@ def test_camera_ortho_covers_height_not_just_longest_side():
     assert loc[2] > target[2]
 
 
+def test_render_job_isolates_ground_pass_and_prefers_eevee_next():
+    source = (PACKAGING / "blender" / "render_job.py").read_text(encoding="utf-8")
+    assert "def render_view_pair" in source
+    product_at = source.index('render_still(scene, job["outputs"][product_key])')
+    try_at = source.index("try:", product_at)
+    except_at = source.index("except Exception", try_at)
+    finally_at = source.index("finally:", except_at)
+    assert product_at < try_at
+    assert "if dest:" in source[try_at:except_at]
+    assert "set_product_holdout(model_objects, True)" in source[try_at:except_at]
+    assert "ground pass failed" in source[except_at:finally_at]
+    assert "set_product_holdout(model_objects, False)" in source[finally_at:]
+    assert "ground.hide_render = True" in source[finally_at:]
+    assert source.index("BLENDER_EEVEE_NEXT") < source.index('scene.render.engine = "BLENDER_EEVEE"')
+    assert "for obj in model_objects" in source
+
+
+def test_ground_plane_z_is_bottom_minus_point_two():
+    cam = camera_frame()
+    bottom = cam.box_bottom_z_mm()
+    assert bottom == pytest.approx(-0.065)
+    assert cam.ground_plane_z(bottom) == pytest.approx(-0.265)
+
+
+def test_ground_plane_size_covers_ortho_frustum():
+    cam = camera_frame()
+    flower_scale = cam.camera_ortho_scale_mm(47.5, 47.5, 177.5)
+    assert flower_scale == pytest.approx(241.4)
+    assert cam.ground_plane_size(240) == pytest.approx(600.0)
+    assert cam.ground_plane_size(flower_scale) == pytest.approx(603.5)
+    assert cam.ground_plane_size(400) == pytest.approx(1000.0)
+
+
 def test_camera_fit_after_front_back_rotation():
     cam = camera_frame()
     import math
@@ -609,3 +642,16 @@ def test_all_output_files_exist_without_ppt(tmp_path: Path):
         files[key] = str(f)
     assert p.all_output_files_exist({"outputs": files}, False) is True
     assert p.all_output_files_exist({"outputs": files}, True) is True
+    files["front_right_ground"] = str(tmp_path / "missing_ground.png")
+    assert p.all_output_files_exist({"outputs": files}, False) is True
+
+
+def test_preflight_output_dicts_declare_optional_ground_keys():
+    source = (PACKAGING / "pipeline.py").read_text(encoding="utf-8")
+    assert source.count('"front_right_ground"') >= 2
+    assert source.count('"back_left_ground"') >= 2
+    required = (PACKAGING / "pipeline.py").read_text(encoding="utf-8")
+    start = required.index("def all_output_files_exist")
+    body = required[start : required.index("def main")]
+    assert "front_right_ground" not in body
+    assert 'keys = ["blend", "glb", "front_right", "back_left"]' in body

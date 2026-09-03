@@ -10,7 +10,16 @@ from mathutils import Matrix, Vector
 _PACKAGING = Path(__file__).resolve().parents[1]
 if str(_PACKAGING) not in sys.path:
     sys.path.insert(0, str(_PACKAGING))
-from camera_frame import aabb_after_z_rotation, camera_fit_after_yaw, camera_location_mm, camera_ortho_scale_mm, camera_target_mm
+from camera_frame import (
+    aabb_after_z_rotation,
+    box_bottom_z_mm,
+    camera_fit_after_yaw,
+    camera_location_mm,
+    camera_ortho_scale_mm,
+    camera_target_mm,
+    ground_plane_size,
+    ground_plane_z,
+)
 from glb_verify import (
     SEMANTIC_FACES,
     compare_glb_core_contract,
@@ -178,11 +187,93 @@ def look_at(obj, target=(0, 0, 0)):
     obj.rotation_euler = direction.to_track_quat("-Z", "Y").to_euler()
 
 
+def apply_eevee_engine(scene):
+    engine_prop = bpy.types.RenderSettings.bl_rna.properties.get("engine")
+    identifiers = [item.identifier for item in engine_prop.enum_items] if engine_prop else []
+    if "BLENDER_EEVEE_NEXT" in identifiers:
+        scene.render.engine = "BLENDER_EEVEE_NEXT"
+    else:
+        scene.render.engine = "BLENDER_EEVEE"
+
+
+def make_ground_material():
+    material = bpy.data.materials.new("MAT_StudioGround")
+    material.use_nodes = True
+    nodes = material.node_tree.nodes
+    links = material.node_tree.links
+    for node in list(nodes):
+        nodes.remove(node)
+    output = nodes.new("ShaderNodeOutputMaterial")
+    shader = nodes.new("ShaderNodeBsdfPrincipled")
+    shader.inputs["Base Color"].default_value = (1.0, 1.0, 1.0, 1.0)
+    shader.inputs["Roughness"].default_value = 0.82
+    if shader.inputs.get("Emission Strength"):
+        shader.inputs["Emission Strength"].default_value = 0.0
+    links.new(shader.outputs["BSDF"], output.inputs["Surface"])
+    if hasattr(material, "blend_method"):
+        material.blend_method = "OPAQUE"
+    return material
+
+
+def add_studio_ground():
+    bpy.ops.mesh.primitive_plane_add(size=1, location=(0.0, 0.0, ground_plane_z(box_bottom_z_mm())))
+    ground = bpy.context.object
+    ground.name = "StudioGround"
+    ground.data.materials.append(make_ground_material())
+    ground.hide_render = True
+    return ground
+
+
+def fit_ground_plane(ground, ortho_scale):
+    size = ground_plane_size(ortho_scale)
+    ground.scale = (size, size, 1.0)
+    ground.location = (0.0, 0.0, ground_plane_z(box_bottom_z_mm()))
+
+
+def set_product_holdout(model_objects, holdout):
+    for obj in model_objects:
+        if hasattr(obj, "visible_camera"):
+            obj.visible_camera = not holdout
+        if hasattr(obj, "visible_shadow"):
+            obj.visible_shadow = True
+        obj.hide_render = False
+
+
+def render_still(scene, path):
+    scene.render.filepath = str(path)
+    bpy.ops.render.render(write_still=True)
+
+
+def render_view_pair(scene, camera, job, yaw_rad, product_key, ground_key, root, model_objects, ground):
+    # product RGBA, then isolated ground; restore visibility in finally
+    root.rotation_euler.z = yaw_rad
+    bpy.context.view_layer.update()
+    apply_camera_fit(camera, job, yaw_rad)
+    fit_ground_plane(ground, camera.data.ortho_scale)
+    set_product_holdout(model_objects, False)
+    ground.hide_render = True
+    scene.render.film_transparent = True
+    scene.render.image_settings.color_mode = "RGBA"
+    render_still(scene, job["outputs"][product_key])
+    try:
+        set_product_holdout(model_objects, True)
+        ground.hide_render = False
+        dest = job["outputs"].get(ground_key)
+        if dest:
+            render_still(scene, dest)
+    except Exception as err:
+        print(f"ground pass failed {ground_key}: {err}", file=sys.stderr)
+    finally:
+        set_product_holdout(model_objects, False)
+        ground.hide_render = True
+
+
+
 def add_studio(job):
     scene = bpy.context.scene
     render_config = job["render"]
     exact_white_background = bool(render_config.get("exact_white_background", True))
-    scene.render.engine = "BLENDER_EEVEE"
+    apply_eevee_engine(scene)
     scene.render.resolution_x = int(render_config["resolution_x"])
     scene.render.resolution_y = int(render_config["resolution_y"])
     scene.render.resolution_percentage = 100
@@ -295,23 +386,17 @@ def apply_camera_fit(camera, job, yaw_rad):
     look_at(camera, target)
 
 
-def render_views(job, root):
+def render_views(job, root, model_objects, ground):
     scene = bpy.context.scene
     camera = scene.camera
-    outputs = job["outputs"]
     front_rotation = math.radians(float(job["render"].get("front_rotation_deg", 0)))
     back_rotation = math.radians(float(job["render"].get("back_rotation_deg", 180)))
-    root.rotation_euler.z = front_rotation
-    bpy.context.view_layer.update()
-    apply_camera_fit(camera, job, front_rotation)
-    scene.render.filepath = outputs["front_right"]
-    bpy.ops.render.render(write_still=True)
-
-    root.rotation_euler.z = back_rotation
-    bpy.context.view_layer.update()
-    apply_camera_fit(camera, job, back_rotation)
-    scene.render.filepath = outputs["back_left"]
-    bpy.ops.render.render(write_still=True)
+    render_view_pair(
+        scene, camera, job, front_rotation, "front_right", "front_right_ground", root, model_objects, ground
+    )
+    render_view_pair(
+        scene, camera, job, back_rotation, "back_left", "back_left_ground", root, model_objects, ground
+    )
     root.rotation_euler.z = 0.0
 
 
@@ -520,7 +605,8 @@ def main():
     clean_scene()
     root, model_objects = add_box(job)
     add_studio(job)
-    render_views(job, root)
+    ground = add_studio_ground()
+    render_views(job, root, model_objects, ground)
     export_model(job, root, model_objects)
     dimension_report = verify_glb(job)
     measured_sorted = sorted(dimension_report["measured_mm"].values())

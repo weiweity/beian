@@ -3650,6 +3650,65 @@ html[data-theme="dark"] .notes.is-float {
   background: transparent;
 }
 
+.mockup-sheet-photos.is-studio-hero {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.mockup-sheet-hero {
+  width: min(100%, 480px);
+  margin-inline: auto;
+}
+
+.mockup-sheet-hero .mockup-sheet-frame {
+  aspect-ratio: 5 / 6;
+  width: 100%;
+  background: rgb(242, 242, 244);
+}
+
+.mockup-sheet-hero .mockup-sheet-frame::after,
+.mockup-sheet-frame.is-studio-ground::after,
+.mockup-still-lightbox-stage.is-studio-ground::after {
+  content: none;
+}
+
+.mockup-sheet-secondary {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.mockup-studio-canvas,
+.mockup-studio-lightbox-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.mockup-studio-lightbox-canvas {
+  max-width: 100%;
+  max-height: min(72vh, 820px);
+  width: auto;
+  height: auto;
+  margin-inline: auto;
+  aspect-ratio: 5 / 6;
+}
+
+.mockup-studio-toggle {
+  align-self: center;
+}
+
+.mockup-dl:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.mockup-dl:disabled:hover,
+.mockup-dl:disabled:active {
+  filter: none;
+}
+
 .mockup-sheet-glb model-viewer {
   display: block;
   width: 100%;
@@ -3848,6 +3907,10 @@ html[data-theme="dark"] .notes.is-float {
   }
 
   .mockup-sheet-photos {
+    grid-template-columns: 1fr;
+  }
+
+  .mockup-sheet-secondary {
     grid-template-columns: 1fr;
   }
 
