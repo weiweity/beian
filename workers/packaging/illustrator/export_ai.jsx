@@ -1,3 +1,5 @@
+#include "unattended_host.jsx"
+
 function readUtf8(pathValue) {
     var file = new File(pathValue);
     file.encoding = "UTF-8";
@@ -7,16 +9,6 @@ function readUtf8(pathValue) {
     var text = file.read();
     file.close();
     return text;
-}
-
-function writeUtf8(pathValue, text) {
-    var file = new File(pathValue);
-    file.encoding = "UTF-8";
-    if (!file.open("w")) {
-        throw new Error("Cannot write result: " + pathValue);
-    }
-    file.write(text);
-    file.close();
 }
 
 function appendUtf8(pathValue, text) {
@@ -102,11 +94,20 @@ var result = {
     print_pdf: config.print_pdf,
     layers: [],
     page_size_points: [],
-    illustrator_version: app.version
+    illustrator_version: app.version,
+    attempt_id: config.attempt_id || ""
 };
+var hostState = { liveEdit: null, restored: true };
+var resultCommitted = false;
+
+function commitResult() {
+    writeUtf8(config.result_json, jsonStringify(result));
+    resultCommitted = true;
+}
 
 try {
     app.userInteractionLevel = UserInteractionLevel.DONTDISPLAYALERTS;
+    writeJobProgress(config, "opening");
     appendUtf8(debugPath, "02 opening source");
     if (config.document_already_open) {
         if (app.documents.length < 1) {
@@ -116,6 +117,8 @@ try {
     } else {
         documentRef = app.open(new File(config.source_ai));
     }
+    hostState = applyUnattendedHost(documentRef);
+    writeJobProgress(config, "inventory");
     appendUtf8(debugPath, "03 source opened");
     if (documentRef.artboards.length < 1) {
         throw new Error("Document has no artboard");
@@ -133,6 +136,7 @@ try {
         visibility.push(documentRef.layers[layerIndex].visible);
     }
 
+    writeJobProgress(config, "saving_full_pdf");
     appendUtf8(debugPath, "04 saving full pdf");
     savePdf(documentRef, config.full_pdf);
     appendUtf8(debugPath, "05 full pdf saved");
@@ -144,16 +148,25 @@ try {
         );
     }
     appendUtf8(debugPath, "06 print layers selected");
+    writeJobProgress(config, "saving_artwork_pdf");
     appendUtf8(debugPath, "07 saving print pdf");
     savePdf(documentRef, config.print_pdf);
     appendUtf8(debugPath, "08 print pdf saved");
 
     result.success = true;
+    writeJobProgress(config, "writing_result");
+    commitResult();
 } catch (error) {
     appendUtf8(debugPath, "ERROR " + error.message);
     result.error = error.message;
     result.error_line = error.line || null;
+    try {
+        commitResult();
+    } catch (resultError) {
+        appendUtf8(debugPath, "ERROR result " + resultError.message);
+    }
 } finally {
+    writeJobProgress(config, "closing");
     appendUtf8(debugPath, "09 closing document");
     if (documentRef !== null) {
         try {
@@ -162,8 +175,19 @@ try {
             result.close_error = closeError.message;
         }
     }
+    try {
+        restoreUnattendedHost(hostState);
+    } catch (hostRestoreError) {
+        result.host_restore_error = hostRestoreError.message;
+    }
     app.userInteractionLevel = previousInteractionLevel;
-    writeUtf8(config.result_json, jsonStringify(result));
+    if (!resultCommitted || result.close_error || result.host_restore_error) {
+        try {
+            commitResult();
+        } catch (finalResultError) {
+            appendUtf8(debugPath, "ERROR final result " + finalResultError.message);
+        }
+    }
     appendUtf8(debugPath, "10 result written");
 }
 

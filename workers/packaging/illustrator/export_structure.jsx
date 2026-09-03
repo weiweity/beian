@@ -1,4 +1,5 @@
 #include "curve_flatten.js"
+#include "unattended_host.jsx"
 
 function readUtf8(pathValue) {
     var file = new File(pathValue);
@@ -9,16 +10,6 @@ function readUtf8(pathValue) {
     var text = file.read();
     file.close();
     return text;
-}
-
-function writeUtf8(pathValue, text) {
-    var file = new File(pathValue);
-    file.encoding = "UTF-8";
-    if (!file.open("w")) {
-        throw new Error("Cannot write result: " + pathValue);
-    }
-    file.write(text);
-    file.close();
 }
 
 function appendUtf8(pathValue, text) {
@@ -944,14 +935,23 @@ var result = {
     page_size_points: [],
     semantic_path_count: 0,
     semantic_edge_count: 0,
-    illustrator_version: app.version
+    illustrator_version: app.version,
+    attempt_id: config.attempt_id || ""
 };
+var hostState = { liveEdit: null, restored: true };
+var resultCommitted = false;
+
+function commitResult() {
+    writeUtf8(config.result_json, jsonStringify(result));
+    resultCommitted = true;
+}
 
 try {
     if (!config.source_sha256 || String(config.source_sha256).length !== 64) {
         throw new Error("source_sha256 is required for semantic export");
     }
     app.userInteractionLevel = UserInteractionLevel.DONTDISPLAYALERTS;
+    writeJobProgress(config, "opening");
     appendUtf8(debugPath, "v2 01 opening source");
     if (config.document_already_open) {
         if (app.documents.length < 1) {
@@ -961,6 +961,8 @@ try {
     } else {
         documentRef = app.open(new File(config.source_ai));
     }
+    hostState = applyUnattendedHost(documentRef);
+    writeJobProgress(config, "inventory");
     if (documentRef.artboards.length < 1) {
         throw new Error("Document has no artboard");
     }
@@ -1113,22 +1115,32 @@ try {
     }
     uniquePush(structure.validation.errors, "structure_face_mapping_incomplete");
 
+    writeJobProgress(config, "saving_full_pdf");
     appendUtf8(debugPath, "v2 02 saving full pdf");
     savePdf(documentRef, config.full_pdf);
     withHiddenSemanticItems(semanticItems, function () {
         withConfiguredPrintLayers(documentRef, config.print_layers, function () {
+            writeJobProgress(config, "saving_artwork_pdf");
             appendUtf8(debugPath, "v2 03 saving isolated artwork pdf");
             savePdf(documentRef, config.print_pdf);
         });
     });
+    writeJobProgress(config, "writing_result");
     writeUtf8(config.structure_json, jsonStringify(structure));
     result.semantic_errors = structure.validation.errors;
     result.success = true;
+    commitResult();
 } catch (error) {
     appendUtf8(debugPath, "V2 ERROR " + error.message);
     result.error = error.message;
     result.error_line = error.line || null;
+    try {
+        commitResult();
+    } catch (resultError) {
+        appendUtf8(debugPath, "V2 ERROR result " + resultError.message);
+    }
 } finally {
+    writeJobProgress(config, "closing");
     if (documentRef !== null) {
         try {
             documentRef.close(SaveOptions.DONOTSAVECHANGES);
@@ -1136,8 +1148,19 @@ try {
             result.close_error = closeError.message;
         }
     }
+    try {
+        restoreUnattendedHost(hostState);
+    } catch (hostRestoreError) {
+        result.host_restore_error = hostRestoreError.message;
+    }
     app.userInteractionLevel = previousInteractionLevel;
-    writeUtf8(config.result_json, jsonStringify(result));
+    if (!resultCommitted || result.close_error || result.host_restore_error) {
+        try {
+            commitResult();
+        } catch (finalResultError) {
+            appendUtf8(debugPath, "V2 ERROR final result " + finalResultError.message);
+        }
+    }
 }
 
 jsonStringify(result);

@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import threading
 import time
 
 
@@ -14,6 +15,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from illustrator_agent import IllustratorAgentError, request_agent
+from unattended_wait import parse_job_sidecar, progress_stage
 
 
 RUNNER = ROOT / "run_export.applescript"
@@ -21,6 +23,8 @@ LEGACY_JSX = ROOT / "export_ai.jsx"
 STRUCTURE_JSX = ROOT / "export_structure.jsx"
 CURVE_FLATTEN_JS = ROOT / "curve_flatten.js"
 CURVE_FLATTEN_INCLUDE = '#include "curve_flatten.js"'
+UNATTENDED_HOST_JS = ROOT / "unattended_host.jsx"
+UNATTENDED_HOST_INCLUDE = '#include "unattended_host.jsx"'
 
 
 def load_json(path: Path) -> dict:
@@ -36,18 +40,40 @@ def select_jsx(config: dict) -> Path:
 def bind_runtime_jsx(config_path: Path, config: dict) -> Path:
     """Materialize fixed JSX dependencies beside the job before AppleScript reads it."""
     exporter = select_jsx(config)
-    if exporter != STRUCTURE_JSX:
-        return exporter
     source = exporter.read_text(encoding="utf-8")
-    if source.count(CURVE_FLATTEN_INCLUDE) != 1:
-        raise RuntimeError("Illustrator structure exporter has an invalid curve helper binding")
-    helper = CURVE_FLATTEN_JS.read_text(encoding="utf-8")
-    runtime_path = config_path.parent / "export_structure.runtime.jsx"
-    runtime_path.write_text(
-        source.replace(CURVE_FLATTEN_INCLUDE, helper),
-        encoding="utf-8",
-    )
+    if source.count(UNATTENDED_HOST_INCLUDE) != 1:
+        raise RuntimeError("Illustrator exporter has an invalid unattended host binding")
+    source = source.replace(UNATTENDED_HOST_INCLUDE, UNATTENDED_HOST_JS.read_text(encoding="utf-8"))
+    if exporter == STRUCTURE_JSX:
+        if source.count(CURVE_FLATTEN_INCLUDE) != 1:
+            raise RuntimeError("Illustrator structure exporter has an invalid curve helper binding")
+        source = source.replace(CURVE_FLATTEN_INCLUDE, CURVE_FLATTEN_JS.read_text(encoding="utf-8"))
+        runtime_name = "export_structure.runtime.jsx"
+    else:
+        runtime_name = "export_ai.runtime.jsx"
+    runtime_path = config_path.parent / runtime_name
+    runtime_path.write_text(source, encoding="utf-8")
     return runtime_path
+
+
+def emit_illustrator_progress_stages(config: dict, stop: threading.Event) -> None:
+    debug_log = str(config.get("debug_log") or "")
+    attempt_id = str(config.get("attempt_id") or "")
+    if not debug_log or not attempt_id:
+        return
+    progress_path = Path(debug_log).parent / "illustrator_progress.json"
+    last_stage = ""
+    while not stop.is_set():
+        raw = None
+        try:
+            raw = progress_path.read_text(encoding="utf-8-sig")
+        except OSError:
+            raw = None
+        stage = progress_stage(parse_job_sidecar(raw, attempt_id))
+        if stage and stage != last_stage:
+            print(f"STAGE illustrator_{stage}", file=sys.stderr, flush=True)
+            last_stage = stage
+        stop.wait(1.0)
 
 
 def warm_up_illustrator(app_path: Path, timeout_seconds: int) -> str:
@@ -164,7 +190,7 @@ def write_agent_error(error: IllustratorAgentError) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Illustrator AI normalization worker")
     parser.add_argument("config", type=Path)
-    parser.add_argument("--timeout", type=int, default=420)
+    parser.add_argument("--timeout", type=int, default=1260)
     args = parser.parse_args()
 
     config_path = args.config.expanduser().resolve()
@@ -195,6 +221,14 @@ def main() -> int:
             json.dumps(config, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
+        stop_progress = threading.Event()
+        progress_thread = threading.Thread(
+            target=emit_illustrator_progress_stages,
+            args=(config, stop_progress),
+            name="illustrator-progress-stages",
+            daemon=True,
+        )
+        progress_thread.start()
         try:
             agent_result = request_agent(
                 "run",
@@ -207,6 +241,9 @@ def main() -> int:
         except IllustratorAgentError as error:
             write_agent_error(error)
             return agent_error_exit_code(error)
+        finally:
+            stop_progress.set()
+            progress_thread.join(2)
         illustrator_version = str(agent_result.get("illustrator_version") or "unknown")
         warmup_elapsed = float(agent_result.get("warmup_elapsed_ms") or 0) / 1000
         external_open_elapsed = 0.0
@@ -275,6 +312,10 @@ def main() -> int:
         return 2
 
     result = load_json(result_path)
+    expected_attempt = str(config.get("attempt_id") or "")
+    if not expected_attempt or str(result.get("attempt_id") or "") != expected_attempt:
+        print("Illustrator result attempt_id does not match this job", file=sys.stderr)
+        return 2
     result["illustrator_version"] = illustrator_version
     result["warmup_elapsed_s"] = round(warmup_elapsed, 4)
     result["external_open_elapsed_s"] = round(external_open_elapsed, 4)

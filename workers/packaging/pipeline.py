@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 import zipfile
 from typing import Any
 
@@ -46,6 +47,7 @@ ILLUSTRATOR_WORKER = ROOT / "illustrator" / "illustrator_worker.py"
 ILLUSTRATOR_JSX = ROOT / "illustrator" / "export_ai.jsx"
 ILLUSTRATOR_STRUCTURE_JSX = ROOT / "illustrator" / "export_structure.jsx"
 ILLUSTRATOR_CURVE_HELPER = ROOT / "illustrator" / "curve_flatten.js"
+ILLUSTRATOR_UNATTENDED_HOST = ROOT / "illustrator" / "unattended_host.jsx"
 ILLUSTRATOR_RUNNER = ROOT / "illustrator" / "run_export.applescript"
 ILLUSTRATOR_WINDOWS_RUNNER = ROOT / "illustrator" / "run_export.vbs"
 ILLUSTRATOR_AGENT_CLIENT = ROOT / "illustrator" / "illustrator_agent.py"
@@ -489,6 +491,7 @@ def job_fingerprint(
         ILLUSTRATOR_JSX,
         ILLUSTRATOR_STRUCTURE_JSX,
         ILLUSTRATOR_CURVE_HELPER,
+        ILLUSTRATOR_UNATTENDED_HOST,
         ILLUSTRATOR_RUNNER,
         ILLUSTRATOR_WINDOWS_RUNNER,
         ILLUSTRATOR_AGENT_CLIENT,
@@ -708,9 +711,10 @@ def run_illustrator_fallback(
         "result_json": str(result_path),
         "debug_log": str(normalized_dir / "jsx_debug.log"),
         "print_layers": template["print_layers"],
+        "attempt_id": uuid.uuid4().hex,
     }
     save_json(config_path, worker_config)
-    timeout_seconds = int(illustrator_config.get("timeout_seconds", 180))
+    timeout_seconds = int(illustrator_config.get("timeout_seconds", 1260))
     command = [
         sys.executable,
         str(ILLUSTRATOR_WORKER),
@@ -869,12 +873,12 @@ def illustrator_export_failure(
             cause=cause,
             fix="在杭州电脑设置页重新扫描 Illustrator 后再打样",
         )
-    if agent_code in {"illustrator_timeout", "illustrator_agent_busy"} or returncode == 3 or "timed out" in lowered or "timeout" in lowered:
+    if agent_code == "illustrator_timeout" or returncode == 3 or "timed out" in lowered or "timeout" in lowered:
         return PipelineError(
-            "Illustrator 处理超时，请确认桌面没有弹窗后重试",
+            "这一单处理超时，请稍后重试",
             code="illustrator_timeout",
             cause=cause,
-            fix="查看交互桌面的许可、恢复或模态弹窗；处理后重新打样",
+            fix="重稿保存 PDF 可能超过数分钟；不要清围栏，等桌面空闲后再试",
         )
     if "javascript code was missing" in diagnostic_text:
         return PipelineError(
@@ -1029,12 +1033,13 @@ def run_illustrator_structure_export(
         "structure_json": str(normalized_dir / "structure.json"),
         "result_json": str(result_path),
         "debug_log": str(normalized_dir / "jsx_debug.log"),
+        "attempt_id": uuid.uuid4().hex,
         "semantic_assignments": semantic_assignments or {},
         "proposal_layers": [str(value) for value in (proposal_layers or []) if str(value).strip()],
         "print_layers": normalized_print_layers,
     }
     save_json(config_path, worker_config)
-    timeout_seconds = int(illustrator_config.get("timeout_seconds", 420))
+    timeout_seconds = int(illustrator_config.get("timeout_seconds", 1260))
     process = subprocess.run(
         [
             sys.executable,

@@ -342,6 +342,7 @@ describe("repository quality policy", () => {
     assert.ok(entries.includes("workers/packaging/ppt/build_product_ppt.mjs!"));
     assert.ok(entries.includes("workers/packaging/illustrator/export_ai.jsx!"));
     assert.ok(entries.includes("workers/packaging/illustrator/export_structure.jsx!"));
+    assert.ok(entries.includes("workers/packaging/illustrator/unattended_host.jsx!"));
     assert.ok(entries.includes("workers/packaging/illustrator/curve_flatten.js!"));
     assert.ok(entries.includes("workers/packaging/illustrator/runner_probe.jsx!"));
     assert.ok(!entries.some((entry) => entry.includes("illustrator/*.jsx")));

@@ -309,7 +309,7 @@ export async function runPackaging(
   return runPython({
     args: ["pipeline.py", manifestPath, "--workers", "1"],
     cwd: PACKAGING,
-    timeoutMs: 420_000,
+    timeoutMs: 1_260_000,
     onStderrLine: hooks?.onStderrLine,
     onSpawn: hooks?.onSpawn,
   });
@@ -322,7 +322,7 @@ export async function preflightPackaging(
   return runPython({
     args: ["pipeline.py", manifestPath, "--workers", "1", "--preflight-only"],
     cwd: PACKAGING,
-    timeoutMs: 420_000,
+    timeoutMs: 1_260_000,
     onStderrLine: hooks?.onStderrLine,
     onSpawn: hooks?.onSpawn,
   });
