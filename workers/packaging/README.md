@@ -18,7 +18,7 @@
 2. 非 PDF 兼容 AI 自动调用 Illustrator 标准化；
 3. 印刷层与完整图层分别高速栅格化（pymupdf 出图，杭州不靠 macOS qlmanage）；
 4. 按切面切片纹理（膜袋只印正反，其余面空白纸面补齐）；
-5. 多产品并行调用 Blender 后台建模、渲染并导出 .blend / .glb；
+5. 多产品并行调用 Blender 后台建模、渲染并导出 .blend / .glb；静帧先出产品 RGBA，再单独跑地面 pass，地面失败不挡产品图；
 6. GLB 自动复核轴向、毫米尺寸，以及 front/right/back/left/top/bottom 六面贴图来源、方向和镜像；
 7. 用两张白底写成 1 页 OOXML PPT（正面+侧面、反面+侧面），不依赖 Node；写不出才试演示文稿运行时。导出时用 `png_bytes_over_white` 铺白，不覆盖磁盘上的 RGBA 产品层。stderr 打 `PPT 跳过` 时静帧、PDF 和 GLB 仍算成功，不要把整单判失败。`--no-ppt` 同样跳过 PPT。
 8. 两张白底合成一页 PDF（页底先铺白，槽按源图比例 contain，标题用中文字体）。同样只在导出时铺白。pymupdf 写不出且还没落盘再用已装的 Pillow，不另装包，不要盖掉已经写出的文件。缺 PDF 不当失败。
@@ -69,6 +69,7 @@ V2 任务在产品项中写 `"structure_engine": "v2"`。显式 sidecar 可写 `
 - .blend：可编辑 Blender 文件；
 - .glb：可旋转查看的通用 3D 文件；六个已确认面都通过贴图来源、方向、镜像和尺寸复核后才交付；
 - 正面/右侧面和背面/左侧面静帧（RGBA 产品层；棚只提亮产品和接触阴影，不改盒子材质。磁盘文件要重新打样或加 `--force` 才会变；网页再套白底，下载图按当前灯光合成）；网页打样单下载白底只认这两张，不要把印刷面当白底；
+- 可选地面 pass：`front_right_ground.png` / `back_left_ground.png`（非发光灰平面阴影垫，不是木桌）。网页映射 `white_a_ground` / `white_b_ground`，canvas 铺 `rgb(242,242,244)` 再 multiply 地面、叠产品；`*_ground` 不能当产品静帧。地面 pass 失败时仍交付产品图；
 - `assets/panel_{front,back,right,left,top,bottom}.png`：各面印刷图。网页打样单读字区用这些图，不是 GLB 截屏，也不是 3/4 白底静帧；
 - 打样单 PDF（两张白底一页，页底先铺白，槽按源图比例 contain。pymupdf 写不出且还没落盘再用已装的 Pillow，不另装包、不盖掉已写成的文件；跳过时没有，也不当失败）；
 - 独立 .pptx（一页两张白底：正面+侧面、反面+侧面；先写 OOXML，不依赖 Node。跳过 PPT 时没有这一项，也不当失败）；

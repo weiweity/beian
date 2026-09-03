@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -8,7 +8,7 @@ import { makeTestTempDir } from "./testTemp.js";
 process.env.VITEST = "1";
 process.env.WB_DATA_DIR = makeTestTempDir("beian-mockup-files-");
 
-const { collectOutputs, fileOf, isWhiteFile, mockupFileBrokenMessage, publicMockup, publicMockupSummary, saveMockup } = await import("./mockup.js");
+const { collectOutputs, fileOf, isWhiteFile, mockupFileBrokenMessage, publicMockup, publicMockupSummary, saveMockup, unlinkSameGenerationStills } = await import("./mockup.js");
 
 describe("collectOutputs", () => {
   it("keeps front/back white renders and ignores ai-raster and ppt qa pngs", () => {
@@ -221,5 +221,108 @@ describe("collectOutputs", () => {
     assert.match(fileOf(job, "read_front")?.path || "", /assets[/\\]panel_front\.png$/);
     assert.match(fileOf(job, "read_back")?.path || "", /assets[/\\]panel_back\.png$/);
     assert.equal(fileOf(job, "read_front")?.path?.includes("scratch"), false);
+  });
+
+  it("does not treat a ground still as white_a or white_b", () => {
+    assert.equal(isWhiteFile("white_a", "pack_front_right_ground.png"), false);
+    assert.equal(isWhiteFile("white_b", "pack_back_left_ground.png"), false);
+    assert.equal(isWhiteFile("white_a_ground", "pack_front_right_ground.png"), true);
+    assert.equal(isWhiteFile("white_b_ground", "pack_back_left_ground.png"), true);
+    assert.equal(isWhiteFile("white_a", "26H06A_front_right_white.png"), true);
+    assert.equal(isWhiteFile("white_a", "pack_front_right_background.png"), true);
+    assert.equal(isWhiteFile("white_a_ground", "pack_front_right_background.png"), false);
+    assert.equal(isWhiteFile("white_a_ground", "pack_back_left_ground.png"), false);
+  });
+
+  it("classifies ground before product when ground is listed first", () => {
+    const root = makeTestTempDir("beian-pack-ground-first-");
+    writeFileSync(join(root, "pack_front_right_ground.png"), "g");
+    writeFileSync(join(root, "pack_front_right_white.png"), "p");
+    writeFileSync(join(root, "pack_back_left_ground.png"), "g");
+    writeFileSync(join(root, "pack_back_left_white.png"), "p");
+    const files = collectOutputs(root);
+    assert.equal(files.find((f) => f.key === "white_a")?.name, "pack_front_right_white.png");
+    assert.equal(files.find((f) => f.key === "white_a_ground")?.name, "pack_front_right_ground.png");
+    assert.equal(files.find((f) => f.key === "white_b")?.name, "pack_back_left_white.png");
+    assert.equal(files.find((f) => f.key === "white_b_ground")?.name, "pack_back_left_ground.png");
+  });
+
+  it("classifies ground before product when product is listed first", () => {
+    const root = makeTestTempDir("beian-pack-product-first-");
+    writeFileSync(join(root, "pack_front_right_white.png"), "p");
+    writeFileSync(join(root, "pack_front_right_ground.png"), "g");
+    const files = collectOutputs(root);
+    assert.equal(files.find((f) => f.key === "white_a")?.name.includes("ground"), false);
+    assert.equal(files.find((f) => f.key === "white_a_ground")?.name.includes("ground"), true);
+  });
+
+  it("classifies nested ground without stealing the product still", () => {
+    const root = makeTestTempDir("beian-pack-ground-nested-");
+    mkdirSync(join(root, "passes"));
+    writeFileSync(join(root, "passes", "pack_front_right_ground.png"), "g");
+    writeFileSync(join(root, "pack_front_right_white.png"), "p");
+    const files = collectOutputs(root);
+    assert.equal(files.find((f) => f.key === "white_a")?.name, "pack_front_right_white.png");
+    assert.equal(files.find((f) => f.key === "white_a_ground")?.name, "pack_front_right_ground.png");
+  });
+
+  it("retry unlinks job-root stills including ground and leaves print faces", () => {
+    const id = "retryground01";
+    const dir = join(process.env.WB_DATA_DIR || "", "mockups", id);
+    mkdirSync(join(dir, "assets"), { recursive: true });
+    writeFileSync(join(dir, "pack_front_right_white.png"), "p");
+    writeFileSync(join(dir, "pack_front_right_ground.png"), "g");
+    writeFileSync(join(dir, "pack_back_left_white.png"), "p");
+    writeFileSync(join(dir, "pack_back_left_ground.png"), "g");
+    writeFileSync(join(dir, "assets", "panel_front.png"), "face");
+    unlinkSameGenerationStills(id);
+    assert.equal(existsSync(join(dir, "pack_front_right_white.png")), false);
+    assert.equal(existsSync(join(dir, "pack_front_right_ground.png")), false);
+    assert.equal(existsSync(join(dir, "pack_back_left_white.png")), false);
+    assert.equal(existsSync(join(dir, "pack_back_left_ground.png")), false);
+    assert.equal(existsSync(join(dir, "assets", "panel_front.png")), true);
+  });
+
+  it("unlink on a missing job root does not throw", () => {
+    assert.doesNotThrow(() => unlinkSameGenerationStills("missingjobroot01"));
+  });
+
+  it("retry unlinks nested stills so collectOutputs cannot mix generations", () => {
+    const id = "retryground02";
+    const dir = join(process.env.WB_DATA_DIR || "", "mockups", id);
+    mkdirSync(join(dir, "passes"), { recursive: true });
+    mkdirSync(join(dir, "assets"), { recursive: true });
+    writeFileSync(join(dir, "pack_front_right_white.png"), "p");
+    writeFileSync(join(dir, "passes", "pack_front_right_ground.png"), "old");
+    writeFileSync(join(dir, "assets", "panel_front.png"), "face");
+    unlinkSameGenerationStills(id);
+    const files = collectOutputs(dir);
+    assert.equal(files.find((f) => f.key === "white_a"), undefined);
+    assert.equal(files.find((f) => f.key === "white_a_ground"), undefined);
+    assert.equal(existsSync(join(dir, "assets", "panel_front.png")), true);
+  });
+
+  it("publicMockup lists ground keys without paths", () => {
+    const id = "publicground01";
+    const dir = join(process.env.WB_DATA_DIR || "", "mockups", id);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "pack_front_right_white.png"), "p");
+    writeFileSync(join(dir, "pack_front_right_ground.png"), "g");
+    const listed = [
+      { key: "white_a", path: join(dir, "pack_front_right_white.png"), name: "pack_front_right_white.png" },
+      { key: "white_a_ground", path: join(dir, "pack_front_right_ground.png"), name: "pack_front_right_ground.png" },
+    ];
+    const job = {
+      id,
+      status: "done" as const,
+      created_at: "2026-09-03T00:00:00Z",
+      files: listed,
+    };
+    const view = publicMockup(job);
+    assert.equal(view.files.some((f) => f.key === "white_a_ground"), true);
+    assert.equal(view.files.every((f) => !("path" in f)), true);
+    assert.equal(fileOf(job, "white_a_ground")?.name, "pack_front_right_ground.png");
+    assert.equal(isWhiteFile("white_a", "pack_front_right_ground.png"), false);
+    assert.match(mockupFileBrokenMessage("white_a_ground"), /白底图坏了/);
   });
 });
