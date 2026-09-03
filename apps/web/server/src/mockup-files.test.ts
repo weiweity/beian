@@ -236,6 +236,17 @@ describe("collectOutputs", () => {
     assert.equal(isWhiteFile("white_a", "pack_front_right_white_card.png"), false);
     assert.equal(isWhiteFile("white_a_ground_card", "pack_front_right_ground_card.png"), true);
     assert.equal(isWhiteFile("white_a_ground", "pack_front_right_ground_card.png"), false);
+    assert.equal(isWhiteFile("white_a", "pack_front_right_set.png"), false);
+    assert.equal(isWhiteFile("white_a_ground", "pack_front_right_set.png"), false);
+    assert.equal(isWhiteFile("white_a_set", "pack_front_right_set.png"), true);
+    assert.equal(isWhiteFile("white_a", "pack_front_right_set_card.png"), false);
+    assert.equal(isWhiteFile("white_a_set_card", "pack_front_right_set_card.png"), true);
+    assert.equal(isWhiteFile("white_a_set", "pack_front_right_set_card.png"), false);
+    assert.equal(isWhiteFile("white_a", "gift_set_front_right_white.png"), true);
+    assert.equal(isWhiteFile("white_a_set", "gift_set_front_right_white.png"), false);
+    assert.equal(isWhiteFile("white_a_set", "gift_set_front_right_set.png"), true);
+    assert.equal(isWhiteFile("white_a_set", "pack_front_right_settings.png"), false);
+    assert.equal(isWhiteFile("white_a", "pack_front_right_settings.png"), true);
   });
 
   it("classifies ground before product when ground is listed first", () => {
@@ -262,6 +273,22 @@ describe("collectOutputs", () => {
     assert.equal(files.find((f) => f.key === "white_a_card")?.name, "pack_front_right_white_card.png");
     assert.equal(files.find((f) => f.key === "white_a_ground")?.name, "pack_front_right_ground.png");
     assert.equal(files.find((f) => f.key === "white_a_ground_card")?.name, "pack_front_right_ground_card.png");
+  });
+
+  it("classifies set stills without stealing product or ground", () => {
+    const root = makeTestTempDir("beian-pack-set-still-");
+    writeFileSync(join(root, "pack_front_right_white.png"), "p");
+    writeFileSync(join(root, "pack_front_right_ground.png"), "g");
+    writeFileSync(join(root, "pack_front_right_set.png"), "s");
+    writeFileSync(join(root, "pack_front_right_set_card.png"), "sc");
+    writeFileSync(join(root, "pack_back_left_white.png"), "p");
+    writeFileSync(join(root, "pack_back_left_set.png"), "s");
+    const files = collectOutputs(root);
+    assert.equal(files.find((f) => f.key === "white_a")?.name, "pack_front_right_white.png");
+    assert.equal(files.find((f) => f.key === "white_a_ground")?.name, "pack_front_right_ground.png");
+    assert.equal(files.find((f) => f.key === "white_a_set")?.name, "pack_front_right_set.png");
+    assert.equal(files.find((f) => f.key === "white_a_set_card")?.name, "pack_front_right_set_card.png");
+    assert.equal(files.find((f) => f.key === "white_b_set")?.name, "pack_back_left_set.png");
   });
 
   it("classifies ground before product when product is listed first", () => {
@@ -291,12 +318,14 @@ describe("collectOutputs", () => {
     writeFileSync(join(dir, "pack_front_right_ground.png"), "g");
     writeFileSync(join(dir, "pack_back_left_white.png"), "p");
     writeFileSync(join(dir, "pack_back_left_ground.png"), "g");
+    writeFileSync(join(dir, "pack_front_right_set.png"), "s");
     writeFileSync(join(dir, "assets", "panel_front.png"), "face");
     unlinkSameGenerationStills(id);
     assert.equal(existsSync(join(dir, "pack_front_right_white.png")), false);
     assert.equal(existsSync(join(dir, "pack_front_right_ground.png")), false);
     assert.equal(existsSync(join(dir, "pack_back_left_white.png")), false);
     assert.equal(existsSync(join(dir, "pack_back_left_ground.png")), false);
+    assert.equal(existsSync(join(dir, "pack_front_right_set.png")), false);
     assert.equal(existsSync(join(dir, "assets", "panel_front.png")), true);
   });
 

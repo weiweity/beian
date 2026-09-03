@@ -349,8 +349,10 @@ test("有 ground 的已出图单走 canvas 成片，不显示 PPT，调灯默认
   mockup.files = [
     { key: "white_a", name: "front_right_white.png" },
     { key: "white_a_ground", name: "front_right_ground.png" },
+    { key: "white_a_set", name: "front_right_set.png" },
     { key: "white_b", name: "back_left_white.png" },
     { key: "white_b_ground", name: "back_left_ground.png" },
+    { key: "white_b_set", name: "back_left_set.png" },
     { key: "ppt", name: "deck.pptx" },
   ];
   syntheticApi.mockups.push(mockup);
@@ -358,8 +360,10 @@ test("有 ground 的已出图单走 canvas 成片，不显示 PPT，调灯默认
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
     "base64",
   );
-  for (const key of ["white_a", "white_a_ground", "white_b", "white_b_ground"]) {
+  let fetchedSet = 0;
+  for (const key of ["white_a", "white_a_ground", "white_a_set", "white_b", "white_b_ground", "white_b_set"]) {
     await page.route(new RegExp(`/api/mockups/${mockup.id}/files/${key}(?:\\?.*)?$`), async (route) => {
+      if (key.endsWith("_set")) fetchedSet += 1;
       await route.fulfill({ status: 200, contentType: "image/png", body: png });
     });
   }
@@ -387,11 +391,41 @@ test("有 ground 的已出图单走 canvas 成片，不显示 PPT，调灯默认
   expect(syntheticApi.calls.filter((call) => call.method === "POST").length).toBe(postsBefore);
   await switcher.getByText("白底", { exact: true }).click();
   await expect(page.locator(".mockup-sheet-frame").first()).toHaveClass(/is-backdrop-white/);
+  await switcher.getByText("白桌白墙", { exact: true }).click();
+  await expect(page.locator(".mockup-sheet-frame").first()).toHaveClass(/is-backdrop-white-set/);
+  expect(syntheticApi.calls.filter((call) => call.method === "POST").length).toBe(postsBefore);
+  expect(fetchedSet).toBeGreaterThan(0);
   await page.getByRole("button", { name: "调灯" }).click();
   await expect(page.getByRole("slider", { name: "产品灯光" })).toBeVisible();
   await page.getByRole("button", { name: /打开正面/ }).click();
   await expect(page.getByRole("dialog", { name: "正面 + 侧面原图" })).toBeVisible();
   await expect(page.locator(".mockup-still-lightbox-stage.is-studio-ground")).toBeVisible();
+});
+
+test("成片 set 损坏时仍走 canvas，不报白底图坏了", async ({ page, syntheticApi }) => {
+  const mockup = completedMockup("ee11ff22aa35", "影棚坏棚景");
+  mockup.files = [
+    { key: "white_a", name: "front_right_white.png" },
+    { key: "white_a_ground", name: "front_right_ground.png" },
+    { key: "white_a_set", name: "front_right_set.png" },
+  ];
+  syntheticApi.mockups.push(mockup);
+  const png = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+    "base64",
+  );
+  await page.route(new RegExp(`/api/mockups/${mockup.id}/files/white_a(?:\\?.*)?$`), async (route) => {
+    await route.fulfill({ status: 200, contentType: "image/png", body: png });
+  });
+  await page.route(new RegExp(`/api/mockups/${mockup.id}/files/white_a_ground(?:\\?.*)?$`), async (route) => {
+    await route.fulfill({ status: 200, contentType: "image/png", body: png });
+  });
+  await page.route(new RegExp(`/api/mockups/${mockup.id}/files/white_a_set(?:\\?.*)?$`), async (route) => {
+    await route.fulfill({ status: 404, contentType: "text/plain", body: "missing" });
+  });
+  await page.goto(`/mockup/${mockup.id}`);
+  await expect(page.locator(".mockup-sheet-photos.is-grounded canvas").first()).toBeVisible();
+  await expect(page.getByText("这张白底图坏了，回到打样台重新打。")).toHaveCount(0);
 });
 
 test("成片 ground 损坏时隐藏原图和下载", async ({ page, syntheticApi }) => {
