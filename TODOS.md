@@ -1,153 +1,103 @@
 # TODOS
 
-由 /autoplan（2026-08-18）从 SELECTIVE EXPANSION 推迟项写入。不是 8/31 主路径。
+这是当前未完成事项的唯一清单。已完成代码和版本历史只写 `CHANGELOG.md`；设计理由写 ADR；一次性现场数据留在带日期的诊断报告。这里不再混放已完成的 `[x]`、旧方案全文或生产验收证据。
 
-## P2 — 膜袋打样
+## 状态口径
 
-- [ ] **膜袋 v1 3D**
-  标准已写在 `docs/pouch-v1-acceptance.md`。L0 已接线：词表只认「膜袋」，**不要用品名「面膜」当开关**（26H06A 是花盒，26H11A 才是袋）。花盒 `box_net` 失败且恰好两块相近闭合刀线再兜底。两块袋片走现有「点品名面」。六面仍进 `add_box` 薄盒。不要复活 `dieline.py`。hold 仍是内包/标贴；袋装花盒当花盒。
-  **Depends on:** 杭州金标（下条）。没有金标不得宣称膜袋产品存在。
+- **Code**：代码已经落地，不代表测试、杭州或业务验收完成。
+- **L0**：Mac / GitHub-hosted 的单测、类型、质量和合成回归。
+- **L1**：可信 `main` 发版事务在杭州验证进程、版本、端口和平台身份链；不替代真实稿。
+- **L2**：杭州真实 Illustrator / Blender + 人工核定金标；真稿、真值与输出不进 Git。
+- **UAT**：刘籽烨按真实工作方式确认可用。没有 L2/UAT，不写“生产能力已完成”。
 
-- [ ] **杭州金标：膜袋正/负 + 白盒重渲棚目视**
-  land 后杭州人工：正=两块刀线膜袋（如 26H11A 类）；负=5片面膜花盒 26H06A、2-up 花盒；白盒点「重渲棚」后纸面不再吃边。真稿不进 git。Mac L0 合成测不能替代。
-  **Why:** 代码完成 ≠ 籽烨能用。
-  **Blocked by:** 本机禁止 SSH 杭州；要等合 main 后 Hangzhou 上点。
+优先级：P1 是当前质量/验收阻塞；P2 是下一阶段可靠性或产品完善；P3 是独立、低耦合的后续工作。
 
-## P2 — 打样棚景
+## P1 — 包装 3D 渲染真实感与清晰度
 
-- [x] **换背景无队列样片**
-  打样单三键：白底 / 银底 / 白桌白墙。浏览器合成，不排队 Blender。白桌白墙是白墙+白台面近似，不是木桌。
-  **Completed:** v0.21.23.0 (2026-09-03)
+主计划：`docs/adr-007-packaging-render-fidelity.md`。`0.21.26.0` 已完成 RF-00 可复现测量尺和 RF-01 独立 `packaging-render-spec/1` / profile registry 的 Code/L0；两者都未改变产品画质。下面只保留尚未闭环的工作。
 
-- [x] **白墙白台 set pass**
-  同一趟 Blender 多渲一条白台+白墙（产品 holdout）。`white_set` 有 `white_*_set` 就画 set+产品，不再 CSS 墙、不再乘旧 ground。缺 pass 回退 CSS。切背景不排队。`stillKeyFromName` 先认 `_set`。
-  **Completed:** v0.21.24.0 (2026-09-03)
+- [ ] **批准渲染质量基线与门槛**
+  RF-00 已能用 Git 内脱敏合成样片重复记录几何、白盒边界、纸材、字体频率、Alpha 光边、渲染耗时和 full/card/read-face 像素身份；正式 approved baseline 仍不存在。必须由人工审阅现状报告后显式批准，后续参数变化才可用同一身份闭包比较；私有真稿仍只在杭州记录哈希、评分和结论。
 
-- [ ] **真金属地 / 木桌**
-  银底没拒图证据不做真金属地。木桌仍 hold，不是默认。无杭州金标静帧不给新几何按钮。
+- [ ] **RF-02：把版本化渲染合同接入产品流水线**
+  RF-01 只提供严格 registry、能力矩阵、canonical hash、解析/验证和兼容参数桥，没有改 `pipeline.py` 或 Blender。下一片在结构确认后、切面栅格前解析合同，并写入 resolved job、缓存指纹和 `pipeline_result.json`；新任务缺 spec 失败关闭，旧重渲显式合成 compat，未知 family / profile 不按文件名、颜色或任务 ID 猜模型。
 
-## P2 — 打样成片后续
+- [ ] **矩形花盒真实感内核**
+  在现有 `render_job.py` 内按 family 分派几何；先把 `rectangular_carton` 做完整。外尺寸、六面 UV 和 GLB 验证不回退；纸板厚度、边缘、折角、接触影和轮廓高光使用物理毫米与声明的材质 profile，不能靠白盒专属滤镜补丁。
 
-`0.21.20.0` 已交 grounded 成片 first-look。下面这些还不做。
+- [ ] **纸材、油墨与涂层分层**
+  未声明时仍是白卡；牛皮纸、深色纸、覆膜、整体上光必须显式配置。局部 UV 没有独立 mask 语义前标为不支持，不从印刷图亮色猜。用 Blender 官方支持的 PBR 通道，GLB 只导出查看器能验证的子集。
 
-- [ ] **浏览器 PPT zip**
-  新单有 ground 时页头隐藏「下载 PPT」。浏览器端 OOXML / 新单 PPT zip 不在本楔。
+- [ ] **棚光、白盒边界与色彩管理**
+  继续无 HDRI 的可复现三灯棚；灯位、软箱尺寸、相机与世界强度按成盒尺寸归一。用合成白盒验证产品/背景亮度分离、边缘连续和接触影。`Standard`、`Khronos PBR Neutral`、`AgX` 先 A/B，再由金标冻结，不凭模型偏好直接替换。
 
-- [ ] **打样看板列**
-  本轮只改打样单 first-look，不改看板列。
+- [ ] **端到端字体清晰度修复**
+  把 PDF→切面→Blender 纹理→全尺寸静帧→1440 卡→浏览器 canvas 的每次采样写入报告；切面像素密度由相机投影需求反推并受现有像素预算保护。首屏允许卡图，但全图加载后必须原位升级为全尺寸来源；预览只做一次高质量缩放，下载继续使用全尺寸。3D 仍用于看形，`read_*` 印刷面仍是验字事实源。
 
-- [ ] **默认木桌**
-  地面是非发光灰平面阴影垫，不是木桌。书面允许前不要换材质。
+- [ ] **质量门与回归矩阵**
+  L0 验证合同、像素预算、缓存、旧单兼容和浏览器升级；有 Blender 的显式质量命令验证合成样片；L1 记录 Blender 版本/合同 hash；L2/UAT 用白盒、深色盒、细长盒、矮宽盒、膜袋正负样本做人工 A/B。任何机器分数都不能替代人核“真实感”。
 
-- [ ] **杭州双 pass 目视**
-  Mac L0 不跑 Blender。合 main 后看杭州 5.2 白花盒成片：未调灯地面 `rgb(228,228,232)`，下载与预览同一合成器。
+## P1 — 已有代码仍欠生产/业务验收
 
-## P2 — 补印刷面队列
+- [ ] **膜袋 v1 杭州金标**
+  `0.21.25.0` 已完成 L0 分流与 3 mm 薄盒预览。杭州正样本为“膜袋”且两块相近闭合刀线；负样本至少覆盖 5 片面膜花盒、`7袋装花盒`、2-up 花盒和一页多袋。未通过前不得宣称真实膜袋能力；真实袋体属于 ADR-007 能力矩阵之外的新 family。
 
-- [ ] **切面进作业队列 / 发版 drain**
-  现在 `POST /print-faces` 同步等最多 60 秒，busy 只在内存，开机和 `hangzhou-release` 排空看不见。跨用户可补之后撞车和重启会丢。本楔只修 403+`repaired_by`，队列化另开。
-  **Why:** 发版中途切面会被杀掉。
-  **Depends on / blocked by:** 本楔权限修复先合。
+- [ ] **PackagingStructure V2 真实稿矩阵**
+  私有 Phase 0 的 13 份真实稿仍需逐份人工批准或明确不支持，并为每个受支持结构族留至少一份黄金样本。Mac 脱敏矩阵和 GLB 合同不替代杭州 Illustrator→Blender L2。
 
-## P2 — 打样涂层
+- [ ] **Illustrator 无人值守重稿 L2**
+  `0.21.21.0`–`0.21.22.0` 已完成结果文件完工、saving 禁杀、busy 排队和 1260 秒外层合同；仍需杭州 26H21A 人工重稿证明。未跑不得宣称无人值守控制面已通过真实稿。
 
-- [ ] **涂层 / UV vs 纸**
-  棚（`add_studio`）只能提亮和接触阴影。上光、局部 UV、涂层和纸的区分在 `add_box` 材质。硬约束目前不重写 `add_box`。下次若籽烨仍觉得白底没光泽，要书面允许动盒子的涂层通道再做。
+- [ ] **对红真实改稿金标**
+  代码已能传第二份 PDF，并执行签字/对红门。仍需刘籽烨提供一套获书面许可的旧 PDF、新 PDF、发给设计的话和二校真值；补齐 `open_issues` 的字段、应印、实读结构后再决定是否加严空格规则。
 
-## P2 — 评测与止损
+## P2 — 作业可靠性与打样单完善
 
-- [ ] **金标人核**  
-  试验记录仍是空表。`gold-v0` 自动导出未人工核定。  
-  至少 1 组已知正错样本：漏标 / 误报 / 待人工确认。  
-  若她认为不比分屏少漏：停止「生产级远程工作台」叙事。
+- [ ] **补印刷面进入持久队列 / 发版 drain**
+  当前 `/print-faces` 同步等待，busy 只在内存；跨用户碰撞和进程重启会丢。复用现有作业合同，不建 `/api/jobs`，并让发版围栏看得见在途切面。
 
-- [ ] **采用止损**  
-  若无辅导真稿后她仍左右分屏，或第二周不再主动开单：撤销后续 3D 投入，改飞书发报告。
+- [ ] **真金属地 / 木桌预设**
+  先取得用户拒图证据和许可清晰的材质资产。背景切换继续由已有 pass + 浏览器 compositor 完成，不为三键重新排 Blender；木桌不是默认。
 
-## P2 — 资产与合规
+- [ ] **新单 PPT 与打样看板信息**
+  grounded 新单当前隐藏 PPT；若业务仍需要，另做浏览器/OOXML 输出合同。打样看板新增信息必须保持一行高密度，不扩成重复卡片。
 
-- [ ] **真稿出境书面许可**  
-  百度 OCR / MiniMax 处理备案稿前要书面允许。不允许就本机 OCR 或停。
+- [ ] **切面与渲染资源压测**
+  覆盖极端长宽比、最高允许像素预算、两个并发上传、Illustrator busy、Blender 单槽、重渲棚和发版排干；先量峰值内存、磁盘和总耗时，再决定是否调预算。
 
-- [ ] **公司仓 / 第二管理员**  
-  `weiweity/beian` 是个人账号私仓。确认组织仓或第二管理员 + 离职移交。
+## P2 — 采用、资产与合规
 
-- [ ] **生产主分支强制保护**
-  `main` 的 push 会触发杭州生产 self-hosted runner，但当前个人私仓套餐拒绝 branch protection / ruleset API，无法强制「只能 PR、必过 quality、禁止 force push/删除」。不要用仓库内脚本伪装成不可绕过的保护；升级到支持私仓规则的 GitHub 套餐或迁入组织仓后，启用保护并再次用 API 取证。
-  **Blocked externally:** GitHub plan（2026-08-30）。
+- [ ] **审稿金标与采用止损**
+  至少一组已知漏标、误报、待人工确认样本。若辅导后籽烨仍持续左右分屏，或第二周不主动开单，停止“生产级远程工作台”叙事，评估改为飞书发报告。
 
-## P1 — 作业模块审查留下的洞（本周不改）
+- [ ] **真稿出境书面许可**
+  百度 OCR / MiniMax 处理备案稿前取得书面许可；不允许就本机 OCR 或停。真稿、人工真值和渲染输出不得进 Git 或对外模型上下文。
 
-- [x] **无主任务 / 打样默认拒绝**  
-  非 admin 读空 owner 403。新单 owner 写飞书 `open_id`。旧单花名仍能被同名会话读到。  
-  **Completed:** v0.13.0.0 (2026-08-25)
+- [ ] **公司仓 / 第二管理员与主分支保护**
+  `weiweity/beian` 仍是个人私仓。确认组织仓或第二管理员及离职移交；GitHub 套餐支持私仓 ruleset 后再强制 PR、quality、禁止 force push/删除。仓库内脚本不能伪装成不可绕过的保护。
 
-- [x] **打样完成通知不要走 `/?task=`**  
-  `notifyJobFinished` 对照走 `/review/:id`，打样走 `/mockup/:id`。前端 History API 换台。  
-  **Completed:** v0.12.17.0 (2026-08-25)
-
-- [x] **新稿上传流式限体积并允许两份并发**
-  `/api/uploads` 不再走 `parseBody()` / `File.arrayBuffer()` 整包驻留内存，改为两条通道直接流式落盘；第三份立即 429，文件聚合上限仍为 100 MB。对红保持独立单槽并尊重更低的 `WB_MAX_UPLOAD_MB`。
-  **Completed:** v0.13.2.0 (2026-08-26)
-
-- [x] **未登录 health 不要带队列人数**
-  公网 `GET /api/health` 只保留 `ok`、`version` 与发版所需的 Illustrator 可见性标记；准确队列仅给杭州本机直连和已登录 `/api/status`。WaitCard、侧栏阶段脉冲已改走登录接口。
-  **Completed:** v0.13.1.0 (2026-08-26)
-
-## P1 — 对红（金标门，不进本周 P0）
-
-- [ ] **同一单第二份 PDF / 对红**  
-  代码已能传第二份 PDF，并卡住签字/对红门（待审才可签；干净签字单不能对红；对红后优先读非空 `hits_v2`）。  
-  仍阻塞：刘籽烨一套真实改稿前后（旧 PDF、新 PDF、发给设计的话、二校新发现的漏字/少字/空格）+ 书面许可进机。没有金标，不加严空格引擎、不宣称业务验收完成。  
-  还缺：`open_issues` 用 `field+expected_text+observed_text`；默认队列只复检上一轮 issue；对红比较保留空白。  
-  不做：历史中心、第三份 PDF、改 `normalize()` 去空白、旧新 PDF 全量 diff。  
-  入口：`docs/designs/review-rework-loop.md` Recommended Approach。
-
-## P2 — 上传续传与崩溃恢复
-
-- [x] **字节级分片断点续传**
-  1 MiB 分片、SHA-256 校验、服务端持久化偏移量、同一 `client_upload_id` 幂等重放；网络错误自动重连 3 次，暂停或整页刷新后重新选择同一文件可从服务端偏移量继续。上传会话与待开工回执统一受 30 分钟 TTL 和容量限制。
-  **Completed:** v0.17.0.0 (2026-08-27)
-
-- [x] **领取回执的进程崩溃窗口**
-  回执领取改为磁盘 durable claim：任务事实落盘后才 finalize，准备失败原子 rollback；Node 中断后启动恢复按 `source_receipt` 恢复回执或完成清理。同一回执的并发开工也在服务端串行并收敛到同一任务。
-  **Completed:** v0.20.6.0 (2026-08-31)
-
-## P1 — 包装语义结构 V2 上线闸门
-
-- [ ] **真实稿结构真值与杭州 L2**
-  `0.14.0.0` 已提供语义结构，后续版本已把网页固定到 V2 并删除运行时旧引擎开关；无法证明结构时 fail-closed。V2.1 的 Git 内脱敏矩阵只验证白色外盒+内衬、曲线闭合、整体旋转和大量标注分量的算法合同，不是业务真值。私有 Phase 0 的 13 份真实稿仍为 `pending_manual`。逐份由管理员确认或明确判为不支持，并为每个受支持结构族保留至少一份黄金样本；杭州真实 Illustrator + Blender L2 通过前不得把 Mac L0 或可信主线的身份冒烟写成真稿生产验收。
-
-## P2 — 开工板向导页画面（设计审查 2026-08-21）
-
-- [x] **百度 / 飞书 / MiniMax 向导页 mockup**  
-  落地页已是编号步骤 + 原字段，不是第二套密钥表。HTML 线框仍可后补。  
-  **Completed:** v0.12.0.0 (2026-08-21)
-
-- [x] **390 开工板画面**  
-  ≤720 顶上 Segmented，行右 ≥44px，桌面仍 208px 左栏。已在实机 390 验过。  
-  **Completed:** v0.12.0.0 (2026-08-21)
-
-## P3 — 9 月以后
+## P3 — 独立后续
 
 - [ ] **退役核对原型清理（独立 PR）**
-  2026-08-29 合并前审计确认：`apps/web/ui/src/pages/reviewSplit.ts` 仅被自身测试引用；`apps/web/backend/app/baidu_paddle_vl.py`、`graphics_diff.py`、`ocr_ensemble.py`、`ocr_zone_boost.py` 未被当前产品入口、脚本或 worker 调用；`workers/packaging/illustrator/create_smoke_fixture.jsx` 没有仓库调用方，现作为基线候选保留，删除前仍要确认是否存在仓库外人工冒烟流程。其中区域 OCR 回归还明确断言后两条旧路径不进入 `compare_core`。持续质量门禁已落地，深审候选可用 `npm run quality:deep` 复核；不要混入治理或 Windows 发布 PR，独立删除时同步移除相关测试，按 ADR-006 四类证据核验并保留完整 L0。
-- [x] **测试文件无用导入清理**
-  2026-08-29 已移除 `jobs.test.ts` 的 `tryStart`、`tasks.test.ts` 的 `writeFileSync`、`workers.test.ts` 的 `join`，并在 server `tsconfig.json` 启用 `noUnusedLocals` / `noUnusedParameters`；生产源码和测试统一受编译门禁约束。
-- [x] 3D Worker 接线（打样台调用 pipeline；缺 Blender 会失败而不是装可用）
-- [x] **qlmanage 替换（平面出图）**  
-  打样 PDF 栅格走 pymupdf（对照同一 `.venv`）；macOS qlmanage 仅兜底。杭州不依赖 Quick Look。  
-  **Completed:** v0.12.11.0 (2026-08-24)
-- [x] **Illustrator COM 接线**
-  macOS AppleScript 与 Windows VBScript/COM 共用 `export_structure.jsx`；`0.20.0.0` 增加 InteractiveToken Session 1 Agent，LocalSystem worker/runner 只通过受限命名管道调用现有 VBS/JSX，不再拉起 Session 0 Illustrator。Agent 身份、checkout、超时与故障恢复均 fail-closed；合入后由可信 `main` release transaction 在业务仍被 fence 阻断时执行生产 L1 身份冒烟；真实稿仍由上面的 V2 L2 闸门验收。
-  **Completed in code:** v0.20.0.0 (2026-08-28；杭州 L1/L2 待验收)
-- [ ] Tunnel 掉线告警（`beian-server-8787` 与 cloudflared 已是 Windows 服务；Illustrator Agent 按设计只在管理员登录会话运行，不改成开机 Session 0 服务）
-- [ ] SQLite / 异步通用队列
-- [ ] 压测并继续优化现有 CSS `transform` 1–6× 审稿缩放；保持当前轻量方案，不引入 OpenSeadragon
-- [ ] 飞书机器人收文件回报告（网页路径的备选）
+  候选包括只被自身测试引用的 `reviewSplit.ts`、未被产品入口调用的若干旧 OCR/图像模块和可能由仓库外流程使用的 Illustrator smoke fixture。先按 ADR-006 取四类证据，再按文件名精确删除，不能混入 3D 或 Windows 发布改动。
 
-## Completed
+- [ ] **Tunnel / 服务掉线告警**
+  监控 `beian-server-8787` 与 cloudflared；Illustrator Agent 保持登录桌面进程，不改成 Session 0 开机服务。
 
-- [x] **打样读取与写动作分权**
-  `list` / `get` / `files` / 结构预览已在 2026-09-01 顺延为团队可读；确认结构由独立 `confirm_structure` 能力保护，现已授予 `admin` / `reviewer` / `viewer`，删除仍按本人或管理员。旧 `assertCanAccessMockup` / `listJobsFor` 所有者读取模型不再作为当前合同。
-  **Completed:** v0.11.0.0（初版）；v0.21.7.0（团队读取与独立确认能力，2026-09-01）
+- [ ] **SQLite / 通用异步队列评估**
+  只有现有 JSON 作业合同出现可复现的数据一致性或吞吐瓶颈时才启动；不得为“以后可能扩展”先改存储。
+
+- [ ] **审稿缩放性能**
+  压测现有 CSS `transform` 1–6×；保持初始 `transform:none` 和平移期临时 `will-change`，不引入 OpenSeadragon。
+
+- [ ] **飞书机器人收文件回报告**
+  作为网页路径的备选，不替代当前产品入口；权限、费用与真实消息 UAT 单独立项。
+
+## 已完成工作在哪里看
+
+- 发布事实：`CHANGELOG.md`
+- 当前产品与启动：`README.md`
+- UI 锁定稿：`DESIGN.md`
+- 结构与六面正确性：`docs/adr-005-packaging-structure-v2.md`
+- Illustrator 控制面历史施工合同：`docs/designs/illustrator-unattended-control.md`
+- 2026-09-02 现场数据：`docs/diagnoses/2026-09-02-mockup-illustrator.md`（历史快照）

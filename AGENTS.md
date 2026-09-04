@@ -25,7 +25,7 @@
 - 对照 worker：`apps/web/backend`（Python，由 TS `app.cli` 调用）
 - 3D CLI：`workers/packaging/`
 - 本机配置：侧栏「设置」→ 默认 `apps/web/backend/data/settings.json` + `settings.secrets.json`（gitignore；`WB_DATA_DIR` 可改）。密钥不要写进前端或仓库。
-- 文档入口：`README.md`（完整文档地图、启动、设置）、`DESIGN.md`（视觉）、`docs/00-charter.md`（8/31 章程）、`docs/adr-004-ousterhout-design.md`（深模块）、`docs/adr-005-packaging-structure-v2.md`（打样结构）、`docs/designs/review-job-module.md`（对照/对红/打样入队）、`docs/designs/illustrator-unattended-control.md`（Illustrator 完工信号与禁杀阶段）、`docs/pouch-v1-acceptance.md`（膜袋 v1：L0 已接线，无杭州金标不得宣称产品存在）、`CHANGELOG.md`、`TODOS.md`。实现约定见下面「设计哲学」。
+- 文档入口：`README.md`（完整文档地图、启动、设置）、`DESIGN.md`（视觉）、`docs/00-charter.md`（8/31 章程）、`docs/adr-004-ousterhout-design.md`（深模块）、`docs/adr-005-packaging-structure-v2.md`（打样结构）、`docs/adr-007-packaging-render-fidelity.md`（3D 渲染真实感、材质、棚光、清晰度与能力矩阵；RF-00 测量尺与 RF-01 独立合同已交 Code/L0，RF-02+ 产品接线及 L1/L2/UAT 未完成）、`docs/designs/review-job-module.md`（对照/对红/打样入队）、`docs/designs/illustrator-unattended-control.md`（Illustrator 完工信号与禁杀阶段）、`docs/pouch-v1-acceptance.md`（膜袋 v1：L0 已接线为 3 mm 薄盒，无杭州金标不得宣称真实膜袋能力）、`CHANGELOG.md`、`TODOS.md`。实现约定见下面「设计哲学」。
 - 入口：开发口 `:5173`（Vite 听本机网卡，`/api` 反代到 8787）；产品/验收入口 `:8787`。不要再加第三个 HTTP 入口。
 - 旧 `apps/web/frontend/` 已删除；网页入口只有 `apps/web/ui` + Hono `apps/web/server`。
 
