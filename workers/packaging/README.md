@@ -2,7 +2,7 @@
 
 这是包装平面稿到既有 Blender 流水线的本地批处理入口。V2 不再把“红线、间距或 bbox 看起来像盒子”当作可自动接受的结构事实；它消费版本化 `PackagingStructure`，把结构识别、拓扑验证、人工确认和 3D 生成分开。旧 `dieline.py` 只保留给命令行诊断，不在网页新任务路径中。
 
-结构事实与成盒闸门以 `docs/adr-005-packaging-structure-v2.md` 为准；渲染真实感、family 几何分派、纸材/涂层、棚光、清晰度预算和质量评测以 `docs/adr-007-packaging-render-fidelity.md` 为准。`0.21.26.0` 已交 RF-00 测量尺和 RF-01 独立合同的 Code/L0，但尚未由 RF-02 接入产品流水线，也没有改变画质。`0.21.25.0` 起的膜袋仍只是 `add_box` 生成的 3 mm 薄盒预览，不是写实软袋。
+结构事实与成盒闸门以 `docs/adr-005-packaging-structure-v2.md` 为准；渲染真实感、family 几何分派、纸材/涂层、棚光、清晰度预算和质量评测以 `docs/adr-007-packaging-render-fidelity.md` 为准。RF-00 测量尺、RF-01 独立合同和 RF-02 流水线接线（含 RF-02.3 磁盘执行边界）已交 Code/L0：新 V2 任务在切面栅格前解析 persistable render plan，写入 resolved job、fingerprint 和 result；这没有改变 Blender 几何或棚光。非 V2 只是命令行诊断路径，不是网页产品通道。approved baseline、RF-03 输出代际、L1、L2、UAT 均未完成。`0.21.25.0` 起的膜袋仍只是 `add_box` 生成的 3 mm 薄盒预览，不是写实软袋。
 
 当前可验证的语义来源有两种：
 
@@ -59,7 +59,19 @@
     # 网页打样台会调这份 CLI。本机直接跑也可以。PPT 用白底写 OOXML，不依赖 Node。不要提交 node_modules。
     python3 pipeline.py examples/jobs_26H17.json --workers 2 --force
 
-V2 任务在产品项中写 `"structure_engine": "v2"`。显式 sidecar 可写 `structure_sidecar`；已从结构对象清理出的印刷稿可写 `artwork_pdf`。网页 `.ai` 通道由 Illustrator 同时导出这两个文件。首次运行加 `--force`；同一源文件、结构、artwork 和流程版本未变化时，去掉 `--force` 会复用缓存，但缓存命中仍必须先通过当前 sidecar 的 `validation.status=accepted` 闸门。
+`examples/jobs_26H17.json` 与 `examples/jobs_illustrator_smoke.json` 未写 `structure_engine=v2`，只走非 V2/命令行诊断路径，不是网页产品通道。生产与 smoke 模板不再带散落 `render`；该诊断路径通过 `render_contract.v1_diagnostic_render()` 取得历史 6 键参数（生产 `3000×3600`、smoke `1200×1440`、白底 `[1,1,1,1]`），不会裸 `KeyError`，也不会把 V2 再变成双事实源。网页新建打样单仍必须写 `structure_engine=v2`。
+
+V2 任务在产品项中写 `"structure_engine": "v2"`。显式 sidecar 可写 `structure_sidecar`；已从结构对象清理出的印刷稿可写 `artwork_pdf`。网页 `.ai` 通道由 Illustrator 同时导出这两个文件。结构模板只声明 `render_profile_id` 和可选对象 `output_request`：生产花盒用 `compat-legacy-v0`，Illustrator smoke 用 `smoke-v1`。缺 profile、未知 profile / family、falsy 非对象 output request，或模板 raster 与 spec 冲突时只用 spec。这些检查都在 `render_face_assets` 和 Blender 之前失败关闭。普通新任务缺 render spec 永远失败，不会合成兼容合同。
+
+`pipeline.py` 只消费合同深入口返回的已验证 plan（spec、平面 render、sampling、四项顶层 identity、fingerprint token）。新任务 + 缓存结果走 `render_plan_for_new_job_and_persisted_result`（同一次 registry snapshot）；Blender 启动走 `blender_execution_plan`（校验真正交给 Blender 的磁盘 payload，四项顶层 identity 与 spec 派生 flat render 必须齐全且与内存一致）。磁盘/内存相等不等于路径合法：六面 `assets` 必须恰好是本单 `assets/panel_{face}.png` 的非 symlink 普通 PNG。它不读 registry，不复制 nested hash 字段名。Blender 仍读平面 `render` 参数。切面宽度只取 plan 里的 `legacy_raster_width_px`。
+
+所有非 cache Blender 任务都从当前内存 job 写成私有执行快照并注入本轮 `execution_nonce`，subprocess 不再直接读可被改写的 `resolved_job.json`。V2 在生成快照前仍走 `blender_execution_plan` 的磁盘/内存/spec/路径/asset 校验。非 V2 诊断路径跳过该 V2 合同校验，但仍用同一套私有快照和 nonce。Blender 返回的 `blender_result.json` 是不可信边界：必须回传同 nonce，只接受测量字段，`code`/`outputs` 必须与执行快照 canonical 全等；未知字段、越界输出或 `project_dir`/`render`/`spec`/identity 注入在写核对卡和 relight 提交前失败。
+
+首次运行加 `--force`；同一源文件、结构、artwork、流程版本和 plan fingerprint token 未变化时，去掉 `--force` 会复用缓存。缓存命中还要求：result 绑定本次实际 `project_dir` 与预期 `resolved_job.json`（不信 previous 自报路径），sidecar `validation.status=accepted`，result 带完整 spec，四项 identity 一致，六面 assets 与 blend/glb/front/back 均在本单目录内互不重复（已存在文件比 inode，未存在目标按 casefold）、非 symlink、非空、带格式签名；未知 output key 或与 resolved_job/六面 assets/source/template（含 symlink 目标与 hardlink 同 inode）重叠只 miss。格式检查只读文件头 8 字节。内容 SHA 与不可变 generation manifest 留给 RF-03。只改 JSON 空白不改变规范化合同 hash；registry 原始字节变化通过 plan identity 使缓存失效。
+
+`--blender-only` 只处理已有 `resolved_job.json`：已含完整 spec 时严格绑定到本单 family/hash/三轴尺寸，四项顶层 identity 与派生 flat render 必须存在且一致，hash / profile / registry 身份被篡改则拒绝。缺 spec 时，只有已知 pre-RF02 V2 作业（`pipeline_version=1.4.0` 且 `structure_engine=v2`）才合成 `source=legacy_synthesized` 的 `compat-legacy-v0`；当前/未来/未知/缺版本且缺 spec 一律拒绝。合成还要求历史实际持久化的最小 render 键（substrate/resolution/camera/rotation）完整且逐项匹配 compat；`None`、`{}` 或缺键失败，不要求当时未持久化、由 Blender 默认提供的新键。缺少可证明 family / 完整六面 / 结构身份时失败，不按文件名、颜色或任务 ID 猜。
+
+重渲先在临时目录生成并验证全部新输出；提交前才对流式拷贝到磁盘的原已存在文件建备份，并记录每个目标提交前是否存在。任一第 1..N 个替换或最终 job 写入失败，恢复原文件、删除本轮新建目标（含 optional ground/set/card），并恢复内存 job。备份不把 Blend/GLB/大 PNG 读进 RAM。`resolved_job.json` 使用同目录临时文件 + `os.replace`。这覆盖同步异常回滚；进程崩溃/断电级原子 current pointer 仍由 RF-03 解决，本轮不是 generation 完成。
 
 网页新建打样单一律写 `structure_engine=v2`，不再提供运行时旧引擎开关。杭州 Windows 的 Illustrator/Blender 验证是合并部署门：失败时保持上一生产版本；任务本身若缺少可验证结构，则停在 `review_required` / `unsupported`，不会用旧引擎伪造成功。
 
@@ -68,7 +80,7 @@ V2 任务在产品项中写 `"structure_engine": "v2"`。显式 sidecar 可写 `
 - PDF 兼容 AI 直接走高速通道，不启动 Illustrator。平面 PNG 用 pymupdf 按 MediaBox 整页出图（细 CropBox 不按可见条带放大）。杭州 Windows 与对照共用 `apps/web/backend/.venv` 里的 pymupdf，不要装 macOS Quick Look。pymupdf 失败时，本机若有 `/usr/bin/qlmanage` 才兜底。
 - 原生 AI 或非 PDF 兼容 AI 自动通过 Illustrator 导出完整稿和印刷层 PDF，再进入相同建模流程。Windows 上管理员必须保持登录，`beian-illustrator-agent` 的 Session 和心跳必须正常；Agent 接单后按需启动并验证同会话可见窗口与文档列表。生产任务与可信 `main` 发版内的 L1 请求共用同一个执行锁及持久故障围栏，执行中断或清理未确认后不能由另一请求接手；只能按 `scripts/windows/README.md` 的交互管理员流程确认并清除。心跳 busy 时新单排队，不是 412。用户注销、Agent 离线或 faulted 时开始接口返回 412，不消耗待开工回执，也不退回 Session 0。
 - Illustrator 冷启动和复杂转曲稿解析可能较慢，建议保持应用常驻。无人值守控制面：无进度 60 秒（存 PDF 300 秒）才放弃；作业墙钟 900 秒只表示 cancel_pending，外层 1260 秒。禁止在 saving 期间 Kill cscript。盘点前 hide 顶层、进轮廓视图（`executeMenuCommand("preview")` 只按一次）、zoom 0.0625；`eachInventoryPathItem` 走 `layer.pageItems` 并展开组和复合路径，跳过 表/标注/Dimensions/尺寸，每层 remainder 上限 512；空的隐藏集合不要把 fallback 从 `document.pathItems` 闩走。存 PDF 前 `restoreUnattendedArtwork` 必须把原可见顶层恢复，否则抛 `Cannot fully restore artwork layers`。关稿再 hide+outline+zoom 0.03125。26H21A 仍是 land 后杭州人工金标。
-- 相同结构只需新增任务记录即可并行处理；缓存键包含源稿、结构 sidecar、清理后的 artwork 和流程版本。
+- 相同结构只需新增任务记录即可并行处理；缓存键包含源稿、结构 sidecar、清理后的 artwork、流程版本，以及 contract 给出的 render plan fingerprint token（其中含合同 hash、profile hash 和 registry 原始字节身份）。
 - `structure_v2` 用 Shapely/GEOS 做单位归一、同源近点归一、noding、polygonize 和拓扑诊断。结构可闭合但产品正面仍有业务歧义时返回 `review_required`。网页路径上，唯一可确认正面且带 `preferred_quarter_turns` 时由服务端自动确认并继续出图；多面时已登录账号只提供一个正面锚点。系统只公开最终确认引擎接受的方向，自动带入其几何推荐，再从完整盒型推导其余五面。管理员可对已出图且只有一套公开盒型的单再提交正面，只重跑 Blender。尺寸不匹配与贴图方向不唯一使用不同错误码，不能用方向文案掩盖尺寸失败。曲线适配或结构工作量超过安全上限时返回可执行的 `unsupported`，不会进入 Blender。确认接口用 409 表示候选已过期、422 表示当前结构不能成盒；它们不是网络错误。
 - 只有 `validation.status=accepted`、源稿 SHA-256 匹配、六面角色唯一且拓扑闭合的结构才能形成 `ResolvedPackagingJob`。人工确认结果写成新的批准 sidecar，再进入现有建模、渲染、PPT 和 GLB 合同。GLB 导出后还要逐面核对已确认 artwork 绑定；底面缺图、方向错误或镜像错误都判失败。
 - Blender MCP 只保留给交互调试。稳定生产通过独立 Blender 后台进程并行执行，避免界面串行和上下文开销。
