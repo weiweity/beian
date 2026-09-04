@@ -171,7 +171,7 @@ test("完成态打样单可分开调产品和背景灯光，原图灯箱也能�
   await backgroundLight.fill("0.6");
   await expect(page.locator(".mockup-sheet-photo .mockup-sheet-frame").first()).toHaveCSS(
     "background-color",
-    "rgb(153, 153, 153)",
+    "rgb(143, 143, 143)",
   );
 
   const originalButtons = page.getByRole("button", { name: /打开.+原图/ });
@@ -322,6 +322,53 @@ test("缺印刷面且可补时点补印刷面后读字出现，看板仍已出�
   ).toBeTruthy();
   await expect(page.getByRole("heading", { name: mockup.title })).toBeVisible();
   await expect(page.locator(".wait-card")).toHaveCount(0);
+});
+
+test("已出图可重渲棚时点按钮保持已出图", async ({ page, syntheticApi }) => {
+  const mockup = completedMockup("aa11bb22cc33", "可重渲棚盒");
+  mockup.files = [
+    { key: "white_a", name: "正面与侧面.png" },
+    { key: "white_b", name: "反面与侧面.png" },
+    { key: "glb", name: "box.glb" },
+  ];
+  mockup.can_relight_studio = true;
+  syntheticApi.mockups.push(mockup);
+  const image = "<svg xmlns='http://www.w3.org/2000/svg' width='800' height='1200'><rect width='800' height='1200' fill='white'/></svg>";
+  for (const key of ["white_a", "white_b"]) {
+    await page.route(new RegExp(`/api/mockups/${mockup.id}/files/${key}(?:\\?.*)?$`), async (route) => {
+      await route.fulfill({ status: 200, contentType: "image/svg+xml", body: image });
+    });
+  }
+  await page.route(new RegExp(`/api/mockups/${mockup.id}/files/glb(?:\\?.*)?$`), async (route) => {
+    await route.fulfill({ status: 200, contentType: "model/gltf-binary", body: "glTF" });
+  });
+  await page.goto(`/mockup/${mockup.id}`);
+  await expect(page.getByRole("button", { name: "重渲棚" })).toBeEnabled();
+  await page.getByRole("button", { name: "重渲棚" }).click();
+  expect(
+    syntheticApi.calls.some((call) => call.method === "POST" && call.path === `/api/mockups/${mockup.id}/relight`),
+  ).toBeTruthy();
+  await expect(page.locator(".wait-card")).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: mockup.title })).toBeVisible();
+});
+
+test("点反面芯片滚到读字并高亮", async ({ page, syntheticApi }) => {
+  const mockup = completedMockup("ee77ff001122", "读字芯片盒");
+  mockup.files = [
+    { key: "white_a", name: "正面与侧面.png" },
+    { key: "read_front", name: "panel_front.png" },
+    { key: "read_back", name: "panel_back.png" },
+  ];
+  syntheticApi.mockups.push(mockup);
+  const image = "<svg xmlns='http://www.w3.org/2000/svg' width='400' height='600'><rect width='400' height='600' fill='white'/></svg>";
+  for (const key of ["white_a", "read_front", "read_back"]) {
+    await page.route(new RegExp(`/api/mockups/${mockup.id}/files/${key}(?:\\?.*)?$`), async (route) => {
+      await route.fulfill({ status: 200, contentType: "image/svg+xml", body: image });
+    });
+  }
+  await page.goto(`/mockup/${mockup.id}`);
+  await page.getByRole("navigation", { name: "跳到印刷面" }).getByRole("button", { name: "反面" }).click();
+  await expect(page.locator("#read-face-back")).toHaveClass(/is-highlight/);
 });
 
 test("印刷面图损坏时隐藏原图和下载操作", async ({ page, syntheticApi }) => {

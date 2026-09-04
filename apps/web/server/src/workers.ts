@@ -315,6 +315,19 @@ export async function runPackaging(
   });
 }
 
+export async function runPackagingBlenderOnly(
+  manifestPath: string,
+  hooks?: { onStderrLine?: (line: string) => void; onSpawn?: (pid: number) => void },
+): Promise<RunPythonResult> {
+  return runPython({
+    args: ["pipeline.py", manifestPath, "--workers", "1", "--blender-only", "--no-ppt"],
+    cwd: PACKAGING,
+    timeoutMs: 1_260_000,
+    onStderrLine: hooks?.onStderrLine,
+    onSpawn: hooks?.onSpawn,
+  });
+}
+
 export async function preflightPackaging(
   manifestPath: string,
   hooks?: { onStderrLine?: (line: string) => void; onSpawn?: (pid: number) => void },

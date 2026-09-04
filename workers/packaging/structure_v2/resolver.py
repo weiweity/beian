@@ -23,6 +23,13 @@ from .dimensions import (
     solve_body_dimensions,
 )
 from .model import StructureContractError, canonicalize_structure, structure_cache_key
+from .pouch import (
+    POUCH_REVIEW_MESSAGE,
+    POUCH_UNSUPPORTED_MESSAGE,
+    build_pouch_resolved,
+    derive_pouch_proposal,
+    mapped_face_size,
+)
 from .topology import (
     TopologyError,
     analyze_declared_faces,
@@ -573,11 +580,79 @@ def _save_cache(cache_dir: Path | None, cache_key: str, resolved: Mapping[str, A
     )
 
 
+def _pouch_ready(structure: Mapping[str, Any]) -> ResolutionResult | None:
+    if structure.get("packaging_family") != "pouch":
+        return None
+    if structure["validation"]["status"] != "accepted":
+        return None
+    faces_by_role = {str(face["role"]): face for face in structure["faces"]}
+    if set(faces_by_role) != {"front", "back"}:
+        return None
+    front = faces_by_role["front"]
+    back = faces_by_role["back"]
+    try:
+        width, height = mapped_face_size(structure, front)
+    except ValueError:
+        return None
+    resolved = build_pouch_resolved(
+        structure,
+        front_face=front,
+        back_face=back,
+        dimensions_mm={"width": width, "depth": 3.0, "height": height},
+    )
+    return ResolutionResult(status="ready", structure=dict(structure), resolved=resolved)
+
+
+def _pouch_divert(structure: Mapping[str, Any], pouch_hint: bool) -> ResolutionResult | None:
+    if not pouch_hint:
+        return None
+    pouch = derive_pouch_proposal(structure)
+    if pouch is None:
+        return ResolutionResult(
+            status="unsupported",
+            code="structure_category_unsupported",
+            message=POUCH_UNSUPPORTED_MESSAGE,
+            structure=dict(structure),
+        )
+    from .confirmation import preflight_anchor_proposals
+
+    confirmable, rejected = preflight_anchor_proposals(pouch["structure"], pouch["net_proposals"])
+    topology = {
+        "status": "review_required",
+        "errors": ["structure_face_mapping_incomplete"],
+        "warnings": [],
+        "counts": dict(pouch.get("topology_counts") or {}),
+        "faces": [],
+        "face_proposal": pouch["faces"],
+        "net_proposals": confirmable,
+        "packaging_family": "pouch",
+        "proposal_diagnostics": {
+            **dict(pouch.get("proposal_diagnostics") or {}),
+            "rejected_unconfirmable": rejected,
+        },
+    }
+    if not confirmable:
+        return ResolutionResult(
+            status="unsupported",
+            code="structure_category_unsupported",
+            message=POUCH_UNSUPPORTED_MESSAGE,
+            structure=pouch["structure"],
+            topology=topology,
+        )
+    return _review(
+        "structure_face_mapping_incomplete",
+        POUCH_REVIEW_MESSAGE,
+        structure=pouch["structure"],
+        topology=topology,
+    )
+
+
 def resolve_structure_payload(
     payload: Mapping[str, Any],
     *,
     cache_dir: Path | str | None = None,
     snap_tolerance_mm: float = 0.1,
+    pouch_hint: bool = False,
 ) -> ResolutionResult:
     try:
         structure = canonicalize_structure(payload)
@@ -585,6 +660,9 @@ def resolve_structure_payload(
         code = getattr(error, "code", "structure_contract_invalid")
         status = "unsupported" if code in {"structure_schema_unsupported", "structure_limit_exceeded"} else "review_required"
         return ResolutionResult(status=status, code=code, message=str(error))
+    ready_pouch = _pouch_ready(structure)
+    if ready_pouch is not None:
+        return ready_pouch
     proposal_adapter = is_stroke_proposal_source(structure.get("source"))
     if proposal_adapter and not structure["faces"]:
         blocking_validation_errors = [
@@ -603,6 +681,10 @@ def resolve_structure_payload(
         try:
             proposal = derive_rectangular_face_proposal(structure)
         except TopologyError as error:
+            if error.code == "structure_box_net_missing":
+                divert = _pouch_divert(structure, pouch_hint)
+                if divert is not None:
+                    return divert
             return ResolutionResult(
                 status="unsupported" if error.code in UNSUPPORTED_STRUCTURE_ERRORS else "review_required",
                 code=error.code,
@@ -633,6 +715,9 @@ def resolve_structure_payload(
         )
         proposal_topology["proposal_diagnostics"]["rejected_unconfirmable"] = rejected
         if not confirmable:
+            divert = _pouch_divert(structure, pouch_hint)
+            if divert is not None:
+                return divert
             proposal_topology["net_proposals"] = []
             return _review(
                 "structure_box_net_missing",
@@ -804,6 +889,7 @@ def resolve_structure(
     sidecar: Path | str | None = None,
     cache_dir: Path | str | None = None,
     snap_tolerance_mm: float = 0.1,
+    pouch_hint: bool = False,
 ) -> ResolutionResult:
     adapted: AdaptationResult = adapt_structure(source, sidecar=sidecar)
     if adapted.status != "adapted" or adapted.structure is None:
@@ -816,4 +902,5 @@ def resolve_structure(
         adapted.structure,
         cache_dir=cache_dir,
         snap_tolerance_mm=snap_tolerance_mm,
+        pouch_hint=pouch_hint,
     )

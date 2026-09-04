@@ -460,3 +460,12 @@ def test_actual_pixmap_pixel_limit_is_checked_after_library_rounding(tmp_path: P
         "max_pixels": 1_000_000,
         "pixels_per_mm": 20.0,
     }
+
+
+def test_paper_only_face_writes_transparent_panel(tmp_path: Path):
+    source = artwork_pdf(tmp_path / "artwork.pdf")
+    resolved = resolved_fixture()
+    resolved["faces"]["left"] = {"face_id": "face-left", "paper_only": True, "artwork_layers": []}
+    sizes = render_face_assets(source, resolved, tmp_path / "assets", raster_width_px=1200)
+    assert sizes["left"][0] >= 8
+    assert center_rgba(tmp_path / "assets" / "panel_left.png")[3] == 0

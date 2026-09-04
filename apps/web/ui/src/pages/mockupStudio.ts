@@ -68,17 +68,16 @@ function silverFill(light: number): string {
 }
 
 function whiteSetWallFill(light: number): string {
-  return `rgb(${litChannel(245, light)}, ${litChannel(245, light)}, ${litChannel(243, light)})`;
+  return `rgb(${litChannel(238, light)}, ${litChannel(238, light)}, ${litChannel(236, light)})`;
 }
 
-/** 白底：0.6 灰 → 1.0 及更亮为纯白。银底浅银。白桌白墙用台面灰，墙面另画。 */
+/** 白底默认约 RGB 238，给白盒留层次；滑条仍能加到接近白。银底浅银。白桌白墙用台面灰，墙面另画。 */
 export function studioBackdrop(light: number, preset: BackdropPreset = "white"): string {
   if (preset === "silver") return silverFill(light);
   if (preset === "white_set") {
     return `rgb(${litChannel(228, light)}, ${litChannel(228, light)}, ${litChannel(232, light)})`;
   }
-  const value = Math.round(255 * Math.min(1, clampStudioLight(light)));
-  return `rgb(${value}, ${value}, ${value})`;
+  return `rgb(${litChannel(238, light)}, ${litChannel(238, light)}, ${litChannel(238, light)})`;
 }
 
 function paintStudioSet(

@@ -36,11 +36,11 @@ describe("mockup studio light", () => {
     assert.equal(glbExposure(0.6), "0.54");
   });
 
-  it("maps background light to gray-to-white without going past white", () => {
-    assert.equal(studioBackdrop(1), "rgb(255, 255, 255)");
+  it("maps background light to a packshot cyc that stays below paper white at default", () => {
+    assert.equal(studioBackdrop(1), "rgb(238, 238, 238)");
     assert.equal(studioBackdrop(1.4), "rgb(255, 255, 255)");
-    assert.equal(studioBackdrop(0.6), "rgb(153, 153, 153)");
-    assert.equal(studioBackdrop(Number.NaN), "rgb(255, 255, 255)");
+    assert.equal(studioBackdrop(0.6), "rgb(143, 143, 143)");
+    assert.equal(studioBackdrop(Number.NaN), "rgb(238, 238, 238)");
   });
 
   it("maps silver and white-set fills without leaving the compositor", () => {
@@ -274,7 +274,7 @@ describe("composeStudioStill", () => {
     assert.equal(images.length, 1);
     assert.equal(images[0]?.[1], "product");
     const fill = ctx.calls.find((call) => call[0] === "fillRect");
-    assert.equal(fill?.[1], "rgb(255, 255, 255)");
+    assert.equal(fill?.[1], "rgb(238, 238, 238)");
   });
 
   it("silver fills a cool gray and does not multiply ground", () => {

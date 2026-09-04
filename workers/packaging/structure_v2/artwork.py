@@ -311,6 +311,20 @@ def render_face_assets(
             width_mm = float(dimensions[keys[0]])
             height_mm = float(dimensions[keys[1]])
             raw_layers = face.get("artwork_layers")
+            if face.get("paper_only") is True and not raw_layers:
+                pixels_per_mm = float(minimum_face_pixels_per_mm)
+                output_size = (
+                    max(8, round(width_mm * pixels_per_mm)),
+                    max(8, round(height_mm * pixels_per_mm)),
+                )
+                paper = Image.new("RGBA", output_size, (0, 0, 0, 0))
+                try:
+                    output = destination / f"panel_{role}.png"
+                    paper.save(output, compress_level=3)
+                    sizes[role] = [paper.width, paper.height]
+                finally:
+                    paper.close()
+                continue
             if not isinstance(raw_layers, list) or not raw_layers:
                 raise ArtworkMappingError("artwork_transform_invalid", f"{role} 面缺少贴图图层")
             layers = sorted(

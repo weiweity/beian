@@ -432,7 +432,20 @@ def _normalized_artwork_assemblies(
 def _normalize(payload: Mapping[str, Any], limits: Mapping[str, int] | None = None) -> dict[str, Any]:
     _known_keys(
         payload,
-        {"schema", "units", "source", "vertices", "edges", "faces", "folds", "root_face", "structure_hash", "validation", "artwork_assemblies"},
+        {
+            "schema",
+            "units",
+            "source",
+            "vertices",
+            "edges",
+            "faces",
+            "folds",
+            "root_face",
+            "structure_hash",
+            "validation",
+            "artwork_assemblies",
+            "packaging_family",
+        },
         "structure",
     )
     if payload.get("schema") != SCHEMA:
@@ -582,6 +595,11 @@ def _normalize(payload: Mapping[str, Any], limits: Mapping[str, int] | None = No
             payload["artwork_assemblies"],
             faces,
         )
+    family = payload.get("packaging_family")
+    if family is not None:
+        if family != "pouch":
+            _fail("structure_contract_invalid", "packaging_family 只能是 pouch", field="packaging_family")
+        normalized_structure["packaging_family"] = "pouch"
     return normalized_structure
 
 

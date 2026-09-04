@@ -35,13 +35,17 @@ def test_flattened_and_category_holds_are_unsupported_not_review():
         "structure_flattened_artwork",
         "当前不支持（拼合稿）。请用未拼合、仍有印刷/刀版分层的源稿重新打样。",
     )
-    code, message = factory.factory_input_hold(
+    assert factory.factory_input_hold(
         Path("26G30A-膜袋.ai"),
         ["印刷", "刀版"],
         {"display_name": "膜袋"},
-    )
+    ) is None
+    assert factory.pouch_marker_hint(Path("26G30A-膜袋.ai"), ["印刷", "刀版"], {"display_name": "膜袋"}) is True
+    assert factory.pouch_marker_hint(Path("26H11A-面膜.ai"), ["印刷", "刀版"], {"display_name": "面膜"}) is False
+    assert factory.pouch_marker_hint(Path("26H24A-7袋装花盒.ai"), ["印刷", "刀线"], {}) is False
+    code, message = factory.factory_input_hold(Path("26E20A-内包.ai"), ["印刷", "刀版"], {})
     assert code == "structure_category_unsupported"
-    assert "膜袋" in message
+    assert "内包" in message
     assert factory.factory_input_hold(Path("26H24A-7袋装花盒.ai"), ["印刷", "刀线"], {}) is None
     assert factory.factory_input_hold(Path("flower.ai"), ["印刷", "刀版", "标注"], {}) is None
 

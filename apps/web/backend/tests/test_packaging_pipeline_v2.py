@@ -17,6 +17,24 @@ from packaging_structure_fixture import semantic_box
 PACKAGING = Path(__file__).resolve().parents[4] / "workers" / "packaging"
 
 
+def test_overlay_studio_profile_grades_paper():
+    pipe = pipeline_module()
+    graded = pipe.overlay_studio_profile({"substrate_rgba": [1, 1, 1, 1], "resolution_x": 10})
+    assert graded["substrate_rgba"] == [0.7, 0.7, 0.7, 1.0]
+    assert graded["resolution_x"] == 10
+
+
+def test_blender_only_without_resolved_job_fails_closed(tmp_path: Path):
+    pipe = pipeline_module()
+    with pytest.raises(pipe.PipelineError) as raised:
+        pipe.load_blender_only_jobs(
+            [{"code": "deadbeef"}],
+            tmp_path,
+            tmp_path,
+        )
+    assert "已出图棚" in str(raised.value)
+
+
 def pipeline_module():
     spec = importlib.util.spec_from_file_location("packaging_pipeline_v2", PACKAGING / "pipeline.py")
     assert spec and spec.loader
