@@ -1867,6 +1867,33 @@ describe("mockup print-faces http", { concurrency: false }, () => {
     assert.equal(body.detail, "这单没有可用底稿，无法补生成。请重新打样。");
   });
 
+  it("POST from another reviewer succeeds and stamps repaired_by", async () => {
+    const { setJobsTestHooks, resetJobsTestHooks } = await import("./jobs.js");
+    seedPrintFaceJob("aa13aa13aa13", "ou_pf_owner");
+    setJobsTestHooks({
+      runPrintFaceRepair: async (opts) => {
+        writeRequiredFaces(opts.assets);
+        return { code: 0, stdout: '{"ok":true}', stderr: "", timedOut: false };
+      },
+    });
+    try {
+      const peer = issueSessionForTest("籽烨", "reviewer", "ou_pf_peer");
+      const res = await app.request("/api/mockups/aa13aa13aa13/print-faces", {
+        method: "POST",
+        headers: { authorization: `Bearer ${peer.token}` },
+      });
+      assert.equal(res.status, 200);
+      const body = (await res.json()) as {
+        print_faces_repaired_by?: string;
+        print_faces_repaired_at?: string;
+      };
+      assert.equal(body.print_faces_repaired_by, "ou_pf_peer");
+      assert.equal(typeof body.print_faces_repaired_at, "string");
+    } finally {
+      resetJobsTestHooks();
+    }
+  });
+
   it("POST rejects viewer, failed, running, and blender-live jobs", async () => {
     const { setJobsLiveForTest, resetJobsTestHooks } = await import("./jobs.js");
     seedPrintFaceJob("aa06aa06aa06", "ou_pf_deny");
@@ -1981,6 +2008,210 @@ describe("mockup print-faces http", { concurrency: false }, () => {
       const next = (await detail.json()) as { status?: string };
       assert.equal(next.status, "done");
     } finally {
+      resetJobsTestHooks();
+    }
+  });
+});
+
+function seedRelightJob(
+  id: string,
+  owner: string,
+  opts: {
+    status?: "done" | "failed" | "running" | "queued";
+    resolved?: boolean;
+    assets?: boolean;
+    stills?: boolean;
+    manifest?: boolean;
+  } = {},
+) {
+  const dir = join(DATA_DIR, "mockups", id);
+  const assetsDir = join(dir, "assets");
+  mkdirSync(assetsDir, { recursive: true });
+  const stillA = join(dir, `${id}_pack_front_right_white.png`);
+  const stillB = join(dir, `${id}_pack_back_left_white.png`);
+  const assets: Record<string, string> = {};
+  for (const face of ["front", "right", "back", "left", "top", "bottom"] as const) {
+    const path = join(assetsDir, `panel_${face}.png`);
+    if (opts.assets !== false) writeFileSync(path, PNG_MAGIC);
+    assets[face] = path;
+  }
+  if (opts.stills !== false) {
+    writeFileSync(stillA, PNG_MAGIC);
+    writeFileSync(stillB, PNG_MAGIC);
+  }
+  const resolvedPath = join(dir, "resolved_job.json");
+  if (opts.resolved !== false) {
+    writeFileSync(
+      resolvedPath,
+      JSON.stringify({
+        assets,
+        outputs: { front_right: stillA, back_left: stillB },
+        render: { substrate_rgba: [1, 1, 1, 1] },
+      }),
+    );
+  }
+  const manifest = join(dir, "manifest.json");
+  if (opts.manifest !== false) writeFileSync(manifest, JSON.stringify({ products: [{ code: id.slice(0, 8) }] }));
+  const status = opts.status || "done";
+  saveMockup({
+    id,
+    status,
+    created_at: "2026-09-04T00:00:00Z",
+    files: opts.stills === false
+      ? []
+      : [
+          { key: "white_a", path: stillA, name: `${id}_pack_front_right_white.png` },
+          { key: "white_b", path: stillB, name: `${id}_pack_back_left_white.png` },
+        ],
+    owner,
+    job_kind: "mockup",
+    job_status: status === "done" ? "succeeded" : status === "failed" ? "failed" : status,
+    structure_engine: "v2",
+    structure_status: "ready",
+    manifest_path: opts.manifest === false ? undefined : manifest,
+  });
+  return { dir, stillA, stillB };
+}
+
+describe("mockup relight http", { concurrency: false }, () => {
+  it("GET detail returns can_relight without paths; list does not scan", async () => {
+    seedRelightJob("bb01bb01bb01", "ou_rl_get");
+    const sess = issueSessionForTest("籽烨", "reviewer", "ou_rl_get");
+    const detail = await app.request("/api/mockups/bb01bb01bb01", {
+      headers: { authorization: `Bearer ${sess.token}` },
+    });
+    assert.equal(detail.status, 200);
+    const body = (await detail.json()) as Record<string, unknown>;
+    assert.equal(body.can_relight_studio, true);
+    assert.equal(body.status, "done");
+    assert.equal(JSON.stringify(body).includes("resolved_job"), false);
+    const list = await app.request("/api/mockups", {
+      headers: { authorization: `Bearer ${sess.token}` },
+    });
+    assert.equal(list.status, 200);
+    const rows = (await list.json()) as Array<Record<string, unknown>>;
+    const row = rows.find((item) => item.id === "bb01bb01bb01");
+    assert.ok(row);
+    assert.equal("can_relight_studio" in (row || {}), false);
+  });
+
+  it("POST keeps status done, stamps relit_by, and does not unlink stills on failure", async () => {
+    const { setJobsTestHooks, resetJobsTestHooks } = await import("./jobs.js");
+    const { stillA } = seedRelightJob("bb02bb02bb02", "ou_rl_ok");
+    const before = readFileSync(stillA);
+    setJobsTestHooks({
+      runRelight: async () => ({ code: 0, stdout: '{"ok":true}', stderr: "", timedOut: false }),
+    });
+    try {
+      const peer = issueSessionForTest("籽烨", "reviewer", "ou_rl_peer");
+      const res = await app.request("/api/mockups/bb02bb02bb02/relight", {
+        method: "POST",
+        headers: { authorization: `Bearer ${peer.token}` },
+      });
+      assert.equal(res.status, 200);
+      const body = (await res.json()) as {
+        status?: string;
+        studio_relit_by?: string;
+        studio_relit_at?: string;
+      };
+      assert.equal(body.status, "done");
+      assert.equal(body.studio_relit_by, "ou_rl_peer");
+      assert.equal(typeof body.studio_relit_at, "string");
+      assert.deepEqual(readFileSync(stillA), before);
+    } finally {
+      resetJobsTestHooks();
+    }
+  });
+
+  it("POST without resolved job is 409; viewer 403; blender-live 409; failure keeps stills", async () => {
+    const { setJobsTestHooks, setJobsLiveForTest, resetJobsTestHooks } = await import("./jobs.js");
+    seedRelightJob("bb03bb03bb03", "ou_rl_miss", { resolved: false });
+    seedRelightJob("bb04bb04bb04", "ou_rl_view");
+    seedRelightJob("bb05bb05bb05", "ou_rl_live");
+    const { stillA } = seedRelightJob("bb06bb06bb06", "ou_rl_fail");
+    const before = readFileSync(stillA);
+    const miss = await app.request("/api/mockups/bb03bb03bb03/relight", {
+      method: "POST",
+      headers: { authorization: `Bearer ${issueSessionForTest("籽烨", "reviewer", "ou_rl_miss").token}` },
+    });
+    assert.equal(miss.status, 409);
+    const missBody = (await miss.json()) as { detail?: string };
+    assert.match(String(missBody.detail), /棚底稿/);
+    const viewer = issueSessionForTest("只看", "viewer", "ou_rl_view");
+    const forbidden = await app.request("/api/mockups/bb04bb04bb04/relight", {
+      method: "POST",
+      headers: { authorization: `Bearer ${viewer.token}` },
+    });
+    assert.equal(forbidden.status, 403);
+    setJobsLiveForTest("blender", "bb05bb05bb05");
+    try {
+      const live = await app.request("/api/mockups/bb05bb05bb05/relight", {
+        method: "POST",
+        headers: { authorization: `Bearer ${issueSessionForTest("籽烨", "reviewer", "ou_rl_live").token}` },
+      });
+      assert.equal(live.status, 409);
+      const liveBody = (await live.json()) as { detail?: string };
+      assert.equal(liveBody.detail, "出图还在跑，现在不能重渲棚。");
+    } finally {
+      resetJobsTestHooks();
+    }
+    setJobsTestHooks({
+      runRelight: async () => ({ code: 1, stdout: "", stderr: "boom", timedOut: false }),
+    });
+    try {
+      const fail = await app.request("/api/mockups/bb06bb06bb06/relight", {
+        method: "POST",
+        headers: { authorization: `Bearer ${issueSessionForTest("籽烨", "reviewer", "ou_rl_fail").token}` },
+      });
+      assert.equal(fail.status, 409);
+      assert.deepEqual(readFileSync(stillA), before);
+      const detail = await app.request("/api/mockups/bb06bb06bb06", {
+        headers: { authorization: `Bearer ${issueSessionForTest("籽烨", "reviewer", "ou_rl_fail").token}` },
+      });
+      const next = (await detail.json()) as { status?: string };
+      assert.equal(next.status, "done");
+    } finally {
+      resetJobsTestHooks();
+    }
+  });
+
+  it("same-job second POST is 409 while blender slot is held", async () => {
+    const { setJobsTestHooks, resetJobsTestHooks } = await import("./jobs.js");
+    seedRelightJob("bb07bb07bb07", "ou_rl_hold");
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started: () => void = () => {};
+    const startedAt = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    setJobsTestHooks({
+      runRelight: async () => {
+        started();
+        await gate;
+        return { code: 0, stdout: '{"ok":true}', stderr: "", timedOut: false };
+      },
+    });
+    try {
+      const owner = issueSessionForTest("籽烨", "reviewer", "ou_rl_hold");
+      const first = app.request("/api/mockups/bb07bb07bb07/relight", {
+        method: "POST",
+        headers: { authorization: `Bearer ${owner.token}` },
+      });
+      await startedAt;
+      const again = await app.request("/api/mockups/bb07bb07bb07/relight", {
+        method: "POST",
+        headers: { authorization: `Bearer ${owner.token}` },
+      });
+      assert.equal(again.status, 409);
+      const againBody = (await again.json()) as { detail?: string };
+      assert.match(String(againBody.detail), /正在重渲棚|出图还在跑/);
+      release();
+      const done = await first;
+      assert.equal(done.status, 200);
+    } finally {
+      release();
       resetJobsTestHooks();
     }
   });

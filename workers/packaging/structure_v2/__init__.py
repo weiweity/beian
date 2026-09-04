@@ -11,7 +11,7 @@ from .adapters import AdaptationResult, StructureAdapterError, adapt_structure
 from .artwork import ArtworkMappingError, render_face_assets
 from .repair import REQUIRED_PRINT_FACES, repair_print_faces
 from .confirmation import StructureConfirmationError, confirm_structure
-from .factory_layers import factory_input_hold, print_layer_failure_message
+from .factory_layers import factory_input_hold, pouch_marker_hint, print_layer_failure_message
 from .resolver import ResolutionResult, resolve_structure, resolve_structure_payload
 from .topology import (
     TopologyError,
@@ -39,6 +39,7 @@ __all__ = [
     "derive_rectangular_face_proposal",
     "factory_input_hold",
     "load_structure",
+    "pouch_marker_hint",
     "print_layer_failure_message",
     "resolve_structure",
     "resolve_structure_payload",

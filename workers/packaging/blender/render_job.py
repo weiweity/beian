@@ -56,6 +56,34 @@ def clean_scene():
                 collection.remove(item)
 
 
+# sRGB 210–225 → scene-linear ~0.64–0.75. Printed white lives on the texture,
+# not the paperboard core, so grade Base Color here. Read-face PNGs stay ungraded.
+PAPER_ALBEDO_LINEAR = 0.70
+
+
+def _multiply_paper_albedo(nodes, links, texture_color):
+    paper = nodes.new("ShaderNodeRGB")
+    paper.outputs[0].default_value = (PAPER_ALBEDO_LINEAR, PAPER_ALBEDO_LINEAR, PAPER_ALBEDO_LINEAR, 1.0)
+    mix = None
+    try:
+        mix = nodes.new("ShaderNodeMix")
+        mix.data_type = "RGBA"
+        mix.blend_type = "MULTIPLY"
+        mix.inputs["Factor"].default_value = 1.0
+        links.new(texture_color, mix.inputs["A"])
+        links.new(paper.outputs[0], mix.inputs["B"])
+        return mix.outputs["Result"]
+    except (TypeError, KeyError, RuntimeError):
+        if mix is not None:
+            nodes.remove(mix)
+        mix = nodes.new("ShaderNodeMixRGB")
+        mix.blend_type = "MULTIPLY"
+        mix.inputs["Fac"].default_value = 1.0
+        links.new(texture_color, mix.inputs["Color1"])
+        links.new(paper.outputs[0], mix.inputs["Color2"])
+        return mix.outputs["Color"]
+
+
 def make_material(name, image_path, roughness=0.52, specular_ior=0.08):
     material = bpy.data.materials.new(name)
     material.use_nodes = True
@@ -75,7 +103,7 @@ def make_material(name, image_path, roughness=0.52, specular_ior=0.08):
     alpha_mask.use_clamp = True
     shader.inputs["Roughness"].default_value = roughness
     shader.inputs["Specular IOR Level"].default_value = specular_ior
-    links.new(texture.outputs["Color"], shader.inputs["Base Color"])
+    links.new(_multiply_paper_albedo(nodes, links, texture.outputs["Color"]), shader.inputs["Base Color"])
     links.new(texture.outputs["Alpha"], alpha_mask.inputs[0])
     links.new(alpha_mask.outputs[0], shader.inputs["Alpha"])
     # Alpha is a binary physical-coverage mask, not translucent paper.  The
@@ -137,7 +165,10 @@ def add_box(job):
     assets = {name: Path(path) for name, path in job["assets"].items()}
     roughness = float(job["render"].get("material_roughness", 0.52))
     specular_ior = float(job["render"].get("material_specular_ior", 0.08))
-    substrate_rgba = job["render"].get("substrate_rgba", [1.0, 1.0, 1.0, 1.0])
+    substrate_rgba = job["render"].get(
+        "substrate_rgba",
+        [PAPER_ALBEDO_LINEAR, PAPER_ALBEDO_LINEAR, PAPER_ALBEDO_LINEAR, 1.0],
+    )
     if (
         not isinstance(substrate_rgba, list)
         or len(substrate_rgba) != 4
@@ -463,11 +494,14 @@ def add_studio(job):
     fill.data.size = 110
     look_at(fill, (0, 0, 90))
 
-    bpy.ops.object.light_add(type="AREA", location=(0, 15, 315))
+    # Camera sits at +X/-Y. Far side of the box from the camera is -X/+Y.
+    # Keep lights in camera space so both 0° and 180° stills get a back rim.
+    bpy.ops.object.light_add(type="AREA", location=(-90, 210, 280))
     rim = bpy.context.object
     rim.name = "Rim softbox"
     rim.data.energy = 72000 * light_scale
-    rim.data.size = 95
+    rim.data.size = 70
+    rim.data.shape = "RECTANGLE"
     look_at(rim, (0, 0, 90))
 
     dims = job["dimensions_mm"]
@@ -578,7 +612,10 @@ def export_model(job, root, model_objects):
 
 
 def verify_glb(job):
-    substrate_rgba = job["render"].get("substrate_rgba", [1.0, 1.0, 1.0, 1.0])
+    substrate_rgba = job["render"].get(
+        "substrate_rgba",
+        [PAPER_ALBEDO_LINEAR, PAPER_ALBEDO_LINEAR, PAPER_ALBEDO_LINEAR, 1.0],
+    )
     try:
         artifact = load_glb_artifact(job["outputs"]["glb"])
         material_report = compare_glb_material_contract(

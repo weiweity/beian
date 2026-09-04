@@ -26,7 +26,8 @@ from .dimensions import (
     solve_body_dimensions,
 )
 from .model import canonicalize_structure
-from .resolver import BOX_ROLES, resolve_structure_payload
+from .pouch import POUCH_NET_PROPOSAL_SCHEMA
+from .resolver import resolve_structure_payload
 
 
 CAP_OUTWARD_DIRECTIONS = {
@@ -758,6 +759,68 @@ def _anchor_decisions(
     return normalized, normalized_closures
 
 
+def _resolve_pouch_anchor(
+    resolution: Mapping[str, Any],
+    structure: Mapping[str, Any],
+    anchor: Mapping[str, Any],
+    net: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    front_id = str(anchor.get("front_face_id") or "")
+    turns = anchor.get("quarter_turns", 0)
+    if isinstance(turns, bool) or not isinstance(turns, int) or turns not in {0, 1, 2, 3}:
+        raise StructureConfirmationError("artwork_transform_invalid", "正面方向只能旋转 0/90/180/270 度。")
+    bound_hash = net.get("structure_hash")
+    if not isinstance(bound_hash, str) or bound_hash != structure.get("structure_hash"):
+        raise StructureConfirmationError("structure_confirmation_stale", "完整盒型与当前结构版本不一致，请重新识别。")
+    body_ids = [str(value) for value in net.get("body_face_ids", [])]
+    face_ids = [str(value) for value in net.get("face_ids", [])]
+    if (
+        len(body_ids) != 2
+        or len(face_ids) != 2
+        or set(body_ids) != set(face_ids)
+        or front_id not in body_ids
+    ):
+        raise StructureConfirmationError("structure_confirmation_invalid", "膜袋正反面提案格式不对。")
+    valid_anchors = net.get("valid_anchors")
+    if isinstance(valid_anchors, list):
+        allowed_turns = next(
+            (
+                item.get("quarter_turns")
+                for item in valid_anchors
+                if isinstance(item, Mapping) and str(item.get("front_face_id") or "") == front_id
+            ),
+            None,
+        )
+        if not isinstance(allowed_turns, list) or turns not in allowed_turns:
+            raise StructureConfirmationError("structure_confirmation_invalid", "这个正面方向未通过结构预检。")
+    faces_by_id = {face["id"]: face for face in structure["faces"]}
+    back_id = next(face_id for face_id in body_ids if face_id != front_id)
+    if front_id not in faces_by_id or back_id not in faces_by_id:
+        raise StructureConfirmationError("structure_confirmation_stale", "膜袋引用的袋片已经失效。")
+    approved = canonicalize_structure(structure)
+    approved_faces = {face["id"]: face for face in approved["faces"]}
+    front = approved_faces[front_id]
+    back = approved_faces[back_id]
+    width, height = _mapped_size(approved, front)
+    front["artwork_transform"] = _rotated_transform(list(front["artwork_transform"]), width, height, turns)
+    front["role"] = "front"
+    back["role"] = "back"
+    approved["faces"] = [front, back]
+    approved["folds"] = []
+    approved["root_face"] = front_id
+    approved["packaging_family"] = "pouch"
+    approved["validation"] = {"status": "accepted", "errors": [], "warnings": ["pouch_v1_thin_card"]}
+    approved.pop("structure_hash", None)
+    approved = canonicalize_structure(approved)
+    resolved = resolve_structure_payload(approved)
+    if resolved.status != "ready" or resolved.resolved is None:
+        raise StructureConfirmationError(
+            resolved.code or "structure_confirmation_invalid",
+            resolved.message or "膜袋锚点不能形成受支持的袋片。",
+        )
+    return approved, resolved.resolved
+
+
 def _resolve_anchor(
     resolution: Mapping[str, Any],
     structure: Mapping[str, Any],
@@ -769,6 +832,19 @@ def _resolve_anchor(
     exact path.  The preflight therefore cannot expose an option that later
     fails only after role assignment, dimension averaging, or cap alignment.
     """
+    topology = resolution.get("topology")
+    raw_nets = topology.get("net_proposals") if isinstance(topology, Mapping) else None
+    proposal_id = str(anchor.get("proposal_id") or "")
+    net = next(
+        (
+            item
+            for item in (raw_nets or [])
+            if isinstance(item, Mapping) and str(item.get("id") or "") == proposal_id
+        ),
+        None,
+    )
+    if isinstance(net, Mapping) and net.get("schema") == POUCH_NET_PROPOSAL_SCHEMA:
+        return _resolve_pouch_anchor(resolution, structure, anchor, net)
     approved = canonicalize_structure(structure)
     faces_by_id = {face["id"]: face for face in approved["faces"]}
     normalized, closure_assemblies = _anchor_decisions(resolution, approved, anchor)
@@ -912,7 +988,10 @@ def preflight_anchor_proposals(
                         if isinstance(face, Mapping)
                     }
                     front_index = body_face_ids.index(front_face_id)
-                    if roles.get("right") == body_face_ids[(front_index + 1) % 4]:
+                    if (
+                        len(body_face_ids) == 4
+                        and roles.get("right") == body_face_ids[(front_index + 1) % 4]
+                    ):
                         preferred_turn = quarter_turns
             if turns:
                 valid.append({

@@ -9,7 +9,8 @@ from typing import Any, Mapping, Sequence
 FACTORY_KNIFE_LAYER_NAMES = ("刀版", "刀线")
 PROCESS_PLATE_MARKERS = ("击凹", "击凸", "哑油", "垫白", "丝印", "注塑", "漏银", "烫")
 NEVER_DEFAULT_PROPOSAL_MARKERS = ("印刷", "表", "标注", "码")
-CATEGORY_UNSUPPORTED_MARKERS = ("膜袋", "内包", "标贴")
+CATEGORY_UNSUPPORTED_MARKERS = ("内包", "标贴")
+POUCH_MARKER = "膜袋"
 FLATTENED_LAYER_NAME = re.compile(r"^图层\s*\d+$")
 
 
@@ -106,9 +107,29 @@ def factory_input_hold(
     if marker is not None:
         return (
             "structure_category_unsupported",
-            f"当前不支持（{marker}）。打样台只做花盒展开图，请不要把袋子、内包或标贴送进同一套成盒证明。",
+            f"当前不支持（{marker}）。打样台只做花盒展开图，请不要把内包或标贴送进同一套成盒证明。",
         )
     return None
+
+
+def pouch_marker_hint(
+    source: Path,
+    layers: Any,
+    product: Mapping[str, Any] | None = None,
+) -> bool:
+    """True when filename/title/layers contain 膜袋. Never keys on 面膜 or 袋装."""
+    product = product or {}
+    haystack = " ".join(
+        [
+            source.name,
+            str(product.get("code") or ""),
+            str(product.get("slug") or ""),
+            str(product.get("display_name") or ""),
+            str(product.get("title") or ""),
+            *_layer_names(layers),
+        ]
+    )
+    return POUCH_MARKER in haystack
 
 
 def print_layer_failure_message(layers: Any) -> str:

@@ -110,7 +110,7 @@ export function structureIssueCopy(
     return "当前不支持（拼合稿）。请用还留着印刷/刀版分层的源稿重新打样，不要只交「图层 1」。";
   }
   if (job.structure_code === "structure_category_unsupported") {
-    return message || "当前不支持这类包装。打样台只做花盒展开图，膜袋、内包和标贴请不要送进来。";
+    return message || "当前不支持这类包装。内包和标贴不要送进打样台；膜袋只有两块相近刀线才走袋片。";
   }
   if (job.structure_code === "structure_open_boundary") {
     return "刀线或折线存在断口，闭合后重新识别；系统不会自动补线。";

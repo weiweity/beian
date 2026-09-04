@@ -3466,6 +3466,32 @@ html[data-theme="dark"] .notes.is-float {
   aspect-ratio: 5 / 6;
 }
 
+.mockup-read-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 16px 0 0;
+  min-height: 44px;
+}
+
+.mockup-read-chip {
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid rgba(40, 24, 56, 0.16);
+  border-radius: 999px;
+  background: #fff;
+  color: #1c1a1f;
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.mockup-read-chip.is-current,
+.mockup-read-face.is-highlight .mockup-read-frame {
+  outline: 2px solid #805898;
+  outline-offset: 2px;
+}
+
 .mockup-read-faces {
   margin-top: 28px;
   min-width: 0;

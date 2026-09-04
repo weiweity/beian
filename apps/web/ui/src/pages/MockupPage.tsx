@@ -758,8 +758,10 @@ export function MockupJobPage({
   const [backgroundLight, setBackgroundLight] = useState(STUDIO_LIGHT_DEFAULT);
   const [retrying, setRetrying] = useState(false);
   const [repairing, setRepairing] = useState(false);
+  const [relighting, setRelighting] = useState(false);
   const [lightsOpen, setLightsOpen] = useState(false);
   const [backdrop, setBackdrop] = useState<BackdropPreset>(readBackdropPreset);
+  const [highlightedReadFace, setHighlightedReadFace] = useState<string | null>(null);
   const glbBox = useRef<HTMLDivElement>(null);
   const hudTimer = useRef<number | null>(null);
   const announced = useRef("");
@@ -785,6 +787,23 @@ export function MockupJobPage({
       message.error(err instanceof Error ? err.message : "重试失败");
     } finally {
       setRetrying(false);
+    }
+  }
+
+  async function relightStudio() {
+    if (!job || relighting) return;
+    setRelighting(true);
+    notice("正在重渲棚");
+    try {
+      const next = await api.relightMockupStudio(job.id);
+      setError(null);
+      setJob(next);
+      notice("棚灯已重渲");
+    } catch (err: unknown) {
+      notice("");
+      message.error(err instanceof Error ? err.message : "重渲棚失败");
+    } finally {
+      setRelighting(false);
     }
   }
 
@@ -1028,6 +1047,11 @@ export function MockupJobPage({
               {retrying ? "正在重试…" : "重试"}
             </button>
           ) : null}
+          {canCreate && job.status === "done" && job.can_relight_studio ? (
+            <button type="button" className="btn-ghost" disabled={relighting} onClick={() => void relightStudio()}>
+              {relighting ? "正在重渲棚" : "重渲棚"}
+            </button>
+          ) : null}
           <button type="button" className="btn-ghost" onClick={onBack}>
             返回打样台
           </button>
@@ -1207,6 +1231,24 @@ export function MockupJobPage({
           </figure>
         )}
       </div>
+      {readFaces.length ? (
+        <div className="mockup-read-chips" role="navigation" aria-label="跳到印刷面">
+          <span className="mockup-backdrop-label">读字</span>
+          {readFaces.map((role) => (
+            <button
+              key={role}
+              type="button"
+              className={highlightedReadFace === role ? "mockup-read-chip is-current" : "mockup-read-chip"}
+              onClick={() => {
+                setHighlightedReadFace(role);
+                document.getElementById(`read-face-${role}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+              }}
+            >
+              {READ_FACE_LABEL[role]}
+            </button>
+          ))}
+        </div>
+      ) : null}
       <section className="mockup-read-faces" aria-label="印刷面读字">
         <h2 className="mockup-read-title">读字</h2>
         <p className="page-lead">印刷面来自打样时已生成的各面图，不是 3D 截屏。滚轮或按钮可放到 6 倍。</p>
@@ -1221,6 +1263,8 @@ export function MockupJobPage({
                   jobId={job.id}
                   fileKey={fileKey}
                   label={READ_FACE_LABEL[role]}
+                  highlighted={highlightedReadFace === role}
+                  faceId={`read-face-${role}`}
                   downloadName={file?.name}
                   onDownload={() => notice(downloadHudLine("印刷面"))}
                 />
@@ -1248,12 +1292,16 @@ function ReadFaceShot({
   fileKey,
   label,
   downloadName,
+  highlighted,
+  faceId,
   onDownload,
 }: {
   jobId: string;
   fileKey: string;
   label: string;
   downloadName?: string;
+  highlighted?: boolean;
+  faceId?: string;
   onDownload: () => void;
 }) {
   const [bad, setBad] = useState(false);
@@ -1323,7 +1371,7 @@ function ReadFaceShot({
   };
 
   return (
-    <figure className="mockup-read-face">
+    <figure className={highlighted ? "mockup-read-face is-highlight" : "mockup-read-face"} id={faceId}>
       <div
         className="mockup-read-frame"
         ref={viewRef}

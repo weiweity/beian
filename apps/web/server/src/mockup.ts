@@ -60,6 +60,12 @@ export type MockupJob = {
   structure_input_selection_ids?: string[];
   /** 首次选层前的原稿预览；重跑会隐藏所选结构线，不能覆盖这份核对依据。 */
   structure_input_preview_path?: string;
+  /** 补印刷面审计：谁切的、何时。不参与权限。 */
+  print_faces_repaired_by?: string;
+  print_faces_repaired_at?: string;
+  /** 重渲棚审计。不参与权限。 */
+  studio_relit_by?: string;
+  studio_relit_at?: string;
 };
 
 export type StructureInputLayerCandidate = {
@@ -104,12 +110,13 @@ export type StructurePreviewFace = {
 };
 
 export type StructureNetProposal = {
-  schema: "box-net-proposal/3";
+  schema: "box-net-proposal/3" | "pouch-net-proposal/1";
   id: string;
   face_ids: string[];
-  body_face_ids: [string, string, string, string];
-  cap_face_ids: [string, string];
-  strip_axis: "x" | "y";
+  body_face_ids: string[];
+  cap_face_ids?: [string, string];
+  strip_axis?: "x" | "y";
+  packaging_family?: "pouch";
   bounds_mm?: [number, number, number, number];
   dimensions_mm?: { width: number; depth: number; height: number };
   valid_anchors?: Array<{
@@ -117,7 +124,7 @@ export type StructureNetProposal = {
     quarter_turns: Array<0 | 1 | 2 | 3>;
     preferred_quarter_turns?: 0 | 1 | 2 | 3;
   }>;
-  closure_assemblies: Array<{
+  closure_assemblies?: Array<{
     primary_face_id: string;
     side: -1 | 1;
     extent: "full" | "partial";
@@ -141,6 +148,7 @@ export type StructureAnchorDecision = {
 export type StructureConfirmationDecision = { anchor: StructureAnchorDecision };
 
 const BOX_NET_PROPOSAL_SCHEMA = "box-net-proposal/3";
+const POUCH_NET_PROPOSAL_SCHEMA = "pouch-net-proposal/1";
 const STRUCTURE_INPUT_CANDIDATES_SCHEMA = "packaging-structure-input-candidates/2";
 const STRUCTURE_INPUT_PREVIEW_SCHEMA = "illustrator-layer-preview/1";
 const MAX_STRUCTURE_INPUT_CANDIDATES = 128;
@@ -157,7 +165,7 @@ const MIN_ASSEMBLY_UNION_RATIO = 0.94;
 const MAX_ASSEMBLY_MEMBER_SUM_RATIO = 1.02;
 
 export function isStructureProposalId(value: string): boolean {
-  return /^box-net-(?:\d{4}|[0-9a-f]{16})$/.test(value);
+  return /^(?:box-net|pouch-net)-(?:\d{4}|[0-9a-f]{16})$/.test(value);
 }
 
 const STRUCTURE_CONFIRMATION_UNPROCESSABLE = new Set([
@@ -412,6 +420,11 @@ export function publicMockup(job: MockupJob, view: PublicMockupView = {}) {
     ...publicMockupSummaryFields(job),
     files: visibleMockupFiles(job),
     can_repair_print_faces: canRepairPrintFaces(job),
+    print_faces_repaired_by: job.print_faces_repaired_by,
+    print_faces_repaired_at: job.print_faces_repaired_at,
+    can_relight_studio: canRelightStudio(job),
+    studio_relit_by: job.studio_relit_by,
+    studio_relit_at: job.studio_relit_at,
     structure_preview: structurePreviewFromResolution(job, resolution),
     structure_input: view.structureDesk === false
       ? undefined
@@ -920,6 +933,69 @@ function structurePreviewFromResolution(
         const capIds = Array.isArray(net.cap_face_ids) ? net.cap_face_ids.map(String) : [];
         const stripAxis = net.strip_axis === "x" || net.strip_axis === "y" ? net.strip_axis : null;
         const bounds = finiteNumbers(net.bounds_mm, 4);
+        if (net.schema === POUCH_NET_PROPOSAL_SCHEMA) {
+          const pouchAnchors = Array.isArray(net.valid_anchors) ? net.valid_anchors : null;
+          if (
+            !isStructureProposalId(id)
+            || !currentStructureHash
+            || !sourceMatchesJob
+            || net.structure_hash !== currentStructureHash
+            || faceIdsRaw.length !== 2
+            || new Set(faceIdsRaw).size !== 2
+            || bodyIds.length !== 2
+            || new Set(bodyIds).size !== 2
+            || bodyIds.some((faceId) => !faceIdsRaw.includes(faceId))
+            || faceIdsRaw.some((faceId) => !faceIds.has(faceId))
+            || faceIdsRaw.some((faceId) => !polygonFaceIds.has(faceId))
+            || !pouchAnchors
+            || pouchAnchors.length < 1
+            || pouchAnchors.length > 2
+          ) {
+            continue;
+          }
+          const pouchValid: NonNullable<StructureNetProposal["valid_anchors"]> = [];
+          for (const rawAnchor of pouchAnchors) {
+            if (!rawAnchor || typeof rawAnchor !== "object" || Array.isArray(rawAnchor)) continue;
+            const anchor = rawAnchor as Record<string, unknown>;
+            const frontFaceId = typeof anchor.front_face_id === "string" ? anchor.front_face_id : "";
+            const rawTurns = Array.isArray(anchor.quarter_turns) ? anchor.quarter_turns : [];
+            const turns = rawTurns.filter((turn): turn is number => (
+              typeof turn === "number" && Number.isInteger(turn) && turn >= 0 && turn <= 3
+            ));
+            const preferred = anchor.preferred_quarter_turns;
+            if (
+              !bodyIds.includes(frontFaceId)
+              || !turns.length
+              || turns.length !== rawTurns.length
+              || new Set(turns).size !== turns.length
+              || typeof preferred !== "number"
+              || !Number.isInteger(preferred)
+              || !turns.includes(preferred)
+            ) continue;
+            pouchValid.push({
+              front_face_id: frontFaceId,
+              quarter_turns: turns as Array<0 | 1 | 2 | 3>,
+              preferred_quarter_turns: preferred as 0 | 1 | 2 | 3,
+            });
+          }
+          if (
+            pouchValid.length !== pouchAnchors.length
+            || new Set(pouchValid.map((anchor) => anchor.front_face_id)).size !== pouchValid.length
+          ) continue;
+          const pouchDimensions = positiveDimensions(net.dimensions_mm);
+          if (net.dimensions_mm !== undefined && !pouchDimensions) continue;
+          netProposals.push({
+            schema: POUCH_NET_PROPOSAL_SCHEMA,
+            id,
+            face_ids: faceIdsRaw,
+            body_face_ids: bodyIds,
+            packaging_family: "pouch",
+            ...(bounds ? { bounds_mm: bounds as StructureNetProposal["bounds_mm"] } : {}),
+            ...(pouchDimensions ? { dimensions_mm: pouchDimensions } : {}),
+            valid_anchors: pouchValid,
+          });
+          continue;
+        }
         if (
           net.schema !== BOX_NET_PROPOSAL_SCHEMA ||
           !isStructureProposalId(id) ||
@@ -1247,6 +1323,64 @@ export function printFaceRepairSource(job: MockupJob): PrintFaceRepairSource | n
 
 function canRepairPrintFaces(job: MockupJob): boolean {
   return job.status === "done" && !requiredPrintFacesReady(job.id) && printFaceRepairSource(job) !== null;
+}
+
+export type RelightStudioSource = {
+  jobDir: string;
+  manifest: string;
+};
+
+function findResolvedJobPath(jobDir: string, jobId: string): string | null {
+  const walk = (dir: string): string | null => {
+    if (!existsSync(dir)) return null;
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name.startsWith(".")) continue;
+        const nested = walk(path);
+        if (nested) return nested;
+        continue;
+      }
+      if (entry.isFile() && entry.name === "resolved_job.json" && underJobDir(jobId, path)) {
+        return path;
+      }
+    }
+    return null;
+  };
+  return walk(jobDir);
+}
+
+function hasRelightAssets(path: string, jobId: string): boolean {
+  try {
+    const data = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    const assets = data.assets;
+    const outputs = data.outputs;
+    if (!assets || typeof assets !== "object" || Array.isArray(assets)) return false;
+    if (!outputs || typeof outputs !== "object" || Array.isArray(outputs)) return false;
+    for (const face of ["front", "right", "back", "left", "top", "bottom"] as const) {
+      const panel = String((assets as Record<string, unknown>)[face] || "");
+      if (!isMockupJobFile(jobId, panel) || !pngMagicAtPath(panel)) return false;
+    }
+    const front = String((outputs as Record<string, unknown>).front_right || "");
+    const back = String((outputs as Record<string, unknown>).back_left || "");
+    return Boolean(isMockupJobFile(jobId, front) && isMockupJobFile(jobId, back));
+  } catch {
+    return false;
+  }
+}
+
+export function relightStudioSource(job: MockupJob): RelightStudioSource | null {
+  if (job.structure_engine !== "v2") return null;
+  const jobDir = join(mockupRoot(false), job.id);
+  const manifest = job.manifest_path || join(jobDir, "manifest.json");
+  if (!isMockupJobFile(job.id, manifest)) return null;
+  const resolved = findResolvedJobPath(jobDir, job.id);
+  if (!resolved || !hasRelightAssets(resolved, job.id)) return null;
+  return { jobDir, manifest };
+}
+
+function canRelightStudio(job: MockupJob): boolean {
+  return job.status === "done" && relightStudioSource(job) !== null;
 }
 
 function readKeyForPanelName(name: string): string | undefined {

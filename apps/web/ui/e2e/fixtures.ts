@@ -59,6 +59,7 @@ export type SyntheticMockup = {
   job_stage_label?: string;
   queue_ahead?: number;
   can_repair_print_faces?: boolean;
+  can_relight_studio?: boolean;
   structure_status?: "analyzing" | "review_required" | "unsupported" | "ready";
   structure_code?: string;
   structure_message?: string;
@@ -90,12 +91,13 @@ export type SyntheticMockup = {
     page_size_mm?: [number, number];
     image_url?: string;
     net_proposals: Array<{
-      schema: "box-net-proposal/3";
+      schema: "box-net-proposal/3" | "pouch-net-proposal/1";
       id: string;
       face_ids: string[];
-      body_face_ids: [string, string, string, string];
-      cap_face_ids: [string, string];
-      strip_axis: "x" | "y";
+      body_face_ids: string[];
+      cap_face_ids?: [string, string];
+      strip_axis?: "x" | "y";
+      packaging_family?: "pouch";
       bounds_mm?: [number, number, number, number];
       dimensions_mm?: { width: number; depth: number; height: number };
       valid_anchors?: Array<{
@@ -103,7 +105,7 @@ export type SyntheticMockup = {
         quarter_turns: Array<0 | 1 | 2 | 3>;
         preferred_quarter_turns?: 0 | 1 | 2 | 3;
       }>;
-      closure_assemblies: Array<{
+      closure_assemblies?: Array<{
         primary_face_id: string;
         side: -1 | 1;
         extent: "full" | "partial";
@@ -557,6 +559,7 @@ async function installSyntheticApi(page: Page, state: SyntheticApi) {
       const mockupPath = path.match(/^\/api\/mockups\/([0-9a-f]{12})$/);
       const retryPath = path.match(/^\/api\/mockups\/([0-9a-f]{12})\/retry$/);
       const printFacesPath = path.match(/^\/api\/mockups\/([0-9a-f]{12})\/print-faces$/);
+      const relightPath = path.match(/^\/api\/mockups\/([0-9a-f]{12})\/relight$/);
       const structureInputPath = path.match(/^\/api\/mockups\/([0-9a-f]{12})\/structure\/input$/);
       const structurePath = path.match(/^\/api\/mockups\/([0-9a-f]{12})\/structure$/);
       if (retryPath && method === "POST") {
@@ -587,6 +590,17 @@ async function installSyntheticApi(page: Page, state: SyntheticApi) {
         mockup.files = nextFiles;
         mockup.can_repair_print_faces = false;
         mockup.status = "done";
+        return json(route, mockup);
+      }
+      if (relightPath && method === "POST") {
+        const mockup = state.mockups.find((item) => item.id === relightPath[1]);
+        if (!mockup) return json(route, { detail: "合成打样不存在" }, 404);
+        if (mockup.status !== "done") return json(route, { detail: "只有已出图的纸盒才能重渲棚。" }, 409);
+        if (!mockup.can_relight_studio) {
+          return json(route, { detail: "这单没有可用棚底稿，无法重渲。请重新打样。" }, 409);
+        }
+        mockup.status = "done";
+        mockup.can_relight_studio = true;
         return json(route, mockup);
       }
       if (structureInputPath && method === "POST") {
