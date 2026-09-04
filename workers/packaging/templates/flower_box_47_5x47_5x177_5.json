@@ -26,13 +26,6 @@
     "top": "print"
   },
   "composite_inset_reference_px": 4,
-  "render": {
-    "substrate_rgba": [1.0, 1.0, 1.0, 1.0],
-    "resolution_x": 3000,
-    "resolution_y": 3600,
-    "camera_ortho_scale_mm": 224.0,
-    "front_rotation_deg": 0.0,
-    "back_rotation_deg": 180.0
-  },
+  "render_profile_id": "compat-legacy-v0",
   "glb_tolerance_mm": 0.5
 }
