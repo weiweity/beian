@@ -61,6 +61,7 @@ import PIL
 PACKAGING_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = PACKAGING_ROOT.parents[1]
 PIPELINE_PATH = PACKAGING_ROOT / "pipeline.py"
+RENDER_CONTRACT_PATH = PACKAGING_ROOT / "render_contract.py"
 RENDER_JOB_PATH = PACKAGING_ROOT / "blender" / "render_job.py"
 GLB_VERIFY_PATH = PACKAGING_ROOT / "glb_verify.py"
 CAMERA_FRAME_PATH = PACKAGING_ROOT / "camera_frame.py"
@@ -141,6 +142,17 @@ def _load_pipeline() -> Any:
     spec = importlib.util.spec_from_file_location("packaging_pipeline_rf00", PIPELINE_PATH)
     if spec is None or spec.loader is None:
         raise EvalError(f"unable to load pipeline: {PIPELINE_PATH}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_render_contract() -> Any:
+    spec = importlib.util.spec_from_file_location(
+        "packaging_render_contract_rf00", RENDER_CONTRACT_PATH
+    )
+    if spec is None or spec.loader is None:
+        raise EvalError(f"unable to load render contract: {RENDER_CONTRACT_PATH}")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -793,25 +805,52 @@ def raster_width_px(page_mm: list[float]) -> int:
     return max(256, min(30_000, int(round(width_mm * MIN_FACE_PIXELS_PER_MM))))
 
 
-def current_template_render() -> dict[str, Any]:
+def current_template_render(
+    *, registry_path: Path | str | None = None
+) -> dict[str, Any]:
     template = json.loads(CURRENT_TEMPLATE_PATH.read_text(encoding="utf-8"))
     render = dict(template.get("render") or {})
+    profile_id = template.get("render_profile_id")
+    spec = None
+    if profile_id:
+        contract = _load_render_contract()
+        structure = {
+            "schema": "resolved-packaging-job/3",
+            "structure_schema": "packaging-structure/1",
+            "structure_hash": "sha256:" + "a" * 64,
+            "dimensions_mm": template["dimensions_mm"],
+            "faces": {
+                face: {}
+                for face in ("front", "right", "back", "left", "top", "bottom")
+            },
+            "validation": {"status": "accepted", "errors": [], "warnings": []},
+        }
+        resolve_kw = {} if registry_path is None else {"registry_path": registry_path}
+        spec = contract.resolve_render_spec(
+            structure, profile_id, template.get("output_request"), **resolve_kw
+        )
+        render = contract.current_renderer_config(spec, **resolve_kw)
     return {
         "template_id": template.get("template_id"),
         "raster_width_px_declared": template.get("raster_width_px"),
+        "render_profile_id": profile_id,
         "render": render,
+        "render_spec": spec,
         "glb_tolerance_mm": template.get("glb_tolerance_mm", 0.5),
     }
 
 
-def render_profile_sha256() -> str:
-    template = current_template_render()
+def render_profile_sha256(*, registry_path: Path | str | None = None) -> str:
+    template = current_template_render(registry_path=registry_path)
+    spec = template.get("render_spec")
+    if not isinstance(spec, dict) or not spec:
+        raise EvalError("render identity requires canonical resolved render spec")
     return sha256_text(
         canonical_dumps(
             {
                 "glb_tolerance_mm": template["glb_tolerance_mm"],
                 "raster_width_px_declared": template["raster_width_px_declared"],
-                "render": template["render"],
+                "render_spec": spec,
             }
         )
     )
@@ -822,7 +861,13 @@ def collect_source_identity() -> dict[str, Any]:
         "evaluator_sha256": sha256_file(Path(__file__).resolve()),
         "render_job_sha256": source_bundle_sha256((RENDER_JOB_PATH, GLB_VERIFY_PATH)),
         "pipeline_sha256": source_bundle_sha256(
-            (PIPELINE_PATH, DIELINE_PATH, WHITE_BACKGROUND_PATH, *STRUCTURE_V2_PATHS)
+            (
+                PIPELINE_PATH,
+                DIELINE_PATH,
+                WHITE_BACKGROUND_PATH,
+                RENDER_CONTRACT_PATH,
+                *STRUCTURE_V2_PATHS,
+            )
         ),
         "camera_frame_sha256": sha256_file(CAMERA_FRAME_PATH),
         "template_sha256": sha256_file(CURRENT_TEMPLATE_PATH),
@@ -952,8 +997,7 @@ def materialize_fixture(spec: Mapping[str, Any], dest: Path) -> dict[str, Any]:
     page_mm = artwork["page_mm"]
     profile = {
         "template_id": "rf00-observe-current-studio",
-        "raster_width_px": raster_width_px(page_mm),
-        "render": template["render"],
+        "render_profile_id": template.get("render_profile_id") or "compat-legacy-v0",
         "glb_tolerance_mm": template["glb_tolerance_mm"],
     }
     template_path = dest / "render-profile.json"

@@ -4,6 +4,7 @@ from copy import deepcopy
 import importlib.util
 import json
 import math
+import os
 from pathlib import Path
 
 import pytest
@@ -500,9 +501,10 @@ def test_registry_byte_identity_is_distinct_from_semantic_contract_hash(tmp_path
     assert (
         default_spec["render_contract_hash"] == reformatted_spec["render_contract_hash"]
     )
-    assert (
-        contract.validate_render_spec(default_spec, registry_path=reformatted)
-        == default_spec
+    assert_error(
+        contract,
+        "render_contract_invalid",
+        lambda: contract.validate_render_spec(default_spec, registry_path=reformatted),
     )
 
 
@@ -518,13 +520,14 @@ def test_compat_profile_matches_current_effective_renderer_parameters():
         {},
     )
 
+    assert template["render_profile_id"] == "compat-legacy-v0"
     assert contract.current_renderer_config(spec) == {
         "substrate_rgba": [0.7, 0.7, 0.7, 1.0],
-        "resolution_x": template["render"]["resolution_x"],
-        "resolution_y": template["render"]["resolution_y"],
-        "camera_ortho_scale_mm": template["render"]["camera_ortho_scale_mm"],
-        "front_rotation_deg": template["render"]["front_rotation_deg"],
-        "back_rotation_deg": template["render"]["back_rotation_deg"],
+        "resolution_x": 3000,
+        "resolution_y": 3600,
+        "camera_ortho_scale_mm": 224.0,
+        "front_rotation_deg": 0.0,
+        "back_rotation_deg": 180.0,
         "material_roughness": 0.52,
         "material_specular_ior": 0.08,
         "exact_white_background": True,
@@ -568,4 +571,849 @@ def test_smoke_profile_is_bounded_and_cannot_claim_pouch_support():
         contract,
         "render_profile_unsupported",
         lambda: contract.resolve_render_spec(pouch_job(), "smoke-v1", {}),
+    )
+
+
+def _legacy_pipeline_job(*, assets: dict | None = None, **overrides) -> dict:
+    faces = assets or {
+        face: f"/tmp/panel_{face}.png" for face in FACES
+    }
+    payload = {
+        "code": "flower-box-legacy",
+        "slug": "guess-me",
+        "display_name": "红色花盒",
+        "template_path": "/tmp/flower_box_47_5x47_5x177_5.json",
+        "structure_schema": "packaging-structure/1",
+        "structure_hash": "sha256:" + "a" * 64,
+        "dimensions_mm": {"width": 47.5, "depth": 47.5, "height": 177.5},
+        "assets": faces,
+        "render": {
+            "substrate_rgba": [0.7, 0.7, 0.7, 1.0],
+            "resolution_x": 3000,
+            "resolution_y": 3600,
+            "camera_ortho_scale_mm": 224.0,
+            "front_rotation_deg": 0.0,
+            "back_rotation_deg": 180.0,
+        },
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_resolve_render_spec_never_emits_legacy_synthesized_source():
+    contract = contract_module()
+    spec = contract.resolve_render_spec(carton_job(), "compat-legacy-v0", {})
+    assert spec["source"] == "profile_resolved"
+    assert spec["source"] != "legacy_synthesized"
+    assert contract.RENDER_SPEC_SOURCES == ("profile_resolved", "legacy_synthesized")
+
+
+def test_legacy_synthesis_uses_persisted_structure_facts_and_compat_profile():
+    contract = contract_module()
+    resolved = contract.resolve_render_spec(carton_job(), "compat-legacy-v0", {})
+    synthesized = contract.synthesize_legacy_render_spec(_legacy_pipeline_job())
+
+    assert synthesized["source"] == "legacy_synthesized"
+    assert synthesized["renderer"]["profile"] == "compat-legacy-v0"
+    assert synthesized["geometry"]["family"] == "rectangular_carton_v1"
+    assert synthesized["geometry"]["structure_hash"] == "sha256:" + "a" * 64
+    assert synthesized["render_contract_hash"] != resolved["render_contract_hash"]
+    assert contract.validate_render_spec(synthesized) == synthesized
+    assert contract.current_renderer_config(synthesized) == {
+        "substrate_rgba": [0.7, 0.7, 0.7, 1.0],
+        "resolution_x": 3000,
+        "resolution_y": 3600,
+        "camera_ortho_scale_mm": 224.0,
+        "front_rotation_deg": 0.0,
+        "back_rotation_deg": 180.0,
+        "material_roughness": 0.52,
+        "material_specular_ior": 0.08,
+        "exact_white_background": True,
+        "view_transform": "Standard",
+        "look": "None",
+        "exposure": 0.0,
+        "world_strength": 0.62,
+        "light_energy_scale": 4.0,
+    }
+
+
+def test_legacy_synthesis_maps_persisted_pouch_family_without_filename_guessing():
+    contract = contract_module()
+    synthesized = contract.synthesize_legacy_render_spec(
+        _legacy_pipeline_job(
+            packaging_family="pouch",
+            dimensions_mm={"width": 140.0, "depth": 3.0, "height": 200.0},
+        )
+    )
+    assert synthesized["source"] == "legacy_synthesized"
+    assert synthesized["geometry"]["family"] == "pouch_thin_card_v1"
+    assert synthesized["geometry"]["preview_fidelity"] == "thin_card"
+
+
+def test_legacy_synthesis_fails_closed_without_provable_structure_facts():
+    contract = contract_module()
+    missing_hash = _legacy_pipeline_job()
+    missing_hash.pop("structure_hash")
+    assert_error(
+        contract,
+        "render_contract_invalid",
+        lambda: contract.synthesize_legacy_render_spec(missing_hash),
+    )
+
+    missing_schema = _legacy_pipeline_job(structure_schema="guess-from-filename")
+    assert_error(
+        contract,
+        "render_family_unsupported",
+        lambda: contract.synthesize_legacy_render_spec(missing_schema),
+    )
+
+    missing_faces = _legacy_pipeline_job(
+        assets={"front": "/tmp/panel_front.png", "back": "/tmp/panel_back.png"}
+    )
+    assert_error(
+        contract,
+        "render_family_unsupported",
+        lambda: contract.synthesize_legacy_render_spec(missing_faces),
+    )
+
+    unknown_family = _legacy_pipeline_job(packaging_family="flexible_pouch_v1")
+    assert_error(
+        contract,
+        "render_family_unsupported",
+        lambda: contract.synthesize_legacy_render_spec(unknown_family),
+    )
+
+
+def test_legacy_synthesized_source_is_strictly_enumerated():
+    contract = contract_module()
+    spec = contract.resolve_render_spec(carton_job(), "compat-legacy-v0", {})
+    spec["source"] = "imported_guess"
+    spec["render_contract_hash"] = contract.render_contract_sha256(spec)
+    assert_error(
+        contract,
+        "render_contract_invalid",
+        lambda: contract.validate_render_spec(spec),
+    )
+
+
+@pytest.mark.parametrize("value", [False, 0, "", [], True])
+def test_falsy_non_object_output_request_is_rejected(value):
+    contract = contract_module()
+    assert_error(
+        contract,
+        "render_contract_invalid",
+        lambda: contract.resolve_render_spec(
+            carton_job(), "compat-legacy-v0", value
+        ),
+    )
+    assert_error(
+        contract,
+        "render_contract_invalid",
+        lambda: contract.render_plan_for_new_job(
+            carton_job(), "compat-legacy-v0", value
+        ),
+    )
+
+
+def test_new_job_render_plan_exposes_four_identity_fields_without_copying_registry():
+    contract = contract_module()
+    plan = contract.render_plan_for_new_job(carton_job(), "compat-legacy-v0", None)
+    assert plan["schema"] == "packaging-render-plan/1"
+    assert plan["spec"]["source"] == "profile_resolved"
+    assert list(plan["identity"]) == [
+        "render_contract_hash",
+        "render_profile_id",
+        "render_profile_sha256",
+        "render_registry_sha256",
+    ]
+    assert plan["identity"]["render_profile_id"] == "compat-legacy-v0"
+    assert plan["identity"]["render_contract_hash"] == plan["spec"]["render_contract_hash"]
+    assert (
+        plan["identity"]["render_profile_sha256"]
+        == plan["spec"]["renderer"]["profile_sha256"]
+    )
+    assert (
+        plan["identity"]["render_registry_sha256"] == plan["spec"]["registry_sha256"]
+    )
+    assert plan["sampling"]["legacy_raster_width_px"] == 10000
+    assert plan["render"]["resolution_x"] == 3000
+    assert plan["fingerprint_token"].startswith("sha256:")
+
+
+def test_bound_spec_rejects_foreign_job_and_structure_mutations():
+    contract = contract_module()
+    spec_b = contract.resolve_render_spec(
+        carton_job(dimensions={"width": 80.0, "depth": 40.0, "height": 120.0}),
+        "compat-legacy-v0",
+        {},
+    )
+    job_a = _legacy_pipeline_job()
+    job_a["render_spec"] = spec_b
+    assert_error(
+        contract,
+        "render_contract_invalid",
+        lambda: contract.render_plan_for_resolved_job(job_a),
+    )
+    bound = contract.render_plan_for_new_job(carton_job(), "compat-legacy-v0", None)
+    job = _legacy_pipeline_job()
+    job["render_spec"] = bound["spec"]
+    job["render"] = deepcopy(bound["render"])
+    job.update(bound["identity"])
+    job["pipeline_version"] = "1.5.1"
+    job["structure_engine"] = "v2"
+    contract.render_plan_for_resolved_job(job)
+
+    family = deepcopy(job)
+    family["packaging_family"] = "pouch"
+    family["dimensions_mm"] = {"width": 140.0, "depth": 3.0, "height": 200.0}
+    assert_error(
+        contract,
+        "render_contract_invalid",
+        lambda: contract.render_plan_for_resolved_job(family),
+    )
+    hashed = deepcopy(job)
+    hashed["structure_hash"] = "sha256:" + "b" * 64
+    assert_error(
+        contract,
+        "render_contract_invalid",
+        lambda: contract.render_plan_for_resolved_job(hashed),
+    )
+    for axis in ("width", "depth", "height"):
+        mutated = deepcopy(job)
+        mutated["dimensions_mm"] = dict(job["dimensions_mm"])
+        mutated["dimensions_mm"][axis] = mutated["dimensions_mm"][axis] + 1.0
+        assert_error(
+            contract,
+            "render_contract_invalid",
+            lambda payload=mutated: contract.render_plan_for_resolved_job(payload),
+        )
+
+
+def test_nested_and_top_level_registry_identity_must_match_real_provenance():
+    contract = contract_module()
+    plan = contract.render_plan_for_new_job(carton_job(), "compat-legacy-v0", None)
+    job = _legacy_pipeline_job()
+    job["render_spec"] = deepcopy(plan["spec"])
+    job["render"] = deepcopy(plan["render"])
+    job.update(plan["identity"])
+    job["pipeline_version"] = "1.5.1"
+    job["structure_engine"] = "v2"
+    contract.render_plan_for_resolved_job(job)
+
+    top = deepcopy(job)
+    top["render_registry_sha256"] = "sha256:" + "c" * 64
+    assert_error(
+        contract,
+        "render_contract_invalid",
+        lambda: contract.render_plan_for_resolved_job(top),
+    )
+    nested = deepcopy(job)
+    nested["render_spec"] = deepcopy(plan["spec"])
+    nested["render_spec"]["registry_sha256"] = "sha256:" + "c" * 64
+    nested["render_spec"]["render_contract_hash"] = contract.render_contract_sha256(
+        nested["render_spec"]
+    )
+    assert_error(
+        contract,
+        "render_contract_invalid",
+        lambda: contract.render_plan_for_resolved_job(nested),
+    )
+    forged = deepcopy(job)
+    forged["render_registry_sha256"] = "sha256:" + "c" * 64
+    forged["render_spec"] = deepcopy(plan["spec"])
+    forged["render_spec"]["registry_sha256"] = "sha256:" + "c" * 64
+    forged["render_spec"]["render_contract_hash"] = contract.render_contract_sha256(
+        forged["render_spec"]
+    )
+    assert_error(
+        contract,
+        "render_contract_invalid",
+        lambda: contract.render_plan_for_resolved_job(forged),
+    )
+
+
+@pytest.mark.parametrize(
+    "version",
+    ["1.5.1", "9.9.9", "unknown", None],
+)
+def test_only_known_pre_rf02_v2_jobs_can_synthesize_legacy(version):
+    contract = contract_module()
+    job = _legacy_pipeline_job()
+    if version is None:
+        job.pop("pipeline_version", None)
+    else:
+        job["pipeline_version"] = version
+    job["structure_engine"] = "v2"
+    assert_error(
+        contract,
+        "render_contract_invalid",
+        lambda: contract.render_plan_for_resolved_job(job),
+    )
+
+
+def test_pre_rf02_v2_job_synthesizes_compat_when_persisted_render_matches():
+    contract = contract_module()
+    job = _legacy_pipeline_job()
+    job["pipeline_version"] = "1.4.0"
+    job["structure_engine"] = "v2"
+    job["render"] = contract.current_renderer_config(
+        contract.resolve_render_spec(carton_job(), "compat-legacy-v0", {})
+    )
+    plan = contract.render_plan_for_resolved_job(job)
+    assert plan["spec"]["source"] == "legacy_synthesized"
+    assert plan["identity"]["render_profile_id"] == "compat-legacy-v0"
+
+
+def test_legacy_render_mismatch_is_rejected_instead_of_silently_retargeted():
+    contract = contract_module()
+    job = _legacy_pipeline_job()
+    job["pipeline_version"] = "1.4.0"
+    job["structure_engine"] = "v2"
+    job["render"] = {"resolution_x": 800, "resolution_y": 900, "camera_ortho_scale_mm": 80}
+    assert_error(
+        contract,
+        "render_contract_invalid",
+        lambda: contract.render_plan_for_resolved_job(job),
+    )
+
+
+@pytest.mark.parametrize("payload", [None, {}, {"resolution_x": 3000}])
+def test_legacy_synthesis_rejects_missing_historical_render_keys(payload):
+    contract = contract_module()
+    job = _legacy_pipeline_job()
+    job["pipeline_version"] = "1.4.0"
+    job["structure_engine"] = "v2"
+    if payload is None:
+        job["render"] = None
+    else:
+        job["render"] = payload
+    assert_error(
+        contract,
+        "render_contract_invalid",
+        lambda: contract.render_plan_for_resolved_job(job),
+    )
+
+
+@pytest.mark.parametrize("key", ["resolution_x", "camera_ortho_scale_mm", "substrate_rgba", "front_rotation_deg"])
+def test_legacy_synthesis_rejects_deleted_historical_render_key(key):
+    contract = contract_module()
+    job = _legacy_pipeline_job()
+    job["pipeline_version"] = "1.4.0"
+    job["structure_engine"] = "v2"
+    job["render"] = dict(job["render"])
+    job["render"].pop(key)
+    assert_error(
+        contract,
+        "render_contract_invalid",
+        lambda: contract.render_plan_for_resolved_job(job),
+    )
+
+
+def test_v1_diagnostic_render_uses_historical_template_values_not_registry():
+    contract = contract_module()
+    production = json.loads(CURRENT_TEMPLATE.read_text(encoding="utf-8"))
+    smoke = json.loads(
+        (PACKAGING / "templates" / "flower_box_illustrator_smoke.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert "render" not in production
+    assert "render" not in smoke
+    assert contract.v1_diagnostic_render(production) == {
+        "substrate_rgba": [1.0, 1.0, 1.0, 1.0],
+        "resolution_x": 3000,
+        "resolution_y": 3600,
+        "camera_ortho_scale_mm": 224.0,
+        "front_rotation_deg": 0.0,
+        "back_rotation_deg": 180.0,
+    }
+    assert contract.v1_diagnostic_render(smoke)["resolution_x"] == 1200
+    assert contract.v1_diagnostic_render(smoke)["resolution_y"] == 1440
+
+
+def test_spec_bearing_job_requires_identity_and_flat_render():
+    contract = contract_module()
+    plan = contract.render_plan_for_new_job(carton_job(), "compat-legacy-v0", None)
+    job = _legacy_pipeline_job()
+    job["render_spec"] = deepcopy(plan["spec"])
+    job["pipeline_version"] = "1.5.1"
+    job["structure_engine"] = "v2"
+    assert_error(
+        contract,
+        "render_contract_invalid",
+        lambda: contract.render_plan_for_resolved_job(job),
+    )
+    job.update(plan["identity"])
+    assert_error(
+        contract,
+        "render_contract_invalid",
+        lambda: contract.render_plan_for_resolved_job(job),
+    )
+    job["render"] = deepcopy(plan["render"])
+    contract.render_plan_for_resolved_job(job)
+    job["render"] = dict(plan["render"])
+    job["render"]["resolution_x"] = 1
+    assert_error(
+        contract,
+        "render_contract_invalid",
+        lambda: contract.render_plan_for_resolved_job(job),
+    )
+
+
+def test_blender_execution_plan_rejects_disk_memory_divergence(tmp_path: Path):
+    contract = contract_module()
+    plan = contract.render_plan_for_new_job(carton_job(), "compat-legacy-v0", None)
+    project = tmp_path / "BOX"
+    project.mkdir()
+    assets_dir = project / "assets"
+    assets_dir.mkdir()
+    png_header = b"\x89PNG\r\n\x1a\n" + b"\x00" * 8
+    front = project / "BOX_box_front_right_white.png"
+    back = project / "BOX_box_back_left_white.png"
+    blend = project / "BOX_box_white_studio.blend"
+    glb = project / "BOX_box.glb"
+    for path in (front, back, blend, glb):
+        path.write_bytes(b"x")
+    for face in FACES:
+        (assets_dir / f"panel_{face}.png").write_bytes(png_header)
+    resolved_path = project / "resolved_job.json"
+    job = {
+        "code": "BOX",
+        "slug": "box",
+        "display_name": "盒",
+        "source_ai": str(tmp_path / "source.ai"),
+        "template_path": str(tmp_path / "template.json"),
+        "project_dir": str(project),
+        "resolved_job_path": str(resolved_path),
+        "pipeline_version": "1.5.1",
+        "structure_engine": "v2",
+        "structure_schema": "packaging-structure/1",
+        "structure_hash": "sha256:" + "a" * 64,
+        "dimensions_mm": {"width": 47.5, "depth": 47.5, "height": 177.5},
+        "glb_tolerance_mm": 0.5,
+        "assets": {face: str(assets_dir / f"panel_{face}.png") for face in FACES},
+        "outputs": {
+            "blend": str(blend),
+            "glb": str(glb),
+            "front_right": str(front),
+            "back_left": str(back),
+        },
+        "render_spec": deepcopy(plan["spec"]),
+        "render": deepcopy(plan["render"]),
+    }
+    job.update(plan["identity"])
+    resolved_path.write_text(json.dumps(job), encoding="utf-8")
+    contract.blender_execution_plan(job, job, resolved_job_path=resolved_path)
+
+    missing = deepcopy(job)
+    missing.pop("render_profile_id")
+    assert_error(
+        contract,
+        "render_contract_invalid",
+        lambda: contract.blender_execution_plan(
+            missing, job, resolved_job_path=resolved_path
+        ),
+    )
+    tampered_render = deepcopy(job)
+    tampered_render["render"] = dict(job["render"])
+    tampered_render["render"]["resolution_x"] = 1
+    assert_error(
+        contract,
+        "render_contract_invalid",
+        lambda: contract.blender_execution_plan(
+            tampered_render, job, resolved_job_path=resolved_path
+        ),
+    )
+    escaped = deepcopy(job)
+    escaped["outputs"] = dict(job["outputs"])
+    escaped["outputs"]["front_right"] = str(tmp_path / "outside.png")
+    assert_error(
+        contract,
+        "render_contract_invalid",
+        lambda: contract.blender_execution_plan(
+            escaped, job, resolved_job_path=resolved_path
+        ),
+    )
+
+
+def test_output_contract_rejects_unknown_duplicate_and_reserved_targets(tmp_path: Path):
+    contract = contract_module()
+    project = tmp_path / "BOX"
+    project.mkdir()
+    front = project / "a.png"
+    back = project / "b.png"
+    blend = project / "c.blend"
+    glb = project / "d.glb"
+    resolved = project / "resolved_job.json"
+    for path in (front, back, blend, glb, resolved):
+        path.write_bytes(b"data")
+    job = {
+        "project_dir": str(project),
+        "resolved_job_path": str(resolved),
+        "source_ai": str(project / "source.ai"),
+        "template_path": str(project / "template.json"),
+        "assets": {face: str(project / f"panel_{face}.png") for face in FACES},
+        "outputs": {
+            "blend": str(blend),
+            "glb": str(glb),
+            "front_right": str(front),
+            "back_left": str(back),
+        },
+    }
+    contract.validate_job_output_contract(job)
+    unknown = deepcopy(job)
+    unknown["outputs"] = dict(job["outputs"])
+    unknown["outputs"]["evil"] = str(project / "evil.bin")
+    assert_error(
+        contract,
+        "render_contract_invalid",
+        lambda: contract.validate_job_output_contract(unknown),
+    )
+    overlap = deepcopy(job)
+    overlap["outputs"] = dict(job["outputs"])
+    overlap["outputs"]["front_right"] = str(resolved)
+    assert_error(
+        contract,
+        "render_contract_invalid",
+        lambda: contract.validate_job_output_contract(overlap),
+    )
+
+
+def test_output_contract_rejects_reserved_symlink_target_and_hardlink(
+    tmp_path: Path,
+):
+    contract = contract_module()
+    project = tmp_path / "BOX"
+    assets_dir = project / "assets"
+    assets_dir.mkdir(parents=True)
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 8
+    real_source = project / "source.ai"
+    real_source.write_bytes(b"ai")
+    alias = project / "source-alias.ai"
+    alias.symlink_to(real_source)
+    front = project / "a.png"
+    back = project / "b.png"
+    blend = project / "c.blend"
+    glb = project / "d.glb"
+    for path in (front, back, blend, glb):
+        path.write_bytes(png if path.suffix == ".png" else b"data")
+    for face in FACES:
+        (assets_dir / f"panel_{face}.png").write_bytes(png)
+    job = {
+        "project_dir": str(project),
+        "resolved_job_path": str(project / "resolved_job.json"),
+        "source_ai": str(alias),
+        "template_path": str(project / "template.json"),
+        "assets": {face: str(assets_dir / f"panel_{face}.png") for face in FACES},
+        "outputs": {
+            "blend": str(blend),
+            "glb": str(glb),
+            "front_right": str(front),
+            "back_left": str(back),
+        },
+    }
+    (project / "resolved_job.json").write_bytes(b"{}")
+    (project / "template.json").write_text("{}", encoding="utf-8")
+    contract.validate_job_output_contract(job)
+
+    hard = deepcopy(job)
+    hard["outputs"] = dict(job["outputs"])
+    overlap = project / "stolen-source.png"
+    if overlap.exists():
+        overlap.unlink()
+    os.link(real_source, overlap)
+    hard["outputs"]["front_right"] = str(overlap)
+    assert_error(
+        contract,
+        "render_contract_invalid",
+        lambda: contract.validate_job_output_contract(hard),
+    )
+
+    stolen_asset = deepcopy(job)
+    stolen_asset["outputs"] = dict(job["outputs"])
+    asset_front = Path(job["assets"]["front"])
+    alias_out = project / "alias-asset.png"
+    if alias_out.exists():
+        alias_out.unlink()
+    os.link(asset_front, alias_out)
+    stolen_asset["outputs"]["back_left"] = str(alias_out)
+    assert_error(
+        contract,
+        "render_contract_invalid",
+        lambda: contract.validate_job_output_contract(stolen_asset),
+    )
+
+
+def test_asset_contract_requires_six_unique_in_tree_pngs(tmp_path: Path):
+    contract = contract_module()
+    project = tmp_path / "BOX"
+    assets_dir = project / "assets"
+    assets_dir.mkdir(parents=True)
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 8
+    assets = {}
+    for face in FACES:
+        dest = assets_dir / f"panel_{face}.png"
+        dest.write_bytes(png)
+        assets[face] = str(dest)
+    job = {
+        "project_dir": str(project),
+        "assets": assets,
+    }
+    contract.validate_job_asset_contract(job, project_dir=project)
+
+    missing = deepcopy(job)
+    Path(missing["assets"]["top"]).unlink()
+    assert_error(
+        contract,
+        "render_contract_invalid",
+        lambda: contract.validate_job_asset_contract(missing, project_dir=project),
+    )
+    outside = deepcopy(job)
+    stolen = tmp_path / "panel_front.png"
+    stolen.write_bytes(png)
+    outside["assets"] = dict(job["assets"])
+    outside["assets"]["front"] = str(stolen)
+    assert_error(
+        contract,
+        "render_contract_invalid",
+        lambda: contract.validate_job_asset_contract(outside, project_dir=project),
+    )
+
+
+def _png_header() -> bytes:
+    return b"\x89PNG\r\n\x1a\n" + b"\x00" * 8
+
+
+def _write_face_pngs(assets_dir: Path) -> dict[str, str]:
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    assets = {}
+    png = _png_header()
+    for face in FACES:
+        dest = assets_dir / f"panel_{face}.png"
+        dest.write_bytes(png)
+        assets[face] = str(dest)
+    return assets
+
+
+def _spec_bearing_execution_job(
+    tmp_path: Path,
+    contract,
+    *,
+    project: Path,
+    assets: dict[str, str],
+    outputs: dict[str, str],
+) -> dict:
+    plan = contract.render_plan_for_new_job(carton_job(), "compat-legacy-v0", None)
+    resolved_path = project / "resolved_job.json"
+    job = {
+        "code": "BOX",
+        "slug": "box",
+        "display_name": "盒",
+        "source_ai": str(tmp_path / "source.ai"),
+        "template_path": str(tmp_path / "template.json"),
+        "project_dir": str(project),
+        "resolved_job_path": str(resolved_path),
+        "pipeline_version": "1.5.1",
+        "structure_engine": "v2",
+        "structure_schema": "packaging-structure/1",
+        "structure_hash": "sha256:" + "a" * 64,
+        "dimensions_mm": {"width": 47.5, "depth": 47.5, "height": 177.5},
+        "glb_tolerance_mm": 0.5,
+        "assets": assets,
+        "outputs": outputs,
+        "render_spec": deepcopy(plan["spec"]),
+        "render": deepcopy(plan["render"]),
+    }
+    job.update(plan["identity"])
+    resolved_path.write_text(json.dumps(job), encoding="utf-8")
+    return job
+
+
+def test_apply_blender_result_requires_nonce_and_returns_measurements_only():
+    contract = contract_module()
+    snapshot = {
+        "code": "BOX",
+        "outputs": {
+            "blend": "/tmp/box.blend",
+            "glb": "/tmp/box.glb",
+            "front_right": "/tmp/front.png",
+            "back_left": "/tmp/back.png",
+        },
+        "execution_nonce": "round-nonce",
+        "render": {"resolution_x": 3000},
+        "render_spec": {"schema": "packaging-render-spec/1"},
+        "project_dir": "/tmp/box",
+    }
+    measurements = contract.apply_blender_result(
+        {
+            "code": "BOX",
+            "outputs": snapshot["outputs"],
+            "execution_nonce": "round-nonce",
+            "glb_dimensions_mm": {"x": 1.0, "y": 2.0, "z": 3.0},
+            "blender_elapsed_s": 0.2,
+        },
+        snapshot_job=snapshot,
+    )
+    assert measurements == {
+        "glb_dimensions_mm": {"x": 1.0, "y": 2.0, "z": 3.0},
+        "blender_elapsed_s": 0.2,
+    }
+    assert "execution_nonce" not in measurements
+    assert "code" not in measurements
+    assert "outputs" not in measurements
+
+    stale = {
+        "code": "BOX",
+        "outputs": snapshot["outputs"],
+        "execution_nonce": "old-nonce",
+        "glb_dimensions_mm": {"x": 9.0, "y": 9.0, "z": 9.0},
+    }
+    assert_error(
+        contract,
+        "render_contract_invalid",
+        lambda: contract.apply_blender_result(stale, snapshot_job=snapshot),
+    )
+    missing_nonce = dict(stale)
+    missing_nonce.pop("execution_nonce")
+    assert_error(
+        contract,
+        "render_contract_invalid",
+        lambda: contract.apply_blender_result(missing_nonce, snapshot_job=snapshot),
+    )
+    snapshot_without_nonce = dict(snapshot)
+    snapshot_without_nonce.pop("execution_nonce")
+    assert_error(
+        contract,
+        "render_contract_invalid",
+        lambda: contract.apply_blender_result(
+            {
+                "code": "BOX",
+                "outputs": snapshot["outputs"],
+                "glb_dimensions_mm": {"x": 1.0, "y": 2.0, "z": 3.0},
+            },
+            snapshot_job=snapshot_without_nonce,
+        ),
+    )
+    injected = {
+        "code": "BOX",
+        "outputs": snapshot["outputs"],
+        "execution_nonce": "round-nonce",
+        "glb_dimensions_mm": {"x": 1.0, "y": 2.0, "z": 3.0},
+        "project_dir": "/evil",
+        "render": {"resolution_x": 1},
+        "render_spec": {"schema": "nope"},
+        "render_profile_id": "compat-legacy-v0",
+    }
+    assert_error(
+        contract,
+        "render_contract_invalid",
+        lambda: contract.apply_blender_result(injected, snapshot_job=snapshot),
+    )
+
+
+@pytest.mark.parametrize("mutation", ["code", "output_keys", "output_path"])
+def test_apply_blender_result_rejects_isolated_identity_mismatch(mutation: str):
+    contract = contract_module()
+    snapshot = {
+        "code": "BOX",
+        "execution_nonce": "current-round",
+        "outputs": {"front_right": "/tmp/box/front.png", "back_left": "/tmp/box/back.png"},
+    }
+    result = deepcopy(snapshot)
+    if mutation == "code":
+        result["code"] = "OTHER"
+        message = "code 与执行快照不一致"
+    elif mutation == "output_keys":
+        result["outputs"].pop("back_left")
+        message = "outputs key 与执行快照不一致"
+    else:
+        result["outputs"]["front_right"] = "/tmp/other/front.png"
+        message = "输出路径与执行快照不一致"
+    original = deepcopy(snapshot)
+    with pytest.raises(contract.RenderContractError, match=message):
+        contract.apply_blender_result(result, snapshot_job=snapshot)
+    assert snapshot == original
+
+
+def test_blender_execution_plan_rejects_external_assets_with_correct_layout(
+    tmp_path: Path,
+):
+    contract = contract_module()
+    project = tmp_path / "BOX"
+    project.mkdir()
+    assets = _write_face_pngs(project / "assets")
+    outside_root = tmp_path / "stolen-box"
+    outside_assets = _write_face_pngs(outside_root / "assets")
+    front = project / "BOX_box_front_right_white.png"
+    back = project / "BOX_box_back_left_white.png"
+    blend = project / "BOX_box_white_studio.blend"
+    glb = project / "BOX_box.glb"
+    for path in (front, back, blend, glb):
+        path.write_bytes(b"x")
+    job = _spec_bearing_execution_job(
+        tmp_path,
+        contract,
+        project=project,
+        assets=assets,
+        outputs={
+            "blend": str(blend),
+            "glb": str(glb),
+            "front_right": str(front),
+            "back_left": str(back),
+        },
+    )
+    contract.blender_execution_plan(
+        job, job, resolved_job_path=job["resolved_job_path"]
+    )
+
+    escaped = deepcopy(job)
+    escaped["assets"] = outside_assets
+    assert_error(
+        contract,
+        "render_contract_invalid",
+        lambda: contract.blender_execution_plan(
+            escaped, escaped, resolved_job_path=job["resolved_job_path"]
+        ),
+    )
+
+
+def test_blender_execution_plan_accepts_explicit_original_asset_root(
+    tmp_path: Path,
+):
+    contract = contract_module()
+    original = tmp_path / "BOX"
+    original.mkdir()
+    assets = _write_face_pngs(original / "assets")
+    staging = tmp_path / "relight-temp"
+    staging.mkdir()
+    front = staging / "BOX_box_front_right_white.png"
+    back = staging / "BOX_box_back_left_white.png"
+    blend = staging / "BOX_box_white_studio.blend"
+    glb = staging / "BOX_box.glb"
+    for path in (front, back, blend, glb):
+        path.write_bytes(b"x")
+    remapped = _spec_bearing_execution_job(
+        tmp_path,
+        contract,
+        project=staging,
+        assets=assets,
+        outputs={
+            "blend": str(blend),
+            "glb": str(glb),
+            "front_right": str(front),
+            "back_left": str(back),
+        },
+    )
+    assert_error(
+        contract,
+        "render_contract_invalid",
+        lambda: contract.blender_execution_plan(
+            remapped, remapped, resolved_job_path=remapped["resolved_job_path"]
+        ),
+    )
+    contract.blender_execution_plan(
+        remapped,
+        remapped,
+        resolved_job_path=remapped["resolved_job_path"],
+        asset_project_dir=original,
     )

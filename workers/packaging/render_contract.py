@@ -21,6 +21,123 @@ REGISTRY_SCHEMA = "packaging-render-profile-registry/1"
 RENDER_SPEC_SCHEMA = "packaging-render-spec/1"
 RESOLVED_STRUCTURE_SCHEMA = "resolved-packaging-job/3"
 STRUCTURE_SCHEMA = "packaging-structure/1"
+COMPAT_LEGACY_PROFILE_ID = "compat-legacy-v0"
+RENDER_SPEC_SOURCES = ("profile_resolved", "legacy_synthesized")
+RENDER_PLAN_SCHEMA = "packaging-render-plan/1"
+RENDER_IDENTITY_KEYS = (
+    "render_contract_hash",
+    "render_profile_id",
+    "render_profile_sha256",
+    "render_registry_sha256",
+)
+PRE_RF02_V2_PIPELINE_VERSIONS = frozenset({"1.4.0"})
+LEGACY_RENDER_REQUIRED_KEYS = (
+    "substrate_rgba",
+    "resolution_x",
+    "resolution_y",
+    "camera_ortho_scale_mm",
+    "front_rotation_deg",
+    "back_rotation_deg",
+)
+LEGACY_RENDER_COMPARE_KEYS = (
+    *LEGACY_RENDER_REQUIRED_KEYS,
+    "material_roughness",
+    "material_specular_ior",
+    "exact_white_background",
+    "view_transform",
+    "look",
+    "exposure",
+    "world_strength",
+    "light_energy_scale",
+)
+REQUIRED_RENDERER_OUTPUT_KEYS = ("blend", "glb", "front_right", "back_left")
+OPTIONAL_RENDERER_OUTPUT_KEYS = (
+    "front_right_ground",
+    "back_left_ground",
+    "front_right_set",
+    "back_left_set",
+    "front_right_card",
+    "back_left_card",
+    "front_right_ground_card",
+    "back_left_ground_card",
+    "front_right_set_card",
+    "back_left_set_card",
+    "pptx",
+    "sheet_pdf",
+)
+ALLOWED_OUTPUT_KEYS = frozenset(
+    REQUIRED_RENDERER_OUTPUT_KEYS + OPTIONAL_RENDERER_OUTPUT_KEYS
+)
+RENDERER_WRITABLE_OUTPUT_KEYS = frozenset(
+    {
+        "blend",
+        "glb",
+        "front_right",
+        "back_left",
+        "front_right_ground",
+        "back_left_ground",
+        "front_right_set",
+        "back_left_set",
+    }
+)
+OUTPUT_SUFFIX_BY_KEY = {
+    "blend": ".blend",
+    "glb": ".glb",
+    "front_right": ".png",
+    "back_left": ".png",
+    "front_right_ground": ".png",
+    "back_left_ground": ".png",
+    "front_right_set": ".png",
+    "back_left_set": ".png",
+    "front_right_card": ".png",
+    "back_left_card": ".png",
+    "front_right_ground_card": ".png",
+    "back_left_ground_card": ".png",
+    "front_right_set_card": ".png",
+    "back_left_set_card": ".png",
+    "pptx": ".pptx",
+    "sheet_pdf": ".pdf",
+}
+RENDERER_CONSUMED_JOB_KEYS = (
+    "code",
+    "slug",
+    "display_name",
+    "source_ai",
+    "template_path",
+    "project_dir",
+    "resolved_job_path",
+    "dimensions_mm",
+    "glb_tolerance_mm",
+    "structure_schema",
+    "structure_hash",
+    "packaging_family",
+    "assets",
+    "outputs",
+    "render",
+    "render_spec",
+    *RENDER_IDENTITY_KEYS,
+)
+# Historical V1/CLI diagnostic render. Not a V2 fact source and not copied
+# from registry internals. Production templates must not grow a scattered
+# `render` object again.
+V1_DIAGNOSTIC_RENDER_BY_TEMPLATE_ID = {
+    "flower_box_square_47_5x47_5x177_5": {
+        "substrate_rgba": [1.0, 1.0, 1.0, 1.0],
+        "resolution_x": 3000,
+        "resolution_y": 3600,
+        "camera_ortho_scale_mm": 224.0,
+        "front_rotation_deg": 0.0,
+        "back_rotation_deg": 180.0,
+    },
+    "flower_box_illustrator_smoke": {
+        "substrate_rgba": [1.0, 1.0, 1.0, 1.0],
+        "resolution_x": 1200,
+        "resolution_y": 1440,
+        "camera_ortho_scale_mm": 224.0,
+        "front_rotation_deg": 0.0,
+        "back_rotation_deg": 180.0,
+    },
+}
 DEFAULT_REGISTRY_PATH = (
     Path(__file__).resolve().parent / "profiles" / "render-profiles.v1.json"
 )
@@ -876,9 +993,10 @@ def _normalize_structure_job(
 def _resolved_output_contract(
     profile_outputs: Mapping[str, Any], output_request: Mapping[str, Any] | None
 ) -> dict[str, Any]:
-    request = _mapping(
-        {} if output_request is None else output_request, "output_request"
-    )
+    if output_request is None:
+        request: Mapping[str, Any] = {}
+    else:
+        request = _mapping(output_request, "output_request")
     _known_keys(request, {"ground_pass", "white_set_pass"}, "output_request")
     resolved = dict(profile_outputs)
     for key in ("ground_pass", "white_set_pass"):
@@ -1151,8 +1269,17 @@ def _validate_render_spec_with_registry(
         _invalid(
             "render spec schema 不受支持", field="spec.schema", value=spec.get("schema")
         )
-    source = _text(spec.get("source"), "spec.source", allowed={"profile_resolved"})
+    source = _text(
+        spec.get("source"), "spec.source", allowed=set(RENDER_SPEC_SOURCES)
+    )
     registry_hash = _hash_identity(spec.get("registry_sha256"), "spec.registry_sha256")
+    if registry_hash != registry["registry_sha256"]:
+        _invalid(
+            "spec.registry_sha256 与 registry 原始字节身份不一致",
+            field="spec.registry_sha256",
+            expected=registry["registry_sha256"],
+            actual=registry_hash,
+        )
     renderer, profile = _spec_renderer(spec.get("renderer"), registry)
     geometry = _spec_geometry(spec.get("geometry"), profile)
     material = _normalize_material(spec.get("material"), "spec.material")
@@ -1199,14 +1326,12 @@ def validate_render_spec(
     return _validate_render_spec_with_registry(spec, registry)
 
 
-def resolve_render_spec(
+def _resolve_render_spec_with_registry(
     structure_job: Mapping[str, Any],
     profile_id: str,
-    output_request: Mapping[str, Any] | None = None,
-    *,
-    registry_path: Path | str = DEFAULT_REGISTRY_PATH,
+    output_request: Mapping[str, Any] | None,
+    registry: Mapping[str, Any],
 ) -> dict[str, Any]:
-    registry = load_profile_registry(registry_path)
     normalized_profile_id = _identifier(profile_id, "profile_id")
     profile = registry["profiles"].get(normalized_profile_id)
     if profile is None:
@@ -1257,18 +1382,115 @@ def resolve_render_spec(
     return _validate_render_spec_with_registry(spec, registry)
 
 
-def current_renderer_config(
-    spec: Mapping[str, Any],
+def resolve_render_spec(
+    structure_job: Mapping[str, Any],
+    profile_id: str,
+    output_request: Mapping[str, Any] | None = None,
     *,
     registry_path: Path | str = DEFAULT_REGISTRY_PATH,
 ) -> dict[str, Any]:
-    """Translate a validated spec to the existing renderer's flat config.
+    registry = load_profile_registry(registry_path)
+    return _resolve_render_spec_with_registry(
+        structure_job, profile_id, output_request, registry
+    )
 
-    RF-01 does not call this from the product pipeline.  Keeping the translation
-    here provides a testable zero-visual-change bridge for the RF-02 wiring.
+
+def _legacy_asset_faces(assets: Any) -> dict[str, str]:
+    mapping = _mapping(assets, "legacy_job.assets")
+    missing = [
+        face
+        for face in SEMANTIC_FACES
+        if not str(mapping.get(face) or "").strip()
+    ]
+    if missing:
+        _fail(
+            "render_family_unsupported",
+            "旧作业缺少可证明的完整六面，不能合成兼容合同",
+            missing_faces=missing,
+        )
+    return {face: str(mapping[face]).strip() for face in SEMANTIC_FACES}
+
+
+def _structure_job_from_legacy_resolved(
+    resolved_job: Mapping[str, Any],
+    *,
+    require_assets: bool,
+) -> dict[str, Any]:
+    job = _mapping(resolved_job, "legacy_job")
+    if job.get("structure_schema") != STRUCTURE_SCHEMA:
+        _fail(
+            "render_family_unsupported",
+            "旧作业缺少可证明的结构身份，不能合成兼容合同",
+            field="legacy_job.structure_schema",
+            value=job.get("structure_schema"),
+        )
+    structure_hash = _hash_identity(
+        job.get("structure_hash"), "legacy_job.structure_hash"
+    )
+    dimensions = _normalize_dimensions(
+        job.get("dimensions_mm"), "legacy_job.dimensions_mm"
+    )
+    if require_assets:
+        _legacy_asset_faces(job.get("assets"))
+    structure_job: dict[str, Any] = {
+        "schema": RESOLVED_STRUCTURE_SCHEMA,
+        "structure_schema": STRUCTURE_SCHEMA,
+        "structure_hash": structure_hash,
+        "dimensions_mm": dimensions,
+        "faces": {face: {} for face in SEMANTIC_FACES},
+        "validation": {"status": "accepted", "errors": [], "warnings": []},
+    }
+    declared_family = job.get("packaging_family")
+    if declared_family is not None:
+        structure_job["packaging_family"] = declared_family
+    return structure_job
+
+
+def _synthesize_legacy_with_registry(
+    resolved_job: Mapping[str, Any],
+    output_request: Mapping[str, Any] | None,
+    registry: Mapping[str, Any],
+) -> dict[str, Any]:
+    structure_job = _structure_job_from_legacy_resolved(
+        resolved_job, require_assets=True
+    )
+    resolved = _resolve_render_spec_with_registry(
+        structure_job, COMPAT_LEGACY_PROFILE_ID, output_request, registry
+    )
+    if resolved["source"] != "profile_resolved":
+        _invalid(
+            "resolve_render_spec 必须只产生 profile_resolved",
+            field="spec.source",
+            value=resolved["source"],
+        )
+    synthesized = dict(resolved)
+    synthesized["source"] = "legacy_synthesized"
+    synthesized["render_contract_hash"] = render_contract_sha256(synthesized)
+    validated = _validate_render_spec_with_registry(synthesized, registry)
+    _assert_legacy_render_matches_compat(
+        resolved_job, _renderer_config_from_normalized(validated)
+    )
+    return validated
+
+
+def synthesize_legacy_render_spec(
+    resolved_job: Mapping[str, Any],
+    output_request: Mapping[str, Any] | None = None,
+    *,
+    registry_path: Path | str = DEFAULT_REGISTRY_PATH,
+) -> dict[str, Any]:
+    """Build a compat-legacy-v0 spec from persisted historical job facts.
+
+    New tasks must call ``resolve_render_spec`` and always persist
+    ``source=profile_resolved``.  This entry is only for blender-only relight
+    of jobs that never stored a render spec.
     """
 
-    normalized = validate_render_spec(spec, registry_path=registry_path)
+    registry = load_profile_registry(registry_path)
+    return _synthesize_legacy_with_registry(resolved_job, output_request, registry)
+
+
+def _renderer_config_from_normalized(normalized: Mapping[str, Any]) -> dict[str, Any]:
     material = normalized["material"]
     shots = normalized["shots"]
     color = normalized["color"]
@@ -1290,3 +1512,765 @@ def current_renderer_config(
     if shots["camera_ortho_scale_mm"] is not None:
         result["camera_ortho_scale_mm"] = shots["camera_ortho_scale_mm"]
     return result
+
+
+def current_renderer_config(
+    spec: Mapping[str, Any],
+    *,
+    registry_path: Path | str = DEFAULT_REGISTRY_PATH,
+) -> dict[str, Any]:
+    """Translate a validated spec to the existing renderer's flat config.
+
+    Pipeline wiring consumes a persistable render plan instead of calling this
+    on the hot path.  Tests still use it as the RF-01 zero-visual-change bridge.
+    """
+
+    normalized = validate_render_spec(spec, registry_path=registry_path)
+    return _renderer_config_from_normalized(normalized)
+
+
+def _identity_from_spec(spec: Mapping[str, Any]) -> dict[str, str]:
+    renderer = _mapping(spec.get("renderer"), "spec.renderer")
+    identity = {
+        "render_contract_hash": _hash_identity(
+            spec.get("render_contract_hash"), "spec.render_contract_hash"
+        ),
+        "render_profile_id": _identifier(
+            renderer.get("profile"), "spec.renderer.profile"
+        ),
+        "render_profile_sha256": _hash_identity(
+            renderer.get("profile_sha256"), "spec.renderer.profile_sha256"
+        ),
+        "render_registry_sha256": _hash_identity(
+            spec.get("registry_sha256"), "spec.registry_sha256"
+        ),
+    }
+    return {key: identity[key] for key in RENDER_IDENTITY_KEYS}
+
+
+def _plan_from_spec(spec: Mapping[str, Any]) -> dict[str, Any]:
+    identity = _identity_from_spec(spec)
+    return {
+        "schema": RENDER_PLAN_SCHEMA,
+        "spec": dict(spec),
+        "render": _renderer_config_from_normalized(spec),
+        "sampling": dict(spec["sampling"]),
+        "identity": identity,
+        "fingerprint_token": canonical_sha256(identity),
+    }
+
+
+def _assert_spec_bound_to_job(spec: Mapping[str, Any], job: Mapping[str, Any]) -> None:
+    structure_job = _structure_job_from_legacy_resolved(job, require_assets=False)
+    family, dimensions, structure_hash = _normalize_structure_job(structure_job)
+    geometry = _mapping(spec.get("geometry"), "spec.geometry")
+    if geometry.get("family") != family:
+        _invalid(
+            "render spec 与作业 family 不一致",
+            field="spec.geometry.family",
+            spec_family=geometry.get("family"),
+            job_family=family,
+        )
+    if geometry.get("structure_hash") != structure_hash:
+        _invalid(
+            "render spec 与作业结构身份不一致",
+            field="spec.geometry.structure_hash",
+        )
+    spec_dimensions = _normalize_dimensions(
+        geometry.get("outer_dimensions_mm"), "spec.geometry.outer_dimensions_mm"
+    )
+    for axis in ("width", "depth", "height"):
+        if spec_dimensions[axis] != dimensions[axis]:
+            _invalid(
+                "render spec 与作业尺寸不一致",
+                field=f"spec.geometry.outer_dimensions_mm.{axis}",
+                spec=spec_dimensions[axis],
+                job=dimensions[axis],
+            )
+
+
+def _assert_job_identity_matches_spec(
+    job: Mapping[str, Any], spec: Mapping[str, Any]
+) -> None:
+    expected = _identity_from_spec(spec)
+    for key in RENDER_IDENTITY_KEYS:
+        if key not in job:
+            _invalid("作业缺少顶层渲染身份", field=key)
+        actual = job.get(key)
+        if actual != expected[key]:
+            _invalid(
+                "作业顶层渲染身份与 spec 不一致",
+                field=key,
+                expected=expected[key],
+                actual=actual,
+            )
+
+
+def _assert_job_render_matches_spec(
+    job: Mapping[str, Any], spec: Mapping[str, Any]
+) -> None:
+    derived = _renderer_config_from_normalized(spec)
+    persisted = job.get("render")
+    if not isinstance(persisted, Mapping):
+        _invalid("作业缺少平面 render", field="render")
+    render = _mapping(persisted, "job.render")
+    extra = sorted(str(key) for key in render if key not in derived)
+    if extra:
+        _invalid("作业平面 render 含未知字段", field="job.render", unknown=extra)
+    for key, expected in derived.items():
+        if key not in render:
+            _invalid("作业平面 render 缺少字段", field=f"job.render.{key}")
+        actual = render.get(key)
+        if key == "substrate_rgba":
+            actual = _normalize_rgba(actual, f"job.render.{key}")
+        elif key in {"resolution_x", "resolution_y"}:
+            actual = _integer(actual, f"job.render.{key}", lower=1, upper=20_000)
+        elif isinstance(expected, bool):
+            actual = _boolean(actual, f"job.render.{key}")
+        elif isinstance(expected, str):
+            actual = _text(actual, f"job.render.{key}")
+        else:
+            actual = _number(actual, f"job.render.{key}")
+        if actual != expected:
+            _invalid(
+                "作业平面 render 与 spec 派生值不一致",
+                field=f"job.render.{key}",
+                expected=expected,
+                actual=actual,
+            )
+
+
+def _assert_legacy_synthesis_eligible(job: Mapping[str, Any]) -> None:
+    version = job.get("pipeline_version")
+    if version not in PRE_RF02_V2_PIPELINE_VERSIONS:
+        _fail(
+            "render_contract_invalid",
+            "只有已知的 pre-RF02 V2 作业才能合成兼容合同",
+            field="pipeline_version",
+            pipeline_version=version,
+        )
+    if job.get("structure_engine") != "v2":
+        _fail(
+            "render_contract_invalid",
+            "只有 V2 结构作业才能合成兼容合同",
+            field="structure_engine",
+            structure_engine=job.get("structure_engine"),
+        )
+
+
+def _assert_legacy_render_matches_compat(
+    job: Mapping[str, Any], compat_render: Mapping[str, Any]
+) -> None:
+    persisted = job.get("render")
+    if persisted is None or persisted == {}:
+        _invalid("历史作业缺少可证明的渲染参数", field="legacy_job.render")
+    render = _mapping(persisted, "legacy_job.render")
+    missing = [key for key in LEGACY_RENDER_REQUIRED_KEYS if key not in render]
+    if missing:
+        _invalid(
+            "历史作业渲染参数不完整",
+            field="legacy_job.render",
+            missing=missing,
+        )
+    for key in LEGACY_RENDER_COMPARE_KEYS:
+        if key not in render:
+            continue
+        expected = compat_render.get(key)
+        actual = render.get(key)
+        if key == "substrate_rgba":
+            actual = _normalize_rgba(actual, f"legacy_job.render.{key}")
+        elif key in {
+            "resolution_x",
+            "resolution_y",
+        }:
+            actual = _integer(actual, f"legacy_job.render.{key}", lower=1, upper=20_000)
+        elif key == "exact_white_background":
+            actual = _boolean(actual, f"legacy_job.render.{key}")
+        elif isinstance(expected, str):
+            actual = _text(actual, f"legacy_job.render.{key}")
+        else:
+            actual = _number(actual, f"legacy_job.render.{key}")
+        if actual != expected:
+            _invalid(
+                "历史作业渲染参数与 compat-legacy-v0 不一致，拒绝静默改画质",
+                field=f"legacy_job.render.{key}",
+                expected=expected,
+                actual=actual,
+            )
+
+
+PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+BLENDER_RESULT_MEASUREMENT_KEYS = (
+    "glb_dimensions_mm",
+    "glb_dimension_error_mm",
+    "glb_dimensions_mm_sorted",
+    "glb_dimension_error_mm_sorted",
+    "render_resolution",
+    "blender_elapsed_s",
+)
+BLENDER_RESULT_ALLOWED_KEYS = frozenset(
+    {"code", "outputs", "execution_nonce", *BLENDER_RESULT_MEASUREMENT_KEYS}
+)
+
+
+def _canonical_path_text(value: Any) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    return str(Path(text).expanduser().resolve())
+
+
+def _path_identity_tokens(path: Path) -> frozenset[tuple[Any, ...]]:
+    """Identify a path by casefold location and inode, following reserved symlinks.
+
+    Output hardlinks and a reserved symlink's target must share an inode token.
+    """
+
+    tokens: set[tuple[Any, ...]] = set()
+    target = Path(path).expanduser()
+    tokens.add(("case", str(target).casefold()))
+    try:
+        tokens.add(("case", str(target.resolve()).casefold()))
+    except OSError:
+        pass
+    try:
+        link_stat = target.lstat()
+    except OSError:
+        return frozenset(tokens)
+    link_ino = int(getattr(link_stat, "st_ino", 0) or 0)
+    if link_ino:
+        tokens.add(("ino", int(link_stat.st_dev), link_ino))
+    try:
+        followed = target.stat()
+    except OSError:
+        return frozenset(tokens)
+    followed_ino = int(getattr(followed, "st_ino", 0) or 0)
+    if followed_ino:
+        tokens.add(("ino", int(followed.st_dev), followed_ino))
+    return frozenset(tokens)
+
+
+def _output_identity_token(path: Path) -> tuple[Any, ...]:
+    tokens = _path_identity_tokens(path)
+    for token in tokens:
+        if token[0] == "ino":
+            return token
+    return next(iter(tokens))
+
+
+def _identities_overlap(left: Path, right: Path) -> bool:
+    return bool(_path_identity_tokens(left) & _path_identity_tokens(right))
+
+
+def _is_regular_png(path: Path) -> bool:
+    try:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size <= 0:
+            return False
+        with path.open("rb") as handle:
+            return handle.read(8).startswith(PNG_MAGIC)
+    except OSError:
+        return False
+
+
+def _reserved_job_paths(job: Mapping[str, Any]) -> list[Path]:
+    reserved: list[Path] = []
+    for key in ("resolved_job_path", "source_ai", "template_path"):
+        raw = job.get(key)
+        if str(raw or "").strip():
+            reserved.append(Path(str(raw)))
+    assets = job.get("assets") if isinstance(job.get("assets"), Mapping) else {}
+    for face in SEMANTIC_FACES:
+        raw = assets.get(face)
+        if str(raw or "").strip():
+            reserved.append(Path(str(raw)))
+    return reserved
+
+
+def _bound_project_dir(
+    job: Mapping[str, Any], project_dir: Path | str | None
+) -> Path:
+    raw = project_dir if project_dir is not None else job.get("project_dir")
+    if not str(raw or "").strip():
+        _invalid("作业缺少 project_dir", field="project_dir")
+    return Path(str(raw)).expanduser().resolve()
+
+
+def validate_job_output_contract(
+    job: Mapping[str, Any],
+    *,
+    project_dir: Path | str | None = None,
+) -> None:
+    """Reject unknown, escaped, duplicate, or reserved renderer output targets.
+
+    ``project_dir`` binds validation to this run's canonical product directory
+    and must not be taken from a self-reported cached result when provided.
+    """
+
+    payload = _mapping(job, "resolved_job")
+    bound_project = _bound_project_dir(payload, project_dir)
+    outputs = _mapping(payload.get("outputs"), "outputs")
+    unknown = sorted(str(key) for key in outputs if key not in ALLOWED_OUTPUT_KEYS)
+    if unknown:
+        _invalid(
+            "渲染输出含未知 key",
+            field="outputs",
+            unknown=unknown,
+            allowed=sorted(ALLOWED_OUTPUT_KEYS),
+            writable=sorted(RENDERER_WRITABLE_OUTPUT_KEYS),
+        )
+    for key in REQUIRED_RENDERER_OUTPUT_KEYS:
+        if not str(outputs.get(key) or "").strip():
+            _invalid("这单没有可用成片路径，不能重渲棚。", field=f"outputs.{key}")
+    reserved_paths = _reserved_job_paths(payload)
+    seen: dict[str, frozenset[tuple[Any, ...]]] = {}
+    for key, raw in outputs.items():
+        if not str(raw or "").strip():
+            continue
+        path = Path(str(raw))
+        try:
+            is_link = path.is_symlink()
+        except OSError as error:
+            _invalid(
+                "无法读取渲染输出路径",
+                field=f"outputs.{key}",
+                cause=str(error),
+            )
+        if is_link:
+            _invalid("渲染输出路径不能是符号链接。", field=f"outputs.{key}")
+        canonical = path.expanduser().resolve()
+        try:
+            canonical.relative_to(bound_project)
+        except ValueError:
+            _invalid("渲染输出必须落在本单目录内。", field=f"outputs.{key}")
+        expected_suffix = OUTPUT_SUFFIX_BY_KEY.get(str(key))
+        if expected_suffix and canonical.suffix.lower() != expected_suffix:
+            _invalid(
+                "渲染输出扩展名与 key 合同不一致",
+                field=f"outputs.{key}",
+                expected=expected_suffix,
+                actual=canonical.suffix,
+            )
+        tokens = _path_identity_tokens(path)
+        for other_key, other_tokens in seen.items():
+            if tokens & other_tokens:
+                _invalid(
+                    "渲染输出路径不能重复。",
+                    field=f"outputs.{key}",
+                    other=other_key,
+                )
+        seen[str(key)] = tokens
+        for reserved in reserved_paths:
+            if _identities_overlap(path, reserved):
+                _invalid("渲染输出不能覆盖保留输入。", field=f"outputs.{key}")
+
+
+def validate_job_asset_contract(
+    job: Mapping[str, Any],
+    *,
+    project_dir: Path | str | None = None,
+) -> None:
+    """Require the six semantic faces as unique in-tree regular PNG files."""
+
+    payload = _mapping(job, "resolved_job")
+    assets = _mapping(payload.get("assets"), "assets")
+    extra = sorted(str(key) for key in assets if key not in SEMANTIC_FACES)
+    if extra:
+        _invalid("印刷面贴图含未知面", field="assets", unknown=extra)
+    missing = [
+        face for face in SEMANTIC_FACES if not str(assets.get(face) or "").strip()
+    ]
+    if missing:
+        _invalid("印刷面贴图不完整", field="assets", missing=missing)
+    bound_assets = None
+    if project_dir is not None or str(payload.get("project_dir") or "").strip():
+        bound_assets = _bound_project_dir(payload, project_dir) / "assets"
+    seen: dict[str, frozenset[tuple[Any, ...]]] = {}
+    for face in SEMANTIC_FACES:
+        path = Path(str(assets[face]))
+        try:
+            is_link = path.is_symlink()
+        except OSError as error:
+            _invalid(
+                "无法读取印刷面贴图",
+                field=f"assets.{face}",
+                cause=str(error),
+            )
+        if is_link:
+            _invalid("印刷面贴图不能是符号链接。", field=f"assets.{face}")
+        if not path.is_file():
+            _invalid("印刷面贴图缺失", field=f"assets.{face}")
+        if path.name != f"panel_{face}.png":
+            _invalid(
+                "印刷面贴图文件名与历史布局不一致",
+                field=f"assets.{face}",
+            )
+        if path.parent.name != "assets":
+            _invalid("印刷面贴图必须落在 assets 目录", field=f"assets.{face}")
+        canonical = path.expanduser().resolve()
+        if bound_assets is not None:
+            try:
+                canonical.relative_to(bound_assets)
+            except ValueError:
+                _invalid(
+                    "印刷面贴图必须落在本单 assets 目录内",
+                    field=f"assets.{face}",
+                )
+        if not _is_regular_png(path):
+            _invalid("印刷面贴图必须是可读取的 PNG", field=f"assets.{face}")
+        tokens = _path_identity_tokens(path)
+        for other, other_tokens in seen.items():
+            if tokens & other_tokens:
+                _invalid(
+                    "印刷面贴图不能重复。",
+                    field=f"assets.{face}",
+                    other=other,
+                )
+        seen[face] = tokens
+
+
+def bind_persisted_job_to_project(
+    previous: Mapping[str, Any],
+    *,
+    project_dir: Path | str,
+    resolved_job_path: Path | str,
+    code: str,
+    slug: str,
+    source_ai: Path | str | None = None,
+    template_path: Path | str | None = None,
+) -> None:
+    """Reject a cached result that does not bind to this run's product paths."""
+
+    payload = _mapping(previous, "cached_result")
+    if str(payload.get("code") or "") != str(code):
+        _invalid("缓存结果 code 与本单不一致", field="code")
+    if str(payload.get("slug") or "") != str(slug):
+        _invalid("缓存结果 slug 与本单不一致", field="slug")
+    expected_project = Path(str(project_dir)).expanduser().resolve()
+    declared_project = payload.get("project_dir")
+    if (
+        not str(declared_project or "").strip()
+        or Path(str(declared_project)).expanduser().resolve() != expected_project
+    ):
+        _invalid("缓存结果 project_dir 与本单目录不一致", field="project_dir")
+    expected_resolved = Path(str(resolved_job_path)).expanduser().resolve()
+    declared_resolved = payload.get("resolved_job_path")
+    if (
+        not str(declared_resolved or "").strip()
+        or Path(str(declared_resolved)).expanduser().resolve() != expected_resolved
+    ):
+        _invalid(
+            "缓存结果 resolved_job_path 与本单作业文件不一致",
+            field="resolved_job_path",
+        )
+    if source_ai is not None:
+        declared_source = payload.get("source_ai")
+        if _canonical_path_text(declared_source) != _canonical_path_text(source_ai):
+            _invalid("缓存结果 source_ai 与本单源稿不一致", field="source_ai")
+    if template_path is not None:
+        declared_template = payload.get("template_path")
+        if _canonical_path_text(declared_template) != _canonical_path_text(
+            template_path
+        ):
+            _invalid(
+                "缓存结果 template_path 与本单模板不一致",
+                field="template_path",
+            )
+
+
+def apply_blender_result(
+    blender_result: Mapping[str, Any],
+    *,
+    snapshot_job: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Accept only measurement fields from an untrusted Blender result manifest."""
+
+    result = _mapping(blender_result, "blender_result")
+    unknown = sorted(
+        str(key) for key in result if key not in BLENDER_RESULT_ALLOWED_KEYS
+    )
+    if unknown:
+        _invalid(
+            "Blender 结果含未知或受保护字段",
+            field="blender_result",
+            unknown=unknown,
+        )
+    snapshot = _mapping(snapshot_job, "execution_snapshot")
+    if result.get("code") != snapshot.get("code"):
+        _invalid(
+            "Blender 结果 code 与执行快照不一致",
+            field="blender_result.code",
+            expected=snapshot.get("code"),
+            actual=result.get("code"),
+        )
+    snapshot_outputs = _mapping(snapshot.get("outputs"), "execution_snapshot.outputs")
+    result_outputs = _mapping(result.get("outputs"), "blender_result.outputs")
+    if set(result_outputs) != set(snapshot_outputs):
+        _invalid(
+            "Blender 结果 outputs key 与执行快照不一致",
+            field="blender_result.outputs",
+            expected=sorted(snapshot_outputs),
+            actual=sorted(result_outputs),
+        )
+    for key, raw in result_outputs.items():
+        expected = snapshot_outputs.get(key)
+        if _canonical_path_text(raw) != _canonical_path_text(expected):
+            _invalid(
+                "Blender 结果输出路径与执行快照不一致",
+                field=f"blender_result.outputs.{key}",
+            )
+    expected_nonce = snapshot.get("execution_nonce")
+    if not isinstance(expected_nonce, str) or not expected_nonce.strip():
+        _invalid(
+            "执行快照 execution_nonce 无效",
+            field="execution_snapshot.execution_nonce",
+        )
+    if result.get("execution_nonce") != expected_nonce:
+        _invalid(
+            "Blender 结果不是本轮执行产物",
+            field="blender_result.execution_nonce",
+        )
+    return {
+        key: deepcopy(result[key])
+        for key in BLENDER_RESULT_MEASUREMENT_KEYS
+        if key in result
+    }
+
+
+def _consumed_job_view(job: Mapping[str, Any]) -> dict[str, Any]:
+    assets = job.get("assets") if isinstance(job.get("assets"), Mapping) else {}
+    outputs = job.get("outputs") if isinstance(job.get("outputs"), Mapping) else {}
+    view: dict[str, Any] = {}
+    for key in RENDERER_CONSUMED_JOB_KEYS:
+        if key in {"source_ai", "template_path", "project_dir", "resolved_job_path"}:
+            view[key] = _canonical_path_text(job.get(key))
+        elif key == "assets":
+            view[key] = {
+                face: _canonical_path_text(assets.get(face)) for face in SEMANTIC_FACES
+            }
+        elif key == "outputs":
+            view[key] = {
+                str(name): _canonical_path_text(value) for name, value in outputs.items()
+            }
+        else:
+            view[key] = job.get(key)
+    return view
+
+
+def _assert_renderer_consumed_jobs_equal(
+    disk_job: Mapping[str, Any], memory_job: Mapping[str, Any]
+) -> None:
+    disk_view = _consumed_job_view(disk_job)
+    memory_view = _consumed_job_view(memory_job)
+    for key in disk_view:
+        if disk_view[key] != memory_view[key]:
+            _invalid(
+                "磁盘作业与内存作业的渲染消费字段不一致",
+                field=key,
+            )
+
+
+def _assert_execution_paths(
+    disk_job: Mapping[str, Any],
+    memory_job: Mapping[str, Any],
+    resolved_job_path: Path | str,
+) -> None:
+    expected = Path(str(resolved_job_path)).expanduser().resolve()
+    memory_path = Path(str(memory_job.get("resolved_job_path") or "")).expanduser()
+    try:
+        memory_resolved = memory_path.resolve()
+    except OSError:
+        memory_resolved = memory_path
+    if memory_resolved != expected:
+        _invalid(
+            "内存作业 resolved_job_path 与将交给 Blender 的路径不一致",
+            field="resolved_job_path",
+        )
+    declared = disk_job.get("resolved_job_path")
+    if str(declared or "").strip():
+        disk_path = Path(str(declared)).expanduser().resolve()
+        if disk_path != expected:
+            _invalid(
+                "磁盘作业 resolved_job_path 与将交给 Blender 的路径不一致",
+                field="resolved_job_path",
+            )
+
+
+def _strict_spec_bearing_plan(
+    job: Mapping[str, Any], registry: Mapping[str, Any]
+) -> dict[str, Any]:
+    existing = job.get("render_spec")
+    if existing is None:
+        _invalid("Blender 执行要求作业带完整 render spec", field="render_spec")
+    spec = _validate_render_spec_with_registry(existing, registry)
+    _assert_spec_bound_to_job(spec, job)
+    _assert_job_identity_matches_spec(job, spec)
+    _assert_job_render_matches_spec(job, spec)
+    return _plan_from_spec(spec)
+
+
+def _plan_for_resolved_job_with_registry(
+    resolved_job: Mapping[str, Any],
+    output_request: Mapping[str, Any] | None,
+    registry: Mapping[str, Any],
+) -> dict[str, Any]:
+    job = _mapping(resolved_job, "resolved_job")
+    existing = job.get("render_spec")
+    if existing is None:
+        _assert_legacy_synthesis_eligible(job)
+        spec = _synthesize_legacy_with_registry(job, output_request, registry)
+    else:
+        spec = _validate_render_spec_with_registry(existing, registry)
+        _assert_spec_bound_to_job(spec, job)
+        _assert_job_identity_matches_spec(job, spec)
+        _assert_job_render_matches_spec(job, spec)
+    return _plan_from_spec(spec)
+
+
+def v1_diagnostic_render(template: Mapping[str, Any]) -> dict[str, Any]:
+    """Historical V1/CLI render for registered templates.
+
+    V2 templates must not grow a scattered ``render`` object.  Pipeline's
+    non-V2 branch consumes this entry instead of copying registry internals.
+    """
+
+    payload = _mapping(template, "v1_template")
+    if "render" in payload:
+        render = _mapping(payload.get("render"), "v1_template.render")
+        return deepcopy(dict(render))
+    template_id = payload.get("template_id")
+    if (
+        not isinstance(template_id, str)
+        or template_id not in V1_DIAGNOSTIC_RENDER_BY_TEMPLATE_ID
+    ):
+        _invalid(
+            "非 V2 模板缺少历史渲染参数",
+            field="v1_template.render",
+            template_id=template_id,
+        )
+    return deepcopy(V1_DIAGNOSTIC_RENDER_BY_TEMPLATE_ID[template_id])
+
+
+def persistable_plan_from_bound_job(job: Mapping[str, Any]) -> dict[str, Any]:
+    """Rebuild a persistable plan from a job already accepted this process.
+
+    Does not reread the registry.  Identity and flat render must still match
+    the nested spec.
+    """
+
+    payload = _mapping(job, "resolved_job")
+    spec = _mapping(payload.get("render_spec"), "job.render_spec")
+    plan = _plan_from_spec(spec)
+    _assert_job_identity_matches_spec(payload, spec)
+    _assert_job_render_matches_spec(payload, spec)
+    return plan
+
+
+def render_plan_for_new_job(
+    structure_job: Mapping[str, Any],
+    profile_id: str,
+    output_request: Mapping[str, Any] | None = None,
+    *,
+    registry_path: Path | str = DEFAULT_REGISTRY_PATH,
+) -> dict[str, Any]:
+    """Resolve a persistable render plan for a new V2 task.
+
+    Pipeline must consume this object: spec, flat render, sampling, top-level
+    identity, and fingerprint_token.  It must not read the registry or copy
+    nested hash field names.
+    """
+
+    plan, _cached = render_plan_for_new_job_and_persisted_result(
+        structure_job,
+        profile_id,
+        output_request,
+        None,
+        registry_path=registry_path,
+    )
+    return plan
+
+
+def render_plan_for_new_job_and_persisted_result(
+    structure_job: Mapping[str, Any],
+    profile_id: str,
+    output_request: Mapping[str, Any] | None,
+    persisted_result: Mapping[str, Any] | None,
+    *,
+    registry_path: Path | str = DEFAULT_REGISTRY_PATH,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """One registry snapshot for the new-job plus optional cached-result boundary."""
+
+    registry = load_profile_registry(registry_path)
+    spec = _resolve_render_spec_with_registry(
+        structure_job, profile_id, output_request, registry
+    )
+    plan = _plan_from_spec(spec)
+    cached: dict[str, Any] | None = None
+    if persisted_result is not None:
+        try:
+            cached = _plan_for_resolved_job_with_registry(
+                persisted_result, None, registry
+            )
+        except RenderContractError:
+            cached = None
+    return plan, cached
+
+
+def render_plan_for_resolved_job(
+    resolved_job: Mapping[str, Any],
+    output_request: Mapping[str, Any] | None = None,
+    *,
+    registry_path: Path | str = DEFAULT_REGISTRY_PATH,
+) -> dict[str, Any]:
+    """Validate or synthesize a persistable plan for an existing resolved job.
+
+    Complete specs are rebound to this job's structure facts.  Missing specs
+    synthesize ``compat-legacy-v0`` only for known pre-RF02 V2 jobs.
+    """
+
+    registry = load_profile_registry(registry_path)
+    return _plan_for_resolved_job_with_registry(
+        resolved_job, output_request, registry
+    )
+
+
+def blender_execution_plan(
+    disk_job: Mapping[str, Any],
+    memory_job: Mapping[str, Any],
+    *,
+    resolved_job_path: Path | str,
+    registry_path: Path | str = DEFAULT_REGISTRY_PATH,
+    asset_project_dir: Path | str | None = None,
+) -> dict[str, Any]:
+    """Validate the disk payload Blender will read against the in-memory job.
+
+    One registry snapshot.  Spec-bearing RF-02 jobs must have all four top-level
+    identity fields, a flat render equal to the spec-derived config, and
+    in-tree output targets.  Any disk/memory difference fails before subprocess.
+    Disk/memory equality does not make illegal asset or output paths legal.
+
+    Asset authorization is the actual execution ``project_dir``, or a
+    caller-verified ``asset_project_dir`` (relight).  Never infer the root
+    from the payload's own asset paths.
+    """
+
+    registry = load_profile_registry(registry_path)
+    disk = _mapping(disk_job, "disk_job")
+    memory = _mapping(memory_job, "memory_job")
+    disk_plan = _strict_spec_bearing_plan(disk, registry)
+    memory_plan = _strict_spec_bearing_plan(memory, registry)
+    if disk_plan["fingerprint_token"] != memory_plan["fingerprint_token"]:
+        _invalid(
+            "磁盘作业合同与内存作业合同不一致",
+            field="fingerprint_token",
+        )
+    _assert_execution_paths(disk, memory, resolved_job_path)
+    _assert_renderer_consumed_jobs_equal(disk, memory)
+    execution_project = _bound_project_dir(disk, None)
+    validate_job_output_contract(disk, project_dir=execution_project)
+    if asset_project_dir is not None:
+        asset_project = Path(str(asset_project_dir)).expanduser().resolve()
+    else:
+        asset_project = execution_project
+    validate_job_asset_contract(disk, project_dir=asset_project)
+    validate_job_asset_contract(memory, project_dir=asset_project)
+    return disk_plan

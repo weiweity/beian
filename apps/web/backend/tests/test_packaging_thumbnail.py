@@ -96,6 +96,7 @@ def test_write_review_card_caps_longest_edge_and_keeps_alpha(tmp_path):
     ground = tmp_path / "front_right_ground.png"
     image.save(ground)
     job = {
+        "project_dir": str(tmp_path),
         "outputs": {
             "front_right": str(source),
             "front_right_ground": str(ground),
@@ -118,7 +119,10 @@ def test_write_review_cards_optional_set_decode_failure_does_not_raise(tmp_path)
     Image.new("RGB", (8, 8), (255, 255, 255)).save(product)
     bad = tmp_path / "front_right_set.png"
     bad.write_bytes(b"not a png")
-    job = {"outputs": {"front_right": str(product), "front_right_set": str(bad)}}
+    job = {
+        "project_dir": str(tmp_path),
+        "outputs": {"front_right": str(product), "front_right_set": str(bad)},
+    }
     pipe.write_review_cards(job)
     assert "front_right_card" in job["outputs"]
     assert "front_right_set_card" not in job["outputs"]
@@ -129,6 +133,7 @@ def test_write_review_cards_skips_missing_source(tmp_path):
     source = tmp_path / "front_right_white.png"
     Image.new("RGB", (8, 8), (255, 255, 255)).save(source)
     job = {
+        "project_dir": str(tmp_path),
         "outputs": {
             "front_right": str(source),
             "back_left": str(tmp_path / "gone.png"),

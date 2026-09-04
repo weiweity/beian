@@ -2721,9 +2721,37 @@ def test_production_flower_box_outputs_zoomable_white_shots():
             encoding="utf-8"
         )
     )
+    smoke = json.loads(
+        (PACKAGING / "templates" / "flower_box_illustrator_smoke.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    spec = importlib.util.spec_from_file_location(
+        "packaging_render_contract_zoomable", PACKAGING / "render_contract.py"
+    )
+    assert spec and spec.loader
+    contract = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(contract)
+    structure = {
+        "schema": "resolved-packaging-job/3",
+        "structure_schema": "packaging-structure/1",
+        "structure_hash": "sha256:" + "a" * 64,
+        "dimensions_mm": template["dimensions_mm"],
+        "faces": {
+            face: {}
+            for face in ("front", "right", "back", "left", "top", "bottom")
+        },
+        "validation": {"status": "accepted", "errors": [], "warnings": []},
+    }
+    production = contract.resolve_render_spec(
+        structure, template["render_profile_id"], {}
+    )
+    render = contract.current_renderer_config(production)
 
-    assert template["render"]["resolution_x"] >= 3000
-    assert template["render"]["resolution_y"] >= 3600
+    assert template["render_profile_id"] == "compat-legacy-v0"
+    assert smoke["render_profile_id"] == "smoke-v1"
+    assert render["resolution_x"] >= 3000
+    assert render["resolution_y"] >= 3600
 
 
 def test_windows_pipe_contract_is_utf8_json_and_request_correlated():

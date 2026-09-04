@@ -30,8 +30,7 @@ except ImportError:
     raise
 
 
-PIPELINE_VERSION = "1.4.0"
-PAPER_ALBEDO_LINEAR = 0.70
+PIPELINE_VERSION = "1.5.1"
 MAX_RASTER_PIXELS = 32_000_000
 MAX_EXPLICIT_PROPOSAL_LAYERS = 16
 MAX_PROPOSAL_LAYER_CANDIDATES = 128
@@ -55,6 +54,7 @@ ILLUSTRATOR_WINDOWS_RUNNER = ROOT / "illustrator" / "run_export.vbs"
 ILLUSTRATOR_AGENT_CLIENT = ROOT / "illustrator" / "illustrator_agent.py"
 ILLUSTRATOR_AGENT_SERVER = ROOT.parents[1] / "scripts" / "windows" / "illustrator-agent.ps1"
 DIELINE_SCRIPT = ROOT / "dieline.py"
+RENDER_CONTRACT_SCRIPT = ROOT / "render_contract.py"
 STRUCTURE_V2_FILES = tuple(sorted((ROOT / "structure_v2").glob("*.py")))
 
 if str(ROOT) not in sys.path:
@@ -66,6 +66,18 @@ from structure_v2 import (  # noqa: E402
     print_layer_failure_message,
     render_face_assets,
     resolve_structure,
+)
+from render_contract import (  # noqa: E402
+    RenderContractError,
+    apply_blender_result,
+    bind_persisted_job_to_project,
+    blender_execution_plan,
+    persistable_plan_from_bound_job,
+    render_plan_for_new_job_and_persisted_result,
+    render_plan_for_resolved_job,
+    v1_diagnostic_render,
+    validate_job_asset_contract,
+    validate_job_output_contract,
 )
 from white_background import png_bytes_over_white  # noqa: E402
 
@@ -148,10 +160,22 @@ def load_json(path: Path) -> dict[str, Any]:
 
 
 def save_json(path: Path, value: Any) -> None:
+    path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as stream:
-        json.dump(value, stream, ensure_ascii=False, indent=2)
-        stream.write("\n")
+    handle, temp_name = tempfile.mkstemp(
+        prefix=path.name + ".", suffix=".tmp", dir=str(path.parent)
+    )
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as stream:
+            json.dump(value, stream, ensure_ascii=False, indent=2)
+            stream.write("\n")
+        os.replace(temp_name, path)
+    except Exception:
+        try:
+            Path(temp_name).unlink()
+        except FileNotFoundError:
+            pass
+        raise
 
 
 def explicit_proposal_layers(
@@ -501,6 +525,7 @@ def job_fingerprint(
         ILLUSTRATOR_AGENT_CLIENT,
         ILLUSTRATOR_AGENT_SERVER,
         DIELINE_SCRIPT,
+        RENDER_CONTRACT_SCRIPT,
         *STRUCTURE_V2_FILES,
         *extra_paths,
     ):
@@ -510,6 +535,112 @@ def job_fingerprint(
     digest.update(file_sha256(template_path).encode("ascii"))
     digest.update(json.dumps(product, ensure_ascii=False, sort_keys=True).encode("utf-8"))
     return digest.hexdigest()
+
+
+def _pipeline_contract_error(error: RenderContractError) -> PipelineError:
+    return PipelineError(str(error), code=error.code)
+
+
+def _apply_render_plan(job: dict[str, Any], plan: Mapping[str, Any]) -> None:
+    job["render_spec"] = plan["spec"]
+    job["render"] = plan["render"]
+    job.update(plan["identity"])
+
+
+def relight_commit_failpoint(stage: str, **_details: Any) -> None:
+    return None
+
+
+def _path_inside_project(path: Path, project_dir: Path) -> bool:
+    try:
+        path.resolve().relative_to(project_dir.resolve())
+    except ValueError:
+        return False
+    return True
+
+
+def _v2_required_output_name(code: str, slug: str, key: str) -> str:
+    return {
+        "blend": f"{code}_{slug}_white_studio.blend",
+        "glb": f"{code}_{slug}.glb",
+        "front_right": f"{code}_{slug}_front_right_white.png",
+        "back_left": f"{code}_{slug}_back_left_white.png",
+    }[key]
+
+
+def _output_format_matches(path: Path, key: str) -> bool:
+    with path.open("rb") as handle:
+        header = handle.read(8)
+    if key in {"front_right", "back_left"}:
+        return header.startswith(b"\x89PNG\r\n\x1a\n")
+    if key == "glb":
+        return header.startswith(b"glTF")
+    if key == "blend":
+        return header.startswith(b"BLENDER")
+    return False
+
+
+def _cached_output_usable(
+    path_value: Any,
+    key: str,
+    project_dir: Path,
+    code: str,
+    slug: str,
+) -> bool:
+    if not path_value:
+        return False
+    path = Path(str(path_value))
+    try:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size <= 0:
+            return False
+        if path.name != _v2_required_output_name(code, slug, key):
+            return False
+        if not _path_inside_project(path, project_dir):
+            return False
+        return _output_format_matches(path, key)
+    except OSError:
+        return False
+
+
+def _cached_v2_result_usable(
+    previous: Mapping[str, Any],
+    fingerprint: str,
+    plan: Mapping[str, Any],
+    cached_plan: Mapping[str, Any] | None,
+    project_dir: Path,
+    code: str,
+    slug: str,
+    *,
+    resolved_job_path: Path,
+    source_ai: Path,
+    template_path: Path,
+) -> bool:
+    if previous.get("fingerprint") != fingerprint:
+        return False
+    if cached_plan is None:
+        return False
+    if cached_plan["fingerprint_token"] != plan["fingerprint_token"]:
+        return False
+    try:
+        bind_persisted_job_to_project(
+            previous,
+            project_dir=project_dir,
+            resolved_job_path=resolved_job_path,
+            code=code,
+            slug=slug,
+            source_ai=source_ai,
+            template_path=template_path,
+        )
+        validate_job_output_contract(previous, project_dir=project_dir)
+        validate_job_asset_contract(previous, project_dir=project_dir)
+    except RenderContractError:
+        return False
+    outputs = previous.get("outputs") or {}
+    required = ("blend", "glb", "front_right", "back_left")
+    for key in required:
+        if not _cached_output_usable(outputs.get(key), key, project_dir, code, slug):
+            return False
+    return True
 
 
 def optional_content_layers(reader: PdfReader) -> list[str]:
@@ -1217,32 +1348,51 @@ def preflight_product_v2(
             },
         )
     structure_job = resolution.resolved
+    result_path = project_dir / "pipeline_result.json"
+    previous = load_json(result_path) if (not force and result_path.is_file()) else None
+    try:
+        plan, cached_plan = render_plan_for_new_job_and_persisted_result(
+            structure_job,
+            template.get("render_profile_id"),
+            template.get("output_request"),
+            previous,
+        )
+    except RenderContractError as error:
+        raise _pipeline_contract_error(error) from error
     fingerprint_paths = [template_path, artwork_pdf]
     if structure_sidecar is not None:
         fingerprint_paths.append(structure_sidecar)
     fingerprint = job_fingerprint(
         source,
         template_path,
-        {**product, "structure_hash": structure_job["structure_hash"]},
+        {
+            **product,
+            "structure_hash": structure_job["structure_hash"],
+            "render_plan_token": plan["fingerprint_token"],
+        },
         extra_paths=tuple(fingerprint_paths),
     )
-    result_path = project_dir / "pipeline_result.json"
-    if not force and result_path.is_file():
-        previous = load_json(result_path)
-        outputs = previous.get("outputs", {})
-        required = [outputs.get(key) for key in ("blend", "glb", "front_right", "back_left")]
-        if previous.get("fingerprint") == fingerprint and all(
-            value and Path(value).is_file() for value in required
-        ):
-            previous["cache_hit"] = True
-            previous["preflight_elapsed_s"] = round(time.perf_counter() - started, 4)
-            return previous
+    if previous is not None and _cached_v2_result_usable(
+        previous,
+        fingerprint,
+        plan,
+        cached_plan,
+        project_dir,
+        code,
+        slug,
+        resolved_job_path=project_dir / "resolved_job.json",
+        source_ai=source,
+        template_path=template_path,
+    ):
+        previous["cache_hit"] = True
+        previous["preflight_elapsed_s"] = round(time.perf_counter() - started, 4)
+        return previous
 
     face_sizes = render_face_assets(
         artwork_pdf,
         structure_job,
         assets_dir,
-        raster_width_px=int(template.get("raster_width_px", 10_000)),
+        raster_width_px=int(plan["sampling"]["legacy_raster_width_px"]),
     )
     reader = PdfReader(str(artwork_pdf))
     media = reader.pages[0].mediabox
@@ -1260,7 +1410,6 @@ def preflight_product_v2(
         "project_dir": str(project_dir),
         "assets_dir": str(assets_dir),
         "dimensions_mm": structure_job["dimensions_mm"],
-        "render": overlay_studio_profile(template.get("render") or {}),
         "packaging_family": structure_job.get("packaging_family"),
         "glb_tolerance_mm": template.get("glb_tolerance_mm", 0.5),
         "page_size_points": page_size,
@@ -1296,6 +1445,7 @@ def preflight_product_v2(
     }
     resolved_path = project_dir / "resolved_job.json"
     resolved["resolved_job_path"] = str(resolved_path)
+    _apply_render_plan(resolved, plan)
     save_json(resolved_path, resolved)
     return resolved
 
@@ -1447,6 +1597,11 @@ def preflight_product(
         )
         face_sizes = crop_faces(print_png, full_png, assets_dir, template)
 
+    try:
+        v1_render = v1_diagnostic_render(template)
+    except RenderContractError as error:
+        raise _pipeline_contract_error(error) from error
+
     resolved = {
         "pipeline_version": PIPELINE_VERSION,
         "fingerprint": fingerprint,
@@ -1460,7 +1615,7 @@ def preflight_product(
         "project_dir": str(project_dir),
         "assets_dir": str(assets_dir),
         "dimensions_mm": template["dimensions_mm"],
-        "render": template["render"],
+        "render": v1_render,
         "glb_tolerance_mm": template.get("glb_tolerance_mm", 0.5),
         "page_size_points": page_size,
         "layers": layers,
@@ -1541,6 +1696,7 @@ def write_review_card(source: Path, dest: Path, max_edge: int = REVIEW_CARD_MAX_
 
 
 def write_review_cards(job: dict[str, Any]) -> None:
+    project_dir = Path(str(job.get("project_dir") or "")).expanduser().resolve()
     outputs = job.setdefault("outputs", {})
     for src_key, dest_key in (
         ("front_right", "front_right_card"),
@@ -1557,6 +1713,8 @@ def write_review_cards(job: dict[str, Any]) -> None:
         if not source.is_file():
             continue
         dest = source.with_name(f"{source.stem}_card.png")
+        if not _path_inside_project(dest, project_dir):
+            raise PipelineError("核对卡必须落在本单目录内。")
         try:
             write_review_card(source, dest)
         except Exception:
@@ -1566,39 +1724,78 @@ def write_review_cards(job: dict[str, Any]) -> None:
         outputs[dest_key] = str(dest)
 
 
-def run_blender_job(job: dict[str, Any], blender_executable: Path) -> dict[str, Any]:
+def run_blender_job(
+    job: dict[str, Any],
+    blender_executable: Path,
+    *,
+    asset_project_dir: Path | str | None = None,
+) -> dict[str, Any]:
     if job.get("cache_hit"):
         return job
-    started = time.perf_counter()
-    project_dir = Path(job["project_dir"])
-    log_path = project_dir / "blender.log"
-    command = [
-        str(blender_executable),
-        "--background",
-        "--factory-startup",
-        "--python",
-        str(BLENDER_SCRIPT),
-        "--",
-        job["resolved_job_path"],
-    ]
-    process = subprocess.run(command, capture_output=True, text=True)
-    log_path.write_text(process.stdout + "\n" + process.stderr, encoding="utf-8")
-    if process.returncode != 0:
-        raise PipelineError(f"Blender任务失败：{job['code']}，日志={log_path}")
-    # 静帧保持 RGBA 产品层。白底由打样单合成；PPT/PDF 导出时再铺白。
-    if bool(job.get("render", {}).get("exact_white_background", True)):
-        for key in ("front_right", "back_left"):
-            output = Path(job["outputs"][key])
-            if not output.is_file():
-                raise PipelineError(f"Blender未生成白底图：{output}")
-    blender_result_path = project_dir / "blender_result.json"
-    if not blender_result_path.is_file():
-        raise PipelineError(f"Blender未生成结果清单：{blender_result_path}")
-    blender_result = load_json(blender_result_path)
-    job.update(blender_result)
-    write_review_cards(job)
-    job["blender_process_elapsed_s"] = round(time.perf_counter() - started, 4)
-    return job
+    snapshot_dir: Path | None = None
+    try:
+        if job.get("structure_engine") == "v2" or job.get("render_spec") is not None:
+            disk_path = Path(str(job.get("resolved_job_path") or ""))
+            if not disk_path.is_file():
+                raise PipelineError("作业合同文件缺失，拒绝启动 Blender。")
+            try:
+                disk_job = load_json(disk_path)
+                blender_execution_plan(
+                    disk_job,
+                    job,
+                    resolved_job_path=disk_path,
+                    asset_project_dir=asset_project_dir,
+                )
+            except RenderContractError as error:
+                raise _pipeline_contract_error(error) from error
+        snapshot_dir = Path(tempfile.mkdtemp(prefix="beian-blender-snap."))
+        snapshot_path = snapshot_dir / "resolved_job.json"
+        snapshot_payload = deepcopy(job)
+        # Bind this subprocess to a nonce Blender must echo. A pre-existing
+        # blender_result.json cannot satisfy the current round. V1 diagnostic
+        # jobs use the same private snapshot; they are not a product path.
+        snapshot_payload["execution_nonce"] = uuid.uuid4().hex
+        save_json(snapshot_path, snapshot_payload)
+        blender_job_arg = str(snapshot_path)
+        started = time.perf_counter()
+        project_dir = Path(job["project_dir"])
+        log_path = project_dir / "blender.log"
+        command = [
+            str(blender_executable),
+            "--background",
+            "--factory-startup",
+            "--python",
+            str(BLENDER_SCRIPT),
+            "--",
+            blender_job_arg,
+        ]
+        process = subprocess.run(command, capture_output=True, text=True)
+        log_path.write_text(process.stdout + "\n" + process.stderr, encoding="utf-8")
+        if process.returncode != 0:
+            raise PipelineError(f"Blender任务失败：{job['code']}，日志={log_path}")
+        # 静帧保持 RGBA 产品层。白底由打样单合成；PPT/PDF 导出时再铺白。
+        if bool(job.get("render", {}).get("exact_white_background", True)):
+            for key in ("front_right", "back_left"):
+                output = Path(job["outputs"][key])
+                if not output.is_file():
+                    raise PipelineError(f"Blender未生成白底图：{output}")
+        blender_result_path = project_dir / "blender_result.json"
+        if not blender_result_path.is_file():
+            raise PipelineError(f"Blender未生成结果清单：{blender_result_path}")
+        blender_result = load_json(blender_result_path)
+        try:
+            measurements = apply_blender_result(
+                blender_result, snapshot_job=snapshot_payload
+            )
+        except RenderContractError as error:
+            raise _pipeline_contract_error(error) from error
+        job.update(measurements)
+        write_review_cards(job)
+        job["blender_process_elapsed_s"] = round(time.perf_counter() - started, 4)
+        return job
+    finally:
+        if snapshot_dir is not None:
+            shutil.rmtree(snapshot_dir, ignore_errors=True)
 
 
 def resolve_node_bin() -> Path | None:
@@ -1962,12 +2159,6 @@ def write_white_pptx_for_job(job: dict[str, Any]) -> None:
     outputs["pptx"] = str(dest)
 
 
-def overlay_studio_profile(render: Mapping[str, Any] | dict[str, Any]) -> dict[str, Any]:
-    next_render = dict(render)
-    next_render["substrate_rgba"] = [PAPER_ALBEDO_LINEAR, PAPER_ALBEDO_LINEAR, PAPER_ALBEDO_LINEAR, 1.0]
-    return next_render
-
-
 def atomic_replace_file(src: Path, dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     handle, temp_name = tempfile.mkstemp(prefix=dest.name + ".", suffix=".tmp", dir=str(dest.parent))
@@ -1975,6 +2166,29 @@ def atomic_replace_file(src: Path, dest: Path) -> None:
     temp_path = Path(temp_name)
     try:
         shutil.copyfile(src, temp_path)
+        os.replace(temp_path, dest)
+    except Exception:
+        try:
+            temp_path.unlink()
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def _stream_copy_file(src: Path, dest: Path) -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(src, dest)
+
+
+def _restore_file_from_backup(backup: Path, dest: Path) -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    handle, temp_name = tempfile.mkstemp(
+        prefix=dest.name + ".", suffix=".tmp", dir=str(dest.parent)
+    )
+    os.close(handle)
+    temp_path = Path(temp_name)
+    try:
+        shutil.copyfile(backup, temp_path)
         os.replace(temp_path, dest)
     except Exception:
         try:
@@ -1997,18 +2211,16 @@ def load_blender_only_jobs(
         if not resolved_path.is_file():
             raise PipelineError("这单没有已出图棚，不能只重渲 Blender。")
         job = load_json(resolved_path)
-        assets = job.get("assets") or {}
-        missing = [
-            face
-            for face in ("front", "right", "back", "left", "top", "bottom")
-            if not Path(str(assets.get(face) or "")).is_file()
-        ]
-        if missing:
-            raise PipelineError("这单缺少印刷面贴图，不能重渲棚。")
-        job["render"] = overlay_studio_profile(job.get("render") or {})
+        try:
+            plan = render_plan_for_resolved_job(job)
+            _apply_render_plan(job, plan)
+            job["project_dir"] = str(project_dir)
+            job["resolved_job_path"] = str(resolved_path)
+            validate_job_output_contract(job, project_dir=project_dir)
+            validate_job_asset_contract(job, project_dir=project_dir)
+        except RenderContractError as error:
+            raise _pipeline_contract_error(error) from error
         job["cache_hit"] = False
-        job["project_dir"] = str(project_dir)
-        job["resolved_job_path"] = str(resolved_path)
         jobs.append(job)
     if not jobs:
         raise PipelineError("任务清单没有products")
@@ -2016,10 +2228,16 @@ def load_blender_only_jobs(
 
 
 def run_blender_relight(job: dict[str, Any], blender_executable: Path) -> dict[str, Any]:
+    original_job = deepcopy(job)
     original_outputs = dict(job.get("outputs") or {})
-    if not original_outputs.get("front_right") or not original_outputs.get("back_left"):
-        raise PipelineError("这单没有可用成片路径，不能重渲棚。")
     original_resolved = Path(job["resolved_job_path"])
+    original_project = Path(str(job["project_dir"])).expanduser().resolve()
+    try:
+        validate_job_output_contract(job, project_dir=original_project)
+        validate_job_asset_contract(job, project_dir=original_project)
+    except RenderContractError as error:
+        raise _pipeline_contract_error(error) from error
+
     with tempfile.TemporaryDirectory(prefix="beian-relight.") as tmp:
         tmp_path = Path(tmp)
         remapped = deepcopy(job)
@@ -2032,24 +2250,81 @@ def run_blender_relight(job: dict[str, Any], blender_executable: Path) -> dict[s
         remapped["resolved_job_path"] = str(remapped_path)
         remapped["cache_hit"] = False
         save_json(remapped_path, remapped)
-        rendered = run_blender_job(remapped, blender_executable)
-        rendered_outputs = rendered.get("outputs") or remapped["outputs"]
+        rendered = run_blender_job(
+            remapped,
+            blender_executable,
+            asset_project_dir=original_project,
+        )
+        execution_outputs = dict(remapped.get("outputs") or {})
         required = ["front_right", "back_left"]
         for key in required:
-            src = Path(str(rendered_outputs.get(key) or ""))
+            src = Path(str(execution_outputs.get(key) or ""))
             if not src.is_file():
                 raise PipelineError("重渲棚没有写成片，保留原图。")
         dest_dir = Path(str(original_outputs["front_right"])).parent
-        for key, src_value in rendered_outputs.items():
+        replacements: list[tuple[str, Path, Path]] = []
+        for key, src_value in execution_outputs.items():
             src = Path(str(src_value))
             if not src.is_file():
                 continue
-            dest = Path(str(original_outputs[key])) if key in original_outputs else dest_dir / src.name
-            atomic_replace_file(src, dest)
-            original_outputs[key] = str(dest)
-        job["render"] = remapped["render"]
-        job["outputs"] = original_outputs
-        save_json(original_resolved, job)
+            dest = (
+                Path(str(original_outputs[key]))
+                if key in original_outputs
+                else dest_dir / src.name
+            )
+            replacements.append((str(key), src, dest))
+        backup_root = Path(tempfile.mkdtemp(prefix="beian-relight-backup."))
+        try:
+            existence: dict[str, bool] = {}
+            backups: dict[str, Path] = {}
+            for index, (_key, _src, dest) in enumerate(replacements):
+                dest_key = str(dest)
+                existed = False
+                try:
+                    existed = dest.is_file() and not dest.is_symlink()
+                except OSError:
+                    existed = False
+                existence[dest_key] = existed
+                if existed:
+                    backup = backup_root / f"{index}.bak"
+                    _stream_copy_file(dest, backup)
+                    backups[dest_key] = backup
+            resolved_existed = original_resolved.is_file()
+            resolved_backup = None
+            if resolved_existed:
+                resolved_backup = backup_root / "resolved_job.json.bak"
+                _stream_copy_file(original_resolved, resolved_backup)
+            try:
+                for index, (key, src, dest) in enumerate(replacements):
+                    relight_commit_failpoint("replace_output", index=index, key=key)
+                    atomic_replace_file(src, dest)
+                    original_outputs[key] = str(dest)
+                try:
+                    plan = persistable_plan_from_bound_job(rendered)
+                except RenderContractError as error:
+                    raise _pipeline_contract_error(error) from error
+                _apply_render_plan(job, plan)
+                job["outputs"] = original_outputs
+                relight_commit_failpoint("write_resolved_job")
+                save_json(original_resolved, job)
+            except Exception:
+                for dest_key, existed in existence.items():
+                    dest = Path(dest_key)
+                    if existed:
+                        _restore_file_from_backup(backups[dest_key], dest)
+                    else:
+                        try:
+                            if dest.is_symlink() or dest.is_file():
+                                dest.unlink()
+                        except OSError:
+                            pass
+                if resolved_existed and resolved_backup is not None:
+                    _restore_file_from_backup(resolved_backup, original_resolved)
+                job.clear()
+                job.update(original_job)
+                raise
+        finally:
+            shutil.rmtree(backup_root, ignore_errors=True)
         return job
 
 
