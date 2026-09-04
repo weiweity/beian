@@ -765,6 +765,15 @@ def validate_registry_update(
                 previous=old_profile["profile_sha256"],
                 candidate=new_profile["profile_sha256"],
             )
+    previous_ids = list(previous["profiles"])
+    candidate_ids = list(candidate["profiles"])
+    if candidate_ids[: len(previous_ids)] != previous_ids:
+        _invalid(
+            "已登记 profile 必须保持原顺序，新增 ID 只能追加",
+            field="registry.profiles",
+            previous=previous_ids,
+            candidate_prefix=candidate_ids[: len(previous_ids)],
+        )
     return candidate
 
 

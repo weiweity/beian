@@ -302,6 +302,30 @@ def test_registry_update_allows_only_append_for_existing_visual_identities(
     ]
 
 
+@pytest.mark.parametrize("mutation", ["reorder", "prepend"])
+def test_registry_update_rejects_reorder_and_prepend(tmp_path: Path, mutation: str):
+    contract = contract_module()
+    payload = registry_payload()
+    if mutation == "reorder":
+        payload["profiles"][0], payload["profiles"][1] = (
+            payload["profiles"][1],
+            payload["profiles"][0],
+        )
+    else:
+        inserted = deepcopy(payload["profiles"][2])
+        inserted["id"] = "smoke-fast-v2"
+        inserted["studio"]["master_resolution_px"] = [640, 768]
+        refresh_profile_hash(contract, inserted)
+        payload["profiles"].insert(0, inserted)
+
+    candidate = write_registry(tmp_path / f"{mutation}.json", payload)
+    assert_error(
+        contract,
+        "render_contract_invalid",
+        lambda: contract.validate_registry_update(REGISTRY_PATH, candidate),
+    )
+
+
 def test_explicit_request_cannot_enable_a_profile_disabled_output(tmp_path: Path):
     contract = contract_module()
     payload = registry_payload()
