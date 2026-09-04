@@ -44,7 +44,7 @@
 | `TODOS.md` | 未做项 |
 | `AGENTS.md` | 给代理的硬约束、加长作业合同、易忘约定（MICRO 不改 `package.json` 三位；禁止 `git add -A`） |
 | `scripts/windows/README.md` | 杭州 Windows 生产备忘 |
-| `workers/packaging/README.md` | 打样 CLI、`PackagingStructure` 语义合同、完整盒型与正面锚点确认、pymupdf 平面出图、白底/印刷面/PPT/GLB 产物合同 |
+| `workers/packaging/README.md` | 打样 CLI、`PackagingStructure` 语义合同、完整盒型与正面锚点确认、pymupdf 平面出图、白底/印刷面/PPT/GLB 产物合同，以及 RF-00 渲染质量测量尺、隔离输出和批准基线边界 |
 
 ## 本机启动
 

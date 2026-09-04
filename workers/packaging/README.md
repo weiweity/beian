@@ -34,6 +34,24 @@
 
 真值格式参考 examples/corpus_truth.example.json。真实稿、真实真值和审计输出都不要提交。工具会校验阈值范围、正尺寸、完整六面、90° 旋转、人工批准人，并汇总候选方盒、结构族和黄金样本。只有每份样本都被人工批准或明确判为不支持、每个支持结构族至少有一份黄金样本、支持样本六面已确认、几何安全阈值已冻结后，才加 --require-phase0-exit 作为 Phase 1 入口门。
 
+## RF-00 渲染质量测量尺
+
+`tools/render_quality_eval.py` 用固定的合成夹具观测当前包装 3D 输出，只建立后续改进所需的测量合同，不改变 `pipeline.py`、Blender 场景或产品图片。清单包含 6 个已支持的矩形盒场景（白盒、深色盒、高盒、宽盒、字体频率和透明边缘）以及 1 个必须明确判为不支持的圆柱场景；结果不能代替杭州 Windows L1、真实稿 L2 或人工 UAT。
+
+在仓库根目录运行：
+
+    apps/web/backend/.venv/bin/python workers/packaging/tools/render_quality_eval.py \
+      --output-dir /tmp/beian-render-quality-rf00-run-1
+
+`--output-dir` 必须是仓库、产品数据目录和 `WB_DATA_DIR` 之外、父目录已经存在的全新专用目录；工具不会复用已有目录。需要指定 Blender 时加 `--blender /absolute/path/to/blender`。未找到 Blender 会明确失败，不会伪造结果或降级到另一条 3D 流水线。
+
+输出只写入该目录，包括 `rf00-report.json`、`contact-sheet.png`、每个夹具的渲染与测量产物；批准基线不在普通采集时写入。只有人工评审确认本次报告完整且成功后，才能显式增加 `--update-baseline`。CLI 只允许把批准基线写到 `workers/packaging/fixtures/render-quality/baselines/`，并会同时校验输入、评估器、渲染作业、流水线、相机、模板、渲染配置、清单、依赖版本和嵌套指标身份。当前仓库没有正式批准基线。
+
+合同测试不需要 Blender：
+
+    cd apps/web/backend
+    .venv/bin/python -m pytest -q tests/test_packaging_render_quality.py
+
 ## 运行
 
     # 网页打样台会调这份 CLI。本机直接跑也可以。PPT 用白底写 OOXML，不依赖 Node。不要提交 node_modules。
