@@ -2,10 +2,10 @@
 
 日期：2026-09-03  
 仓库：weiweity/beian  
-状态：CONSTRUCTION（`/plan-eng-review` FULL_REVIEW，D1–D18 已锁）  
+状态：IMPLEMENTED IN CODE / L0（`0.21.21.0`–`0.21.22.0`）；杭州 26H21A 人工 L2 仍待验收
 生产：杭州 `DESKTOP-FAEJK8S`，Illustrator 2026 30.5.1，Session 1 Agent  
-HEAD：`edb2259`（`0.21.20.0`）  
-本文件是 `/plan-eng-review` 锁定后的施工计划。
+计划基线：`edb2259`（`0.21.20.0`）；实现版本：`6fb4fe3`（`0.21.21.0`）与 `529707b`（`0.21.22.0`）
+本文件保留 `/plan-eng-review` 锁定后的施工合同与验收清单。下文未勾任务是原计划快照，不代表代码仍未实现；当前未闭合项只有杭州真实重稿 L2 和业务验收。
 
 本楔换监督模型。不在 390 秒、围栏、自动拆锁上打补丁。同一台机仍然单槽。没有无 GUI 的 Illustrator Server。Mac 隔离 worktree `/ship`，禁止杭州 `/ship`。
 

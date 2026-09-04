@@ -2,6 +2,8 @@
 
 这是包装平面稿到既有 Blender 流水线的本地批处理入口。V2 不再把“红线、间距或 bbox 看起来像盒子”当作可自动接受的结构事实；它消费版本化 `PackagingStructure`，把结构识别、拓扑验证、人工确认和 3D 生成分开。旧 `dieline.py` 只保留给命令行诊断，不在网页新任务路径中。
 
+结构事实与成盒闸门以 `docs/adr-005-packaging-structure-v2.md` 为准；渲染真实感、family 几何分派、纸材/涂层、棚光、清晰度预算和质量评测以 `docs/adr-007-packaging-render-fidelity.md` 为准。`0.21.26.0` 已交 RF-00 测量尺和 RF-01 独立合同的 Code/L0，但尚未由 RF-02 接入产品流水线，也没有改变画质。`0.21.25.0` 起的膜袋仍只是 `add_box` 生成的 3 mm 薄盒预览，不是写实软袋。
+
 当前可验证的语义来源有两种：
 
 - 同稿件哈希绑定的 `packaging-structure/1` JSON sidecar；
@@ -33,6 +35,24 @@
       --output-dir /path/to/private-phase0-evidence
 
 真值格式参考 examples/corpus_truth.example.json。真实稿、真实真值和审计输出都不要提交。工具会校验阈值范围、正尺寸、完整六面、90° 旋转、人工批准人，并汇总候选方盒、结构族和黄金样本。只有每份样本都被人工批准或明确判为不支持、每个支持结构族至少有一份黄金样本、支持样本六面已确认、几何安全阈值已冻结后，才加 --require-phase0-exit 作为 Phase 1 入口门。
+
+## RF-00 渲染质量测量尺
+
+`tools/render_quality_eval.py` 用固定的合成夹具观测当前包装 3D 输出，只建立后续改进所需的测量合同，不改变 `pipeline.py`、Blender 场景或产品图片。清单包含 6 个已支持的矩形盒场景（白盒、深色盒、高盒、宽盒、字体频率和透明边缘）以及 1 个必须明确判为不支持的圆柱场景；结果不能代替杭州 Windows L1、真实稿 L2 或人工 UAT。
+
+在仓库根目录运行：
+
+    apps/web/backend/.venv/bin/python workers/packaging/tools/render_quality_eval.py \
+      --output-dir /tmp/beian-render-quality-rf00-run-1
+
+`--output-dir` 必须是仓库、产品数据目录和 `WB_DATA_DIR` 之外、父目录已经存在的全新专用目录；工具不会复用已有目录。需要指定 Blender 时加 `--blender /absolute/path/to/blender`。未找到 Blender 会明确失败，不会伪造结果或降级到另一条 3D 流水线。
+
+输出只写入该目录，包括 `rf00-report.json`、`contact-sheet.png`、每个夹具的渲染与测量产物；批准基线不在普通采集时写入。只有人工评审确认本次报告完整且成功后，才能显式增加 `--update-baseline`。CLI 只允许把批准基线写到 `workers/packaging/fixtures/render-quality/baselines/`，并会同时校验输入、评估器、渲染作业、流水线、相机、模板、渲染配置、清单、依赖版本和嵌套指标身份。当前仓库没有正式批准基线。
+
+合同测试不需要 Blender：
+
+    cd apps/web/backend
+    .venv/bin/python -m pytest -q tests/test_packaging_render_quality.py
 
 ## 运行
 
