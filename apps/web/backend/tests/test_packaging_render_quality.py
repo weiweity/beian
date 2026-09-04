@@ -296,6 +296,9 @@ def test_fixture_ids_and_input_sha256_are_stable(tmp_path: Path):
     assert pdf.is_file()
     assert materialized[0]["artwork_sha256"] == hashlib.sha256(pdf.read_bytes()).hexdigest()
     assert materialized[0]["artwork_script_sha256"] != materialized[0]["artwork_sha256"]
+    template = json.loads(Path(materialized[0]["template"]).read_text(encoding="utf-8"))
+    assert "raster_width_px" not in template
+    assert template["render_profile_id"] == "compat-legacy-v0"
 
 
 def test_fixtures_contain_no_real_brand_or_customer_content(tmp_path: Path):
@@ -627,6 +630,50 @@ def test_missing_metrics_are_unavailable_not_zero(tmp_path: Path):
         assert samples.get("value") not in (0, 0.0)
     assert "evaluator_sha256" in report["identity"]
     assert report["identity"]["render_profile_sha256"]
+
+
+def test_render_profile_sha256_changes_when_registry_sampling_changes(
+    tmp_path: Path,
+):
+    eval_mod = eval_module()
+    contract = eval_mod._load_render_contract()
+    original = eval_mod.render_profile_sha256()
+    assert original == eval_mod.render_profile_sha256()
+    baseline = eval_mod.current_template_render()
+    assert baseline["render_spec"]["sampling"]
+    assert baseline["render_spec"]["registry_sha256"]
+    assert baseline["render_spec"]["renderer"]["profile_sha256"]
+    assert baseline["render_spec"]["outputs"]
+    assert baseline["render_spec"]["geometry"]
+    assert baseline["render_spec"]["material"]
+    assert baseline["render_spec"]["shots"]
+    assert baseline["render_spec"]["color"]
+
+    payload = json.loads(
+        (PACKAGING / "profiles" / "render-profiles.v1.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    profile = next(item for item in payload["profiles"] if item["id"] == "compat-legacy-v0")
+    profile["sampling"] = dict(profile["sampling"])
+    profile["sampling"]["minimum_face_pixels_per_mm"] = (
+        float(profile["sampling"]["minimum_face_pixels_per_mm"]) + 1.0
+    )
+    profile["declared_sha256"] = contract.profile_declared_sha256(profile)
+    mutated = tmp_path / "render-profiles.v1.json"
+    mutated.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    changed = eval_mod.render_profile_sha256(registry_path=mutated)
+    mutated_template = eval_mod.current_template_render(registry_path=mutated)
+    assert changed != original
+    assert mutated_template["render"] == baseline["render"]
+    assert (
+        mutated_template["render_spec"]["sampling"]["minimum_face_pixels_per_mm"]
+        != baseline["render_spec"]["sampling"]["minimum_face_pixels_per_mm"]
+    )
+    assert not (PACKAGING / "fixtures" / "render-quality" / "baselines" / "rf00-current.json").exists()
 
 
 def test_eval_does_not_read_backend_data_or_real_jobs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -1525,8 +1572,15 @@ def test_source_bundle_identity_changes_when_dependency_changes(
     original = eval_mod.source_bundle_sha256((first, second))
     second.write_text("VALUE = 3\n", encoding="utf-8")
     assert eval_mod.source_bundle_sha256((first, second)) != original
-    expected = {eval_mod.PIPELINE_PATH, eval_mod.DIELINE_PATH, eval_mod.WHITE_BACKGROUND_PATH, *eval_mod.STRUCTURE_V2_PATHS}
+    expected = {
+        eval_mod.PIPELINE_PATH,
+        eval_mod.DIELINE_PATH,
+        eval_mod.WHITE_BACKGROUND_PATH,
+        eval_mod.RENDER_CONTRACT_PATH,
+        *eval_mod.STRUCTURE_V2_PATHS,
+    }
     assert eval_mod.ARTWORK_PATH in expected
+    assert eval_mod.RENDER_CONTRACT_PATH in expected
     assert eval_mod.collect_source_identity()["pipeline_sha256"] == eval_mod.source_bundle_sha256(tuple(expected))
     assert eval_mod.collect_source_identity()["render_job_sha256"] == eval_mod.source_bundle_sha256(
         (eval_mod.RENDER_JOB_PATH, eval_mod.GLB_VERIFY_PATH)

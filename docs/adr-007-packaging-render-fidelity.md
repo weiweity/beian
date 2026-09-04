@@ -1,11 +1,11 @@
 # ADR-007：包装 3D 渲染真实感、清晰度与能力合同
 
 - 日期：2026-09-04
-- 状态：PARTIAL IMPLEMENTATION / L0 — `/plan-eng-review` 已完成，D1–D8 已锁定；RF-00 测量尺和 RF-01 独立合同已完成 Code/L0，RF-02+ 产品接线、视觉改造、L1、L2、UAT 均未完成
+- 状态：PARTIAL IMPLEMENTATION / L0 — `/plan-eng-review` 已完成，D1–D8 已锁定；RF-00 测量尺、RF-01 独立合同和 RF-02 流水线接线（含 RF-02.3）已完成 Code/L0；RF-03+ 输出代际、视觉改造、L1、L2、UAT 均未完成
 - 目标执行者：Grok / Codex 等编码代理，人工负责人负责选择、金标与发布闸门
 - 关联：`docs/adr-005-packaging-structure-v2.md`、`DESIGN.md`、`workers/packaging/README.md`、`docs/pouch-v1-acceptance.md`
 - 基线：`origin/main` `b39f147`，版本 `0.21.25.0`
-- 实现快照：`0.21.26.0` 交付 RF-00 / RF-01；正式 approved baseline 未创建，产品仍未消费 render spec
+- 实现快照：RF-00 / RF-01 / RF-02 已交 Code/L0（RF-02.3 收口磁盘执行边界与私有执行快照/nonce）。新任务消费 persistable render plan 并写入四项顶层 identity / fingerprint token / resolved job / result；Blender 启动前校验磁盘 payload 与派生 flat render。所有非 cache Blender 任务从当前内存 job 生成私有执行快照并注入本轮 nonce；非 V2 只是命令行诊断路径，不是网页产品通道。只有已知 pre-RF02 V2 作业可合成 `compat-legacy-v0`，且历史最小 render 键必须完整匹配。同步异常全量回滚（含删除本轮新建 optional 输出）；进程崩溃/断电级原子 current 仍是 RF-03。正式 approved baseline 未创建，Blender 几何/材质/棚光未改，不得称画质已改善
 
 ## 1. 结论先行
 
@@ -1125,7 +1125,7 @@ P1 分成两个可独立评审的结构性切片；两片都完成后才进入 P
 
 #### P1a：render contract
 
-交付状态：RF-01 已完成严格 registry、能力矩阵、canonical hash、spec 解析/验证和现有参数兼容桥，并用独立合同测试证明失败关闭；它没有修改 `pipeline.py` 或 Blender。下面“写入 fingerprint / resolved job / result、兼容旧重渲”的接线工作归 RF-02，未完成前不得称产品已启用新合同。
+交付状态：RF-01 已完成严格 registry、能力矩阵、canonical hash、spec 解析/验证和现有参数兼容桥。RF-02 已把 persistable render plan 写入 fingerprint / resolved job / result：新任务缺 spec 永远失败；只有 `pipeline_version=1.4.0` 的 V2 作业可合成 `legacy_synthesized`，且历史最小 render 键必须完整匹配；Blender 启动前校验磁盘 payload 与派生 flat render。所有非 cache Blender 任务从当前内存 job 生成私有执行快照并注入本轮 nonce；`blender_result.json` 必须回传同 nonce。同步替换失败全量回滚（含删除本轮新建 optional 输出）。非 V2 只是命令行诊断路径，用合同模块的历史 render，不把散落默认塞回 V2 模板，也不是网页产品通道。Blender 仍消费平面 `render` 参数，未改几何或棚光。进程崩溃/断电级原子 current、不可变 generation manifest 和内容 SHA 仍是 RF-03。
 
 建议文件：
 
@@ -1266,7 +1266,7 @@ P1b generation     P2 carton core       P3b UI preview shell
 
 ### 20.7 Grok 可执行任务包
 
-2026-09-04 交付快照：RF-00 与 RF-01 已完成 Code/L0；RF-00 没有批准正式 baseline，RF-01 没有接入产品流水线。RF-02–RF-13 状态不变，L1/L2/UAT 仍须独立取证。
+2026-09-05 交付快照：RF-00、RF-01 与 RF-02 已完成 Code/L0（含 RF-02.3：磁盘执行边界、私有执行快照/nonce、V1 诊断路径、legacy 必存键、新建 optional 回滚删除、inode/casefold 输出合同、成对 registry snapshot）。非 V2 只是命令行诊断路径，不是网页产品通道。RF-00 没有批准正式 baseline，不得 `--update-baseline`。RF-02 以合同测试锁定 `compat-legacy-v0` 与现有运行参数一致，没有跑产品 Blender A/B。崩溃级原子代际仍是 RF-03。RF-03–RF-13、L1、L2、UAT 仍须独立取证。
 
 | ID | 优先级 / 估算 | 依赖 | 实施与主要文件 | 完成定义 |
 |---|---|---|---|---|
@@ -1401,10 +1401,11 @@ merge、ship 或 deploy，除非用户在当次任务明确授权。不要 git a
   - Files: `workers/packaging/render_contract.py`、`workers/packaging/profiles/render-profiles.v1.json`、`apps/web/backend/tests/test_packaging_render_contract.py`
   - Verify: registry/schema/能力矩阵/数值/canonical hash 的成功与失败测试全绿，compat profile 与现状零视觉差异。
   - Evidence: 31 项聚焦合同测试全绿；registry 重排/前插均拒绝，compat bridge 与当前模板参数逐项相等；模块尚未接入产品流水线。
-- [ ] **T3（P1，human: ~1d / Grok: ~2h）— pipeline — 接入 resolved job、fingerprint 与结果**
+- [x] **T3（P1，human: ~1d / Grok: ~2h）— pipeline — 接入 resolved job、fingerprint 与结果**
   - Surfaced by: Architecture — Blender 必须只消费 resolved spec，不能继续从模板和常量猜。
   - Files: `workers/packaging/pipeline.py`、`workers/packaging/render_contract.py`、`apps/web/backend/tests/test_packaging_pipeline_v2.py`
   - Verify: 新单缺 spec fail；旧重渲可合成 compat；profile/hash 改变产生 cache miss；output keys/status 不变。
+  - Evidence: RF-02.3 聚焦合同 + pipeline v2 + RF-00 + 模板匹配测试全绿。新任务走 `render_plan_for_new_job_and_persisted_result`（同边界一次读 registry）。所有非 cache Blender 任务从当前内存 job 生成私有执行快照并注入本轮 nonce；V2 生成前仍走 `blender_execution_plan` 磁盘/内存/spec/路径/asset 校验。原 `resolved_job.json` 的 TOCTOU 改写不影响快照。`blender_result.json` 必须回传同 nonce，只收测量字段，code/outputs 必须与快照全等。非 V2 只是命令行诊断路径，不是网页产品通道。缓存绑定本次 project_dir 与预期 resolved_job.json，不信 previous 自报路径；六面 assets 缺失/越界/symlink/重复/hardlink/case alias 只 miss。崩溃级 atomic current 明确留给 RF-03。未跑产品 Blender A/B，未更新 approved baseline。
 - [ ] **T4（P1，human: ~3d / Grok: ~6h）— generations — 实现不可变代际和原子切换**
   - Surfaced by: Architecture D2/D3 — 当前 relight 原位覆盖，无法保留原图、稳定回滚或解释视觉因果。
   - Files: `apps/web/server/src/renderGenerations.ts`、`mockup.ts`、`jobs.ts`、`renderGenerations.test.ts`

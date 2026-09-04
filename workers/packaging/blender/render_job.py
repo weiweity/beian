@@ -804,6 +804,10 @@ def main():
         "render_resolution": [job["render"]["resolution_x"], job["render"]["resolution_y"]],
         "blender_elapsed_s": round(time.perf_counter() - started, 3),
     }
+    nonce = job.get("execution_nonce")
+    if not isinstance(nonce, str) or not nonce.strip():
+        raise SystemExit("execution snapshot missing execution_nonce")
+    result["execution_nonce"] = nonce
     result_path = Path(job["project_dir"]) / "blender_result.json"
     result_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(result, ensure_ascii=False))
