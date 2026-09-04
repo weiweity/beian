@@ -1,10 +1,11 @@
 # ADR-007：包装 3D 渲染真实感、清晰度与能力合同
 
 - 日期：2026-09-04
-- 状态：ACCEPTED PLAN — `/plan-eng-review` 已完成，D1–D8 已锁定；实现、L1、L2、UAT 均未开始
+- 状态：PARTIAL IMPLEMENTATION / L0 — `/plan-eng-review` 已完成，D1–D8 已锁定；RF-00 测量尺和 RF-01 独立合同已完成 Code/L0，RF-02+ 产品接线、视觉改造、L1、L2、UAT 均未完成
 - 目标执行者：Grok / Codex 等编码代理，人工负责人负责选择、金标与发布闸门
 - 关联：`docs/adr-005-packaging-structure-v2.md`、`DESIGN.md`、`workers/packaging/README.md`、`docs/pouch-v1-acceptance.md`
 - 基线：`origin/main` `b39f147`，版本 `0.21.25.0`
+- 实现快照：`0.21.26.0` 交付 RF-00 / RF-01；正式 approved baseline 未创建，产品仍未消费 render spec
 
 ## 1. 结论先行
 
@@ -1124,6 +1125,8 @@ P1 分成两个可独立评审的结构性切片；两片都完成后才进入 P
 
 #### P1a：render contract
 
+交付状态：RF-01 已完成严格 registry、能力矩阵、canonical hash、spec 解析/验证和现有参数兼容桥，并用独立合同测试证明失败关闭；它没有修改 `pipeline.py` 或 Blender。下面“写入 fingerprint / resolved job / result、兼容旧重渲”的接线工作归 RF-02，未完成前不得称产品已启用新合同。
+
 建议文件：
 
 - 新增 `workers/packaging/render_contract.py`
@@ -1263,6 +1266,8 @@ P1b generation     P2 carton core       P3b UI preview shell
 
 ### 20.7 Grok 可执行任务包
 
+2026-09-04 交付快照：RF-00 与 RF-01 已完成 Code/L0；RF-00 没有批准正式 baseline，RF-01 没有接入产品流水线。RF-02–RF-13 状态不变，L1/L2/UAT 仍须独立取证。
+
 | ID | 优先级 / 估算 | 依赖 | 实施与主要文件 | 完成定义 |
 |---|---|---|---|---|
 | RF-00 | P0 / M | 无 | 脱敏 fixture 规范、基线采集脚本骨架、当前参数/尺寸/耗时清单 | 同机可重复产出 current JSON/contact sheet；无产品行为变化；记录 fixture/Blender/hash |
@@ -1386,14 +1391,16 @@ merge、ship 或 deploy，除非用户在当次任务明确授权。不要 git a
 
 以下任务由本次工程评审问题直接合成；编号与 JSONL 评审产物一致。复选框只能在对应 Verify 实际执行并保留证据后勾选。
 
-- [ ] **T1（P1，human: ~6h / Grok: ~45min）— baseline — 建立可复现的现状渲染基线**
+- [x] **T1（P1，human: ~6h / Grok: ~45min）— baseline — 建立可复现的现状渲染基线**
   - Surfaced by: Test Review — 视觉改变缺少固定脱敏基线和完整身份链。
   - Files: `workers/packaging/fixtures/render-quality/`、`workers/packaging/tools/render_quality_eval.py`、`apps/web/backend/tests/test_packaging_render_quality.py`
   - Verify: 同机重复两次得到相同 fixture/profile/Blender/hash 身份；输出 current JSON/contact sheet，无产品行为改变。
-- [ ] **T2（P1，human: ~1.5d / Grok: ~3h）— render contract — 实现严格版本化合同与 profile registry**
+  - Evidence: RF-00.5 两轮 Blender 的 60/60 像素身份一致，合同测试全绿；`--update-baseline` 未执行，正式批准基线仍不存在。
+- [x] **T2（P1，human: ~1.5d / Grok: ~3h）— render contract — 实现严格版本化合同与 profile registry**
   - Surfaced by: Architecture D6 — 散落默认值无法复现、校验或安全失效缓存。
   - Files: `workers/packaging/render_contract.py`、`workers/packaging/profiles/render-profiles.v1.json`、`apps/web/backend/tests/test_packaging_render_contract.py`
   - Verify: registry/schema/能力矩阵/数值/canonical hash 的成功与失败测试全绿，compat profile 与现状零视觉差异。
+  - Evidence: 31 项聚焦合同测试全绿；registry 重排/前插均拒绝，compat bridge 与当前模板参数逐项相等；模块尚未接入产品流水线。
 - [ ] **T3（P1，human: ~1d / Grok: ~2h）— pipeline — 接入 resolved job、fingerprint 与结果**
   - Surfaced by: Architecture — Blender 必须只消费 resolved spec，不能继续从模板和常量猜。
   - Files: `workers/packaging/pipeline.py`、`workers/packaging/render_contract.py`、`apps/web/backend/tests/test_packaging_pipeline_v2.py`

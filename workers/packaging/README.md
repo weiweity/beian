@@ -2,7 +2,7 @@
 
 这是包装平面稿到既有 Blender 流水线的本地批处理入口。V2 不再把“红线、间距或 bbox 看起来像盒子”当作可自动接受的结构事实；它消费版本化 `PackagingStructure`，把结构识别、拓扑验证、人工确认和 3D 生成分开。旧 `dieline.py` 只保留给命令行诊断，不在网页新任务路径中。
 
-结构事实与成盒闸门以 `docs/adr-005-packaging-structure-v2.md` 为准；渲染真实感、family 几何分派、纸材/涂层、棚光、清晰度预算和质量评测以 `docs/adr-007-packaging-render-fidelity.md` 为准（工程评审已锁定，尚未落代码）。现网 `0.21.25.0` 的膜袋只是 `add_box` 生成的 3 mm 薄盒预览，不是写实软袋。
+结构事实与成盒闸门以 `docs/adr-005-packaging-structure-v2.md` 为准；渲染真实感、family 几何分派、纸材/涂层、棚光、清晰度预算和质量评测以 `docs/adr-007-packaging-render-fidelity.md` 为准。`0.21.26.0` 已交 RF-00 测量尺和 RF-01 独立合同的 Code/L0，但尚未由 RF-02 接入产品流水线，也没有改变画质。`0.21.25.0` 起的膜袋仍只是 `add_box` 生成的 3 mm 薄盒预览，不是写实软袋。
 
 当前可验证的语义来源有两种：
 

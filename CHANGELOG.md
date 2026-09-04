@@ -6,6 +6,8 @@
 
 - 新增 RF-00 包装 3D 渲染质量测量尺：7 组脱敏合成夹具、评估 CLI、JSON 报告和 contact sheet，只记录现有流水线输出。
 - 新增 45 项合同测试，覆盖夹具、指标完整性、Blender 失败、输出路径、身份闭包和批准基线拒绝路径。
+- 新增 RF-01 严格 `packaging-render-spec/1`、只允许末尾追加的 profile registry、显式 family 能力矩阵和 canonical hash；31 项合同测试覆盖成功路径、未知字段、身份篡改、重排/前插、资源预算和不支持组合。
+- 新增 ADR-007，并把 3D 渲染后续工作按 RF-00–RF-13、Code/L0/L1/L2/UAT 分层；`TODOS.md` 只保留未闭环事项。
 
 ### Changed
 
@@ -14,7 +16,7 @@
 
 ### For contributors
 
-- 本版本没有修改产品渲染路径或画质，也没有批准正式 baseline；`--update-baseline` 仍需人工明确执行。RF-01 以后画质改造、Windows L1、真实稿 L2 和刘籽烨 UAT 继续分开验收。
+- 本版本没有修改产品渲染路径或画质，也没有批准正式 baseline；`--update-baseline` 仍需人工明确执行。RF-01 只交独立合同与兼容桥，RF-02 以后产品接线和画质改造、Windows L1、真实稿 L2、刘籽烨 UAT 继续分开验收。
 
 ## [0.21.25.0] - 2026-09-04
 

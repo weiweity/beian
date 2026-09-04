@@ -14,16 +14,13 @@
 
 ## P1 — 包装 3D 渲染真实感与清晰度
 
-主计划：`docs/adr-007-packaging-render-fidelity.md`。本分支已完成 `/plan-eng-review` 并锁定 D1–D8；尚未合入、未落实现，不得把计划参数直接写进生产。
+主计划：`docs/adr-007-packaging-render-fidelity.md`。`0.21.26.0` 已完成 RF-00 可复现测量尺和 RF-01 独立 `packaging-render-spec/1` / profile registry 的 Code/L0；两者都未改变产品画质。下面只保留尚未闭环的工作。
 
-- [ ] **锁定 ADR-007 与执行切片**
-  明确现有流水线内部重构边界、`packaging-render-spec/1`、能力矩阵、兼容策略、质量门与 Grok 交付顺序。保留 Hono、作业队列、`ResolvedPackagingJob`、产物 key 和同一 Blender 后台进程，不另建服务或第二套 3D 流水线。
+- [ ] **批准渲染质量基线与门槛**
+  RF-00 已能用 Git 内脱敏合成样片重复记录几何、白盒边界、纸材、字体频率、Alpha 光边、渲染耗时和 full/card/read-face 像素身份；正式 approved baseline 仍不存在。必须由人工审阅现状报告后显式批准，后续参数变化才可用同一身份闭包比较；私有真稿仍只在杭州记录哈希、评分和结论。
 
-- [ ] **建立渲染基线与可复现评测**
-  用 Git 内脱敏合成样片记录当前主线的几何、白盒边界、纸材、字体边缘、Alpha 光边、渲染耗时和首屏/原图差异；私有真稿只在杭州记录哈希、评分和结论。先留基线，再改参数。
-
-- [ ] **版本化渲染合同与能力矩阵**
-  在结构确认后、切面栅格前，由 `workers/packaging` 内部解析 family、几何、纸材、涂层、棚光、相机、采样和输出配置；合同进入缓存指纹和 `pipeline_result.json`。未知 family / profile 失败关闭，不按文件名、颜色或任务 ID 猜模型。
+- [ ] **RF-02：把版本化渲染合同接入产品流水线**
+  RF-01 只提供严格 registry、能力矩阵、canonical hash、解析/验证和兼容参数桥，没有改 `pipeline.py` 或 Blender。下一片在结构确认后、切面栅格前解析合同，并写入 resolved job、缓存指纹和 `pipeline_result.json`；新任务缺 spec 失败关闭，旧重渲显式合成 compat，未知 family / profile 不按文件名、颜色或任务 ID 猜模型。
 
 - [ ] **矩形花盒真实感内核**
   在现有 `render_job.py` 内按 family 分派几何；先把 `rectangular_carton` 做完整。外尺寸、六面 UV 和 GLB 验证不回退；纸板厚度、边缘、折角、接触影和轮廓高光使用物理毫米与声明的材质 profile，不能靠白盒专属滤镜补丁。
