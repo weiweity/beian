@@ -171,6 +171,59 @@ export type ComposeStudioOpts = {
   set?: SizedSource | null;
 };
 
+/** Versioned display transfer, not physical exposure or a change to source PNGs. */
+const STUDIO_TRANSFER_VERSION = "highlight-power-v1";
+
+export function highlightLut(light: number): Uint8ClampedArray {
+  const exponent = 1 / Math.max(1, clampStudioLight(light));
+  return Uint8ClampedArray.from({ length: 256 }, (_, value) => Math.round(255 * (value / 255) ** exponent));
+}
+
+export function protectStudioHighlights(data: Uint8ClampedArray, light: number): void {
+  const lut = highlightLut(light);
+  for (let index = 0; index < data.length; index += 4) {
+    data[index] = lut[data[index]];
+    data[index + 1] = lut[data[index + 1]];
+    data[index + 2] = lut[data[index + 2]];
+    // Keep coverage unchanged, including partially transparent box edges.
+  }
+}
+
+// One reusable scratch layer per destination, not a cache of full images for
+// every slider position. Preview work scales with its backing size; exports
+// process the original dimensions. Default/dimming paths stay unchanged.
+const transferLayers = new WeakMap<CanvasRenderingContext2D, HTMLCanvasElement>();
+
+function drawStudioLayer(
+  ctx: CanvasRenderingContext2D, source: SizedSource,
+  rect: { x: number; y: number; w: number; h: number },
+  light: number, product: boolean, filterSupported: boolean,
+): void {
+  const next = clampStudioLight(light);
+  if (next <= 1) {
+    ctx.filter = filterSupported ? (product ? stillsFilter(next) : next === 1 ? "none" : `brightness(${next})`) : "none";
+    ctx.drawImage(source as CanvasImageSource, rect.x, rect.y, rect.w, rect.h);
+    ctx.filter = "none";
+    return;
+  }
+  let layer = transferLayers.get(ctx);
+  if (!layer) {
+    layer = document.createElement("canvas");
+    transferLayers.set(ctx, layer);
+  }
+  layer.width = Math.max(1, Math.ceil(rect.w));
+  layer.height = Math.max(1, Math.ceil(rect.h));
+  const work = layer.getContext("2d", { willReadFrequently: true });
+  if (!work) throw new Error("这台浏览器不能进行高光保护调灯");
+  work.filter = product && filterSupported ? "contrast(1.04)" : "none";
+  work.drawImage(source as CanvasImageSource, 0, 0, layer.width, layer.height);
+  const pixels = work.getImageData(0, 0, layer.width, layer.height);
+  protectStudioHighlights(pixels.data, next);
+  work.putImageData(pixels, 0, 0);
+  ctx.filter = "none";
+  ctx.drawImage(layer, rect.x, rect.y, rect.w, rect.h);
+}
+
 export function composeStudioStill(
   ctx: CanvasRenderingContext2D,
   destW: number,
@@ -179,6 +232,7 @@ export function composeStudioStill(
   ground: SizedSource | null,
   opts: ComposeStudioOpts,
 ): void {
+  if (ctx.canvas) ctx.canvas.dataset.studioTransfer = STUDIO_TRANSFER_VERSION;
   // Backdrop fill → set still (white_set) or CSS wall + optional ground multiply → product.
   const preset = parseBackdropPreset(opts.backdrop ?? BACKDROP_DEFAULT);
   const productSize = product ? sourceSize(product) : { width: 0, height: 0 };
@@ -190,38 +244,27 @@ export function composeStudioStill(
   const srcH = productSize.height || setSize.height || groundSize.height;
   const rect = containRect(destW, destH, srcW, srcH);
   ctx.save();
+  try {
   ctx.filter = "none";
   ctx.globalCompositeOperation = "source-over";
   if (useSet) {
     ctx.fillStyle = studioBackdrop(opts.backgroundLight, preset);
     ctx.fillRect(0, 0, destW, destH);
-    const background = clampStudioLight(opts.backgroundLight);
-    if (background !== STUDIO_LIGHT_DEFAULT && opts.filterSupported !== false) {
-      ctx.filter = `brightness(${background})`;
-    }
-    ctx.drawImage(set as CanvasImageSource, rect.x, rect.y, rect.w, rect.h);
-    ctx.filter = "none";
+    drawStudioLayer(ctx, set!, rect, opts.backgroundLight, false, opts.filterSupported !== false);
   } else {
     paintStudioSet(ctx, destW, destH, preset, opts.backgroundLight);
     if (usesContactShadow(preset) && ground && groundSize.width && groundSize.height) {
-      const background = clampStudioLight(opts.backgroundLight);
-      if (background !== STUDIO_LIGHT_DEFAULT && opts.filterSupported !== false) {
-        ctx.filter = `brightness(${background})`;
-      }
       ctx.globalCompositeOperation = "multiply";
-      ctx.drawImage(ground as CanvasImageSource, rect.x, rect.y, rect.w, rect.h);
-      ctx.filter = "none";
+      drawStudioLayer(ctx, ground, rect, opts.backgroundLight, false, opts.filterSupported !== false);
       ctx.globalCompositeOperation = "source-over";
     }
   }
   if (product && productSize.width && productSize.height) {
-    if (opts.filterSupported !== false) {
-      ctx.filter = stillsFilter(opts.productLight);
-    }
-    ctx.drawImage(product as CanvasImageSource, rect.x, rect.y, rect.w, rect.h);
-    ctx.filter = "none";
+    drawStudioLayer(ctx, product, rect, opts.productLight, true, opts.filterSupported !== false);
   }
-  ctx.restore();
+  } finally {
+    ctx.restore();
+  }
 }
 
 let filterProbe: boolean | undefined;
@@ -276,9 +319,26 @@ export async function blobFromLitStill(
 
 const stillLoads = new Map<string, Promise<HTMLImageElement>>();
 
+/** A successful relight changes bytes without changing job id or file keys. */
+export function studioAssetHref(jobId: string, key: string, generation = "", download = false): string {
+  const base = `/api/mockups/${jobId}/files/${key}`;
+  const query = new URLSearchParams();
+  if (generation) query.set("generation", generation);
+  if (download) query.set("download", "1");
+  const suffix = query.toString();
+  return suffix ? `${base}?${suffix}` : base;
+}
+
 export function loadStillImage(url: string): Promise<HTMLImageElement> {
   const existing = stillLoads.get(url);
   if (existing) return existing;
+  // Relights reuse a logical asset: do not retain every decoded generation forever.
+  const [asset, query = ""] = url.split("?");
+  if (new URLSearchParams(query).has("generation")) {
+    for (const cached of stillLoads.keys()) {
+      if (cached.split("?")[0] === asset) stillLoads.delete(cached);
+    }
+  }
   const pending = (async () => {
     if (typeof Image === "undefined") {
       throw new Error("load");
@@ -289,11 +349,97 @@ export function loadStillImage(url: string): Promise<HTMLImageElement> {
     await image.decode();
     return image;
   })().catch((error) => {
-    stillLoads.delete(url);
+    if (stillLoads.get(url) === pending) stillLoads.delete(url);
     throw error;
   });
   stillLoads.set(url, pending);
   return pending;
+}
+
+type StudioSourceUrls = { full: string; card?: string };
+export type StudioPreviewSources = { product: HTMLImageElement; ground: HTMLImageElement; set: HTMLImageElement | null };
+
+/** Decode at source resolution. Cards are local, full images reuse the existing download cache. */
+export function loadStudioPreview(
+  urls: { product: StudioSourceUrls; ground: StudioSourceUrls; set: StudioSourceUrls | null },
+  publish: (sources: StudioPreviewSources) => void,
+  failed: () => void,
+  loadFull = loadStillImage,
+  loadCard = async (url: string) => {
+    const image = new Image();
+    image.crossOrigin = "anonymous";
+    image.src = url;
+    await image.decode();
+    return image;
+  },
+): () => void {
+  let cancelled = false;
+  async function initial(source: StudioSourceUrls): Promise<HTMLImageElement> {
+    if (source.card) {
+      try { return await loadCard(source.card); } catch { /* missing card: try full */ }
+    }
+    return loadFull(source.full);
+  }
+  void (async () => {
+    try {
+      const [product, ground, set] = await Promise.all([
+        initial(urls.product), initial(urls.ground),
+        urls.set ? initial(urls.set).catch(() => null) : Promise.resolve(null),
+      ]);
+      if (cancelled) return;
+      let sources = { product, ground, set };
+      publish(sources);
+      await Promise.all((["product", "ground", "set"] as const).map(async (key) => {
+        const source = urls[key];
+        if (!source?.card) return;
+        try {
+          const full = await loadFull(source.full);
+          if (cancelled) return;
+          sources = { ...sources, [key]: full };
+          publish(sources);
+        } catch { /* retain this layer's usable card; other layers may still upgrade */ }
+      }));
+    } catch { if (!cancelled) failed(); }
+  })();
+  return () => { cancelled = true; };
+}
+
+/** Observe the container, not just the viewport. DPR changes re-arm the resolution query. */
+export function observeStudioFrame(frame: HTMLElement, resized: (width: number, height: number) => void): () => void {
+  let raf = 0;
+  let stopped = false;
+  let lastWidth = 0;
+  let lastHeight = 0;
+  let media: MediaQueryList | undefined;
+  const measure = () => {
+    raf = 0;
+    if (stopped || !frame.clientWidth || !frame.clientHeight) return;
+    const dpr = window.devicePixelRatio || 1;
+    const width = Math.max(1, Math.round(frame.clientWidth * dpr));
+    const height = Math.max(1, Math.round(frame.clientHeight * dpr));
+    if (width === lastWidth && height === lastHeight) return;
+    lastWidth = width;
+    lastHeight = height;
+    resized(width, height);
+  };
+  const schedule = () => { if (!stopped && !raf) raf = requestAnimationFrame(measure); };
+  const watchDpr = () => {
+    media?.removeEventListener("change", watchDpr);
+    media = window.matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+    media.addEventListener("change", watchDpr);
+    schedule();
+  };
+  const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(schedule);
+  observer?.observe(frame);
+  window.addEventListener("resize", schedule);
+  watchDpr();
+  return () => {
+    stopped = true;
+    cancelAnimationFrame(raf);
+    observer?.disconnect();
+    media?.removeEventListener("change", watchDpr);
+    window.removeEventListener("resize", schedule);
+  };
 }
 
 export async function blobFromStudioStill(
