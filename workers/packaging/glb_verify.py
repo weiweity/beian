@@ -206,13 +206,23 @@ def _decode_png_rgba(payload: bytes) -> dict[str, Any]:
     if len(decompressed) != (stride + 1) * height:
         raise ValueError("PNG scanlines do not match its dimensions")
     rows: list[bytes] = []
-    previous = bytes(stride)
+    zero_row = bytes(stride)
+    previous = zero_row
     cursor = 0
     for _row in range(height):
         filter_type = decompressed[cursor]
         cursor += 1
         encoded = decompressed[cursor : cursor + stride]
         cursor += stride
+        # Exact PNG filter identities, independent of artwork colour or family.
+        # bytes comparison/copy runs in C instead of revisiting every channel in Python.
+        if filter_type == 0:
+            previous = encoded
+            rows.append(previous)
+            continue
+        if filter_type == 2 and encoded == zero_row:
+            rows.append(previous)
+            continue
         decoded = bytearray(stride)
         for column, value in enumerate(encoded):
             left = decoded[column - 4] if column >= 4 else 0
@@ -240,7 +250,7 @@ def _decode_png_rgba(payload: bytes) -> dict[str, Any]:
         "height": height,
         "pixel_sha256": hashlib.sha256(pixels).hexdigest(),
         "alpha_sha256": hashlib.sha256(alpha).hexdigest(),
-        "transparent_pixels": sum(value < 255 for value in alpha),
+        "transparent_pixels": len(alpha) - alpha.count(255),
     }
 
 
