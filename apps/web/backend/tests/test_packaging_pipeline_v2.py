@@ -1906,6 +1906,20 @@ def test_run_blender_job_v1_rejects_stale_blender_result_without_this_round_nonc
     assert "execution_nonce" not in job
 
 
+@pytest.mark.parametrize("warning", ["Shadow buffer full (2348 / 2048)", "错误：阴影缓冲满了，可能导致阴影缺失", "阴影缓冲区已满"])
+@pytest.mark.parametrize("stream", ["stdout", "stderr"])
+def test_blender_zero_exit_shadow_overflow_rejected(tmp_path, monkeypatch, warning, stream):
+    pipeline, job = prepare_v1_diagnostic_job(tmp_path, monkeypatch)
+    def fake_run(command, **kwargs):
+        assert command[command.index("--python-exit-code") + 1] == "1"
+        return subprocess.CompletedProcess(command, 0, warning if stream == "stdout" else "", warning if stream == "stderr" else "")
+    monkeypatch.setattr(pipeline.subprocess, "run", fake_run)
+    monkeypatch.setattr(pipeline, "write_review_cards", lambda *_: pytest.fail("must not publish cards"))
+    with pytest.raises(pipeline.PipelineError, match="render_shadow_pool_exhausted"):
+        pipeline.run_blender_job(job, tmp_path / "fake-blender")
+    assert warning in (Path(job["project_dir"]) / "blender.log").read_text()
+
+
 def test_run_blender_job_v1_accepts_this_round_nonce_result(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
