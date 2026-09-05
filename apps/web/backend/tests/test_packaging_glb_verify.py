@@ -5,6 +5,10 @@ from io import BytesIO
 import json
 from pathlib import Path
 import struct
+import hashlib
+import random
+import sys
+import zlib
 
 import pytest
 from PIL import Image
@@ -19,6 +23,84 @@ def glb_verify():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def _filtered_png(rows, filters):
+    def chunk(kind, data):
+        return struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data) & 0xffffffff)
+    previous = bytes(len(rows[0]))
+    raw = bytearray()
+    for row, f in zip(rows, filters, strict=True):
+        raw.append(f)
+        for x, value in enumerate(row):
+            left, up = (row[x-4] if x >= 4 else 0), previous[x]
+            corner = previous[x-4] if x >= 4 else 0
+            estimate = left + up - corner
+            distances = [abs(estimate-p) for p in (left, up, corner)]
+            paeth = (left, up, corner)[distances.index(min(distances))]
+            predictor = (0, left, up, (left+up)//2, paeth)[f]
+            raw.append((value-predictor) & 255)
+        previous = row
+    header = struct.pack('>IIBBBBB', len(rows[0])//4, len(rows), 8, 6, 0, 0, 0)
+    return b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', header) + chunk(b'IDAT', zlib.compress(raw)) + chunk(b'IEND', b'')
+
+
+@pytest.mark.parametrize('filter_type', range(5))
+def test_png_filters_match_exact_pixels_and_pillow(filter_type):
+    rng = random.Random(17)
+    rows = [rng.randbytes(37*4) for _ in range(6)]
+    rows += [rows[-1], rows[-1], bytes(37*4)]
+    payload = _filtered_png(rows, [filter_type]*len(rows))
+    pixels = b''.join(rows)
+    assert Image.open(BytesIO(payload)).tobytes() == pixels
+    report = glb_verify()._decode_png_rgba(payload)
+    assert report == dict(width=37, height=9,
+        pixel_sha256=hashlib.sha256(pixels).hexdigest(),
+        alpha_sha256=hashlib.sha256(pixels[3::4]).hexdigest(),
+        transparent_pixels=sum(v < 255 for v in pixels[3::4]))
+    damaged = bytearray(payload)
+    damaged[-1] ^= 1
+    with pytest.raises(ValueError, match='checksum'):
+        glb_verify()._decode_png_rgba(bytes(damaged))
+
+
+@pytest.mark.parametrize('filters', [[2], [2, 0, 2, 1, 2, 3, 0, 4, 2]])
+def test_png_fast_paths_preserve_state_across_first_and_mixed_rows(filters):
+    rng = random.Random(81)
+    rows = []
+    for filter_type in filters:
+        if filter_type == 2:
+            rows.append(rows[-1] if rows else bytes(4))
+        else:
+            rows.append(rng.randbytes(4))
+    payload = _filtered_png(rows, filters)
+    pixels = b''.join(rows)
+    assert Image.open(BytesIO(payload)).tobytes() == pixels
+    assert glb_verify()._decode_png_rgba(payload) == dict(
+        width=1, height=len(rows), pixel_sha256=hashlib.sha256(pixels).hexdigest(),
+        alpha_sha256=hashlib.sha256(pixels[3::4]).hexdigest(),
+        transparent_pixels=sum(value < 255 for value in pixels[3::4]),
+    )
+
+
+def test_repeated_up_rows_avoid_per_byte_python_loop():
+    module = glb_verify()
+    rows = [bytes([3, 128, 254, 255])*64]*24
+    payload = _filtered_png(rows, [0]+[2]*23)
+    events = 0
+    def trace(frame, event, arg):
+        nonlocal events
+        if event == 'line' and frame.f_code.co_filename == str(MODULE):
+            events += 1
+        return trace
+    previous_trace = sys.gettrace()
+    try:
+        sys.settrace(trace)
+        result = module._decode_png_rgba(payload)
+    finally:
+        sys.settrace(previous_trace)
+    assert result['pixel_sha256'] == hashlib.sha256(b''.join(rows)).hexdigest()
+    assert events < 3000, f'repeated rows used {events} Python line events'
 
 
 def test_axis_dimensions_pass_with_small_export_tolerance():
