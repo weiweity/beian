@@ -8,6 +8,7 @@ import hashlib
 import json
 import math
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -1764,6 +1765,7 @@ def run_blender_job(
             str(blender_executable),
             "--background",
             "--factory-startup",
+            "--python-exit-code", "1",
             "--python",
             str(BLENDER_SCRIPT),
             "--",
@@ -1773,6 +1775,10 @@ def run_blender_job(
         log_path.write_text(process.stdout + "\n" + process.stderr, encoding="utf-8")
         if process.returncode != 0:
             raise PipelineError(f"Blender任务失败：{job['code']}，日志={log_path}")
+        # EEVEE can return zero while dropping shadow pages. Never publish that
+        # output as successful; retain the complete log for resource diagnosis.
+        if re.search(r"shadow\s+buffer\s+full|阴影缓冲(?:区)?(?:已)?满", process.stdout + "\n" + process.stderr, re.IGNORECASE):
+            raise PipelineError(f"render_shadow_pool_exhausted: 阴影资源不足，请检查渲染预算；日志={log_path}")
         # 静帧保持 RGBA 产品层。白底由打样单合成；PPT/PDF 导出时再铺白。
         if bool(job.get("render", {}).get("exact_white_background", True)):
             for key in ("front_right", "back_left"):
