@@ -27,7 +27,9 @@ import {
   canvasFilterSupported,
   clampStudioLight,
   composeStudioStill,
-  containRect,
+  loadStudioPreview,
+  observeStudioFrame,
+  studioAssetHref,
   glbExposure,
   jobHasGround,
   jobHasReviewCard,
@@ -37,7 +39,6 @@ import {
   parseBackdropPreset,
   readBackdropPreset,
   reviewCardKey,
-  stillsFilter,
   studioBackdrop,
   writeBackdropPreset,
   type BackdropPreset,
@@ -109,9 +110,8 @@ function mockTitle(row: MockupJob) {
   return row.title || row.files[0]?.name || row.id.slice(0, 8);
 }
 
-function fileHref(jobId: string, key: string, download = false) {
-  const base = `/api/mockups/${jobId}/files/${key}`;
-  return download ? `${base}?download=1` : base;
+function fileHref(jobId: string, key: string, download = false, generation = "") {
+  return studioAssetHref(jobId, key, generation, download);
 }
 
 export function MockupDesk({
@@ -1130,6 +1130,7 @@ export function MockupJobPage({
       <div className={grounded ? "mockup-sheet-photos is-grounded" : "mockup-sheet-photos"}>
         {groundA && whiteA ? (
           <GroundedShot
+            generation={job.studio_relit_at || job.job_finished_at || ""}
             jobId={job.id}
             files={job.files}
             fileKey="white_a"
@@ -1147,6 +1148,8 @@ export function MockupJobPage({
           />
         ) : whiteA ? (
           <WhiteShot
+            key={`${job.id}:${job.studio_relit_at || job.job_finished_at || ""}:white_a`}
+            generation={job.studio_relit_at || job.job_finished_at || ""}
             jobId={job.id}
             fileKey="white_a"
             alt="正面与侧面白底"
@@ -1172,6 +1175,7 @@ export function MockupJobPage({
         )}
         {groundB && whiteB ? (
           <GroundedShot
+            generation={job.studio_relit_at || job.job_finished_at || ""}
             jobId={job.id}
             files={job.files}
             fileKey="white_b"
@@ -1189,6 +1193,8 @@ export function MockupJobPage({
           />
         ) : whiteB ? (
           <WhiteShot
+            key={`${job.id}:${job.studio_relit_at || job.job_finished_at || ""}:white_b`}
+            generation={job.studio_relit_at || job.job_finished_at || ""}
             jobId={job.id}
             fileKey="white_b"
             alt="反面与侧面白底"
@@ -1543,55 +1549,8 @@ function GlbShot({
 
 type PreviewSource = CanvasImageSource & { naturalWidth?: number; naturalHeight?: number; width?: number; height?: number };
 
-function closePreviewSource(image: PreviewSource | null | undefined): void {
-  if (!image) return;
-  if (typeof ImageBitmap !== "undefined" && image instanceof ImageBitmap) {
-    image.close();
-    return;
-  }
-  if (typeof HTMLImageElement !== "undefined" && image instanceof HTMLImageElement && image.src.startsWith("blob:")) {
-    URL.revokeObjectURL(image.src);
-  }
-}
-
-async function previewSource(url: string, destW: number, destH: number): Promise<PreviewSource> {
-  const response = await fetch(url);
-  if (!response.ok) throw new Error("load");
-  const blob = await response.blob();
-  if (typeof createImageBitmap === "function") {
-    const probe = await createImageBitmap(blob);
-    const rect = containRect(destW, destH, probe.width, probe.height);
-    const sized = await createImageBitmap(blob, {
-      resizeWidth: Math.max(1, Math.round(rect.w)),
-      resizeHeight: Math.max(1, Math.round(rect.h)),
-    });
-    probe.close();
-    return sized;
-  }
-  const image = new Image();
-  image.src = URL.createObjectURL(blob);
-  await image.decode();
-  return image;
-}
-
-async function previewStill(
-  jobId: string,
-  files: Array<{ key: string }> | undefined,
-  key: "white_a" | "white_b" | "white_a_ground" | "white_b_ground" | "white_a_set" | "white_b_set",
-  destW: number,
-  destH: number,
-): Promise<PreviewSource> {
-  if (jobHasReviewCard(files, key)) {
-    try {
-      return await previewSource(fileHref(jobId, reviewCardKey(key)), destW, destH);
-    } catch {
-      /* card missing or 415: full still is still on disk */
-    }
-  }
-  return previewSource(fileHref(jobId, key), destW, destH);
-}
-
 function GroundedShot({
+  generation,
   jobId,
   files,
   fileKey,
@@ -1608,6 +1567,7 @@ function GroundedShot({
   onError,
   lazy,
 }: {
+  generation: string;
   jobId: string;
   files?: Array<{ key: string }>;
   fileKey: "white_a" | "white_b";
@@ -1625,13 +1585,31 @@ function GroundedShot({
   lazy?: boolean;
 }) {
   const [bad, setBad] = useState(false);
-  const [ready, setReady] = useState(false);
+  const [ready, setReady] = useState(0);
+  const [frameSize, setFrameSize] = useState<[number, number]>([0, 0]);
   const [originalOpen, setOriginalOpen] = useState(false);
   const [visible, setVisible] = useState(!lazy);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const frameRef = useRef<HTMLDivElement>(null);
   const previewRef = useRef<{ product: PreviewSource; ground: PreviewSource; set: PreviewSource | null } | null>(null);
   const exporting = useRef(false);
+  const sourceIdentity = `${jobId}:${generation}:${fileKey}:${groundKey}:${(files || []).map((file) => file.key).sort().join(",")}`;
+
+  useEffect(() => {
+    setBad(false);
+    setOriginalOpen(false);
+    setReady(0);
+    previewRef.current = null;
+    if (canvasRef.current) {
+      canvasRef.current.width = 0;
+      canvasRef.current.height = 0;
+    }
+  }, [sourceIdentity]);
+
+  useEffect(() => {
+    if (!visible || bad || !frameRef.current) return;
+    return observeStudioFrame(frameRef.current, (width, height) => setFrameSize([width, height]));
+  }, [visible, bad]);
 
   useEffect(() => {
     if (!lazy || visible) return;
@@ -1649,69 +1627,36 @@ function GroundedShot({
 
   useEffect(() => {
     if (!visible || bad) return;
-    const canvas = canvasRef.current;
-    const frame = frameRef.current;
-    if (!canvas || !frame) return;
-    const dpr = window.devicePixelRatio || 1;
-    const destW = Math.max(1, Math.round(frame.clientWidth * dpr));
-    const destH = Math.max(1, Math.round(frame.clientHeight * dpr));
-    canvas.width = destW;
-    canvas.height = destH;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) {
-      setBad(true);
-      return;
-    }
-    ctx.fillStyle = studioBackdrop(backgroundLight, backdrop);
-    ctx.fillRect(0, 0, destW, destH);
-    setReady(false);
-    let cancelled = false;
-    void (async () => {
-      let product: PreviewSource | null = null;
-      let ground: PreviewSource | null = null;
-      let set: PreviewSource | null = null;
-      try {
-        const setKey = stillSetKey(fileKey);
-        [product, ground, set] = await Promise.all([
-          previewStill(jobId, files, fileKey, destW, destH),
-          previewStill(jobId, files, groundKey, destW, destH),
-          jobHasSet(files, fileKey)
-            ? previewStill(jobId, files, setKey, destW, destH).catch(() => null)
-            : Promise.resolve(null),
-        ]);
-        void loadStillImage(fileHref(jobId, fileKey));
-        void loadStillImage(fileHref(jobId, groundKey));
-        if (set) void loadStillImage(fileHref(jobId, setKey));
-        if (cancelled) {
-          closePreviewSource(product);
-          closePreviewSource(ground);
-          closePreviewSource(set);
-          return;
-        }
-        closePreviewSource(previewRef.current?.product);
-        closePreviewSource(previewRef.current?.ground);
-        closePreviewSource(previewRef.current?.set);
-        previewRef.current = { product, ground, set };
-        setReady(true);
-      } catch {
-        closePreviewSource(product);
-        closePreviewSource(ground);
-        closePreviewSource(set);
-        if (!cancelled) setBad(true);
-      }
-    })();
+    setReady(0);
+    const urls = (key: "white_a" | "white_b" | "white_a_ground" | "white_b_ground" | "white_a_set" | "white_b_set") => ({
+      full: fileHref(jobId, key, false, generation),
+      card: jobHasReviewCard(files, key) ? fileHref(jobId, reviewCardKey(key), false, generation) : undefined,
+    });
+    const cancel = loadStudioPreview({
+      product: urls(fileKey), ground: urls(groundKey),
+      set: jobHasSet(files, fileKey) ? urls(stillSetKey(fileKey)) : null,
+    }, (sources) => {
+      previewRef.current = sources;
+      setReady((value) => value + 1);
+    }, () => setBad(true));
     return () => {
-      cancelled = true;
+      cancel();
+      previewRef.current = null;
     };
-  }, [visible, bad, jobId, files, fileKey, groundKey]);
+  }, [visible, bad, sourceIdentity]);
 
   useEffect(() => {
     if (!visible || bad || !ready) return;
     const canvas = canvasRef.current;
     const sources = previewRef.current;
-    if (!canvas || !sources) return;
+    if (!canvas || !sources || !frameSize[0] || !frameSize[1]) return;
+    canvas.width = frameSize[0];
+    canvas.height = frameSize[1];
     const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    if (!ctx) { setBad(true); return; }
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    try {
     composeStudioStill(ctx, canvas.width, canvas.height, sources.product, sources.ground, {
       productLight,
       backgroundLight,
@@ -1719,16 +1664,8 @@ function GroundedShot({
       set: sources.set,
       filterSupported: canvasFilterSupported(ctx),
     });
-  }, [visible, bad, ready, productLight, backgroundLight, backdrop]);
-
-  useEffect(() => {
-    return () => {
-      closePreviewSource(previewRef.current?.product);
-      closePreviewSource(previewRef.current?.ground);
-      closePreviewSource(previewRef.current?.set);
-      previewRef.current = null;
-    };
-  }, []);
+    } catch { ctx.clearRect(0, 0, canvas.width, canvas.height); setBad(true); }
+  }, [visible, bad, ready, frameSize, productLight, backgroundLight, backdrop]);
 
   useEffect(() => {
     if (!originalOpen) return;
@@ -1745,10 +1682,10 @@ function GroundedShot({
     try {
       const setKey = stillSetKey(fileKey);
       const [product, ground, set] = await Promise.all([
-        loadStillImage(fileHref(jobId, fileKey)),
-        loadStillImage(fileHref(jobId, groundKey)),
+        loadStillImage(fileHref(jobId, fileKey, false, generation)),
+        loadStillImage(fileHref(jobId, groundKey, false, generation)),
         jobHasSet(files, fileKey)
-          ? loadStillImage(fileHref(jobId, setKey)).catch(() => null)
+          ? loadStillImage(fileHref(jobId, setKey, false, generation)).catch(() => null)
           : Promise.resolve(null),
       ]);
       const blob = await blobFromStudioStill(product, ground, { productLight, backgroundLight, backdrop, set });
@@ -1816,6 +1753,7 @@ function GroundedShot({
                   style={{ background: studioBackdrop(backgroundLight, backdrop) }}
                 >
                   <GroundedLightboxStill
+                    generation={generation}
                     jobId={jobId}
                     files={files}
                     fileKey={fileKey}
@@ -1851,6 +1789,7 @@ function GroundedShot({
 }
 
 function GroundedLightboxStill({
+  generation,
   jobId,
   files,
   fileKey,
@@ -1861,6 +1800,7 @@ function GroundedLightboxStill({
   backdrop,
   placeholder,
 }: {
+  generation: string;
   jobId: string;
   files?: Array<{ key: string }>;
   fileKey: "white_a" | "white_b";
@@ -1876,6 +1816,7 @@ function GroundedLightboxStill({
     placeholder || null,
   );
   const [loaded, setLoaded] = useState(placeholder ? 1 : 0);
+  const [paintError, setPaintError] = useState(false);
   useEffect(() => {
     if (placeholder && !sourcesRef.current) sourcesRef.current = placeholder;
     let cancelled = false;
@@ -1883,10 +1824,10 @@ function GroundedLightboxStill({
       try {
         const setKey = stillSetKey(fileKey);
         const [product, ground, set] = await Promise.all([
-          loadStillImage(fileHref(jobId, fileKey)),
-          loadStillImage(fileHref(jobId, groundKey)),
+          loadStillImage(fileHref(jobId, fileKey, false, generation)),
+          loadStillImage(fileHref(jobId, groundKey, false, generation)),
           jobHasSet(files, fileKey)
-            ? loadStillImage(fileHref(jobId, setKey)).catch(() => null)
+            ? loadStillImage(fileHref(jobId, setKey, false, generation)).catch(() => null)
             : Promise.resolve(null),
         ]);
         if (cancelled) return;
@@ -1899,7 +1840,7 @@ function GroundedLightboxStill({
     return () => {
       cancelled = true;
     };
-  }, [jobId, files, fileKey, groundKey, placeholder]);
+  }, [jobId, generation, files, fileKey, groundKey, placeholder]);
   useEffect(() => {
     const canvas = canvasRef.current;
     const sources = sourcesRef.current;
@@ -1909,6 +1850,7 @@ function GroundedLightboxStill({
     if (!canvas.width || !canvas.height) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
+    try {
     composeStudioStill(ctx, canvas.width, canvas.height, sources.product, sources.ground, {
       productLight,
       backgroundLight,
@@ -1916,8 +1858,10 @@ function GroundedLightboxStill({
       set: sources.set,
       filterSupported: canvasFilterSupported(ctx),
     });
+    setPaintError(false);
+    } catch { ctx.clearRect(0, 0, canvas.width, canvas.height); setPaintError(true); }
   }, [loaded, productLight, backgroundLight, backdrop]);
-  return <canvas ref={canvasRef} className="mockup-studio-lightbox-canvas" aria-label={alt} />;
+  return <>{paintError ? <p className="page-lead">调灯失败，请重新加载图片。</p> : null}<canvas ref={canvasRef} className="mockup-studio-lightbox-canvas" aria-label={alt} /></>;
 }
 
 function StudioLightSliders({
@@ -1968,6 +1912,7 @@ function StudioLightSliders({
 }
 
 function WhiteShot({
+  generation,
   jobId,
   fileKey,
   alt,
@@ -1980,6 +1925,7 @@ function WhiteShot({
   onBackgroundLight,
   onDownload,
 }: {
+  generation: string;
   jobId: string;
   fileKey: "white_a" | "white_b";
   alt: string;
@@ -1995,9 +1941,9 @@ function WhiteShot({
   const [bad, setBad] = useState(false);
   const [originalOpen, setOriginalOpen] = useState(false);
   const imgRef = useRef<HTMLImageElement>(null);
+  const [imageReady, setImageReady] = useState(false);
   const exporting = useRef(false);
   const fill = studioBackdrop(backgroundLight, backdrop);
-  const filter = stillsFilter(productLight);
 
   useEffect(() => {
     if (!originalOpen) return;
@@ -2034,13 +1980,17 @@ function WhiteShot({
         {bad ? (
           <p className="page-lead">这张白底图坏了，回到打样台重新打。</p>
         ) : (
+          <>
           <img
             ref={imgRef}
-            src={fileHref(jobId, fileKey)}
+            src={fileHref(jobId, fileKey, false, generation)}
             alt={alt}
             onError={() => setBad(true)}
-            style={{ filter }}
+            onLoad={() => setImageReady(true)}
+            style={{ display: "none" }}
           />
+          {imageReady && imgRef.current ? <LegacyLitCanvas image={imgRef.current} alt={alt} productLight={productLight} backgroundLight={backgroundLight} backdrop={backdrop} /> : null}
+          </>
         )}
         {bad ? null : (
           <>
@@ -2078,7 +2028,7 @@ function WhiteShot({
                   className={`mockup-still-lightbox-stage ${backdropFrameClass(backdrop)}`}
                   style={{ background: fill }}
                 >
-                  <img src={fileHref(jobId, fileKey)} alt={alt} style={{ filter }} />
+                  {imageReady && imgRef.current ? <LegacyLitCanvas image={imgRef.current} alt={alt} productLight={productLight} backgroundLight={backgroundLight} backdrop={backdrop} full /> : null}
                 </div>
                 <StudioLightSliders
                   productLight={productLight}
@@ -2101,4 +2051,31 @@ function WhiteShot({
         : null}
     </figure>
   );
+}
+
+function LegacyLitCanvas({ image, alt, productLight, backgroundLight, backdrop, full = false }: {
+  image: HTMLImageElement; alt: string; productLight: number; backgroundLight: number; backdrop: BackdropPreset; full?: boolean;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [size, setSize] = useState<[number, number]>([0, 0]);
+  const [error, setError] = useState(false);
+  useEffect(() => {
+    const frame = canvasRef.current?.parentElement;
+    if (!frame || full) return;
+    return observeStudioFrame(frame, (w, h) => setSize([w, h]));
+  }, [full]);
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    canvas.width = full ? image.naturalWidth : size[0];
+    canvas.height = full ? image.naturalHeight : size[1];
+    if (!canvas.width || !canvas.height) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) { setError(true); return; }
+    try {
+      composeStudioStill(ctx, canvas.width, canvas.height, image, null, { productLight, backgroundLight, backdrop, filterSupported: canvasFilterSupported(ctx) });
+      setError(false);
+    } catch { ctx.clearRect(0, 0, canvas.width, canvas.height); setError(true); }
+  }, [image, size, full, productLight, backgroundLight, backdrop]);
+  return <>{error ? <p className="page-lead">调灯失败，请重新加载图片。</p> : null}<canvas ref={canvasRef} className={full ? "mockup-studio-lightbox-canvas" : "mockup-studio-canvas"} aria-label={alt} /></>;
 }

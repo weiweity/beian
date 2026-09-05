@@ -22,9 +22,25 @@ import {
   usesContactShadow,
   STUDIO_GROUND_FILL,
   STUDIO_LIGHT_DEFAULT,
+  highlightLut,
+  protectStudioHighlights,
 } from "./mockupStudio.js";
 
 describe("mockup studio light", () => {
+  it("protects bright channels without changing alpha or clipping subwhite to white", () => {
+    const lut = highlightLut(1.4);
+    assert.equal(lut[0], 0);
+    assert.equal(lut[255], 255);
+    for (let i = 1; i < 255; i++) {
+      assert.ok(lut[i] >= i);
+      assert.ok(lut[i] >= lut[i - 1]);
+      assert.ok(lut[i] < 255);
+    }
+    const pixels = new Uint8ClampedArray([218, 240, 254, 127, 0, 32, 200, 0]);
+    protectStudioHighlights(pixels, 1.4);
+    assert.deepEqual([...pixels], [lut[218], lut[240], lut[254], 127, 0, lut[32], lut[200], 0]);
+    for (const light of [1, 0.6, NaN]) assert.deepEqual([...highlightLut(light)], Array.from({ length: 256 }, (_, i) => i));
+  });
   it("clamps product brightness and maps GLB exposure from the product slider", () => {
     assert.equal(clampStudioLight(1), 1);
     assert.equal(clampStudioLight(0), 0.6);
@@ -82,6 +98,79 @@ function fakeCtx() {
 }
 
 describe("composeStudioStill", () => {
+  it("fails closed when the highlight scratch canvas has no context", () => {
+    const original = Object.getOwnPropertyDescriptor(globalThis, "document");
+    Object.defineProperty(globalThis, "document", { configurable: true, value: { createElement: () => ({ getContext: () => null }) } });
+    try {
+      const ctx = fakeCtx();
+      assert.throws(() => composeStudioStill(ctx as unknown as CanvasRenderingContext2D, 10, 12, { width: 10, height: 12 }, null,
+        { productLight: 1.4, backgroundLight: 1, backdrop: "white" }), /不能进行高光保护调灯/);
+      assert.equal(ctx.calls.at(-1)?.[0], "restore");
+      assert.equal(ctx.calls.some((call) => call[0] === "drawImage"), false);
+    } finally {
+      if (original) Object.defineProperty(globalThis, "document", original);
+      else Reflect.deleteProperty(globalThis, "document");
+    }
+  });
+
+  it("applies background highlight transfer before product contrast with correct set and ground blending", () => {
+    const original = Object.getOwnPropertyDescriptor(globalThis, "document");
+    const drawn: Array<[string, string]> = [];
+    const transferred: number[][] = [];
+    const work = {
+      filter: "none",
+      drawImage(source: { id: string }) { drawn.push([source.id, this.filter]); },
+      getImageData: () => ({ data: new Uint8ClampedArray([218, 240, 254, 127]) }),
+      putImageData(pixels: { data: Uint8ClampedArray }) { transferred.push([...pixels.data]); },
+    };
+    Object.defineProperty(globalThis, "document", { configurable: true, value: { createElement: () => ({ id: "scratch", getContext: () => work }) } });
+    try {
+      const source = (id: string) => ({ id, width: 10, height: 12 });
+      for (const hasSet of [false, true]) {
+        const ctx = fakeCtx();
+        composeStudioStill(ctx as unknown as CanvasRenderingContext2D, 10, 12, source("product"), source("ground"),
+          { productLight: 1.4, backgroundLight: 1.4, backdrop: "white_set", set: hasSet ? source("set") : null, filterSupported: true });
+        const images = ctx.calls.filter((call) => call[0] === "drawImage");
+        assert.deepEqual(images.map((call) => call[7]), [hasSet ? "source-over" : "multiply", "source-over"]);
+        assert.ok(images.every((call) => call[6] === "none"), "destination must not brighten transferred pixels a second time");
+        assert.equal(ctx.calls.at(-1)?.[0], "restore");
+      }
+      assert.deepEqual(drawn, [["ground", "none"], ["product", "contrast(1.04)"], ["set", "none"], ["product", "contrast(1.04)"]]);
+      const lut = highlightLut(1.4);
+      assert.deepEqual(transferred, Array.from({ length: 4 }, () => [lut[218], lut[240], lut[254], 127]));
+    } finally {
+      if (original) Object.defineProperty(globalThis, "document", original);
+      else Reflect.deleteProperty(globalThis, "document");
+    }
+  });
+
+  it("uses the highlight curve even without native filters and preserves alpha", () => {
+    const old = Object.getOwnPropertyDescriptor(globalThis, "document");
+    const pixels = new Uint8ClampedArray([218, 240, 254, 127]);
+    let allocations = 0;
+    const work = { filter: "none", drawImage() {}, getImageData: () => ({ data: pixels }), putImageData() {} };
+    Object.defineProperty(globalThis, "document", { configurable: true, value: { createElement() { allocations++; return { width: 1, height: 1, getContext: () => work }; } } });
+    try {
+      const ctx = fakeCtx();
+      for (let n = 0; n < 2; n++) composeStudioStill(ctx as unknown as CanvasRenderingContext2D, 1, 1, { width: 1, height: 1 }, null, { productLight: 1.4, backgroundLight: 1, filterSupported: false, backdrop: "white" });
+      assert.equal(allocations, 1);
+      assert.ok(pixels[0] > 218 && pixels[0] < 255);
+      assert.equal(pixels[3], 127);
+      assert.equal(work.filter, "none");
+    } finally { if (old) Object.defineProperty(globalThis, "document", old); else Reflect.deleteProperty(globalThis, "document"); }
+  });
+
+  it("rejects unreadable pixels and restores compositor state rather than exporting clipped fallback", () => {
+    const old = Object.getOwnPropertyDescriptor(globalThis, "document");
+    Object.defineProperty(globalThis, "document", { configurable: true, value: { createElement() { return { getContext: () => ({ drawImage() {}, getImageData() { throw new Error("tainted"); } }) }; } } });
+    try {
+      const ctx = fakeCtx();
+      assert.throws(() => composeStudioStill(ctx as unknown as CanvasRenderingContext2D, 1, 1, { width: 1, height: 1 }, null, { productLight: 1.4, backgroundLight: 1 }), /tainted/);
+      assert.equal(ctx.calls.at(-1)?.[0], "restore");
+      assert.equal(ctx.calls.some(c => c[0] === "drawImage"), false);
+    } finally { if (old) Object.defineProperty(globalThis, "document", old); else Reflect.deleteProperty(globalThis, "document"); }
+  });
+
   it("contains 3000×3600 into a 3:4 dest without stretching", () => {
     assert.deepEqual(containRect(600, 800, 3000, 3600), { x: 0, y: 40, w: 600, h: 720 });
   });
@@ -132,7 +221,7 @@ describe("composeStudioStill", () => {
       800,
       { id: "product", naturalWidth: 3000, naturalHeight: 3600 },
       { id: "ground", naturalWidth: 3000, naturalHeight: 3600 },
-      { productLight: 1.2, backgroundLight: 0.6, filterSupported: false },
+      { productLight: 0.8, backgroundLight: 0.6, filterSupported: false },
     );
     const images = ctx.calls.filter((call) => call[0] === "drawImage");
     assert.equal(images.length, 2);
