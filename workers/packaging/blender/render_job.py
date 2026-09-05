@@ -418,6 +418,43 @@ def render_view_pair(scene, camera, job, yaw_rad, product_key, ground_key, set_k
 
 
 
+def apply_studio_contract(scene, job, lights):
+    """Consume the resolved, versioned F contract; legacy jobs keep their rig."""
+    config = job["render"]
+    pool = config.get("shadow_pool_size_mb")
+    if pool is not None:
+        eevee = getattr(scene, "eevee", None)
+        if eevee is None or not hasattr(eevee, "shadow_pool_size"):
+            raise RuntimeError("render_resource_unsupported: EEVEE shadow pool unavailable")
+        try:
+            eevee.shadow_pool_size = str(pool)
+        except Exception as error:
+            raise RuntimeError("render_resource_unsupported: shadow pool rejected") from error
+        if eevee.shadow_pool_size != str(pool):
+            raise RuntimeError("render_resource_unsupported: shadow pool not applied")
+    if config.get("studio_profile") != "normalized-three-area-f-v1":
+        return
+    dims = job["dimensions_mm"]
+    scale = max(float(dims[k]) for k in ("width", "depth", "height")) / config["rig_reference_mm"]
+    target = Vector((0, 0, float(dims["height"]) / 2))
+    reference = Vector((0, 0, config["rig_reference_mm"] / 2))
+    for light in lights:
+        light.location = target + scale * (light.location - reference)
+        light.data.size *= scale
+        if light.data.shape in {"RECTANGLE", "ELLIPSE"}:
+            light.data.size_y *= scale
+        light.data.energy *= scale * scale
+        look_at(light, target)
+    key, fill, _rim = lights
+    fill.data.energy *= config["fill_energy_multiplier"]
+    offset = key.location - target
+    distance = offset.length
+    azimuth = math.atan2(offset.y, offset.x)
+    elevation = math.atan2(offset.z, math.hypot(offset.x, offset.y)) + math.radians(config["key_elevation_delta_deg"])
+    key.location = target + Vector((distance * math.cos(elevation) * math.cos(azimuth), distance * math.cos(elevation) * math.sin(azimuth), distance * math.sin(elevation)))
+    look_at(key, target)
+
+
 def add_studio(job):
     scene = bpy.context.scene
     render_config = job["render"]
@@ -503,6 +540,7 @@ def add_studio(job):
     rim.data.size = 70
     rim.data.shape = "RECTANGLE"
     look_at(rim, (0, 0, 90))
+    apply_studio_contract(scene, job, (key, fill, rim))
 
     dims = job["dimensions_mm"]
     width = float(dims["width"])

@@ -336,8 +336,13 @@ def _duplicate_safe_json(raw: bytes, path: Path) -> Any:
 
 def _normalize_renderer(value: Any, label: str) -> dict[str, Any]:
     renderer = _mapping(value, label)
-    _known_keys(renderer, {"engine", "minimum_blender_version", "samples"}, label)
+    _known_keys(renderer, {"engine", "minimum_blender_version", "samples", "shadow_pool_size_mb"}, label)
+    resources = {}
+    if "shadow_pool_size_mb" in renderer:
+        pool = _integer(renderer["shadow_pool_size_mb"], f"{label}.shadow_pool_size_mb", lower=1024, upper=1024)
+        resources["shadow_pool_size_mb"] = pool
     return {
+        **resources,
         "engine": _text(
             renderer.get("engine"),
             f"{label}.engine",
@@ -529,6 +534,7 @@ def _normalize_studio(value: Any, label: str) -> dict[str, Any]:
             "world_strength",
             "light_energy_scale",
             "exact_white_background",
+            "rig_reference_mm", "fill_energy_multiplier", "key_elevation_delta_deg",
         },
         label,
     )
@@ -549,11 +555,19 @@ def _normalize_studio(value: Any, label: str) -> dict[str, Any]:
         )
     else:
         camera_scale = None
+    rig = {}
+    rig_fields = {"rig_reference_mm": 180.0, "fill_energy_multiplier": 0.35, "key_elevation_delta_deg": -15.0}
+    if studio.get("profile") == "normalized-three-area-f-v1":
+        for key, expected in rig_fields.items():
+            rig[key] = _number(studio.get(key), f"{label}.{key}", lower=expected, upper=expected)
+    elif any(key in studio for key in rig_fields):
+        _invalid("旧灯光不得携带 F 参数", field=label)
     return {
+        **rig,
         "profile": _text(
             studio.get("profile"),
             f"{label}.profile",
-            allowed={"legacy-fixed-three-area-v0", "three-softbox-no-hdri-v1"},
+            allowed={"legacy-fixed-three-area-v0", "three-softbox-no-hdri-v1", "normalized-three-area-f-v1"},
         ),
         "projection": _text(
             studio.get("projection"), f"{label}.projection", allowed={"ORTHOGRAPHIC"}
@@ -769,6 +783,8 @@ def _normalize_profile(
         "sampling": _normalize_sampling(profile.get("sampling"), f"{label}.sampling"),
         "outputs": _normalize_outputs(profile.get("outputs"), f"{label}.outputs"),
     }
+    if payload["studio"]["profile"] == "normalized-three-area-f-v1" and payload["renderer"].get("shadow_pool_size_mb") != 1024:
+        _invalid("F 灯光必须显式声明 1024 MB 阴影池", field=f"{label}.renderer")
     expected = canonical_sha256(payload)
     if verify_declared:
         declared = _hash_identity(
@@ -1068,7 +1084,7 @@ def _spec_renderer(
     renderer = _mapping(value, "spec.renderer")
     _known_keys(
         renderer,
-        {"engine", "minimum_blender_version", "samples", "profile", "profile_sha256"},
+        {"engine", "minimum_blender_version", "samples", "profile", "profile_sha256", "shadow_pool_size_mb"},
         "spec.renderer",
     )
     profile_id = _identifier(renderer.get("profile"), "spec.renderer.profile")
@@ -1082,6 +1098,7 @@ def _spec_renderer(
             "engine": renderer.get("engine"),
             "minimum_blender_version": renderer.get("minimum_blender_version"),
             "samples": renderer.get("samples"),
+            **({"shadow_pool_size_mb": renderer["shadow_pool_size_mb"]} if "shadow_pool_size_mb" in renderer else {}),
         },
         "spec.renderer",
     )
@@ -1113,6 +1130,7 @@ def _spec_shots(value: Any, profile: Mapping[str, Any]) -> dict[str, Any]:
             "world_strength",
             "light_energy_scale",
             "exact_white_background",
+            "rig_reference_mm", "fill_energy_multiplier", "key_elevation_delta_deg",
         },
         "spec.shots",
     )
@@ -1243,6 +1261,26 @@ def render_contract_sha256(spec: Mapping[str, Any]) -> str:
     return canonical_sha256(_semantic_contract_payload(spec))
 
 
+def _registry_for_persisted_identity(registry_hash: str, current: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Only a source-controlled, byte-pinned historical registry can be replayed.
+
+    Never choose a path from job data or silently re-sign a persisted contract.
+    Current registry must still contain all historical visual identities.
+    """
+    if registry_hash == current["registry_sha256"]:
+        return current
+    trusted_hash = "sha256:38ee501b794e9979a8ab06f2e0e1a476271ea9c7897c41eed3460d0f0acfc77b"
+    if registry_hash != trusted_hash:
+        _invalid("spec.registry_sha256 未在受信任历史中登记", field="spec.registry_sha256")
+    historical = load_profile_registry(DEFAULT_REGISTRY_PATH.parent / "history" / "pre-f.v1.json")
+    if historical["registry_sha256"] != trusted_hash:
+        _invalid("历史 registry 字节身份不一致", field="spec.registry_sha256")
+    for profile_id, profile in historical["profiles"].items():
+        if current["profiles"].get(profile_id) != profile:
+            _invalid("当前 registry 不再兼容历史视觉身份", field="registry.profiles", profile_id=profile_id)
+    return historical
+
+
 def _validate_render_spec_with_registry(
     value: Mapping[str, Any],
     registry: Mapping[str, Any],
@@ -1273,13 +1311,7 @@ def _validate_render_spec_with_registry(
         spec.get("source"), "spec.source", allowed=set(RENDER_SPEC_SOURCES)
     )
     registry_hash = _hash_identity(spec.get("registry_sha256"), "spec.registry_sha256")
-    if registry_hash != registry["registry_sha256"]:
-        _invalid(
-            "spec.registry_sha256 与 registry 原始字节身份不一致",
-            field="spec.registry_sha256",
-            expected=registry["registry_sha256"],
-            actual=registry_hash,
-        )
+    registry = _registry_for_persisted_identity(registry_hash, registry)
     renderer, profile = _spec_renderer(spec.get("renderer"), registry)
     geometry = _spec_geometry(spec.get("geometry"), profile)
     material = _normalize_material(spec.get("material"), "spec.material")
@@ -1511,6 +1543,12 @@ def _renderer_config_from_normalized(normalized: Mapping[str, Any]) -> dict[str,
     }
     if shots["camera_ortho_scale_mm"] is not None:
         result["camera_ortho_scale_mm"] = shots["camera_ortho_scale_mm"]
+    if shots["studio_profile"] == "normalized-three-area-f-v1":
+        result["studio_profile"] = shots["studio_profile"]
+        for key in ("rig_reference_mm", "fill_energy_multiplier", "key_elevation_delta_deg"):
+            result[key] = shots[key]
+    if "shadow_pool_size_mb" in normalized["renderer"]:
+        result["shadow_pool_size_mb"] = normalized["renderer"]["shadow_pool_size_mb"]
     return result
 
 

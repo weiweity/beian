@@ -71,7 +71,7 @@ def assert_error(contract, code: str, call) -> None:
     }
 
 
-def test_registry_loads_three_strict_profiles_and_capability_matrix():
+def test_registry_loads_strict_profiles_and_capability_matrix():
     contract = contract_module()
     registry = contract.load_profile_registry()
 
@@ -81,6 +81,7 @@ def test_registry_loads_three_strict_profiles_and_capability_matrix():
         "compat-legacy-v0",
         "packshot-neutral-v1",
         "smoke-v1",
+        "packshot-f-v1",
     ]
     assert all(
         profile["profile_sha256"] == contract.profile_declared_sha256(profile)
@@ -92,6 +93,7 @@ def test_registry_loads_three_strict_profiles_and_capability_matrix():
         "compat-legacy-v0",
         "packshot-neutral-v1",
         "smoke-v1",
+        "packshot-f-v1",
     ]
     assert matrix["pouch_thin_card_v1"] == [
         {
@@ -103,6 +105,115 @@ def test_registry_loads_three_strict_profiles_and_capability_matrix():
         }
     ]
     assert "flexible_pouch_v1" not in matrix
+
+
+def test_pinned_historical_spec_replays_without_resigning():
+    contract = contract_module()
+    historical = REGISTRY_PATH.parent / "history" / "pre-f.v1.json"
+    spec = contract.resolve_render_spec(carton_job(), "compat-legacy-v0", registry_path=historical)
+    before = deepcopy(spec)
+    assert contract.validate_render_spec(spec) == before
+    assert spec == before
+    current = contract.resolve_render_spec(carton_job(), "compat-legacy-v0")
+    assert current["registry_sha256"] != before["registry_sha256"]
+
+
+def test_historical_registry_cannot_authorize_new_f_profile():
+    contract = contract_module()
+    spec = contract.resolve_render_spec(carton_job(), "packshot-f-v1")
+    spec["registry_sha256"] = "sha256:38ee501b794e9979a8ab06f2e0e1a476271ea9c7897c41eed3460d0f0acfc77b"
+    spec["render_contract_hash"] = contract.render_contract_sha256(spec)
+    assert_error(contract, "render_profile_unsupported", lambda: contract.validate_render_spec(spec))
+
+
+@pytest.mark.parametrize("change", ["unknown_hash", "profile_hash", "material", "flat_render"])
+def test_historical_spec_tampering_still_rejected(change):
+    contract = contract_module()
+    spec = contract.resolve_render_spec(carton_job(), "compat-legacy-v0", registry_path=REGISTRY_PATH.parent / "history" / "pre-f.v1.json")
+    if change == "unknown_hash":
+        spec["registry_sha256"] = "sha256:" + "f" * 64
+    elif change == "profile_hash":
+        spec["renderer"]["profile_sha256"] = "sha256:" + "f" * 64
+    elif change == "material":
+        spec["material"]["roughness"] = 0.99
+    else:
+        render = contract.current_renderer_config(spec)
+        render["light_energy_scale"] = 0
+        assert_error(contract, "render_contract_invalid", lambda: contract._assert_job_render_matches_spec({"render": render}, spec))
+        return
+    spec["render_contract_hash"] = contract.render_contract_sha256(spec)
+    assert_error(contract, "render_contract_invalid", lambda: contract.validate_render_spec(spec))
+
+
+def test_historical_file_tamper_and_current_profile_drift_rejected(monkeypatch):
+    contract = contract_module()
+    current = contract.load_profile_registry()
+    historical = contract.load_profile_registry(REGISTRY_PATH.parent / "history" / "pre-f.v1.json")
+    pinned = historical["registry_sha256"]
+    bad = deepcopy(historical)
+    bad["registry_sha256"] = "sha256:" + "f" * 64
+    monkeypatch.setattr(contract, "load_profile_registry", lambda *_: bad)
+    assert_error(contract, "render_contract_invalid", lambda: contract._registry_for_persisted_identity(pinned, current))
+    monkeypatch.setattr(contract, "load_profile_registry", lambda *_: historical)
+    current["profiles"]["compat-legacy-v0"]["material"]["roughness"] = 0.99
+    assert_error(contract, "render_contract_invalid", lambda: contract._registry_for_persisted_identity(pinned, current))
+
+
+def test_f_profile_is_explicit_hash_bound_and_preserves_legacy():
+    contract = contract_module()
+    registry = contract.load_profile_registry()
+    assert registry["profiles"]["compat-legacy-v0"]["profile_sha256"] == "sha256:abf8256356f1d6d7b780411cc9210a195e1253ae304e0aceb1bcba0fe672aab4"
+    spec = contract.resolve_render_spec(carton_job(), "packshot-f-v1", {})
+    flat = contract.current_renderer_config(spec)
+    assert flat["studio_profile"] == "normalized-three-area-f-v1"
+    assert flat["shadow_pool_size_mb"] == 1024
+    assert flat["rig_reference_mm"] == 180
+    assert flat["fill_energy_multiplier"] == 0.35
+    assert flat["key_elevation_delta_deg"] == -15
+    legacy = contract.current_renderer_config(contract.resolve_render_spec(carton_job(), "compat-legacy-v0", {}))
+    assert "shadow_pool_size_mb" not in legacy and "studio_profile" not in legacy
+    assert_error(contract, "render_profile_unsupported", lambda: contract.resolve_render_spec(pouch_job(), "packshot-f-v1", {}))
+
+
+@pytest.mark.parametrize("section,key", [("renderer", "shadow_pool_size_mb"), ("shots", "rig_reference_mm"), ("shots", "fill_energy_multiplier"), ("shots", "key_elevation_delta_deg")])
+@pytest.mark.parametrize("missing", [False, True])
+def test_f_spec_rejects_mutated_or_missing_parameters(section, key, missing):
+    contract = contract_module()
+    spec = contract.resolve_render_spec(carton_job(), "packshot-f-v1", {})
+    if missing:
+        del spec[section][key]
+    else:
+        spec[section][key] = 0
+    spec["render_contract_hash"] = contract.render_contract_sha256(spec)
+    assert_error(contract, "render_contract_invalid", lambda: contract.validate_render_spec(spec))
+
+
+def test_f_registry_requires_shadow_budget():
+    contract = contract_module()
+    profile = registry_payload()["profiles"][-1]
+    del profile["renderer"]["shadow_pool_size_mb"]
+    assert_error(contract, "render_contract_invalid", lambda: contract.profile_declared_sha256(profile))
+
+
+@pytest.mark.parametrize("key", ["studio_profile", "shadow_pool_size_mb", "rig_reference_mm", "fill_energy_multiplier", "key_elevation_delta_deg"])
+@pytest.mark.parametrize("missing", [False, True])
+def test_f_flat_render_cannot_disagree_with_spec(key, missing):
+    contract = contract_module()
+    spec = contract.resolve_render_spec(carton_job(), "packshot-f-v1", {})
+    render = contract.current_renderer_config(spec)
+    if missing:
+        del render[key]
+    else:
+        render[key] = "legacy" if key == "studio_profile" else 1
+    assert_error(contract, "render_contract_invalid", lambda: contract._assert_job_render_matches_spec({"render": render}, spec))
+
+
+def test_f_new_plan_has_different_cache_token_without_changing_default():
+    contract = contract_module()
+    legacy = contract.render_plan_for_new_job(carton_job(), "compat-legacy-v0")
+    candidate = contract.render_plan_for_new_job(carton_job(), "packshot-f-v1")
+    assert legacy["fingerprint_token"] != candidate["fingerprint_token"]
+    assert json.loads(CURRENT_TEMPLATE.read_text()).get("render_profile_id", "compat-legacy-v0") == "compat-legacy-v0"
 
 
 def test_resolve_carton_uses_only_accepted_structure_dimensions_and_is_canonical():
