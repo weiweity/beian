@@ -29,6 +29,7 @@
   继续无 HDRI 的可复现三灯棚；灯位、软箱尺寸、相机与世界强度按成盒尺寸归一。用合成白盒验证产品/背景亮度分离、边缘连续和接触影。`Standard`、`Khronos PBR Neutral`、`AgX` 先 A/B，再由金标冻结，不凭模型偏好直接替换。
 
 - [ ] **端到端字体清晰度修复**
+  预览容器尺寸同步、卡图→全图原位升级、失败保留卡图、同单重渲缓存切代及高光保护进入共用合成器与旧单。历史合成证据见 `docs/designs/packaging-quality-rfe02-browser-findings.md` 和 `docs/designs/packaging-quality-highlight-transfer.md`；不将原大工作树的测试数字当成本批独立运行结果。这些预览改动不代表端到端字体清晰度或真实稿验收完成。
   F 已追加为显式可选的版本化 profile，包含阴影资源预算、零退出码阴影溢出拒绝及受信任历史 registry 回放；默认未切换。合同与历史证据见 `docs/designs/packaging-quality-f-contract.md`；不代表 RF-03+、字体清晰度或生产验收完成。
   把 PDF→切面→Blender 纹理→全尺寸静帧→1440 卡→浏览器 canvas 的每次采样写入报告；切面像素密度由相机投影需求反推并受现有像素预算保护。首屏允许卡图，但全图加载后必须原位升级为全尺寸来源；预览只做一次高质量缩放，下载继续使用全尺寸。3D 仍用于看形，`read_*` 印刷面仍是验字事实源。
 
