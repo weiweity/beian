@@ -156,7 +156,7 @@ def _artifact_accessor(artifact: GlbArtifact, index: object, kind: str) -> list[
     return values
 
 
-def _artifact_mesh(artifact: GlbArtifact, node: Mapping[str, Any], world: Sequence[float]) -> dict[str, Any]:
+def _artifact_mesh(artifact: GlbArtifact, node: Mapping[str, Any], world: Sequence[float], *, shell: bool = False) -> dict[str, Any]:
     doc = artifact.document
     mesh = _runtime_row(doc.get("meshes"), node.get("mesh"))
     primitives = mesh.get("primitives")
@@ -204,11 +204,11 @@ def _artifact_mesh(artifact: GlbArtifact, node: Mapping[str, Any], world: Sequen
         # convenient UV corners among degenerate/unreferenced vertices.
         uv_triangles = [[uvs[i] for i in indexes[n:n+3]] for n in range(0, len(indexes), 3)]
         signed = [((b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]))/2 for a,b,c in uv_triangles]
-        if (len(signed) != 2 or abs(abs(sum(signed))-1) > 1e-4 or any(abs(v) < 0.49 for v in signed)):
+        if not shell and (len(signed) != 2 or abs(abs(sum(signed))-1) > 1e-4 or any(abs(v) < 0.49 for v in signed)):
             raise ValueError("incomplete artwork triangles")
         edges = Counter(tuple(sorted((tuple(a), tuple(b)))) for tri in uv_triangles for a,b in zip(tri, tri[1:]+tri[:1]))
         shared = [edge for edge, count in edges.items() if count == 2]
-        if (len(shared) != 1 or any(abs(shared[0][0][i]-shared[0][1][i]) < 0.99 for i in (0,1))):
+        if not shell and (len(shared) != 1 or any(abs(shared[0][0][i]-shared[0][1][i]) < 0.99 for i in (0,1))):
             raise ValueError("artwork triangles do not share a diagonal")
     elif not name.endswith("_box_core"):
         raise ValueError("unexpected visible mesh")
@@ -220,6 +220,8 @@ def _artifact_mesh(artifact: GlbArtifact, node: Mapping[str, Any], world: Sequen
 def compare_glb_artifact_contract(
     artifact: GlbArtifact, expected_assets: Mapping[str, object],
     dimensions_mm: Mapping[str, float], tolerance_mm: float, substrate_rgba: Sequence[float],
+    *, geometry: Mapping[str, Any] | None = None,
+    render_identity: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Verify the static exported box directly, without bpy or worker measurements.
 
@@ -227,6 +229,12 @@ def compare_glb_artifact_contract(
     subset. Unsupported geometry fails closed, never passes as an empty scene.
     """
     try:
+        shell = bool(geometry and geometry.get("closure_detail") == "closed-carton-shell-v1")
+        if geometry and (geometry.get("family") not in {"rectangular_carton_v1", "pouch_thin_card_v1"}
+                         or (shell and geometry.get("family") != "rectangular_carton_v1")):
+            raise ValueError("unsupported artifact geometry family")
+        if shell and (not render_identity or not render_identity.get("render_profile_id") or not render_identity.get("render_contract_hash")):
+            raise ValueError("shell verification requires trusted render identity")
         dims = _finite_vector([dimensions_mm[k] for k in AXIS_TO_DIMENSION], 3)
         if min(dims) <= 0 or not math.isfinite(tolerance_mm) or not 0 < tolerance_mm < min(dims):
             raise ValueError("invalid dimension tolerance")
@@ -269,7 +277,13 @@ def compare_glb_artifact_contract(
             seen.add(index)
             world = _matrix_product(parent, _node_matrix(node))
             if "mesh" in node:
-                meshes.append(_artifact_mesh(artifact, node, world))
+                if shell:
+                    expected_metadata = {"render_family": geometry["family"], "geometry_model": geometry["closure_detail"],
+                                         "render_profile_id": render_identity["render_profile_id"], "render_contract_hash": render_identity["render_contract_hash"]}
+                    extras = node.get("extras", {})
+                    if any(extras.get(key) != value for key,value in expected_metadata.items()):
+                        raise ValueError("shell metadata does not match trusted render identity")
+                meshes.append(_artifact_mesh(artifact, node, world, shell=shell))
                 if len(meshes) > 7:
                     raise ValueError("mesh budget exceeded")
             children = node.get("children", [])
@@ -292,14 +306,14 @@ def compare_glb_artifact_contract(
         planes = {"front": (1,0), "back": (1,1), "right": (0,1), "left": (0,0), "top": (2,1), "bottom": (2,0)}
         for face, samples in surfaces.items():
             axis, side = planes[face]
-            if any(abs(s["position"][axis]-bounds[axis][side])*1000 > tolerance_mm for s in samples):
+            if not shell and any(abs(s["position"][axis]-bounds[axis][side])*1000 > tolerance_mm for s in samples):
                 raise ValueError("artwork detached from core boundary")
         points = [p for mesh in meshes for p in mesh["points"]]
         spans = [max(p[i] for p in points)-min(p[i] for p in points) for i in range(3)]
         reports = {
             "dimensions": compare_glb_dimensions(spans, dimensions_mm, tolerance_mm),
-            "surface": compare_glb_surface_contract(surfaces, dimensions_mm, tolerance_mm),
-            "core": compare_glb_core_contract(cores, dimensions_mm, tolerance_mm),
+            "surface": compare_glb_surface_contract(surfaces, dimensions_mm, tolerance_mm, geometry=geometry),
+            "core": compare_glb_core_contract(cores, dimensions_mm, tolerance_mm, geometry=geometry),
             "material": compare_glb_material_contract(artifact, expected_assets, substrate_rgba),
         }
         return {"ok": all(r["ok"] for r in reports.values()), **reports}
@@ -674,8 +688,12 @@ def compare_glb_surface_contract(
     tolerance_mm: float,
     *,
     uv_tolerance: float = 1e-4,
+    geometry: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Verify UV direction and mirror state after importing the exported GLB."""
+    if geometry and geometry.get("closure_detail") == "closed-carton-shell-v1":
+        from render_geometry import compare_shell_surfaces
+        return compare_shell_surfaces(surfaces, dimensions_mm, geometry)
     expected = {
         "front": (float(dimensions_mm["width"]), float(dimensions_mm["height"])),
         "back": (float(dimensions_mm["width"]), float(dimensions_mm["height"])),
@@ -805,8 +823,12 @@ def compare_glb_core_contract(
     core_objects: Sequence[Mapping[str, Any]],
     dimensions_mm: Mapping[str, float],
     tolerance_mm: float,
+    *, geometry: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Verify one opaque core spans and physically backs every box boundary."""
+    if geometry and geometry.get("closure_detail") == "closed-carton-shell-v1":
+        from render_geometry import compare_shell_core
+        return compare_shell_core(core_objects, dimensions_mm, geometry)
     errors: list[dict[str, Any]] = []
     if len(core_objects) != 1:
         return {

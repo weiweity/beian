@@ -568,7 +568,9 @@ def test_runtime_applies_parent_matrix_and_child_trs(tmp_path):
 
 
 @pytest.mark.skipif(os.environ.get("BEIAN_TEST_BLENDER_EXPORT") != "1", reason="explicit local synthetic Blender export check")
-def test_runtime_reads_actual_blender_export_without_rendering(tmp_path):
+@pytest.mark.parametrize("model", ["legacy", "shell", "pouch"])
+def test_runtime_reads_actual_blender_export_without_rendering(tmp_path, model):
+    physical = model == "shell"
     blender = shutil.which("blender")
     assert blender, "explicit export check needs Blender"
     module = glb_verify()
@@ -577,6 +579,13 @@ def test_runtime_reads_actual_blender_export_without_rendering(tmp_path):
         "assets": assets, "dimensions_mm": {"width": 30, "depth": 20, "height": 50},
         "glb_tolerance_mm": 0.5, "render": {"substrate_rgba": [1,1,1,1]},
         "outputs": {"glb": str(tmp_path / "actual.glb"), "blend": str(tmp_path / "actual.blend")}}
+    geometry = {"family": "rectangular_carton_v1", "closure_detail": "closed-carton-shell-v1", "preview_fidelity": "carton_physical_v1"}
+    if physical:
+        job.update(render_spec={"geometry": geometry}, render_profile_id="synthetic-only", render_contract_hash="sha256:"+"a"*64)
+    if model == "pouch":
+        job["dimensions_mm"]["depth"] = 3.0
+        geometry = {"family": "pouch_thin_card_v1", "closure_detail": "thin-card-preview-v1", "preview_fidelity": "thin_card"}
+        job["render_spec"] = {"geometry": geometry}
     job_path = tmp_path / "job.json"
     job_path.write_text(json.dumps(job))
     script = tmp_path / "export_synthetic.py"
@@ -586,7 +595,8 @@ def test_runtime_reads_actual_blender_export_without_rendering(tmp_path):
         "renderer=importlib.util.module_from_spec(spec);spec.loader.exec_module(renderer)\n"
         f"job=json.load(open({str(job_path)!r}))\n"
         "renderer.clean_scene()\n"
-        "root,objects=renderer.add_box(job)\n"
+        + ("root,objects=renderer.build_model(job,job['render_spec']['geometry'])\n" if model != "legacy" else "root,objects=renderer.add_box(job)\n")
+        +
         "renderer.export_model(job,root,objects)\n"
     )
     completed = subprocess.run([blender, "--background", "--factory-startup", "--python-exit-code", "1", "--python", str(script)],
@@ -594,8 +604,14 @@ def test_runtime_reads_actual_blender_export_without_rendering(tmp_path):
     assert completed.returncode == 0, (completed.stdout + completed.stderr)[-4000:]
     artifact = module.load_glb_artifact(job["outputs"]["glb"])
     sys.path.insert(0, str(MODULE.parent))
-    report = module.compare_glb_artifact_contract(artifact, assets, job["dimensions_mm"], 0.5, [1,1,1,1])
+    report = module.compare_glb_artifact_contract(artifact, assets, job["dimensions_mm"], 0.5, [1,1,1,1], geometry=geometry if model != "legacy" else None, render_identity=job)
     assert report["ok"], report
+    if physical:
+        assert not _runtime_report(module, artifact, assets)["ok"]
+        assert all(n.get("extras", {}).get("geometry_model") == "closed-carton-shell-v1" for n in artifact.document["nodes"] if "mesh" in n)
+        mesh = next(n for n in artifact.document["nodes"] if "mesh" in n)
+        mesh["extras"]["render_profile_id"] = "counterfeit"
+        assert not module.compare_glb_artifact_contract(artifact, assets, job["dimensions_mm"], 0.5, [1,1,1,1], geometry=geometry, render_identity=job)["ok"]
 
 
 def test_round_tripped_surfaces_preserve_all_six_uv_orientations():

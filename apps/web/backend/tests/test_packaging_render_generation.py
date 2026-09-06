@@ -513,7 +513,7 @@ if (config.useJobs) {
 
 
 @pytest.mark.skipif(os.environ.get("BEIAN_TEST_BLENDER_FULL") != "1", reason="explicit local synthetic full/card/GLB render")
-@pytest.mark.parametrize("profile_id", ["compat-legacy-v0"])
+@pytest.mark.parametrize("profile_id", ["compat-legacy-v0", "packshot-carton-geometry-v1"])
 def test_normal_local_runtime_with_actual_synthetic_blender_full_card_glb(tmp_path, profile_id):
     # Explicit profiles at unchanged registry resolution; synthetic artwork only.
     # No approved baseline, production registration or fake subprocess.
