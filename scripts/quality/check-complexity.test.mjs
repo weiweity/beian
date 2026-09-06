@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { describe, it } from "node:test";
 import {
   QualityToolError,
@@ -353,28 +353,43 @@ describe("repository quality policy", () => {
   });
 
   it("finds orphan files in scripts and Playwright support code", () => {
-    const probes = [
-      join(root, "scripts/quality/__quality_orphan_probe.js"),
-      join(root, "apps/web/ui/e2e/__quality_orphan_probe.ts"),
-    ];
+    // Exercise the real configuration in a private workspace. A concurrent
+    // repository scan must never observe this test's deliberately orphan files.
+    const fixtureRoot = mkdtempSync(join(tmpdir(), "beian-quality-orphans-"));
+    const seed = (path, contents) => {
+      const target = join(fixtureRoot, path);
+      mkdirSync(dirname(target), { recursive: true });
+      writeFileSync(target, contents, "utf8");
+    };
     const knip = join(
       root,
       "tools/quality/node_modules/.bin",
       process.platform === "win32" ? "knip.cmd" : "knip",
     );
     try {
-      for (const probe of probes) writeFileSync(probe, "export const orphanProbe = 1;\n", "utf8");
+      seed("knip.json", readFileSync(join(root, "knip.json"), "utf8"));
+      seed("package.json", JSON.stringify({ private: true, workspaces: ["apps/web/server", "apps/web/ui"] }));
+      seed("apps/web/server/package.json", JSON.stringify({ name: "beian-server", private: true }));
+      seed("apps/web/ui/package.json", JSON.stringify({ name: "beian-ui", private: true }));
+      seed("scripts/quality/check-complexity.mjs", 'import "./used.mjs";\n');
+      seed("scripts/quality/used.mjs", 'console.log("reachable");\n');
+      seed("apps/web/ui/e2e/example.spec.ts", 'import "./used.ts";\n');
+      seed("apps/web/ui/e2e/used.ts", 'console.log("reachable");\n');
+      seed("scripts/quality/__quality_orphan_probe.js", "export const orphanProbe = 1;\n");
+      seed("apps/web/ui/e2e/__quality_orphan_probe.ts", "export const orphanProbe = 1;\n");
       const result = runTool(
         knip,
         ["--config", "knip.json", "--reporter", "json", "--no-progress", "--no-config-hints"],
-        { allowedStatuses: [0, 1] },
+        { cwd: fixtureRoot, allowedStatuses: [0, 1] },
       );
-      const findings = normalizeKnipReport(JSON.parse(result.stdout));
+      const findings = normalizeKnipReport(JSON.parse(result.stdout), fixtureRoot);
       const paths = new Set(findings.filter((entry) => entry.kind === "file").map((entry) => entry.path));
       assert.ok(paths.has("scripts/quality/__quality_orphan_probe.js"));
       assert.ok(paths.has("apps/web/ui/e2e/__quality_orphan_probe.ts"));
+      assert.ok(!paths.has("scripts/quality/used.mjs"));
+      assert.ok(!paths.has("apps/web/ui/e2e/used.ts"));
     } finally {
-      for (const probe of probes) rmSync(probe, { force: true });
+      rmSync(fixtureRoot, { recursive: true, force: true });
     }
   });
 
@@ -400,7 +415,11 @@ describe("repository quality policy", () => {
     const production = readFileSync(join(root, ".github/workflows/hangzhou-release.yml"), "utf8");
     assert.match(quality, /^\s{2}pull_request:\s*$/m);
     assert.match(quality, /runs-on:\s*ubuntu-latest/);
-    assert.match(quality, /timeout-minutes:\s*12/);
+    const qualityJob = quality.split("\n  quality:\n")[1]?.split(/^  [A-Za-z0-9_-]+:\s*$/m)[0];
+    assert.ok(qualityJob, "Linux quality job must exist");
+    const timeout = qualityJob.match(/^    timeout-minutes:\s*(\d+)\s*$/m);
+    assert.ok(timeout && Number(timeout[1]) > 0 && Number(timeout[1]) <= 30,
+      "quality needs a bounded budget, adjusted to measured suite cost (up to 30 minutes)");
     assert.match(quality, /cancel-in-progress:\s*true/);
     assert.match(quality, /npm run quality/);
     assert.match(quality, /npm run test:quality/);
