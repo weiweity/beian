@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import shutil
 from pathlib import Path
 import struct
 import subprocess
@@ -60,6 +61,168 @@ def test_cli_request_budget_before_json_or_source_reads(tmp_path: Path, use_stdi
     result = json.loads(run.stdout.splitlines()[-1])
     assert result["cause"] == "request_budget"
     assert result["ok"] is False
+
+
+@pytest.mark.skipif(sys.platform not in ("darwin", "linux"), reason="C2 bridge requires POSIX group evidence; Windows containment is not implemented")
+@pytest.mark.parametrize("entry", ["missing", "bridge", "adapter", "jobs"])
+def test_node_bridge_calls_real_rf02_validator_without_blender(tmp_path: Path, entry: str):
+    controlled_render = entry != "missing"
+    data_root = tmp_path
+    if entry == "jobs":
+        _pipeline = pipeline_module()
+        product, _source = prepare_v2_product(tmp_path)
+        product["code"] = "00000000c222"
+        data_root = tmp_path / "data"
+        _job = _pipeline.preflight_product(product, tmp_path, data_root / "mockups", False, {"enabled": False}, False)
+        seed_required_outputs(_job)
+        Path(_job["outputs"]["glb"]).write_bytes(minimal_valid_glb())
+        root = Path(_job["project_dir"])
+    else:
+        _pipeline, _job, root = make_spec_source(tmp_path)
+    before = inventory(root)
+    node = shutil.which("node")
+    assert node, "Node is required for the Node-to-Python bridge contract test"
+    repo = PACKAGING.parents[1]
+    command_dir = PACKAGING
+    if controlled_render:
+        # Only the Blender subprocess is controlled; keep the real CLI, RF-02
+        # validator, private execution snapshot, nonce checks and card writer.
+        command_dir = tmp_path / "controlled-worker"
+        command_dir.mkdir()
+        (command_dir / "render_generation.py").write_text(
+            "import sys\n"
+            f"sys.path.insert(0, {str(Path(__file__).parent)!r})\n"
+            "import pytest\n"
+            "from test_packaging_render_generation import generation_module, fake_blender\n"
+            "gen = generation_module()\n"
+            "fake_blender(gen, pytest.MonkeyPatch())\n"
+            "raise SystemExit(gen.main())\n",
+            encoding="utf-8",
+        )
+    script = r"""
+import assert from 'node:assert/strict';
+import { mkdir, readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+const config = JSON.parse(process.argv[1]);
+const { createRenderGenerationBridge } = await import(config.module);
+const bridge = createRenderGenerationBridge({
+  pythonExecutable: config.python, packagingDir: config.packaging,
+  dataRoot: config.dataRoot, timeoutMs: 30000,
+});
+const stages = [];
+const receipt = await bridge.verify(config.input, {onStage: stage => stages.push(stage)});
+assert.equal(receipt.sourceSha256, config.input.expectedSourceSha256);
+assert.match(receipt.planIdentity, /^sha256:[a-f0-9]{64}$/);
+assert.equal(stages.includes('validate'), true);
+if (!config.useJobs) await mkdir(join(config.input.jobRoot, '.render-generations'));
+if (config.useJobs) {
+  process.env.WB_DATA_DIR = config.dataRoot;
+  process.env.VITEST = '1';
+  const { createRenderGenerationPreparer } = await import(config.adapter);
+  const jobs = await import(config.jobs);
+  const mockup = await import(config.mockup);
+  const generations = await import(config.generations);
+  const plan = JSON.parse(await readFile(join(config.input.jobRoot,'resolved_job.json'),'utf8'));
+  const qualityVerifier = input => ({ generation_id:input.generation_id, contract_sha256:input.contract_sha256,
+    content_fingerprint:input.content_fingerprint, verifier_status:'accepted', quality_status:'unwired',
+    verifier:'controlled-jobs-test', note:generations.RENDER_GENERATION_UNWIRED_NOTE });
+  mockup.saveMockup({id:config.jobId, owner:'test-owner',created_by:'test',status:'done',
+    created_at:'2026-09-05T00:00:00.000Z',job_kind:'mockup',job_status:'succeeded',
+    files:[['white_a','front_right'],['white_b','back_left'],['glb','glb']].map(([key,k])=>({key,path:plan.outputs[k],name:k}))});
+  jobs.setJobsTestHooks({ qualityVerifier, prepareRenderGeneration:createRenderGenerationPreparer({
+    pythonExecutable:config.python, packagingDir:config.packaging, dataRoot:config.dataRoot, blenderExecutable:config.blender}) });
+  const source = generations.openRenderGenerationStore({jobRoot:config.input.jobRoot,jobId:config.jobId,qualityVerifier}).virtualLegacyCurrentId();
+  jobs.enqueueRenderGenerationMutation({jobId:config.jobId,viewer:{id:'test-owner',name:'test',admin:false},
+    clientRequestId:'actual-bridge-test',mode:'legacy_relight',sourceGenerationId:source,expectedCurrentGenerationId:source,
+    studioAdjustment:config.input.studioAdjustment});
+  const deadline=Date.now()+30000;
+  while (Date.now()<deadline && mockup.loadMockup(config.jobId)?.render_mutation?.status !== 'failed') {
+    await new Promise(resolve=>setTimeout(resolve,30));
+  }
+  const final=mockup.readMockupFromDisk(config.jobId);
+  assert.equal(final.render_mutation.status,'failed');
+  assert.match(final.render_mutation.error,/质量门/);
+  assert.equal(final.current_render_generation_id,undefined);
+  assert.equal(final.render_generation_request.worker_pid,undefined);
+  assert.equal(final.render_generation_request.worker_protocol,'render-generation/1');
+  jobs.resetJobsTestHooks();
+  console.log('REAL_RF02_JOBS_ADAPTER_CANDIDATE_QUALITY_UNWIRED_NO_ACTIVATION');
+} else if (config.useAdapter) {
+  const { createRenderGenerationPreparer } = await import(config.adapter);
+  const prepare = createRenderGenerationPreparer({pythonExecutable:config.python,
+    packagingDir:config.packaging, dataRoot:config.dataRoot, blenderExecutable:config.blender});
+  const lifecycle = [];
+  const bytes = await readFile(join(config.input.jobRoot, 'resolved_job.json'));
+  const prepared = await prepare({jobId:'testjob', mutationId:'mtest', jobRoot:config.input.jobRoot,
+    sourcePath:join(config.input.jobRoot, 'resolved_job.json'), bytes, mode:'legacy_relight',
+    studioAdjustment:config.input.studioAdjustment, observer:{context:{jobId:'testjob',mutationId:'mtest'},
+      onSpawn:(pid, id)=>lifecycle.push(['spawn',pid,id]), onClose:(pid,id)=>lifecycle.push(['close',pid,id])}});
+  const result = await prepared.execute({jobId:'testjob', mutationId:'mtest', jobRoot:config.input.jobRoot,
+    mode:'legacy_relight', sourceGenerationId:'g0-legacy-original',
+    candidateDir:join(config.input.jobRoot,'.render-generations','.candidate-adapter'),
+    plan:prepared.plan, sourceOutputs:[], studioAdjustment:config.input.studioAdjustment});
+  assert.equal(result.runtimeQuality, 'unwired');
+  assert.equal(result.contract_sha256, config.input.expectedSourceSha256.slice(7));
+  assert.equal(prepared.plan.sourceAssets.length, 6);
+  assert.ok(result.outputs.some(row=>row.key === 'white_a_card'));
+  assert.equal(lifecycle.length, 4);
+  assert.equal(lifecycle[0][2], lifecycle[1][2]);
+  assert.equal(lifecycle[2][2], lifecycle[3][2]);
+  assert.notEqual(lifecycle[0][2], lifecycle[2][2]);
+  assert.match(lifecycle[0][2], /^testjob:mtest:[a-f0-9]{32}$/);
+  console.log('REAL_RF02_ADAPTER_LIFECYCLE_AND_CANDIDATE_VERIFIED');
+} else if (config.controlledRender) {
+  const result = await bridge.render(receipt,
+    join(config.input.jobRoot, '.render-generations', '.candidate-controlled'), config.blender);
+  assert.equal(result.quality.production_ready, false);
+  assert.match(result.executionNonce, /^[a-f0-9]{32}$/);
+  assert.ok(result.outputs.front_right_card.bytes > 0);
+  assert.ok(result.outputs.glb.bytes > 0);
+  console.log('REAL_RF02_CONTROLLED_RENDER_NONCE_AND_OUTPUTS_VERIFIED');
+} else {
+  await assert.rejects(bridge.render(receipt,
+    join(config.input.jobRoot, '.render-generations', '.candidate-missing-blender'),
+    join(config.dataRoot, 'missing-blender')), /missing_blender/);
+  console.log('REAL_RF02_VALIDATED_MISSING_BLENDER_REJECTED');
+}
+"""
+    ids = identities_for(root)
+    controlled_blender = dummy_blender(tmp_path / "controlled-blender")
+    config = {
+        "module": (repo / "apps/web/server/src/renderGenerationBridge.ts").as_uri(),
+        "adapter": (repo / "apps/web/server/src/renderGenerationAdapter.ts").as_uri(),
+        "jobs": (repo / "apps/web/server/src/jobs.ts").as_uri(),
+        "mockup": (repo / "apps/web/server/src/mockup.ts").as_uri(),
+        "generations": (repo / "apps/web/server/src/renderGenerations.ts").as_uri(),
+        "useJobs": entry == "jobs", "jobId": root.name,
+        "useAdapter": entry == "adapter",
+        "python": PYTHON,
+        "packaging": str(command_dir),
+        "controlledRender": controlled_render,
+        "blender": str(controlled_blender),
+        "dataRoot": str(data_root),
+        "input": {
+            "jobRoot": str(root), "mode": "preserve",
+            "expectedSourceSha256": ids["expected_source_sha256"],
+            "expectedAssetSha256": ids["expected_asset_sha256"],
+            "studioAdjustment": {"product_light": 1.2, "background_light": 0.8},
+        },
+    }
+    run = subprocess.run(
+        [node, "--import", "tsx", "--input-type=module", "-e", script, json.dumps(config)],
+        cwd=repo, capture_output=True, text=True, timeout=60,
+    )
+    assert run.returncode == 0, run.stderr
+    assert "REAL_RF02_" in run.stdout
+    after = inventory(root)
+    assert {name: value for name, value in after.items() if not name.startswith(".render-generations/")
+            and not (entry == "jobs" and name == "job.json")} == before
+    if entry != "jobs":
+        assert all(not name.endswith("generation.json") for name in after)
+    else:
+        assert not any(name.startswith(".render-generations/g1-") for name in after)
+    assert not (root / ".render-generations/.candidate-missing-blender").exists()
+
 
 
 def generation_module():

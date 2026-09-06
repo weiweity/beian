@@ -169,9 +169,9 @@ export type QualityVerifyResult = {
   note: string;
 };
 
-type QualityVerifier = (input: QualityVerifyInput) => QualityVerifyResult;
+export type QualityVerifier = (input: QualityVerifyInput) => QualityVerifyResult;
 
-type RenderGenerationSource = { key: string; path: string };
+export type RenderGenerationSource = { key: string; path: string };
 
 type RenderGenerationFailpoints = {
   duringCopy?: (copiedKey: string) => void;

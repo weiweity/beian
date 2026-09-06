@@ -2,11 +2,13 @@ import {
   closeSync,
   copyFileSync,
   existsSync,
+  fstatSync,
   mkdirSync,
   openSync,
   readdirSync,
   readFileSync,
   readSync,
+  realpathSync,
   rmSync,
   statSync,
   unlinkSync,
@@ -17,6 +19,8 @@ import { createHash } from "node:crypto";
 import { DATA_DIR, PACKAGING } from "./config.js";
 import { blenderBin } from "./settings.js";
 import { canAccessOwner, isTid, replaceFile, type Viewer } from "./tasks.js";
+import { atomicReplaceJobJson } from "./mockupAtomicWrite.js";
+import { isRenderGenerationOutputKey } from "./renderGenerations.js";
 
 export type MockupJob = {
   id: string;
@@ -66,6 +70,50 @@ export type MockupJob = {
   /** 重渲棚审计。不参与权限。 */
   studio_relit_by?: string;
   studio_relit_at?: string;
+  /** 当前展示代。公开只给 id，不给目录。 */
+  current_render_generation_id?: string;
+  /** 小型公开摘要；私有请求字段在 render_generation_request。 */
+  render_mutation?: PublicRenderMutationSummary;
+  /** 仅服务端：幂等请求与提交核对。禁止进入公开详情/列表。 */
+  render_generation_request?: RenderGenerationRequestRecord;
+  /**
+   * 仅服务端。有界幂等账本：覆盖在途与成功/失败终态。
+   * 满员拒绝新 requestId，不挤旧记录；禁止进入公开详情/列表。
+   */
+  render_generation_idempotency?: RenderGenerationIdempotencyFact[];
+};
+
+export type PublicRenderMutationSummary = {
+  id: string;
+  mode: "legacy_relight" | "upgrade";
+  status: "queued" | "running" | "succeeded" | "failed";
+  stage?: string;
+  error?: string;
+};
+
+export type RenderGenerationRequestRecord = {
+  client_request_id: string;
+  payload_sha256: string;
+  mutation_id: string;
+  mode: "legacy_relight" | "upgrade";
+  source_generation_id: string;
+  expected_current_generation_id: string;
+  started_current_generation_id: string | null;
+  studio_adjustment?: { product_light: number; background_light: number };
+  created_at: string;
+  actor_id: string;
+  worker_pid?: number;
+  /** Private per-spawn identity; never serialized by publicMockup/Summary. */
+  worker_execution_id?: string;
+  worker_protocol?: "render-generation/1";
+  source_plan_sha256?: string;
+};
+
+/** 幂等账本条目。mutation 是该 requestId 当时的公开摘要，后续请求不得覆盖它。 */
+export type RenderGenerationIdempotencyFact = {
+  client_request_id: string;
+  payload_sha256: string;
+  mutation: PublicRenderMutationSummary;
 };
 
 export type StructureInputLayerCandidate = {
@@ -240,11 +288,55 @@ export function findBlender(): string | null {
   }
 }
 
+export function isGenerationManagedMockup(job: MockupJob | Pick<MockupJob, "current_render_generation_id">): boolean {
+  return Boolean(job.current_render_generation_id && String(job.current_render_generation_id).trim());
+}
+
+export function generationManagedReject(action: "retry" | "relight" | "print-faces" | "collect"): Error {
+  const message =
+    action === "retry"
+      ? "这单已托管渲染代际，不能用旧重试覆盖成片。"
+      : action === "relight"
+        ? "这单已托管渲染代际，不能用旧重渲覆盖成片。"
+        : action === "print-faces"
+          ? "这单已托管渲染代际，不能用旧补面覆盖成片。"
+          : "这单已托管渲染代际，不能扫描输出覆盖成片。";
+  return Object.assign(new Error(message), { status: 409, code: "render_generation_managed" });
+}
+
+export function applyRenderGenerationPatch(job: MockupJob, patch: { current_render_generation_id: string; files: MockupJob["files"] }): MockupJob {
+  const preserved = (job.files || []).filter((file) => file.key && !isRenderGenerationOutputKey(file.key));
+  return {
+    ...job,
+    current_render_generation_id: patch.current_render_generation_id,
+    files: [...patch.files.map((file) => ({ ...file })), ...preserved.map((file) => ({ ...file }))],
+  };
+}
+
 export function saveMockup(job: MockupJob): void {
-  const dir = join(mockupRoot(), job.id);
-  mkdirSync(dir, { recursive: true });
-  replaceFile(jobPath(job.id), JSON.stringify(job, null, 2));
+  const payload = JSON.stringify(job, null, 2);
+  if (isGenerationManagedMockup(job)) {
+    atomicReplaceJobJson(jobPath(job.id, false), payload);
+  } else {
+    const dir = join(mockupRoot(), job.id);
+    mkdirSync(dir, { recursive: true });
+    replaceFile(jobPath(job.id), payload);
+  }
   rememberMockup(job);
+}
+
+/** 提交代际指针时必须绕过 loadMockup 缓存；失败路径不要先改缓存对象。 */
+export function readMockupFromDisk(id: string): MockupJob | undefined {
+  if (!isTid(id)) return undefined;
+  const p = jobPath(id, false);
+  if (!existsSync(p)) return undefined;
+  try {
+    const job = JSON.parse(readFileSync(p, "utf8")) as MockupJob;
+    if (!job || typeof job !== "object" || Array.isArray(job) || job.id !== id) return undefined;
+    return job;
+  } catch {
+    return undefined;
+  }
 }
 
 export function loadMockup(id: string): MockupJob | undefined {
@@ -379,9 +471,27 @@ function publicMockupError(value: unknown): string | undefined {
   return (safe || PUBLIC_MOCKUP_ERROR_FALLBACK).slice(0, 80);
 }
 
+function publicRenderMutation(job: MockupJob): PublicRenderMutationSummary | undefined {
+  const mutation = job.render_mutation;
+  if (!mutation || typeof mutation !== "object") return undefined;
+  const summary: PublicRenderMutationSummary = {
+    id: String(mutation.id || ""),
+    mode: mutation.mode,
+    status: mutation.status,
+  };
+  if (mutation.stage) summary.stage = mutation.stage;
+  if (mutation.error) summary.error = publicMockupError(mutation.error);
+  if (!summary.id || (summary.mode !== "legacy_relight" && summary.mode !== "upgrade")) return undefined;
+  if (summary.status !== "queued" && summary.status !== "running" && summary.status !== "succeeded" && summary.status !== "failed") {
+    return undefined;
+  }
+  return summary;
+}
+
 function publicMockupSummaryFields(job: MockupJob) {
   const legacyError = publicMockupError(job.error);
   const jobError = publicMockupError(job.job_error);
+  const mutation = publicRenderMutation(job);
   return {
     id: job.id,
     status: job.status,
@@ -402,6 +512,9 @@ function publicMockupSummaryFields(job: MockupJob) {
     structure_status: job.structure_status,
     structure_code: job.structure_code,
     structure_message: job.structure_message,
+    has_render_generations: isGenerationManagedMockup(job) ? true : undefined,
+    current_render_generation_id: job.current_render_generation_id,
+    render_mutation: mutation,
   };
 }
 
@@ -1322,6 +1435,7 @@ export function printFaceRepairSource(job: MockupJob): PrintFaceRepairSource | n
 }
 
 function canRepairPrintFaces(job: MockupJob): boolean {
+  if (isGenerationManagedMockup(job)) return false;
   return job.status === "done" && !requiredPrintFacesReady(job.id) && printFaceRepairSource(job) !== null;
 }
 
@@ -1379,7 +1493,47 @@ export function relightStudioSource(job: MockupJob): RelightStudioSource | null 
   return { jobDir, manifest };
 }
 
+/**
+ * 读取已落盘的 resolved_job 原始字节。这不是 RF-02 验证。
+ * 验证必须走 jobs 注入的服务端验证适配器；禁止把 JSON.parse 或自报哈希当已验证。
+ */
+export function mockupRenderPlanBytes(job: MockupJob): { path: string; bytes: Buffer } | null {
+  const jobDir = join(mockupRoot(false), job.id);
+  const resolved = findResolvedJobPath(jobDir, job.id);
+  if (!resolved || !isMockupJobFile(job.id, resolved)) return null;
+  let fd: number | undefined;
+  try {
+    const stat = statSync(resolved);
+    if (!stat.isFile() || stat.size <= 0 || stat.size > 8 * 1024 * 1024) return null;
+    fd = openSync(resolved, "r");
+    const before = fstatSync(fd);
+    if (!before.isFile() || before.size <= 0 || before.size > 8 * 1024 * 1024) return null;
+    // Bound the allocation/read before handing bytes to async validation, including concurrent growth.
+    const bytes = Buffer.alloc(before.size + 1);
+    let count = 0;
+    while (count < bytes.length) {
+      const n = readSync(fd, bytes, count, bytes.length - count, count);
+      if (!n) break;
+      count += n;
+    }
+    const after = fstatSync(fd);
+    if (count !== before.size || after.size !== before.size || after.mtimeMs !== before.mtimeMs) return null;
+    return { path: resolved, bytes: bytes.subarray(0, count) };
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+export function mockupJobDir(id: string): string {
+  return join(mockupRoot(false), id);
+}
+
 function canRelightStudio(job: MockupJob): boolean {
+  if (isGenerationManagedMockup(job)) return false;
+  const mutationStatus = job.render_mutation?.status;
+  if (mutationStatus === "queued" || mutationStatus === "running") return false;
   return job.status === "done" && relightStudioSource(job) !== null;
 }
 
@@ -1466,10 +1620,16 @@ export function collectOutputs(root: string): MockupJob["files"] {
 }
 
 function underJobDir(jobId: string, p: string): boolean {
-  const root = resolve(mockupRoot(), jobId);
+  const root = resolve(mockupRoot(false), jobId);
   const full = resolve(p);
-  const rel = relative(root, full);
-  return Boolean(rel) && !rel.startsWith("..") && !isAbsolute(rel);
+  const lexical = relative(root, full);
+  if (Boolean(lexical) && !lexical.startsWith("..") && !isAbsolute(lexical)) return true;
+  try {
+    const rel = relative(realpathSync(root), realpathSync(full));
+    return Boolean(rel) && !rel.startsWith("..") && !isAbsolute(rel);
+  } catch {
+    return false;
+  }
 }
 
 function liveReadPanelFiles(jobId: string): MockupJob["files"] {
@@ -1586,6 +1746,9 @@ export function unlinkSameGenerationStills(jobId: string): void {
  * 结构已 ready 的单跳过 Illustrator，从 Blender 再跑。
  */
 export function resetMockupForRetry(job: MockupJob): MockupJob {
+  if (isGenerationManagedMockup(job) || job.render_mutation?.status === "queued" || job.render_mutation?.status === "running") {
+    throw generationManagedReject("retry");
+  }
   if (activeStructureConfirmations.has(job.id)) {
     throw Object.assign(new Error("结构正在确认，暂时不能重试"), { status: 409 });
   }
@@ -1644,7 +1807,10 @@ export function deleteMockup(id: string): void {
     job.status === "queued" ||
     job.status === "running" ||
     job.job_status === "queued" ||
-    job.job_status === "running"
+    job.job_status === "running" ||
+    job.render_mutation?.status === "queued" ||
+    job.render_mutation?.status === "running" ||
+    job.render_generation_request?.worker_pid !== undefined
   ) {
     throw Object.assign(new Error("打样还在跑，不能删。等结束或失败后再删。"), { status: 409 });
   }
