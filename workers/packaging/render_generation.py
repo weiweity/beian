@@ -1326,6 +1326,8 @@ def _run_request(request: Mapping[str, Any]) -> dict[str, Any]:
         load_glb_artifact(glb_path, max_bytes=MAX_FILE_BYTES), rendered["assets"],
         rendered["dimensions_mm"], float(rendered["glb_tolerance_mm"]),
         rendered["render"].get("substrate_rgba", [PAPER_ALBEDO_LINEAR]*3 + [1.0]),
+        geometry=rendered.get("render_spec", {}).get("geometry"),
+        render_identity=rendered,
     )
     if (not report["ok"] or _sha256_file(glb_path) != evidence["glb"]["sha256"]
             or any(_sha256_file(Path(rendered["assets"][face])) != assets[face] for face in SEMANTIC_FACES)):

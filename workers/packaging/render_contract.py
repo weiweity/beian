@@ -369,6 +369,8 @@ def _normalize_geometry_config(value: Any, label: str, family: str) -> dict[str,
             "core_bevel_mm",
             "surface_gap_mm",
             "preview_fidelity",
+            "thickness_mm",
+            "bevel_segments",
         },
         label,
     )
@@ -383,7 +385,23 @@ def _normalize_geometry_config(value: Any, label: str, family: str) -> dict[str,
         )
     if family == "rectangular_carton_v1" and preview == "thin_card":
         _invalid("矩形纸盒不能声明 thin_card", field=f"{label}.preview_fidelity")
+    shell = geometry.get("closure_detail") == "closed-carton-shell-v1"
+    physical = {}
+    if shell:
+        if family != "rectangular_carton_v1" or preview != "carton_physical_v1":
+            _invalid("纸板壳只支持矩形纸盒", field=label)
+        physical = {
+            "thickness_mm": _number(geometry.get("thickness_mm"), f"{label}.thickness_mm", lower=0.01, upper=5.0),
+            "bevel_segments": _integer(geometry.get("bevel_segments"), f"{label}.bevel_segments", lower=2, upper=4),
+        }
+        bevel = _number(geometry.get("core_bevel_mm"), f"{label}.core_bevel_mm", lower=0.0, upper=10.0)
+        gap = _number(geometry.get("surface_gap_mm"), f"{label}.surface_gap_mm", lower=0.0, upper=10.0)
+        if bevel <= 0 or gap <= 0:
+            _invalid("纸板壳倒角与印刷间隙必须大于零", field=label)
+    elif "thickness_mm" in geometry or "bevel_segments" in geometry:
+        _invalid("旧几何不能声明纸板壳参数", field=label)
     return {
+        **physical,
         "substrate_profile": _text(
             geometry.get("substrate_profile"),
             f"{label}.substrate_profile",
@@ -393,7 +411,7 @@ def _normalize_geometry_config(value: Any, label: str, family: str) -> dict[str,
             geometry.get("closure_detail"),
             f"{label}.closure_detail",
             allowed=(
-                {"legacy-closed-box-v0", "closed-carton-visual-v1"}
+                {"legacy-closed-box-v0", "closed-carton-visual-v1", "closed-carton-shell-v1"}
                 if family == "rectangular_carton_v1"
                 else {"thin-card-preview-v1"}
             ),
@@ -1044,6 +1062,8 @@ def _spec_geometry(value: Any, profile: Mapping[str, Any]) -> dict[str, Any]:
             "core_bevel_mm",
             "surface_gap_mm",
             "preview_fidelity",
+            "thickness_mm",
+            "bevel_segments",
         },
         "spec.geometry",
     )
@@ -1063,6 +1083,7 @@ def _spec_geometry(value: Any, profile: Mapping[str, Any]) -> dict[str, Any]:
         "spec.geometry",
         family,
     )
+    _known_keys(geometry, {"family", "structure_hash", "outer_dimensions_mm", *expected}, "spec.geometry")
     if fixed != expected:
         _invalid("spec.geometry 与已登记 profile 不一致", field="spec.geometry")
     return {
@@ -1269,11 +1290,14 @@ def _registry_for_persisted_identity(registry_hash: str, current: Mapping[str, A
     """
     if registry_hash == current["registry_sha256"]:
         return current
-    trusted_hash = "sha256:38ee501b794e9979a8ab06f2e0e1a476271ea9c7897c41eed3460d0f0acfc77b"
-    if registry_hash != trusted_hash:
+    histories = {
+        "sha256:1f490d26590ddcb5a100fa3087d9d36649b7a98e4722cf521f6f342da718ad07": "pre-rf05.v1.json",
+        "sha256:38ee501b794e9979a8ab06f2e0e1a476271ea9c7897c41eed3460d0f0acfc77b": "pre-f.v1.json",
+    }
+    if registry_hash not in histories:
         _invalid("spec.registry_sha256 未在受信任历史中登记", field="spec.registry_sha256")
-    historical = load_profile_registry(DEFAULT_REGISTRY_PATH.parent / "history" / "pre-f.v1.json")
-    if historical["registry_sha256"] != trusted_hash:
+    historical = load_profile_registry(DEFAULT_REGISTRY_PATH.parent / "history" / histories[registry_hash])
+    if historical["registry_sha256"] != registry_hash:
         _invalid("历史 registry 字节身份不一致", field="spec.registry_sha256")
     for profile_id, profile in historical["profiles"].items():
         if current["profiles"].get(profile_id) != profile:
@@ -1644,6 +1668,29 @@ def _assert_job_identity_matches_spec(
             )
 
 
+def renderer_geometry_config(job: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate geometry identity before Blender mutates the scene.
+
+    The private execution snapshot may legitimately adjust studio values. Only
+    immutable geometry/spec identity is checked here; the pipeline owns its
+    full execution-plan checks. Missing V2 specs never fall back to V1.
+    """
+    value = job.get("render_spec")
+    if value is None:
+        if (job.get("structure_schema") or job.get("structure_engine") == "v2"
+                or job.get("schema") == RESOLVED_STRUCTURE_SCHEMA or job.get("packaging_family")
+                or any(key in job for key in RENDER_IDENTITY_KEYS)):
+            _invalid("V2 作业缺少 render_spec", field="render_spec")
+        return {"family": "rectangular_carton_v1", "closure_detail": "legacy-closed-box-v0", "preview_fidelity": "legacy_box"}
+    raw_geometry = _mapping(_mapping(value, "render_spec").get("geometry"), "spec.geometry")
+    if raw_geometry.get("family") not in RENDER_FAMILIES:
+        _fail("render_family_unsupported", "不支持的渲染 family", family=raw_geometry.get("family"))
+    spec = validate_render_spec(value)
+    _assert_spec_bound_to_job(spec, job)
+    _assert_job_identity_matches_spec(job, spec)
+    return dict(spec["geometry"])
+
+
 def _assert_job_render_matches_spec(
     job: Mapping[str, Any], spec: Mapping[str, Any]
 ) -> None:
@@ -1747,7 +1794,7 @@ BLENDER_RESULT_MEASUREMENT_KEYS = (
     "blender_elapsed_s",
 )
 BLENDER_RESULT_ALLOWED_KEYS = frozenset(
-    {"code", "outputs", "execution_nonce", *BLENDER_RESULT_MEASUREMENT_KEYS}
+    {"code", "outputs", "execution_nonce", "render_family", "preview_fidelity", "geometry_model", *BLENDER_RESULT_MEASUREMENT_KEYS}
 )
 
 
@@ -2020,7 +2067,7 @@ def apply_blender_result(
     *,
     snapshot_job: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Accept only measurement fields from an untrusted Blender result manifest."""
+    """Accept measurements and geometry labels bound to the execution contract."""
 
     result = _mapping(blender_result, "blender_result")
     unknown = sorted(
@@ -2067,10 +2114,23 @@ def apply_blender_result(
             "Blender 结果不是本轮执行产物",
             field="blender_result.execution_nonce",
         )
+    geometry_report = {}
+    geometry_keys = {"render_family": "family", "preview_fidelity": "preview_fidelity", "geometry_model": "closure_detail"}
+    geometry = snapshot.get("render_spec", {}).get("geometry", {})
+    required = geometry.get("closure_detail") == "closed-carton-shell-v1" or geometry.get("family") == "pouch_thin_card_v1"
+    if required or any(key in result for key in geometry_keys):
+        trusted = renderer_geometry_config(snapshot)
+        for key, source_key in geometry_keys.items():
+            if result.get(key) != trusted[source_key]:
+                _invalid("Blender 几何报告与本轮合同不一致", field=f"blender_result.{key}")
+            geometry_report[key] = trusted[source_key]
     return {
-        key: deepcopy(result[key])
-        for key in BLENDER_RESULT_MEASUREMENT_KEYS
-        if key in result
+        **geometry_report,
+        **{
+            key: deepcopy(result[key])
+            for key in BLENDER_RESULT_MEASUREMENT_KEYS
+            if key in result
+        },
     }
 
 
