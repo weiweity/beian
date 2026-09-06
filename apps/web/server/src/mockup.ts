@@ -105,7 +105,7 @@ export type RenderGenerationRequestRecord = {
   worker_pid?: number;
   /** Private per-spawn identity; never serialized by publicMockup/Summary. */
   worker_execution_id?: string;
-  worker_protocol?: "render-generation/1";
+  worker_protocol?: "render-generation/1" | "windows-job-object/1";
   source_plan_sha256?: string;
 };
 
@@ -313,10 +313,10 @@ export function applyRenderGenerationPatch(job: MockupJob, patch: { current_rend
   };
 }
 
-export function saveMockup(job: MockupJob): void {
+export function saveMockup(job: MockupJob, checkpoint?: () => void): void {
   const payload = JSON.stringify(job, null, 2);
   if (isGenerationManagedMockup(job)) {
-    atomicReplaceJobJson(jobPath(job.id, false), payload);
+    atomicReplaceJobJson(jobPath(job.id, false), payload, checkpoint);
   } else {
     const dir = join(mockupRoot(), job.id);
     mkdirSync(dir, { recursive: true });
