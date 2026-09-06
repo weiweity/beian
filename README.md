@@ -32,8 +32,9 @@
 | `docs/adr-004-ousterhout-design.md` | 深模块、唯一入口、8/31 前不拆引擎 |
 | `docs/adr-005-packaging-structure-v2.md` | 包装语义 IR、人工确认闸门与 V1 退场条件 |
 | `docs/adr-006-continuous-complexity-governance.md` | TypeScript 控制面 / Python 计算内核边界、死代码单调基线与 PR 质量门禁 |
-| `docs/adr-007-packaging-render-fidelity.md` | 包装 3D 渲染真实感、材质、棚光、清晰度、能力矩阵与评测合同；RF-00–02 Code/L0 与 RF-03 本地产物验证、资源生命周期已实现；生产注册、原生 Windows、RF-04+、批准基线及 L1/L2/UAT 未完成 |
+| `docs/adr-007-packaging-render-fidelity.md` | 包装 3D 渲染真实感、材质、棚光、清晰度、能力矩阵与评测合同；RF-00–02 Code/L0 与 RF-03 本地产物验证、资源生命周期与 RF-04 出图版本 API/UI 已实现；生产注册、原生 Windows、RF-05+、批准基线及 L1/L2/UAT 未完成 |
 | [RF-03 runtime 收口记录](docs/designs/packaging-quality-rf03-runtime-closeout.md) | 本次独立候选的 L0 证据、原开发树的历史轮次，以及生产注册、Windows 原生和真实验收边界 |
+| [RF-04 出图版本交付记录](docs/designs/packaging-quality-rf04-closeout.md) | 同代文件读取、历史切换、创建幂等、失败留图与本次独立验证；生产新代执行仍未开放 |
 | `docs/pouch-v1-acceptance.md` | 膜袋 v1 判定标准；L0 已接线为 3 mm 薄盒预览，杭州金标前不得宣称真实膜袋能力 |
 | `docs/designs/compare-pdf-ingest-v2.md` | PDF 按页选源、单 OCR、版面区域与单钉证据合同 |
 | `docs/designs/review-job-module.md` | 当前对照、对红、打样入队与失败语义合同 |
