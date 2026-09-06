@@ -1250,6 +1250,28 @@ def test_relight_failpoints_roll_back_all_original_bytes(
     assert "render_spec" not in disk
 
 
+def cache_contract_accepts(pipeline, job, previous):
+    """Use a real preflight plan/files while testing cache identity in isolation.
+
+    Full preflight cache-hit/miss wiring remains covered by the neighboring
+    integration tests. Damage cases should not rasterize six faces again.
+    """
+    plan = pipeline.render_plan_for_resolved_job(job)
+    return pipeline._cached_v2_result_usable(
+        previous, job["fingerprint"], plan, plan,
+        Path(job["project_dir"]), job["code"], job["slug"],
+        resolved_job_path=Path(job["resolved_job_path"]),
+        source_ai=Path(job["source_ai"]), template_path=Path(job["template_path"]),
+    )
+
+
+def reset_cache_outputs(job):
+    # Break hardlinks left by earlier damage cases before rewriting any bytes.
+    for raw in job["outputs"].values():
+        Path(raw).unlink(missing_ok=True)
+    seed_required_outputs(job)
+
+
 def test_cache_misses_for_escape_duplicate_empty_and_wrong_format(tmp_path: Path):
     pipeline = pipeline_module()
     product, _source = prepare_v2_product(tmp_path)
@@ -1257,17 +1279,12 @@ def test_cache_misses_for_escape_duplicate_empty_and_wrong_format(tmp_path: Path
     job = pipeline.preflight_product(
         product, tmp_path, output, False, {"enabled": False}, False
     )
-    result_path = Path(job["project_dir"]) / "pipeline_result.json"
-
     def miss_after(mutate) -> None:
-        seed_required_outputs(job)
+        reset_cache_outputs(job)
         payload = deepcopy(job)
+        assert cache_contract_accepts(pipeline, job, payload) is True
         mutate(payload)
-        pipeline.save_json(result_path, payload)
-        missed = pipeline.preflight_product(
-            product, tmp_path, output, False, {"enabled": False}, False
-        )
-        assert missed["cache_hit"] is False
+        assert cache_contract_accepts(pipeline, job, payload) is False
 
     outside = tmp_path / "stolen.png"
     Image.new("RGB", (8, 8)).save(outside)
@@ -1482,17 +1499,12 @@ def test_cache_misses_hardlink_case_alias_and_unknown_output_key(tmp_path: Path)
     job = pipeline.preflight_product(
         product, tmp_path, output, False, {"enabled": False}, False
     )
-    result_path = Path(job["project_dir"]) / "pipeline_result.json"
-
     def miss_after(mutate) -> None:
-        seed_required_outputs(job)
+        reset_cache_outputs(job)
         payload = deepcopy(job)
+        assert cache_contract_accepts(pipeline, job, payload) is True
         mutate(payload)
-        pipeline.save_json(result_path, payload)
-        missed = pipeline.preflight_product(
-            product, tmp_path, output, False, {"enabled": False}, False
-        )
-        assert missed["cache_hit"] is False
+        assert cache_contract_accepts(pipeline, job, payload) is False
 
     def hardlink(payload):
         front = Path(payload["outputs"]["front_right"])
@@ -1631,22 +1643,17 @@ def test_cache_misses_for_missing_outside_symlink_duplicate_hardlink_case_assets
     job = pipeline.preflight_product(
         product, tmp_path, output, False, {"enabled": False}, False
     )
-    result_path = Path(job["project_dir"]) / "pipeline_result.json"
-
     def miss_after(mutate) -> None:
-        seed_required_outputs(job)
+        reset_cache_outputs(job)
         for face, raw in job["assets"].items():
             dest = Path(raw)
             if dest.is_symlink() or dest.exists():
                 dest.unlink()
             Image.new("RGB", (8, 8), (10, 20, 30)).save(dest)
         payload = deepcopy(job)
+        assert cache_contract_accepts(pipeline, job, payload) is True
         mutate(payload)
-        pipeline.save_json(result_path, payload)
-        missed = pipeline.preflight_product(
-            product, tmp_path, output, False, {"enabled": False}, False
-        )
-        assert missed["cache_hit"] is False
+        assert cache_contract_accepts(pipeline, job, payload) is False
 
     def missing(payload):
         Path(payload["assets"]["top"]).unlink()

@@ -20,6 +20,8 @@
 
 | 文件 | 内容 |
 |---|---|
+| [docs/README.md](docs/README.md) | 文档主源、当前状态入口和历史材料维护规则 |
+| [TESTING.md](TESTING.md) | 测试命令、执行顺序、证据复用与实机边界 |
 | `DESIGN.md` | 视觉、侧栏、审稿/打样文案 |
 | `apps/web/README.md` | Web 子系统边界、入口与本地启动关系 |
 | `apps/web/ui/README.md` | UI 开发、构建与浏览器回归入口 |
@@ -46,7 +48,7 @@
 | `docs/risks.md` | 密钥、Tunnel、3D 验收门 |
 | `CHANGELOG.md` | 已发布版本 |
 | `TODOS.md` | 未做项 |
-| `AGENTS.md` | 给代理的硬约束、加长作业合同、易忘约定（MICRO 不改 `package.json` 三位；禁止 `git add -A`） |
+| [AGENTS.md](AGENTS.md) | 授权、任务路由和完成条件；详细工程合同按主题链接读取 |
 | `scripts/windows/README.md` | 杭州 Windows 生产备忘 |
 | `workers/packaging/README.md` | 打样 CLI、`PackagingStructure` 语义合同、完整盒型与正面锚点确认、pymupdf 平面出图、白底/印刷面/PPT/GLB 产物合同，以及 RF-00 测量尺、RF-02 同步回滚与 RF-03 本地候选验证/资源生命周期边界 |
 
@@ -69,9 +71,9 @@
 
 不要跑 uvicorn。没有 `app.main`。产品入口只有 Hono `:8787`。
 
-测服务端、界面和对照 CLI：仓库根目录 `npm test`（Mac；不打外网）。复杂度治理使用隔离的质量工具链：Mac 首次运行先在 Node 20.19+ 或 22.12+ 下执行 `npm ci --prefix tools/quality`，再把 Vulture 装进现有 worker 虚拟环境：`apps/web/backend/.venv/bin/python -m pip install -r apps/web/backend/requirements-quality.txt`；随后运行 `npm run test:quality` 和 `npm run quality`。PR 的 GitHub-hosted Linux Node 22 job 依次执行质量合同、单调基线、完整 L0 与独立类型检查；另一个 GitHub-hosted `windows-2022` job 在 Windows PowerShell 5.1 下实跑 `.NET File.Replace` 的无备份原子替换合同，并验证 Illustrator Agent 计划任务的隐藏窗口、双触发、临时任务单触发和 `Quiesce` 顺序，但不注册或控制生产任务。两者都不使用杭州 self-hosted 生产 runner，也不调用 `release.ps1`；`/ship` 同样要求这些门禁都绿。`npm run quality` 检查 Knip 与高置信 Vulture，并要求 `config/quality/dead-code-baseline.json` 只减不增；TypeScript 则由 `npm run typecheck` 独立检查。本地会自动从 `origin/HEAD`（回退 `origin/main` / `main`）读取目标分支基线，找不到就失败并要求显式传 `--base-ref`，PR CI 则使用精确 base SHA。同文件同名诊断按出现次数核对，不会因行号移动误报，也不会把新增的第二处折叠掉。编排器只读基线，不会自动删代码。人工清理前可跑 `npm run quality:deep` 查看 production/低置信候选。Knip 锁在 `tools/quality/package-lock.json`，Vulture 锁在 `apps/web/backend/requirements-quality.txt`；两者都不进入产品 Node 合同或杭州生产依赖图。浏览器交互回归另跑 `npm run test:e2e`；它使用 Vite + 合成 API，验证页面行为，不替代真实 Hono `:8787` 或杭州 Windows L1。杭州生产不跑单测；可信 `main` release transaction 会检查 health/version/listener/logo，并通过生产 Session 1 Agent 完成管道 → VBS → 唯一 JSX 的身份冒烟。真实稿结构、六面贴图和 Blender 仍属于人工 L2。只要服务端：`npm run test -w beian-server`。只要界面：`npm run test -w beian-ui`。
+测试范围、准备、顺序和 L0/L1/L2 边界统一见 [TESTING.md](TESTING.md)。普通修改按影响选择验证；`/ship` 保留完整门禁。
 
-`npm run test:quality` 同时校验 `.agents/skills` 实际目录、审核清单与 `skills-lock.json` 完全一致；空锁、额外 skill、远程来源、符号链接、自动 shell 权限或绕过包装器的命令都会失败。仓库内 `antd` skill 是 vendored 权威源，不能用标准 skill restore/update 从上游覆盖；需要恢复时从受信任的 Git 提交还原并重新核验哈希。知识查询只走 `node scripts/quality/antd-readonly.mjs`：它固定已审核的 `@ant-design/cli@6.6.1`、关闭更新检查、不经 shell、只读仓库内路径，并拒绝 setup、升级、外部提交和可写迁移参数。CLI 缺失或版本不符时失败关闭，由独立、显式批准的工具维护任务处理。
+
 
 ## Docker（当前未交付）
 
