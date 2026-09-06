@@ -323,7 +323,7 @@ const stillLoads = new Map<string, Promise<HTMLImageElement>>();
 export function studioAssetHref(jobId: string, key: string, generation = "", download = false): string {
   const base = `/api/mockups/${jobId}/files/${key}`;
   const query = new URLSearchParams();
-  if (generation) query.set("generation", generation);
+  if (generation) query.set(/^(?:g0-legacy-original|g[1-9][0-9]*-|legacy-current-v2-)/.test(generation) ? "generation_id" : "generation", generation);
   if (download) query.set("download", "1");
   const suffix = query.toString();
   return suffix ? `${base}?${suffix}` : base;
@@ -334,7 +334,7 @@ export function loadStillImage(url: string): Promise<HTMLImageElement> {
   if (existing) return existing;
   // Relights reuse a logical asset: do not retain every decoded generation forever.
   const [asset, query = ""] = url.split("?");
-  if (new URLSearchParams(query).has("generation")) {
+  if (new URLSearchParams(query).has("generation") || new URLSearchParams(query).has("generation_id")) {
     for (const cached of stillLoads.keys()) {
       if (cached.split("?")[0] === asset) stillLoads.delete(cached);
     }
@@ -354,6 +354,16 @@ export function loadStillImage(url: string): Promise<HTMLImageElement> {
   });
   stillLoads.set(url, pending);
   return pending;
+}
+
+/** Drop only this page's cache references. An already-started download retains its own frozen sources. */
+export function releaseStudioGeneration(jobId:string,generation:string): void {
+  const prefix=`/api/mockups/${jobId}/files/`;
+  for (const url of stillLoads.keys()) {
+    if (!url.startsWith(prefix)) continue;
+    const query=new URLSearchParams(url.split("?")[1] || "");
+    if ((query.get("generation_id") || query.get("generation") || "") === generation) stillLoads.delete(url);
+  }
 }
 
 type StudioSourceUrls = { full: string; card?: string };

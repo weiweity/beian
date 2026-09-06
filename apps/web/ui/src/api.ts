@@ -10,11 +10,13 @@ export class ApiError extends Error {
   status: number;
   brokenApi: boolean;
   code: string | null;
-  constructor(status: number, message: string, brokenApi = false, code: string | null = null) {
+  reason: string | null;
+  constructor(status: number, message: string, brokenApi = false, code: string | null = null, reason: string | null = null) {
     super(message);
     this.status = status;
     this.brokenApi = brokenApi;
     this.code = code;
+    this.reason = reason;
   }
 }
 
@@ -105,18 +107,21 @@ async function fetchJson<T>(path: string, opts: RequestOptions): Promise<T> {
   if (!res.ok) {
     let detail = res.statusText;
     let code: string | null = null;
+    let reason: string | null = null;
     try {
       if (ct.includes("application/json")) {
-        const body = (await res.json()) as { detail?: unknown; code?: unknown };
+        const body = (await res.json()) as { detail?: unknown; code?: unknown; reason?:unknown; message?:unknown };
         if (typeof body.detail === "string") detail = body.detail;
         else if (body.detail) detail = JSON.stringify(body.detail);
+        else if (typeof body.message === "string") detail = body.message;
         if (typeof body.code === "string") code = body.code;
+        if (typeof body.reason === "string") reason = body.reason;
       }
     } catch {
       /* keep statusText */
     }
     const message = hint || detail || (res.status >= 500 ? "审稿服务暂时不可用，请稍后重试。" : "请求失败");
-    throw new ApiError(res.status, message, Boolean(hint) || message === API_DOWN_LOCAL, code);
+    throw new ApiError(res.status, message, Boolean(hint) || message === API_DOWN_LOCAL, code,reason);
   }
   if (!ct.includes("application/json")) {
     throw new ApiError(res.status || 502, hint || "接口没有返回 JSON", true);
@@ -654,8 +659,17 @@ export const api = {
     request<MockupJob>(`/api/mockups/${id}/retry`, { method: "POST" }),
   repairMockupPrintFaces: (id: string) =>
     request<MockupJob>(`/api/mockups/${id}/print-faces`, { method: "POST" }),
-  relightMockupStudio: (id: string) =>
-    request<MockupJob>(`/api/mockups/${id}/relight`, { method: "POST" }),
+  createRenderGeneration: (id: string, body: RenderGenerationCreate) =>
+    request<RenderGenerationCreated>(`/api/mockups/${id}/render-generations`, { method: "POST",body:JSON.stringify(body),timeoutMs:20_000 }),
+  renderGenerations: (id:string,cursor?:string) =>
+    request<RenderGenerationHistory>(`/api/mockups/${id}/render-generations${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`),
+  activateRenderGeneration: (id:string,generation:string,expected:string) =>
+    request<MockupJob>(`/api/mockups/${id}/render-generations/${encodeURIComponent(generation)}/activate`,
+      {method:"POST",body:JSON.stringify({expected_current_generation_id:expected}),timeoutMs:20_000}),
+  refreshMockup: (id:string) => {
+    invalidateGetCache();
+    return request<MockupJob>(`/api/mockups/${id}`);
+  },
   selectMockupStructureInput: (id: string, candidateIds: string[]) =>
     request<MockupJob>(`/api/mockups/${id}/structure/input`, {
       method: "POST",
@@ -783,6 +797,15 @@ export type BillingView = {
 
 export type ProbeResult = { id: string; ok: boolean; message: string };
 
+type RenderCapability = {allowed:boolean;reason?:string};
+export type RenderMutation = {id:string;mode:"legacy_relight" | "upgrade";status:"queued" | "running" | "succeeded" | "failed";stage?:string;error?:string};
+export type RenderGenerationCreate = {client_request_id:string;mode:"legacy_relight";source_generation_id:string;
+  expected_current_generation_id:string;studio_adjustment:{product_light:number;background_light:number}};
+export type RenderGenerationCreated = {mutation:RenderMutation;current_render_generation_id?:string;has_render_generations:boolean;job_status:MockupJob["status"]};
+export type RenderGenerationRow = {generation_id:string;mode:"legacy_import" | "legacy_relight" | "upgrade";profile:string;
+  created_at:string;actor_label?:string;quality_status:"unwired" | "runtime_verified" | "failed";current:boolean};
+export type RenderGenerationHistory = {items:RenderGenerationRow[];next_cursor:string | null};
+
 export type MockupJob = {
   id: string;
   status: "queued" | "running" | "review_required" | "unsupported" | "done" | "failed";
@@ -793,6 +816,10 @@ export type MockupJob = {
   files: { key: string; name: string }[];
   can_repair_print_faces?: boolean;
   can_relight_studio?: boolean;
+  current_render_generation_id?: string;
+  render_mutation?: RenderMutation;
+  has_render_generations?: boolean;
+  render_generation_capabilities?: Record<"history" | "activate" | "legacy_relight" | "upgrade", RenderCapability>;
   studio_relit_by?: string;
   studio_relit_at?: string;
   job_kind?: string;
