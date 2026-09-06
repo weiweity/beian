@@ -1,0 +1,53 @@
+{
+  "schema": "beian-rfe02-experiment/1",
+  "phase": "RF-E02",
+  "id": "rfe02-lighting",
+  "candidate": "normalized-rig-v1",
+  "variants": ["control", "normalized-rig-v1"],
+  "purpose": "isolated lighting A/B evidence; not a quality improvement claim and not a product profile",
+  "product_default_semantics": "control",
+  "experimental_scene_override": {
+    "control": false,
+    "normalized-rig-v1": true
+  },
+  "suites": {
+    "smoke": ["rf00-wide-carton"],
+    "matrix": [
+      "rf00-wide-carton",
+      "rf00-white-carton",
+      "rf00-dark-carton",
+      "rf00-tall-carton",
+      "rf00-type-frequency"
+    ]
+  },
+  "reference_longest_mm": 180.0,
+  "reference_target_mm": [0.0, 0.0, 90.0],
+  "lights": {
+    "Key softbox": {
+      "location_mm": [-135.0, -190.0, 275.0],
+      "type": "AREA",
+      "shape": "RECTANGLE",
+      "size_mm": 120.0,
+      "size_y_mm": 150.0,
+      "energy_base": 105000.0
+    },
+    "Fill softbox": {
+      "location_mm": [155.0, -120.0, 175.0],
+      "type": "AREA",
+      "size_mm": 110.0,
+      "energy_base": 62000.0
+    },
+    "Rim softbox": {
+      "location_mm": [-90.0, 210.0, 280.0],
+      "type": "AREA",
+      "shape": "RECTANGLE",
+      "size_mm": 70.0,
+      "energy_base": 72000.0
+    }
+  },
+  "notes": {
+    "energy_scale": "multiply actual post-add_studio energy by s*s; keep existing light_energy_scale; do not re-guess defaults",
+    "tall_negative_control": "180 mm height with longest edge 180 mm is mathematically identity",
+    "color": "white and dark cartons share dimensions and therefore the same candidate parameters"
+  }
+}
