@@ -12,6 +12,7 @@ import { UploadWell } from "../chrome/UploadWell";
 import { WaitCard } from "../chrome/WaitCard";
 import { mockupFailReason, mockupFailTag } from "./mockupError";
 import { AdminRotateFront, StructureConfirmPanel } from "./StructureConfirmPanel";
+import { RenderVersions } from "./RenderVersions";
 import { structureIssueCopy, structureStatusLabel } from "./mockupStructure";
 import { liveJobLine, mockupBoardProgress, shouldShowWaitCard } from "./waitCard";
 import { stemFromFilename } from "./stemName";
@@ -35,6 +36,7 @@ import {
   jobHasReviewCard,
   jobHasSet,
   loadStillImage,
+  releaseStudioGeneration,
   stillSetKey,
   parseBackdropPreset,
   readBackdropPreset,
@@ -72,7 +74,10 @@ import {
   isElementFullscreen,
   pingViewerAfterFullscreen,
 } from "./mockupFullscreen";
-import "@google/model-viewer";
+import { ModelViewerElement } from "@google/model-viewer";
+// Version changes disconnect the old scene. Keep no unreferenced glTF texture/geometry cache.
+// model-viewer's public cache policy still retains resources used by a live viewer.
+ModelViewerElement.modelCacheSize = 0;
 
 type DeskProps = {
   canCreate: boolean;
@@ -141,6 +146,7 @@ export function MockupDesk({
   if (openId) {
     content = (
       <MockupJobPage
+        key={openId}
         jobId={openId}
         canCreate={canCreate}
         canConfirmStructure={canConfirmStructure}
@@ -758,7 +764,7 @@ export function MockupJobPage({
   const [backgroundLight, setBackgroundLight] = useState(STUDIO_LIGHT_DEFAULT);
   const [retrying, setRetrying] = useState(false);
   const [repairing, setRepairing] = useState(false);
-  const [relighting, setRelighting] = useState(false);
+  const [versionsOpen, setVersionsOpen] = useState(false);
   const [lightsOpen, setLightsOpen] = useState(false);
   const [backdrop, setBackdrop] = useState<BackdropPreset>(readBackdropPreset);
   const [highlightedReadFace, setHighlightedReadFace] = useState<string | null>(null);
@@ -768,6 +774,21 @@ export function MockupJobPage({
   const lastGlbFs = useRef(false);
   const seededJobId = useRef(jobId);
   const waiting = Boolean(job) && shouldShowWaitCard(job);
+  const generation=job?.current_render_generation_id || job?.studio_relit_at || job?.job_finished_at || "";
+  const visibleGeneration=useRef(generation);
+  visibleGeneration.current=generation;
+  const sourceErrorGeneration=useRef<string | null>(null);
+  const alive=useRef(true);
+  useEffect(()=>{alive.current=true;return()=>{alive.current=false;};},[]);
+  useEffect(()=>()=>releaseStudioGeneration(jobId,generation),[jobId,generation]);
+
+  function refreshSource() {
+    if (sourceErrorGeneration.current === generation) return;
+    sourceErrorGeneration.current=generation;
+    void api.refreshMockup(jobId).then(next=>{
+      if (alive.current && visibleGeneration.current === generation) { setJob(next);notice(next.current_render_generation_id !== generation ? "当前版本已变化，已刷新图片" : "版本图片暂时读不到，请重新打开此单"); }
+    }).catch(()=>{if(alive.current && visibleGeneration.current === generation)notice("版本图片暂时读不到，未改动当前版本");});
+  }
 
   function notice(text: string) {
     setHud(text);
@@ -787,23 +808,6 @@ export function MockupJobPage({
       message.error(err instanceof Error ? err.message : "重试失败");
     } finally {
       setRetrying(false);
-    }
-  }
-
-  async function relightStudio() {
-    if (!job || relighting) return;
-    setRelighting(true);
-    notice("正在重渲棚");
-    try {
-      const next = await api.relightMockupStudio(job.id);
-      setError(null);
-      setJob(next);
-      notice("棚灯已重渲");
-    } catch (err: unknown) {
-      notice("");
-      message.error(err instanceof Error ? err.message : "重渲棚失败");
-    } finally {
-      setRelighting(false);
     }
   }
 
@@ -917,7 +921,7 @@ export function MockupJobPage({
     };
   }, [job?.id, waiting, message]);
 
-  if (error) {
+  if (error && !job) {
     return (
       <section>
         <header className="page-head">
@@ -1015,6 +1019,7 @@ export function MockupJobPage({
   const hasGlb = (job.files || []).some((f) => f.key === "glb");
   const hasPpt = (job.files || []).some((f) => f.key === "ppt");
   const grounded = jobHasGround(job.files);
+  const boundAssetsReady=!job.render_generation_capabilities || Boolean(job.current_render_generation_id);
   const readFaces = listedReadFaces(job.files || []);
   const missingRequired = (["front", "back", "left", "right"] as const).filter((role) => !readFaces.includes(role));
   const canRepairPrint = Boolean(job.can_repair_print_faces);
@@ -1047,9 +1052,9 @@ export function MockupJobPage({
               {retrying ? "正在重试…" : "重试"}
             </button>
           ) : null}
-          {canCreate && job.status === "done" && job.can_relight_studio ? (
-            <button type="button" className="btn-ghost" disabled={relighting} onClick={() => void relightStudio()}>
-              {relighting ? "正在重渲棚" : "重渲棚"}
+          {job.render_generation_capabilities?.history.allowed ? (
+            <button type="button" className="btn-ghost" aria-expanded={versionsOpen} aria-controls="mockup-render-versions" onClick={()=>setVersionsOpen(value=>!value)}>
+              {versionsOpen ? "收起版本" : "出图版本"}
             </button>
           ) : null}
           <button type="button" className="btn-ghost" onClick={onBack}>
@@ -1071,6 +1076,9 @@ export function MockupJobPage({
           )}
         </div>
       </header>
+      {error ? <p className="page-lead" role="status">{error}，当前图片仍保留。</p> : null}
+      {job.render_generation_capabilities ? <RenderVersions key={job.id} job={job} open={versionsOpen}
+        productLight={productLight} backgroundLight={backgroundLight} onJob={setJob} /> : null}
       <div className="mockup-backdrop-switch">
         <span className="mockup-backdrop-label" id="mockup-backdrop-label">
           背景
@@ -1104,7 +1112,7 @@ export function MockupJobPage({
         <Alert type="error" showIcon title={mockupFailReason(job.error || job.job_error)} />
       ) : null}
 
-      {canAdmin && job.status === "done" ? (
+      {canAdmin && job.status === "done" && !job.has_render_generations && !job.render_mutation ? (
         <AdminRotateFront job={job} onConfirmed={setJob} />
       ) : null}
 
@@ -1127,10 +1135,11 @@ export function MockupJobPage({
         </div>
       ) : null}
 
-      <div className={grounded ? "mockup-sheet-photos is-grounded" : "mockup-sheet-photos"}>
+      {!boundAssetsReady ? <p className="page-lead" role="status">当前版本资源尚未确认，未混用其他版本的图片。</p> : <div key={`${job.id}:${generation}`} data-render-generation={generation} className={grounded ? "mockup-sheet-photos is-grounded" : "mockup-sheet-photos"}>
         {groundA && whiteA ? (
           <GroundedShot
-            generation={job.studio_relit_at || job.job_finished_at || ""}
+            generation={generation}
+            onSourceError={refreshSource}
             jobId={job.id}
             files={job.files}
             fileKey="white_a"
@@ -1148,8 +1157,9 @@ export function MockupJobPage({
           />
         ) : whiteA ? (
           <WhiteShot
-            key={`${job.id}:${job.studio_relit_at || job.job_finished_at || ""}:white_a`}
-            generation={job.studio_relit_at || job.job_finished_at || ""}
+            key={`${job.id}:${generation}:white_a`}
+            generation={generation}
+            onSourceError={refreshSource}
             jobId={job.id}
             fileKey="white_a"
             alt="正面与侧面白底"
@@ -1175,7 +1185,8 @@ export function MockupJobPage({
         )}
         {groundB && whiteB ? (
           <GroundedShot
-            generation={job.studio_relit_at || job.job_finished_at || ""}
+            generation={generation}
+            onSourceError={refreshSource}
             jobId={job.id}
             files={job.files}
             fileKey="white_b"
@@ -1193,8 +1204,9 @@ export function MockupJobPage({
           />
         ) : whiteB ? (
           <WhiteShot
-            key={`${job.id}:${job.studio_relit_at || job.job_finished_at || ""}:white_b`}
-            generation={job.studio_relit_at || job.job_finished_at || ""}
+            key={`${job.id}:${generation}:white_b`}
+            generation={generation}
+            onSourceError={refreshSource}
             jobId={job.id}
             fileKey="white_b"
             alt="反面与侧面白底"
@@ -1221,6 +1233,8 @@ export function MockupJobPage({
         {hasGlb ? (
           <GlbShot
             jobId={job.id}
+            generation={generation}
+            onSourceError={refreshSource}
             boxRef={glbBox}
             backgroundLight={backgroundLight}
             productLight={productLight}
@@ -1236,7 +1250,7 @@ export function MockupJobPage({
             <figcaption className="mockup-sheet-cap">GLB</figcaption>
           </figure>
         )}
-      </div>
+      </div>}
       {readFaces.length ? (
         <div className="mockup-read-chips" role="navigation" aria-label="跳到印刷面">
           <span className="mockup-backdrop-label">读字</span>
@@ -1479,6 +1493,8 @@ function ReadFaceShot({
 
 function GlbShot({
   jobId,
+  generation,
+  onSourceError,
   boxRef,
   backgroundLight,
   productLight,
@@ -1487,6 +1503,8 @@ function GlbShot({
   onNotice,
 }: {
   jobId: string;
+  generation:string;
+  onSourceError:()=>void;
   boxRef: { current: HTMLDivElement | null };
   backgroundLight: number;
   productLight: number;
@@ -1503,7 +1521,8 @@ function GlbShot({
         style={{ background: fill }}
       >
         <model-viewer
-          src={fileHref(jobId, "glb")}
+          src={fileHref(jobId, "glb",false,generation)}
+          onError={onSourceError}
           camera-controls
           environment-image="neutral"
           exposure={glbExposure(productLight)}
@@ -1534,7 +1553,7 @@ function GlbShot({
         </button>
         <a
           className="mockup-dl mockup-dl-corner"
-          href={fileHref(jobId, "glb", true)}
+          href={fileHref(jobId, "glb", true,generation)}
           download
           aria-label="下载 GLB"
           onClick={() => onNotice(downloadHudLine("GLB"))}
@@ -1551,6 +1570,7 @@ type PreviewSource = CanvasImageSource & { naturalWidth?: number; naturalHeight?
 
 function GroundedShot({
   generation,
+  onSourceError,
   jobId,
   files,
   fileKey,
@@ -1568,6 +1588,7 @@ function GroundedShot({
   lazy,
 }: {
   generation: string;
+  onSourceError:()=>void;
   jobId: string;
   files?: Array<{ key: string }>;
   fileKey: "white_a" | "white_b";
@@ -1638,7 +1659,7 @@ function GroundedShot({
     }, (sources) => {
       previewRef.current = sources;
       setReady((value) => value + 1);
-    }, () => setBad(true));
+    }, () => {setBad(true);onSourceError();});
     return () => {
       cancel();
       previewRef.current = null;
@@ -1913,6 +1934,7 @@ function StudioLightSliders({
 
 function WhiteShot({
   generation,
+  onSourceError,
   jobId,
   fileKey,
   alt,
@@ -1926,6 +1948,7 @@ function WhiteShot({
   onDownload,
 }: {
   generation: string;
+  onSourceError:()=>void;
   jobId: string;
   fileKey: "white_a" | "white_b";
   alt: string;
@@ -1985,7 +2008,7 @@ function WhiteShot({
             ref={imgRef}
             src={fileHref(jobId, fileKey, false, generation)}
             alt={alt}
-            onError={() => setBad(true)}
+            onError={() => {setBad(true);onSourceError();}}
             onLoad={() => setImageReady(true)}
             style={{ display: "none" }}
           />

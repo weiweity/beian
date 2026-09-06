@@ -2,9 +2,9 @@
 
 这是包装平面稿到既有 Blender 流水线的本地批处理入口。V2 不再把“红线、间距或 bbox 看起来像盒子”当作可自动接受的结构事实；它消费版本化 `PackagingStructure`，把结构识别、拓扑验证、人工确认和 3D 生成分开。旧 `dieline.py` 只保留给命令行诊断，不在网页新任务路径中。
 
-结构事实与成盒闸门以 `docs/adr-005-packaging-structure-v2.md` 为准；渲染真实感、family 几何分派、纸材/涂层、棚光、清晰度预算和质量评测以 `docs/adr-007-packaging-render-fidelity.md` 为准。RF-00 测量尺、RF-01 独立合同和 RF-02 流水线接线（含 RF-02.3 磁盘执行边界）已交 Code/L0：新 V2 任务在切面栅格前解析 persistable render plan，写入 resolved job、fingerprint 和 result；这没有改变 Blender 几何或棚光。非 V2 只是命令行诊断路径，不是网页产品通道。RF-03 本地产物验证、资源生命周期与 Windows 托管代码已实现；生产注册、原生 Windows 验证、RF-04+、approved baseline、L1/L2/UAT 和断电耐久性仍未完成。`0.21.25.0` 起的膜袋仍只是 `add_box` 生成的 3 mm 薄盒预览，不是写实软袋。
+结构事实与成盒闸门以 `docs/adr-005-packaging-structure-v2.md` 为准；渲染真实感、family 几何分派、纸材/涂层、棚光、清晰度预算和质量评测以 `docs/adr-007-packaging-render-fidelity.md` 为准。RF-00 测量尺、RF-01 独立合同和 RF-02 流水线接线（含 RF-02.3 磁盘执行边界）已交 Code/L0：新 V2 任务在切面栅格前解析 persistable render plan，写入 resolved job、fingerprint 和 result；这没有改变 Blender 几何或棚光。非 V2 只是命令行诊断路径，不是网页产品通道。RF-03 本地产物验证、资源生命周期与 Windows 托管代码，以及 RF-04 出图版本 API/UI 已实现；生产注册、原生 Windows 验证、RF-05+、approved baseline、L1/L2/UAT 和断电耐久性仍未完成。`0.21.25.0` 起的膜袋仍只是 `add_box` 生成的 3 mm 薄盒预览，不是写实软袋。
 
-RF-03 新候选路径由 `render_generation.py` 校验实际 GLB、full/card 和六面 PNG 网格，Hono 的 `renderGenerationBudget.ts` 把磁盘预留、运行输出/RSS 采样、封存与最终 current 提交绑定到同一资源和时间预算。一次性 `runtime_verified` 凭证仅表示本轮产物合同与资源执行验证，不代表人工视觉通过。正常 registry 只接受系统临时目录内的显式本地评审数据根，生产注册与主 Node 桥的 Windows 新建仍关闭，没有可打开生产能力的环境开关。独立候选 L0、历史开发证据和未完成门见 [RF-03 收口记录](../../docs/designs/packaging-quality-rf03-runtime-closeout.md)。
+RF-03 新候选路径由 `render_generation.py` 校验实际 GLB、full/card 和六面 PNG 网格，Hono 的 `renderGenerationBudget.ts` 把磁盘预留、运行输出/RSS 采样、封存与最终 current 提交绑定到同一资源和时间预算。一次性 `runtime_verified` 凭证仅表示本轮产物合同与资源执行验证，不代表人工视觉通过。正常 registry 只接受系统临时目录内的显式本地评审数据根，生产注册与主 Node 桥的 Windows 新建仍关闭，没有可打开生产能力的环境开关。独立候选 L0、历史开发证据和未完成门见 [RF-03 收口记录](../../docs/designs/packaging-quality-rf03-runtime-closeout.md)。 RF-04 在同一打样单提供“出图版本”：历史切换改变团队共享 current，不启动 Blender；重新出图期间保留当前成片，文件读取和下载绑定同一代。旧 `/relight` 已转入同一代际队列，托管代禁止旧换正面/补面入口原位覆盖；生产新代执行和升级仍未开放，HTTP、操作及本次 Code/L0 证据见 [RF-04 交付记录](../../docs/designs/packaging-quality-rf04-closeout.md)。
 
 当前可验证的语义来源有两种：
 
