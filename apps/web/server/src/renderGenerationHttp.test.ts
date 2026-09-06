@@ -142,6 +142,7 @@ it("RF-04 capability rejects unavailable or changed sources without writes or bl
   const f=seed("f00400000020",true);
   const plan=join(f.root,"resolved_job.json");
   const assets=Object.fromEntries(["front","right","back","left","top","bottom"].map(face=>[face,join(f.root,"assets",`panel_${face}.png`)]));
+  // Tiny protocol fixtures still allocate real credit, without writing the production 4 GiB reserve.
   const clear=registerLocalRenderGenerationRuntime({pythonExecutable:process.execPath,blenderExecutable:process.execPath,
     packagingDir:f.root,dataRoot:process.env.WB_DATA_DIR!});
   const capabilities=async()=>{
@@ -205,7 +206,7 @@ it("RF-04 failed idempotent responses use the same sanitized mutation as detail 
   }
 });
 
-it("RF-04 HTTP traverses the ordinary local registry, owned child, seal, activation and read-only history without jobs hooks", {skip:process.platform === "win32"}, async () => {
+it("RF-04 HTTP traverses the ordinary local registry, owned child, seal, activation and read-only history without jobs hooks", {skip:process.platform === "win32", timeout:75_000}, async () => {
   // Controlled child protocol + valid synthetic containers only. Not real RF-02/Blender/L2 evidence.
   resetJobsTestHooks();
   const f=seed("f00400000008");
@@ -235,8 +236,10 @@ process.stdin.on('end',()=>{
  }
  process.stderr.write('STAGE validate\n');console.log(JSON.stringify(result));
 });`);
+  // Tiny protocol fixtures still allocate real credit, without writing the production 4 GiB reserve.
   const clear=registerLocalRenderGenerationRuntime({pythonExecutable:process.execPath,blenderExecutable:process.execPath,
-    packagingDir:workerRoot,dataRoot:process.env.WB_DATA_DIR!,timeoutMs:10_000,terminationGraceMs:200});
+    packagingDir:workerRoot,dataRoot:process.env.WB_DATA_DIR!,timeoutMs:60_000,terminationGraceMs:200,
+    resourcePolicy:{diskBytes:8*1024*1024}});
   try {
     assert.equal(getRenderGenerationRuntime()?.productionEnabled,false);
     const base=`/api/mockups/${f.id}/render-generations`;
@@ -246,7 +249,9 @@ process.stdin.on('end',()=>{
     assert.equal(first.job_status,"done");
     assert.equal((await post(base,{...input,studio_adjustment:{product_light:1.1,background_light:1}})).status,409);
     const replay=await post(base,input);assert.equal(replay.status,202);assert.equal((await replay.json()).mutation.id,first.mutation.id);
-    for(let i=0;i<200 && !["succeeded","failed"].includes(readMockupFromDisk(f.id)?.render_mutation?.status || "");i++) await delay(25);
+    // Hosted L0 runs many process/IO suites concurrently; this is a success contract, not a latency benchmark.
+    const completedBy=Date.now()+65_000;
+    while(Date.now()<completedBy && !["succeeded","failed"].includes(readMockupFromDisk(f.id)?.render_mutation?.status || "")) await delay(25);
     const job=readMockupFromDisk(f.id)!;
     assert.equal(job.render_mutation?.status,"succeeded",job.render_mutation?.error);
     assert.equal(job.render_last_activation?.mode,"legacy_relight");
