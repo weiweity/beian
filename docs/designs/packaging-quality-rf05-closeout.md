@@ -50,6 +50,8 @@
 
 `npm run typecheck`（含 UI build）、`npm run test:quality`（47 PASS）及 `npm run quality`（59 个既有 baseline findings）通过。质量检查首次与其合同测试并行时读到了测试临时 probe；按独立顺序重跑后通过，未增加豁免。继承的 CI 预算断言已随 RF-03 基线同步。
 
+上述完整 L0 之后继承 RF-04 的 CI 测试修正：合成 fixture 通过普通 `resourcePolicy` 将实际磁盘预留从 4 GiB 改为 8 MiB，并采用有界的 60/65/75 秒等待。该修正在 RF-04 服务端重跑取得 727 PASS；RF-05 产品源码未变，但完整 L0 未在继承该修正后再次运行，不能将两轮证据合称为一次全套复验。
+
 独立覆盖审计新增 **15 项合成 GLB 二进制行为回归**，覆盖实际序列化/解析及身份、内壁、UV、贴图篡改；合并行为覆盖为 16/18（88.9%，非行覆盖）。余下两条原生 Blender 分派/导出及完整封存本轮未重跑。独立 Codex 与 MiniMax 审查未发现确认 P1/P2，旧 profile 与历史 registry 字节已核对。源码哈希与上述完整验证候选一致。
 
 ## 复验命令与未交范围
