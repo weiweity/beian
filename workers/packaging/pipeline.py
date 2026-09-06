@@ -548,6 +548,53 @@ def _apply_render_plan(job: dict[str, Any], plan: Mapping[str, Any]) -> None:
     job.update(plan["identity"])
 
 
+def remap_job_outputs_to_candidate(
+    job: dict[str, Any], candidate_dir: Path | str
+) -> dict[str, Any]:
+    """Point writable outputs at a private candidate directory.
+
+    Assets stay on the caller-bound source root.  This does not copy stills
+    back onto the source job and must not be used as a relight commit.
+    """
+
+    dest = Path(str(candidate_dir)).expanduser()
+    remapped = deepcopy(job)
+    remapped["project_dir"] = str(dest)
+    remapped["resolved_job_path"] = str(dest / "resolved_job.json")
+    remapped["cache_hit"] = False
+    outputs = job.get("outputs") if isinstance(job.get("outputs"), Mapping) else {}
+    remapped["outputs"] = {
+        str(key): str(dest / Path(str(path)).name)
+        for key, path in outputs.items()
+        if str(path or "").strip()
+    }
+    return remapped
+
+
+def apply_private_snapshot_studio_adjustment(
+    snapshot: dict[str, Any],
+    adjustment: Mapping[str, Any] | None,
+) -> None:
+    """Scale lights on the private Blender snapshot only. ``None`` is a no-op."""
+
+    if adjustment is None:
+        return
+    product = float(adjustment["product_light"])
+    background = float(adjustment["background_light"])
+    render = dict(snapshot.get("render") or {})
+    if "light_energy_scale" in render:
+        render["light_energy_scale"] = round(
+            float(render["light_energy_scale"]) * product, 6
+        )
+    if "world_strength" in render:
+        render["world_strength"] = round(float(render["world_strength"]) * background, 6)
+    snapshot["render"] = render
+    snapshot["studio_adjustment"] = {
+        "product_light": product,
+        "background_light": background,
+    }
+
+
 def relight_commit_failpoint(stage: str, **_details: Any) -> None:
     return None
 
@@ -1730,6 +1777,8 @@ def run_blender_job(
     blender_executable: Path,
     *,
     asset_project_dir: Path | str | None = None,
+    snapshot_studio_adjustment: Mapping[str, Any] | None = None,
+    verified_nonce_holder: list[str] | None = None,
 ) -> dict[str, Any]:
     if job.get("cache_hit"):
         return job
@@ -1756,6 +1805,9 @@ def run_blender_job(
         # blender_result.json cannot satisfy the current round. V1 diagnostic
         # jobs use the same private snapshot; they are not a product path.
         snapshot_payload["execution_nonce"] = uuid.uuid4().hex
+        apply_private_snapshot_studio_adjustment(
+            snapshot_payload, snapshot_studio_adjustment
+        )
         save_json(snapshot_path, snapshot_payload)
         blender_job_arg = str(snapshot_path)
         started = time.perf_counter()
@@ -1798,10 +1850,37 @@ def run_blender_job(
         job.update(measurements)
         write_review_cards(job)
         job["blender_process_elapsed_s"] = round(time.perf_counter() - started, 4)
+        if verified_nonce_holder is not None:
+            nonce = snapshot_payload.get("execution_nonce")
+            if not isinstance(nonce, str) or not nonce.strip():
+                raise PipelineError("本轮执行 nonce 未验证。")
+            # This round's snapshot nonce, after apply_blender_result matched it.
+            # Do not copy blender_result.json or persist it onto the job.
+            verified_nonce_holder.clear()
+            verified_nonce_holder.append(nonce)
         return job
     finally:
         if snapshot_dir is not None:
             shutil.rmtree(snapshot_dir, ignore_errors=True)
+
+
+def run_blender_candidate(
+    job: dict[str, Any],
+    blender_executable: Path,
+    *,
+    asset_project_dir: Path | str,
+    studio_adjustment: Mapping[str, Any] | None = None,
+    verified_nonce_holder: list[str] | None = None,
+) -> dict[str, Any]:
+    """Execute a candidate job through ``run_blender_job`` without source writeback."""
+
+    return run_blender_job(
+        job,
+        blender_executable,
+        asset_project_dir=asset_project_dir,
+        snapshot_studio_adjustment=studio_adjustment,
+        verified_nonce_holder=verified_nonce_holder,
+    )
 
 
 def resolve_node_bin() -> Path | None:
