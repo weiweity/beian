@@ -246,7 +246,8 @@ function unlinkIfExists(path: string): void {
 /**
  * 用同目录临时文件 + rename 替换 dest。rename 失败时 dest 原件保持不变。
  */
-export function atomicReplaceJobJson(dest: string, contents: string): void {
+export function atomicReplaceJobJson(dest: string, contents: string, checkpoint: () => void = () => {}): void {
+  checkpoint();
   if (typeof contents !== "string") {
     throw invalid("job.json 内容非法", "contents", "传入 UTF-8 JSON 文本");
   }
@@ -277,6 +278,7 @@ export function atomicReplaceJobJson(dest: string, contents: string): void {
   } finally {
     closeSync(fd);
   }
+  try { checkpoint(); } catch (err) { unlinkIfExists(tmp); throw err; }
   const tmpStat = lstatSync(tmp);
   if (tmpStat.isSymbolicLink() || !tmpStat.isFile() || tmpStat.nlink !== 1) {
     unlinkIfExists(tmp);
@@ -285,6 +287,10 @@ export function atomicReplaceJobJson(dest: string, contents: string): void {
   assertTrustedAncestors(dir);
   assertDestSafe(target);
   const rename = hooks.rename || renameSync;
+  // Last abort/deadline boundary before the linearization point. Once rename
+  // succeeds, report committed, never claim a rollback because a later clock
+  // check expired. A stuck kernel call is not interruptible from JavaScript.
+  try { checkpoint(); } catch (err) { unlinkIfExists(tmp); throw err; }
   try {
     rename(tmp, target);
   } catch (err) {

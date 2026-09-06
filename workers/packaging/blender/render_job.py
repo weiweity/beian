@@ -22,6 +22,7 @@ from camera_frame import (
     white_set_wall_y_mm,
 )
 from glb_verify import (
+    PAPER_ALBEDO_LINEAR,
     SEMANTIC_FACES,
     compare_glb_core_contract,
     compare_glb_dimensions,
@@ -30,6 +31,8 @@ from glb_verify import (
     compare_glb_texture_bindings,
     load_glb_artifact,
 )
+from render_contract import renderer_geometry_config
+from render_geometry import SHELL_MODEL, carton_meshes
 
 
 def job_path_from_argv():
@@ -58,7 +61,7 @@ def clean_scene():
 
 # sRGB 210–225 → scene-linear ~0.64–0.75. Printed white lives on the texture,
 # not the paperboard core, so grade Base Color here. Read-face PNGs stay ungraded.
-PAPER_ALBEDO_LINEAR = 0.70
+# PAPER_ALBEDO_LINEAR is shared with the exported artifact verifier.
 
 
 def _multiply_paper_albedo(nodes, links, texture_color):
@@ -212,6 +215,60 @@ def add_box(job):
     for obj in model_objects:
         obj.parent = root
     return root, model_objects
+
+
+def _physical_mesh(name, data, material):
+    mesh = bpy.data.meshes.new(f"{name}_Mesh")
+    mesh.from_pydata(data["vertices"], [], data["triangles"])
+    mesh.materials.append(material)
+    mesh.update()
+    for polygon in mesh.polygons:
+        polygon.use_smooth = True
+    mesh.normals_split_custom_set_from_vertices(data["normals"])
+    if "uvs" in data:
+        uv = mesh.uv_layers.new(name="Artwork UV")
+        for loop in mesh.loops:
+            uv.data[loop.index].uv = data["uvs"][loop.vertex_index]
+    obj = bpy.data.objects.new(name, mesh)
+    bpy.context.collection.objects.link(obj)
+    return obj
+
+
+def build_rectangular_carton(job, geometry):
+    if geometry["closure_detail"] != SHELL_MODEL:
+        return add_box(job)
+    model = carton_meshes(job["dimensions_mm"], geometry)
+    render = job["render"]
+    root = bpy.data.objects.new(f"{job['code']}_Model_Root", None)
+    bpy.context.collection.objects.link(root)
+    core = _physical_mesh(f"{job['code']}_Box_Core", model["core"], make_core_material(render["substrate_rgba"]))
+    objects = [core]
+    for face, mesh in model["surfaces"].items():
+        material = make_material(f"MAT_{face}", job["assets"][face], render.get("material_roughness", 0.52), render.get("material_specular_ior", 0.08))
+        objects.append(_physical_mesh(face.title(), mesh, material))
+    for obj in [root, *objects]:
+        obj["render_family"] = geometry["family"]
+        obj["geometry_model"] = model["model"]
+        obj["render_profile_id"] = job["render_profile_id"]
+        obj["render_contract_hash"] = job["render_contract_hash"]
+        obj["paperboard_thickness_mm"] = model["parameters"]["thickness_mm"]
+    for obj in objects:
+        obj.parent = root
+    return root, objects
+
+
+def build_pouch_thin_card_preview(job, geometry):
+    if float(job["dimensions_mm"]["depth"]) != 3.0 or geometry["preview_fidelity"] != "thin_card":
+        raise ValueError("pouch preview requires an explicit 3 mm thin card")
+    return add_box(job)
+
+
+def build_model(job, geometry):
+    builders = {"rectangular_carton_v1": build_rectangular_carton, "pouch_thin_card_v1": build_pouch_thin_card_preview}
+    builder = builders.get(geometry["family"])
+    if builder is None:
+        raise ValueError("render_family_unsupported")
+    return builder(job, geometry)
 
 
 def look_at(obj, target=(0, 0, 0)):
@@ -641,6 +698,7 @@ def export_model(job, root, model_objects):
         export_texcoords=True,
         export_normals=True,
         export_materials="EXPORT",
+        export_extras=job.get("render_spec", {}).get("geometry", {}).get("closure_detail") == SHELL_MODEL,
     )
     try:
         bpy.ops.export_scene.gltf(**gltf_kwargs)
@@ -750,6 +808,7 @@ def verify_glb(job):
         surfaces,
         job["dimensions_mm"],
         float(job["glb_tolerance_mm"]),
+        geometry=job.get("render_spec", {}).get("geometry"),
     )
     if not surface_report["ok"]:
         raise RuntimeError(
@@ -784,6 +843,7 @@ def verify_glb(job):
         core_objects,
         job["dimensions_mm"],
         float(job["glb_tolerance_mm"]),
+        geometry=job.get("render_spec", {}).get("geometry"),
     )
     if not core_report["ok"]:
         raise RuntimeError(
@@ -815,10 +875,11 @@ def main():
     started = time.perf_counter()
     job_path = job_path_from_argv()
     job = json.loads(job_path.read_text(encoding="utf-8"))
+    geometry = renderer_geometry_config(job)
     for path in job["outputs"].values():
         Path(path).parent.mkdir(parents=True, exist_ok=True)
     clean_scene()
-    root, model_objects = add_box(job)
+    root, model_objects = build_model(job, geometry)
     add_studio(job)
     ground = add_studio_ground()
     set_objects = add_white_set()
@@ -828,6 +889,9 @@ def main():
     measured_sorted = sorted(dimension_report["measured_mm"].values())
     errors_sorted = sorted(dimension_report["error_mm"].values())
     result = {
+        "render_family": geometry["family"],
+        "preview_fidelity": geometry["preview_fidelity"],
+        "geometry_model": geometry["closure_detail"],
         "code": job["code"],
         "outputs": job["outputs"],
         "glb_dimensions_mm": {

@@ -61,7 +61,7 @@ jobs:
 
   quality:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 30
     steps:
       - name: Checkout full history for baseline comparison
         uses: actions/checkout@v4
@@ -121,4 +121,6 @@ jobs:
         run: npm run typecheck
 
       - name: Run complete L0 suite
+        env:
+          PYTEST_ADDOPTS: "--durations=20"
         run: npm test

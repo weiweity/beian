@@ -4,6 +4,17 @@ import { lstat, open, realpath } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { inspectRenderGenerationGroup, renderGenerationProcessSupported, signalRenderGenerationGroup } from "./renderGenerationProcess.js";
+import { contentFingerprint, type QualityVerifier } from "./renderGenerations.js";
+import { isRenderLifecycle, RenderBudgetError, type RenderLifecycle } from "./renderGenerationBudget.js";
+
+export const RENDER_GENERATION_OUTPUT_KEYS: Readonly<Record<string, string>> = Object.freeze({
+  front_right: "white_a", back_left: "white_b", glb: "glb",
+  front_right_card: "white_a_card", back_left_card: "white_b_card",
+  front_right_ground: "white_a_ground", back_left_ground: "white_b_ground",
+  front_right_set: "white_a_set", back_left_set: "white_b_set",
+  front_right_ground_card: "white_a_ground_card", back_left_ground_card: "white_b_ground_card",
+  front_right_set_card: "white_a_set_card", back_left_set_card: "white_b_set_card",
+});
 
 const REQUEST_LIMIT = 64 * 1024;
 const OUTPUT_LIMIT = 1024 * 1024;
@@ -28,6 +39,7 @@ export class RenderBridgeError extends Error {
 }
 
 export type RenderBridgeObserver = {
+  lifecycle?: RenderLifecycle;
   signal?: AbortSignal;
   context?: { jobId: string; mutationId: string };
   /** Must persist ownership synchronously before stdin is delivered. A throw aborts this child. */
@@ -62,7 +74,7 @@ export type RenderPlanReceipt = Readonly<{
   sourceAssets: ReadonlyArray<Readonly<OutputEvidence>>;
 }>;
 
-type Binding = { request: Json; source: Json; studio: unknown; used: boolean };
+type Binding = { request: Json; source: Json; studio: unknown; used: boolean; deadline: number };
 type OutputEvidence = { path: string; sha256: string; bytes: number };
 export type RenderBridgeCandidate = {
   receipt: RenderPlanReceipt;
@@ -78,6 +90,7 @@ function invalid(cause: string): never {
 }
 
 function publicFailure(error: unknown): RenderBridgeError {
+  if (error instanceof RenderBudgetError) return new RenderBridgeError("render_generation_failed", error.cause);
   return error instanceof RenderBridgeError ? error : new RenderBridgeError("render_generation_invalid", "input_or_file_unavailable");
 }
 
@@ -131,8 +144,10 @@ async function inside(root: string, file: string): Promise<void> {
   }
 }
 
-async function fileIdentity(root: string, file: string, limit = FILE_LIMIT): Promise<OutputEvidence> {
+async function fileIdentity(root: string, file: string, limit = FILE_LIMIT, check = () => {}): Promise<OutputEvidence> {
+  check();
   await inside(root, file);
+  check();
   const before = await lstat(file);
   if (!before.isFile() || before.nlink !== 1 || before.size <= 0 || before.size > limit) invalid("file_budget_or_type");
   const handle = await open(file, "r");
@@ -142,11 +157,13 @@ async function fileIdentity(root: string, file: string, limit = FILE_LIMIT): Pro
     const hash = createHash("sha256");
     let bytes = 0;
     for await (const chunk of handle.createReadStream({ autoClose: false })) {
+      check();
       bytes += chunk.length;
       if (bytes > limit) invalid("file_budget");
       hash.update(chunk);
     }
     const after = await handle.stat();
+    check();
     if (bytes !== before.size || after.mtimeMs !== before.mtimeMs || after.size !== before.size) invalid("file_changed");
     return { path: file, bytes, sha256: `sha256:${hash.digest("hex")}` };
   } finally {
@@ -163,7 +180,8 @@ function qualityUnwired(result: Json): void {
 
 /** Only this child/group is signalled. Parent close alone cannot release ownership. */
 function command(options: Required<RenderBridgeOptions>, request: Json, observer: RenderBridgeObserver): Promise<Json> {
-  const input = Buffer.from(JSON.stringify(request));
+  // Transport-only remaining duration, never part of the persisted visual identity.
+  const input = Buffer.from(JSON.stringify({ ...request, timeout_ms: options.timeoutMs }));
   if (input.length > REQUEST_LIMIT) invalid("request_budget");
   if (observer.signal?.aborted) return Promise.reject(new RenderBridgeError("render_generation_cancelled", "cancelled"));
   if (!renderGenerationProcessSupported()) {
@@ -200,6 +218,12 @@ function command(options: Required<RenderBridgeOptions>, request: Json, observer
     };
     const abort = () => stop("cancelled", "render_generation_cancelled");
     const timer = setTimeout(() => stop("timeout", "render_generation_timeout"), options.timeoutMs);
+    const budgetTimer = observer.lifecycle ? setInterval(() => {
+      if (closed || failure) return;
+      try {
+        observer.lifecycle!.observe(String(request.candidate_dir ?? join(String(request.job_root), ".render-generations", ".candidate-none")), child.pid);
+      } catch (err) { stop(err instanceof RenderBudgetError ? err.cause : "resource_accounting_unavailable"); }
+    }, 100) : undefined;
     observer.signal?.addEventListener("abort", abort, { once: true });
     child.stdout.on("data", (chunk: Buffer) => {
       if (failure) return;
@@ -233,6 +257,7 @@ function command(options: Required<RenderBridgeOptions>, request: Json, observer
         if (closed) return;
         failure ??= new RenderBridgeError("render_generation_failed", "process_group_unconfirmed");
         clearTimeout(timer);
+        if (budgetTimer) clearInterval(budgetTimer);
         observer.signal?.removeEventListener("abort", abort);
         reject(failure);
         child.stdin.destroy();
@@ -251,6 +276,7 @@ function command(options: Required<RenderBridgeOptions>, request: Json, observer
     child.on("close", (code) => {
       closed = true;
       clearTimeout(timer);
+      if (budgetTimer) clearInterval(budgetTimer);
       if (forceTimer) clearTimeout(forceTimer);
       if (drainTimer) clearTimeout(drainTimer);
       observer.signal?.removeEventListener("abort", abort);
@@ -301,78 +327,105 @@ export function createRenderGenerationBridge(config: RenderBridgeOptions) {
     if (!Number.isSafeInteger(value) || value <= 0 || value > ceiling) invalid("time_budget");
   }
   const receipts = new WeakMap<RenderPlanReceipt, Binding>();
+  const partialSealProofs = new WeakMap<RenderBridgeCandidate, QualityVerifier>();
+  const runtimeSealProofs = new WeakMap<RenderBridgeCandidate, QualityVerifier>();
+  // One monotonic budget covers validation hashes, both child runs and final
+  // evidence hashes. Cooperative I/O checkpoints cannot interrupt a stuck OS
+  // filesystem call; jobs sealing and Windows containment remain separate gates.
+  const remaining = (deadline: number, observer: RenderBridgeObserver): number => {
+    observer.lifecycle?.check();
+    if (observer.signal?.aborted) throw new RenderBridgeError("render_generation_cancelled", "cancelled");
+    const left = Math.ceil(deadline - performance.now());
+    if (left <= 0) throw new RenderBridgeError("render_generation_timeout", "timeout");
+    return left;
+  };
 
-  const fresh = async (request: Json): Promise<OutputEvidence[]> => {
+  const fresh = async (request: Json, check: () => void): Promise<OutputEvidence[]> => {
+    check();
     const root = String(request.job_root);
     await inside(options.dataRoot, root);
     const source = join(root, "resolved_job.json");
-    const evidence = await fileIdentity(root, source, PLAN_LIMIT);
+    const evidence = await fileIdentity(root, source, PLAN_LIMIT, check);
     if (evidence.sha256 !== request.expected_source_sha256) invalid("source_changed");
     // Parsing only locates bounded input files; Python remains the sole RF-02 validator.
     const handle = await open(source, "r");
     let raw: Buffer;
     try { raw = Buffer.alloc(evidence.bytes); await handle.read(raw, 0, raw.length, 0); }
     finally { await handle.close(); }
+    check();
     if (digest(raw) !== evidence.sha256) invalid("source_changed");
     const assets = object(object(JSON.parse(raw.toString("utf8"))).assets);
     const rows: OutputEvidence[] = [];
     for (const face of FACES) {
       const path = absolute(String(assets[face]));
-      const current = await fileIdentity(root, path);
+      const current = await fileIdentity(root, path, FILE_LIMIT, check);
       if (current.sha256 !== object(request.expected_asset_sha256)[face]) invalid("asset_changed");
       rows.push(current);
     }
     return rows;
   };
 
+  const verify = async (input: RenderBridgeValidation, observer: RenderBridgeObserver, deadline: number): Promise<RenderPlanReceipt> => {
+    try {
+      const check = () => { remaining(deadline, observer); };
+      check();
+      const request: Json = {
+        schema: "packaging-render-generation-request/1", action: "validate",
+        job_root: absolute(input.jobRoot), mode: input.mode,
+        expected_source_sha256: sha(input.expectedSourceSha256),
+        expected_asset_sha256: Object.fromEntries(FACES.map(face => [face, sha(input.expectedAssetSha256[face])])),
+      };
+      if (input.studioAdjustment) request.studio_adjustment = { ...input.studioAdjustment };
+      await inside(options.dataRoot, String(request.job_root));
+      await fresh(request, check);
+      const result = await command({ ...options, timeoutMs: remaining(deadline, observer) }, request, observer);
+      check();
+      const source = object(result.source_identity);
+      const execution = object(result.execution);
+      if (result.action !== "validate" || result.mode !== input.mode || execution.status !== "validated"
+        || execution.nonce !== null || result.candidate_dir !== null
+        || source.resolved_job_sha256 !== request.expected_source_sha256
+        || !same(source.assets, request.expected_asset_sha256)
+        || !same(result.studio_adjustment, request.studio_adjustment ?? null)
+        || result.candidate_plan_identity !== source.plan_identity) invalid("validation_binding");
+      sha(source.render_contract_hash);
+      if (typeof source.render_profile_id !== "string" || !/^[a-zA-Z0-9._-]{1,64}$/.test(source.render_profile_id)) {
+        invalid("profile_identity");
+      }
+      const sourceAssets = await fresh(request, check);
+      const receipt = Object.freeze({
+        sourceSha256: sha(source.resolved_job_sha256), planIdentity: sha(source.plan_identity),
+        candidateIdentity: sha(result.candidate_identity), profile: source.render_profile_id,
+        sourceAssets: Object.freeze(sourceAssets.map(row => Object.freeze({ ...row }))),
+      });
+      check();
+      receipts.set(receipt, { request, source, studio: result.studio_adjustment, used: false, deadline });
+      return receipt;
+    } catch (error) { throw publicFailure(error); }
+  };
+
   const bridge = {
+    async assertJobRoot(jobRoot: string): Promise<void> { await inside(options.dataRoot, absolute(jobRoot)); },
     async verifyBytes(input: { jobRoot: string; bytes: Buffer; mode: RenderBridgeValidation["mode"]; studioAdjustment?: Studio },
       observer: RenderBridgeObserver = {}): Promise<RenderPlanReceipt> {
+      const deadline = observer.lifecycle?.deadline ?? performance.now() + options.timeoutMs;
+      const check = () => { remaining(deadline, observer); };
       try {
+        check();
         const root = absolute(input.jobRoot);
         if (!Buffer.isBuffer(input.bytes) || !input.bytes.length || input.bytes.length > PLAN_LIMIT) invalid("plan_budget");
         const bytes = Buffer.from(input.bytes);
         await inside(options.dataRoot, root);
+        check();
         const assets = object(object(JSON.parse(bytes.toString("utf8"))).assets);
         const hashes = {} as RenderBridgeValidation["expectedAssetSha256"];
-        for (const face of FACES) hashes[face] = (await fileIdentity(root, absolute(String(assets[face])))).sha256;
-        return await bridge.verify({ jobRoot: root, mode: input.mode, expectedSourceSha256: digest(bytes),
-          expectedAssetSha256: hashes, studioAdjustment: input.studioAdjustment }, observer);
+        for (const face of FACES) hashes[face] = (await fileIdentity(root, absolute(String(assets[face])), FILE_LIMIT, check)).sha256;
+        return await verify({ jobRoot: root, mode: input.mode, expectedSourceSha256: digest(bytes),
+          expectedAssetSha256: hashes, studioAdjustment: input.studioAdjustment }, observer, deadline);
       } catch (error) { throw publicFailure(error); }
     },
-    async verify(input: RenderBridgeValidation, observer: RenderBridgeObserver = {}): Promise<RenderPlanReceipt> {
-      try {
-        const request: Json = {
-          schema: "packaging-render-generation-request/1", action: "validate",
-          job_root: absolute(input.jobRoot), mode: input.mode,
-          expected_source_sha256: sha(input.expectedSourceSha256),
-          expected_asset_sha256: Object.fromEntries(FACES.map(face => [face, sha(input.expectedAssetSha256[face])])),
-        };
-        if (input.studioAdjustment) request.studio_adjustment = { ...input.studioAdjustment };
-        await inside(options.dataRoot, String(request.job_root));
-        await fresh(request);
-        const result = await command(options, request, observer);
-        const source = object(result.source_identity);
-        const execution = object(result.execution);
-        if (result.action !== "validate" || result.mode !== input.mode || execution.status !== "validated"
-          || execution.nonce !== null || result.candidate_dir !== null
-          || source.resolved_job_sha256 !== request.expected_source_sha256
-          || !same(source.assets, request.expected_asset_sha256)
-          || !same(result.studio_adjustment, request.studio_adjustment ?? null)
-          || result.candidate_plan_identity !== source.plan_identity) invalid("validation_binding");
-        sha(source.render_contract_hash);
-        if (typeof source.render_profile_id !== "string" || !/^[a-zA-Z0-9._-]{1,64}$/.test(source.render_profile_id)) {
-          invalid("profile_identity");
-        }
-        const sourceAssets = await fresh(request);
-        const receipt = Object.freeze({
-          sourceSha256: sha(source.resolved_job_sha256), planIdentity: sha(source.plan_identity),
-          candidateIdentity: sha(result.candidate_identity), profile: source.render_profile_id,
-          sourceAssets: Object.freeze(sourceAssets.map(row => Object.freeze({ ...row }))),
-        });
-        receipts.set(receipt, { request, source, studio: result.studio_adjustment, used: false });
-        return receipt;
-      } catch (error) { throw publicFailure(error); }
+    verify(input: RenderBridgeValidation, observer: RenderBridgeObserver = {}): Promise<RenderPlanReceipt> {
+      return verify(input, observer, observer.lifecycle?.deadline ?? performance.now() + options.timeoutMs);
     },
 
     async render(receipt: RenderPlanReceipt, candidate: string, blender: string,
@@ -382,6 +435,8 @@ export function createRenderGenerationBridge(config: RenderBridgeOptions) {
         if (!binding || binding.used) invalid("receipt_unknown_or_used");
         // A render attempt consumes its receipt, even on failure; retries require fresh validation.
         binding.used = true;
+        const check = () => { remaining(binding.deadline, observer); };
+        check();
         const candidateDir = absolute(candidate);
         const parent = join(String(binding.request.job_root), ".render-generations");
         if (dirname(candidateDir) !== parent || !/^\.candidate-[a-zA-Z0-9_-]{1,96}$/.test(basename(candidateDir))) {
@@ -394,11 +449,13 @@ export function createRenderGenerationBridge(config: RenderBridgeOptions) {
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
         }
-        await fresh(binding.request);
-        const result = await command(options, {
+        await fresh(binding.request, check);
+        const result = await command({ ...options, timeoutMs: remaining(binding.deadline, observer) }, {
           ...binding.request, action: "render-candidate", candidate_dir: candidateDir,
           blender_executable: absolute(blender),
         }, observer);
+        observer.lifecycle?.observe(candidateDir);
+        check();
         const execution = object(result.execution);
         if (result.action !== "render-candidate" || result.mode !== binding.request.mode
           || !same(result.source_identity, binding.source) || !same(result.studio_adjustment, binding.studio)
@@ -407,6 +464,7 @@ export function createRenderGenerationBridge(config: RenderBridgeOptions) {
           || typeof execution.nonce !== "string" || !/^[a-zA-Z0-9_-]{16,128}$/.test(execution.nonce)) {
           invalid("execution_binding");
         }
+        if (!same(result.artifact_checks, { glb: "passed", full_card: "passed", source_sampling: "passed" })) invalid("artifact_checks");
         const rows = object(result.outputs);
         await inside(options.dataRoot, candidateDir);
         if (REQUIRED.some(key => !rows[key])) invalid("required_output_missing");
@@ -414,7 +472,7 @@ export function createRenderGenerationBridge(config: RenderBridgeOptions) {
         for (const [key, raw] of Object.entries(rows)) {
           if (!OUTPUT_KEYS.has(key)) invalid("output_key");
           const row = object(raw);
-          const evidence = await fileIdentity(candidateDir, absolute(String(row.path)));
+          const evidence = await fileIdentity(candidateDir, absolute(String(row.path)), FILE_LIMIT, check);
           if (evidence.sha256 !== row.sha256 || evidence.bytes !== row.bytes) invalid("output_identity");
           outputs[key] = evidence;
         }
@@ -430,10 +488,59 @@ export function createRenderGenerationBridge(config: RenderBridgeOptions) {
           }
           return { key: warning.key, cause: warning.cause };
         });
-        await fresh(binding.request);
-        return { receipt, candidateDir, executionNonce: execution.nonce, outputs, optionalWarnings,
+        await fresh(binding.request, check);
+        check();
+        const candidateResult: RenderBridgeCandidate = { receipt, candidateDir, executionNonce: execution.nonce, outputs, optionalWarnings,
           quality: { status: "unwired", production_ready: false } };
+        // Capture copies, never trust caller-mutable candidate rows as proof.
+        const files = Object.entries(outputs).filter(([key]) => RENDER_GENERATION_OUTPUT_KEYS[key])
+          .map(([key, row]) => ({ key: RENDER_GENERATION_OUTPUT_KEYS[key], sha256: row.sha256.slice(7), bytes: row.bytes }))
+          .sort((a, b) => a.key.localeCompare(b.key));
+        const faces = Object.fromEntries(FACES.map(face => [face, String(object(binding.request.expected_asset_sha256)[face]).slice(7)]));
+        const fingerprint = contentFingerprint(files, faces);
+        const contract = receipt.sourceSha256.slice(7);
+        const mode = binding.request.mode;
+        let consumed = false;
+        const runtimeLifecycle = observer.lifecycle;
+        const makeProof = (runtime: boolean): QualityVerifier => input => {
+          if (consumed) invalid("seal_proof_used");
+          consumed = true; // Failure, cancellation and expiry also consume this attempt.
+          check();
+          if (runtime) runtimeLifecycle!.check();
+          const accepted = (!runtime || input.resource_lifecycle === runtimeLifecycle)
+            && (mode === "legacy_relight" || mode === "upgrade") && input.mode === mode
+            && input.contract_sha256 === contract && input.content_fingerprint === fingerprint
+            && same(input.faces, faces)
+            && same([...input.files].sort((a, b) => a.key.localeCompare(b.key)), files);
+          return { generation_id: input.generation_id, contract_sha256: input.contract_sha256,
+            content_fingerprint: input.content_fingerprint, verifier_status: accepted ? "accepted" : "rejected",
+            quality_status: accepted ? (runtime ? "runtime_verified" : "unwired") : "failed",
+            verifier: runtime ? "rf03-runtime-artifacts/1" : "rf03-artifact-subgates/1",
+            note: accepted ? (runtime ? "本轮合同、六面、实际 GLB/full/card、源 PNG 网格及封存字节一致；资源生命周期受限；不代表视觉基线、PDF 固有清晰度或实机验收" : "GLB/full/card/源采样子门与封存字节一致；完整 runtime 质量门尚未接线") : "封存字节与本轮候选凭证不符" };
+        };
+        partialSealProofs.set(candidateResult, makeProof(false));
+        if (isRenderLifecycle(runtimeLifecycle)) runtimeSealProofs.set(candidateResult, makeProof(true));
+        return candidateResult;
       } catch (error) { throw publicFailure(error); }
+    },
+
+    /** Local one-shot subgate proof. Not a production/runtime pass or a g0 import verifier. */
+    createPartialSealVerifier(candidate: RenderBridgeCandidate): QualityVerifier {
+      const verifier = partialSealProofs.get(candidate);
+      if (!verifier) invalid("candidate_unknown_or_used");
+      partialSealProofs.delete(candidate);
+      runtimeSealProofs.delete(candidate);
+      return verifier;
+    },
+    /** Requires the real resource lifecycle and this bridge's verified candidate.
+     * Runtime artifact conformance is deliberately not visual-baseline approval.
+     */
+    createRuntimeSealVerifier(candidate: RenderBridgeCandidate): QualityVerifier {
+      const verifier = runtimeSealProofs.get(candidate);
+      if (!verifier) invalid("runtime_proof_unavailable");
+      runtimeSealProofs.delete(candidate);
+      partialSealProofs.delete(candidate);
+      return verifier;
     },
   };
   return bridge;

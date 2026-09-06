@@ -20,7 +20,7 @@ import { DATA_DIR, PACKAGING } from "./config.js";
 import { blenderBin } from "./settings.js";
 import { canAccessOwner, isTid, replaceFile, type Viewer } from "./tasks.js";
 import { atomicReplaceJobJson } from "./mockupAtomicWrite.js";
-import { isRenderGenerationOutputKey } from "./renderGenerations.js";
+import { isRenderGenerationOutputKey, type RenderActivationFact } from "./renderGenerations.js";
 
 export type MockupJob = {
   id: string;
@@ -81,6 +81,8 @@ export type MockupJob = {
    * 满员拒绝新 requestId，不挤旧记录；禁止进入公开详情/列表。
    */
   render_generation_idempotency?: RenderGenerationIdempotencyFact[];
+  /** Current-pointer commit and this bounded audit fact are one atomic replacement. Never public. */
+  render_last_activation?: RenderActivationFact;
 };
 
 export type PublicRenderMutationSummary = {
@@ -105,7 +107,7 @@ export type RenderGenerationRequestRecord = {
   worker_pid?: number;
   /** Private per-spawn identity; never serialized by publicMockup/Summary. */
   worker_execution_id?: string;
-  worker_protocol?: "render-generation/1";
+  worker_protocol?: "render-generation/1" | "windows-job-object/1";
   source_plan_sha256?: string;
 };
 
@@ -256,6 +258,12 @@ export function resetMockupCache(): void {
 }
 
 export function beginStructureConfirmation(job: MockupJob): void {
+  const current = readMockupFromDisk(job.id) ?? job;
+  if (isGenerationManagedMockup(current)) throw generationManagedReject("structure");
+  if (current.render_mutation?.status === "queued" || current.render_mutation?.status === "running"
+    || current.render_generation_request?.worker_pid !== undefined) {
+    throw Object.assign(new Error("这单渲染版本尚未结束，暂时不能换正面。"), { status: 409, code: "render_generation_busy" });
+  }
   if (activeStructureConfirmations.has(job.id)) {
     throw Object.assign(new Error("这单结构正在确认，请稍候"), { status: 409 });
   }
@@ -264,6 +272,10 @@ export function beginStructureConfirmation(job: MockupJob): void {
 
 export function finishStructureConfirmation(jobId: string): void {
   activeStructureConfirmations.delete(jobId);
+}
+
+export function structureConfirmationActive(jobId: string): boolean {
+  return activeStructureConfirmations.has(jobId);
 }
 
 function mockupRoot(create = true) {
@@ -292,7 +304,7 @@ export function isGenerationManagedMockup(job: MockupJob | Pick<MockupJob, "curr
   return Boolean(job.current_render_generation_id && String(job.current_render_generation_id).trim());
 }
 
-export function generationManagedReject(action: "retry" | "relight" | "print-faces" | "collect"): Error {
+export function generationManagedReject(action: "retry" | "relight" | "print-faces" | "collect" | "structure"): Error {
   const message =
     action === "retry"
       ? "这单已托管渲染代际，不能用旧重试覆盖成片。"
@@ -300,7 +312,9 @@ export function generationManagedReject(action: "retry" | "relight" | "print-fac
         ? "这单已托管渲染代际，不能用旧重渲覆盖成片。"
         : action === "print-faces"
           ? "这单已托管渲染代际，不能用旧补面覆盖成片。"
-          : "这单已托管渲染代际，不能扫描输出覆盖成片。";
+          : action === "structure"
+            ? "这单已托管渲染代际，不能用旧换正面覆盖成片。"
+            : "这单已托管渲染代际，不能扫描输出覆盖成片。";
   return Object.assign(new Error(message), { status: 409, code: "render_generation_managed" });
 }
 
@@ -313,10 +327,10 @@ export function applyRenderGenerationPatch(job: MockupJob, patch: { current_rend
   };
 }
 
-export function saveMockup(job: MockupJob): void {
+export function saveMockup(job: MockupJob, checkpoint?: () => void): void {
   const payload = JSON.stringify(job, null, 2);
   if (isGenerationManagedMockup(job)) {
-    atomicReplaceJobJson(jobPath(job.id, false), payload);
+    atomicReplaceJobJson(jobPath(job.id, false), payload, checkpoint);
   } else {
     const dir = join(mockupRoot(), job.id);
     mkdirSync(dir, { recursive: true });
@@ -471,7 +485,7 @@ function publicMockupError(value: unknown): string | undefined {
   return (safe || PUBLIC_MOCKUP_ERROR_FALLBACK).slice(0, 80);
 }
 
-function publicRenderMutation(job: MockupJob): PublicRenderMutationSummary | undefined {
+export function publicRenderMutation(job: Pick<MockupJob, "render_mutation">): PublicRenderMutationSummary | undefined {
   const mutation = job.render_mutation;
   if (!mutation || typeof mutation !== "object") return undefined;
   const summary: PublicRenderMutationSummary = {
@@ -1439,19 +1453,22 @@ function canRepairPrintFaces(job: MockupJob): boolean {
   return job.status === "done" && !requiredPrintFacesReady(job.id) && printFaceRepairSource(job) !== null;
 }
 
-export type RelightStudioSource = {
+type RelightStudioSource = {
   jobDir: string;
   manifest: string;
 };
 
 function findResolvedJobPath(jobDir: string, jobId: string): string | null {
-  const walk = (dir: string): string | null => {
+  let entriesRead = 0;
+  const walk = (dir: string, depth = 0): string | null => {
+    if (depth > 6 || entriesRead > 256) return null;
     if (!existsSync(dir)) return null;
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (++entriesRead > 256) return null;
       const path = join(dir, entry.name);
       if (entry.isDirectory()) {
         if (entry.name.startsWith(".")) continue;
-        const nested = walk(path);
+        const nested = walk(path, depth + 1);
         if (nested) return nested;
         continue;
       }
@@ -1483,7 +1500,7 @@ function hasRelightAssets(path: string, jobId: string): boolean {
   }
 }
 
-export function relightStudioSource(job: MockupJob): RelightStudioSource | null {
+function relightStudioSource(job: MockupJob): RelightStudioSource | null {
   if (job.structure_engine !== "v2") return null;
   const jobDir = join(mockupRoot(false), job.id);
   const manifest = job.manifest_path || join(jobDir, "manifest.json");

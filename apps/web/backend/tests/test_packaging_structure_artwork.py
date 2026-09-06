@@ -347,6 +347,17 @@ def test_minimum_face_texture_density_can_be_raised_explicitly(tmp_path: Path):
     assert sizes["front"] == [720, 1_200]
 
 
+@pytest.mark.parametrize("paper_only", [False, True])
+def test_fractional_face_dimensions_never_round_below_sampling_floor(tmp_path: Path, paper_only: bool):
+    source = artwork_pdf(tmp_path / "artwork.pdf", page_width_mm=1_000, page_height_mm=532)
+    resolved = resolved_fixture()
+    resolved["dimensions_mm"]["width"] = 30.01
+    if paper_only:
+        resolved["faces"]["front"] = {"face_id": "face-front", "paper_only": True, "artwork_layers": []}
+    sizes = render_face_assets(source, resolved, tmp_path / "assets", raster_width_px=1_200)
+    assert sizes["front"][0] == 601
+
+
 def test_face_texture_density_does_not_spend_pixel_budget_on_unused_artboard(tmp_path: Path):
     source = artwork_pdf(
         tmp_path / "wide-artwork.pdf",

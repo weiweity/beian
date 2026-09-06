@@ -1,13 +1,19 @@
 # ADR-007：包装 3D 渲染真实感、清晰度与能力合同
 
 - 日期：2026-09-04
-- 状态：PARTIAL IMPLEMENTATION / L0 — `/plan-eng-review` 已完成，D1–D8 已锁定；RF-00 测量尺、RF-01 独立合同和 RF-02 流水线接线（含 RF-02.3）已完成 Code/L0；RF-03+ 输出代际、视觉改造、L1、L2、UAT 均未完成
+- 状态：PARTIAL IMPLEMENTATION / L0 — `/plan-eng-review` 已完成，D1–D8 已锁定；RF-00 测量尺、RF-01 独立合同和 RF-02 流水线接线（含 RF-02.3）已完成 Code/L0；RF-03 本地产物验证、资源生命周期、临时 registry 与 Windows 托管代码已实现；RF-04 出图版本 API/UI 与 RF-05 显式纸盒壳几何已实现；生产注册、原生 Windows、RF-06+、视觉改造、L1/L2/UAT 未完成
 - 目标执行者：Grok / Codex 等编码代理，人工负责人负责选择、金标与发布闸门
 - 关联：`docs/adr-005-packaging-structure-v2.md`、`DESIGN.md`、`workers/packaging/README.md`、`docs/pouch-v1-acceptance.md`
 - 基线：`origin/main` `b39f147`，版本 `0.21.25.0`
 - 实现快照：RF-00 / RF-01 / RF-02 已交 Code/L0（RF-02.3 收口磁盘执行边界与私有执行快照/nonce）。新任务消费 persistable render plan 并写入四项顶层 identity / fingerprint token / resolved job / result；Blender 启动前校验磁盘 payload 与派生 flat render。所有非 cache Blender 任务从当前内存 job 生成私有执行快照并注入本轮 nonce；非 V2 只是命令行诊断路径，不是网页产品通道。只有已知 pre-RF02 V2 作业可合成 `compat-legacy-v0`，且历史最小 render 键必须完整匹配。同步异常全量回滚（含删除本轮新建 optional 输出）；进程崩溃/断电级原子 current 仍是 RF-03。正式 approved baseline 未创建，Blender 几何/材质/棚光未改，不得称画质已改善
 
 ## 1. 结论先行
+
+> 2026-09-06 RF-05：追加显式 `packshot-carton-geometry-v1` profile，沿用现有流水线、材质和棚光；纸板壳向内偏置，六面完整 UV 与实际 GLB 内外壁/绕序按受信任合同校验。旧 profile、默认选择、正式 baseline 均未改，膜袋仍为 3 mm thin-card。独立候选验证与原开发历史 Blender 证据分列于 [RF-05 记录](designs/packaging-quality-rf05-closeout.md)；生产和网页 upgrade 仍关闭。
+
+> 2026-09-06 RF-04：已接入同单版本列表、逐动作权限与来源可用性提示、代绑定文件读取、创建幂等、CAS 激活和可恢复审计。来源提示只读核对计划引用及六面身份，执行时仍由原 RF-02 验证器作最终验证。普通临时 registry 与合成 UI 回归独立取证，生产新代执行、Windows 与视觉基线仍关闭或待验。交付及本次审查修复见 [RF-04 记录](designs/packaging-quality-rf04-closeout.md)。
+
+> 2026-09-06 RF-03：本地增量包含磁盘预留、运行输出/RSS 采样、封存与提交检查点预算、实际 GLB/full/card/六面 PNG 合同校验，以及绑定产物和资源生命周期的一次性 runtime_verified 凭证。正常 registry 仅允许系统临时数据根，生产注册和主桥 Windows 新建门继续关闭。阶段证据及未完成门见 [RF-03 runtime 收口](designs/packaging-quality-rf03-runtime-closeout.md)；本地结果不等于正式视觉基线、Windows/L2/UAT 或生产发布。下文原始计划保留历史语境。
 
 这不是“再调亮一点”或“给白盒加一圈描边”的问题。四个表象——真实感弱、白盒吃边、盒型通用性差、字体模糊——来自同一个缺口：现有结构链路已经版本化并可验证，但结构确认之后没有同等级别的**渲染合同**。`workers/packaging/blender/render_job.py` 把所有任务交给同一个六面方盒、同一套纸材、固定三灯棚和固定输出策略；浏览器又把 1440 卡图缩到 canvas 后停在那里，虽预取了全图却不升级显示源。
 

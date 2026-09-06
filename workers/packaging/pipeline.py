@@ -81,6 +81,7 @@ from render_contract import (  # noqa: E402
     validate_job_output_contract,
 )
 from white_background import png_bytes_over_white  # noqa: E402
+from blender_process import BlenderProcessError, run_bounded_blender  # noqa: E402
 
 DEFAULT_NODE_MODULES = Path(os.environ.get("RUNTIME_NODE_MODULES", ""))
 DEFAULT_RUNTIME_BIN = Path(os.environ.get("RUNTIME_BIN_DIR", ""))
@@ -1441,6 +1442,8 @@ def preflight_product_v2(
         structure_job,
         assets_dir,
         raster_width_px=int(plan["sampling"]["legacy_raster_width_px"]),
+        minimum_face_pixels_per_mm=float(plan["sampling"]["minimum_face_pixels_per_mm"]),
+        max_raster_pixels=int(plan["sampling"]["maximum_face_pixels"]),
     )
     reader = PdfReader(str(artwork_pdf))
     media = reader.pages[0].mediabox
@@ -1779,6 +1782,7 @@ def run_blender_job(
     asset_project_dir: Path | str | None = None,
     snapshot_studio_adjustment: Mapping[str, Any] | None = None,
     verified_nonce_holder: list[str] | None = None,
+    capture_deadline: float | None = None,
 ) -> dict[str, Any]:
     if job.get("cache_hit"):
         return job
@@ -1823,8 +1827,19 @@ def run_blender_job(
             "--",
             blender_job_arg,
         ]
-        process = subprocess.run(command, capture_output=True, text=True)
-        log_path.write_text(process.stdout + "\n" + process.stderr, encoding="utf-8")
+        if capture_deadline is None:
+            process = subprocess.run(command, capture_output=True, text=True)
+            log_path.write_text(process.stdout + "\n" + process.stderr, encoding="utf-8")
+        else:
+            try:
+                captured = run_bounded_blender(command, deadline=capture_deadline)
+            except BlenderProcessError as error:
+                log_path.write_bytes(error.output)
+                raise PipelineError("Blender 超过候选执行预算", cause=error.cause,
+                                    fix="保留旧成片，查看本轮有界日志并检查渲染资源") from error
+            log_path.write_bytes(captured.stdout)
+            process = subprocess.CompletedProcess(command, captured.returncode,
+                                                  captured.stdout.decode("utf-8", errors="replace"), "")
         if process.returncode != 0:
             raise PipelineError(f"Blender任务失败：{job['code']}，日志={log_path}")
         # EEVEE can return zero while dropping shadow pages. Never publish that
@@ -1871,6 +1886,7 @@ def run_blender_candidate(
     asset_project_dir: Path | str,
     studio_adjustment: Mapping[str, Any] | None = None,
     verified_nonce_holder: list[str] | None = None,
+    capture_deadline: float | None = None,
 ) -> dict[str, Any]:
     """Execute a candidate job through ``run_blender_job`` without source writeback."""
 
@@ -1880,6 +1896,7 @@ def run_blender_candidate(
         asset_project_dir=asset_project_dir,
         snapshot_studio_adjustment=studio_adjustment,
         verified_nonce_holder=verified_nonce_holder,
+        capture_deadline=capture_deadline,
     )
 
 

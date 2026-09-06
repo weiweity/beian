@@ -49,6 +49,20 @@ function expectWriteError(fn: () => unknown, cause: string): void {
 }
 
 describe("mockupAtomicWrite", () => {
+  for (const boundary of [1, 2, 3]) {
+    it(`deadline at atomic boundary ${boundary} preserves old JSON and cleans temporary bytes`, () => {
+      const dir = makeTestTempDir("beian-atomic-deadline-");
+      const path = join(dir, "job.json");
+      writeFileSync(path, "old-current");
+      let checks = 0;
+      assert.throws(() => atomicReplaceJobJson(path, "new-current", () => {
+        if (++checks === boundary) throw new Error("lifecycle_timeout");
+      }), /lifecycle_timeout/);
+      assert.equal(readFileSync(path, "utf8"), "old-current");
+      assert.deepEqual(sortedNames(dir), ["job.json"]);
+    });
+  }
+
   it("creates an absent job.json preserving UTF-8 bytes and leaves no temporary files", () => {
     const dir = makeTestTempDir("beian-atomic-create-");
     const text = JSON.stringify({ label: "合成测试·底面", current: "g0-legacy-original" });

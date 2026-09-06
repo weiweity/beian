@@ -19,6 +19,9 @@ GLB_VERSION = 2
 GLB_JSON_CHUNK = 0x4E4F534A
 GLB_BIN_CHUNK = 0x004E4942
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+# Existing renderer's fixed paper-white multiplier, shared without changing F.
+# Read-face PNGs are not graded. A future profile must explicitly own this value.
+PAPER_ALBEDO_LINEAR = 0.70
 
 
 class GlbArtifact:
@@ -31,10 +34,15 @@ class GlbArtifact:
         self.binary = binary
 
 
-def load_glb_artifact(path: Path | str) -> GlbArtifact:
+def load_glb_artifact(path: Path | str, *, max_bytes: int = 512 * 1024 * 1024) -> GlbArtifact:
     """Read a GLB 2.0 file and retain bytes needed for artifact verification."""
     source = Path(path)
-    data = source.read_bytes()
+    if source.stat().st_size > max_bytes:
+        raise ValueError("GLB exceeds byte budget")
+    with source.open("rb") as handle:
+        data = handle.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise ValueError("GLB exceeds byte budget")
     if len(data) < 20:
         raise ValueError("GLB is too short")
     magic, version, declared_length = struct.unpack_from("<4sII", data, 0)
@@ -78,6 +86,239 @@ def load_glb_json(path: Path | str) -> dict[str, Any]:
 
 def _normalized_name(value: object) -> str:
     return str(value or "").strip().lower().split(".", 1)[0]
+
+
+def _runtime_row(rows: object, index: object) -> Mapping[str, Any]:
+    row = _indexed(rows, index)
+    if row is None:
+        raise ValueError("invalid artifact index")
+    return row
+
+
+def _finite_vector(raw: object, length: int) -> list[float]:
+    if (not isinstance(raw, list) or len(raw) != length
+            or any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) for v in raw)):
+        raise ValueError("invalid finite vector")
+    return [float(v) for v in raw]
+
+
+def _node_matrix(node: Mapping[str, Any]) -> list[float]:
+    # glTF column-major T*R*S; same world transform used by the importer.
+    if "matrix" in node:
+        if any(k in node for k in ("translation", "rotation", "scale")):
+            raise ValueError("matrix and TRS cannot coexist")
+        matrix = _finite_vector(node["matrix"], 16)
+        if [matrix[i] for i in (3, 7, 11, 15)] != [0, 0, 0, 1]:
+            raise ValueError("non-affine matrix")
+        return matrix
+    t = _finite_vector(node.get("translation", [0, 0, 0]), 3)
+    s = _finite_vector(node.get("scale", [1, 1, 1]), 3)
+    x, y, z, w = _finite_vector(node.get("rotation", [0, 0, 0, 1]), 4)
+    if abs(x*x+y*y+z*z+w*w-1) > 1e-5:
+        raise ValueError("rotation is not a unit quaternion")
+    return [
+        (1-2*(y*y+z*z))*s[0], 2*(x*y+z*w)*s[0], 2*(x*z-y*w)*s[0], 0,
+        2*(x*y-z*w)*s[1], (1-2*(x*x+z*z))*s[1], 2*(y*z+x*w)*s[1], 0,
+        2*(x*z+y*w)*s[2], 2*(y*z-x*w)*s[2], (1-2*(x*x+y*y))*s[2], 0,
+        *t, 1,
+    ]
+
+
+def _matrix_product(a: Sequence[float], b: Sequence[float]) -> list[float]:
+    return [sum(a[k*4+r]*b[c*4+k] for k in range(4)) for c in range(4) for r in range(4)]
+
+
+def _artifact_accessor(artifact: GlbArtifact, index: object, kind: str) -> list[tuple]:
+    row = _runtime_row(artifact.document.get("accessors"), index)
+    if row.get("type") != kind or row.get("sparse") is not None or row.get("normalized", False) is not False:
+        raise ValueError("unsupported accessor representation")
+    component = row.get("componentType")
+    formats = {5121: "B", 5123: "H", 5125: "I"} if kind == "SCALAR" else {5126: "f"}
+    if component not in formats:
+        raise ValueError("unsupported accessor component")
+    count = _integer(row.get("count"), "accessor.count", minimum=1)
+    if count > 8192:
+        raise ValueError("accessor budget exceeded")
+    size = {"SCALAR": 1, "VEC2": 2, "VEC3": 3}[kind]
+    fmt = "<" + formats[component] * size
+    packed = struct.calcsize(fmt)
+    view = _runtime_row(artifact.document.get("bufferViews"), row.get("bufferView"))
+    offset = _integer(row.get("byteOffset", 0), "accessor.byteOffset")
+    stride = _integer(view.get("byteStride", packed), "bufferView.byteStride", minimum=1)
+    if stride < packed or stride > 252 or stride % (packed // size) or offset % (packed // size):
+        raise ValueError("invalid accessor alignment")
+    data = _buffer_view_bytes(artifact, row.get("bufferView"))
+    if offset + (count-1)*stride + packed > len(data):
+        raise ValueError("accessor exceeds bufferView")
+    values = [struct.unpack_from(fmt, data, offset+i*stride) for i in range(count)]
+    if any(not math.isfinite(v) for value in values for v in value):
+        raise ValueError("nonfinite accessor")
+    return values
+
+
+def _artifact_mesh(artifact: GlbArtifact, node: Mapping[str, Any], world: Sequence[float], *, shell: bool = False) -> dict[str, Any]:
+    doc = artifact.document
+    mesh = _runtime_row(doc.get("meshes"), node.get("mesh"))
+    primitives = mesh.get("primitives")
+    # Current six flat artwork panels + one core; RF-05 families must explicitly
+    # extend this contract instead of silently accepting unfamiliar geometry.
+    if not isinstance(primitives, list) or len(primitives) != 1 or mesh.get("weights"):
+        raise ValueError("unsupported mesh primitives")
+    primitive = primitives[0]
+    if not isinstance(primitive, dict) or primitive.get("mode", 4) != 4 or primitive.get("targets") or primitive.get("extensions"):
+        raise ValueError("unsupported primitive")
+    attributes = primitive.get("attributes")
+    if not isinstance(attributes, dict):
+        raise ValueError("missing attributes")
+    positions = _artifact_accessor(artifact, attributes.get("POSITION"), "VEC3")
+    points = []
+    for position in positions:
+        p = [sum(world[c*4+r]*position[c] for c in range(3))+world[12+r] for r in range(3)]
+        # glTF Y-up metres -> existing verifier's Blender Z-up metres.
+        points.append([p[0], -p[2], p[1]])
+    if any(not math.isfinite(v) for point in points for v in point):
+        raise ValueError("nonfinite world coordinate")
+    indexes = ([v[0] for v in _artifact_accessor(artifact, primitive["indices"], "SCALAR")]
+               if "indices" in primitive else list(range(len(points))))
+    if len(indexes) % 3 or any(i >= len(points) for i in indexes):
+        raise ValueError("invalid triangle indexes")
+    material = _runtime_row(doc.get("materials"), primitive.get("material"))
+    name = _normalized_name(node.get("name")).removesuffix("_mesh")
+    result = {"name": name, "materials": [material.get("name")], "points": points,
+              "triangles": [[points[i] for i in indexes[n:n+3]] for n in range(0, len(indexes), 3)]}
+    if name in SEMANTIC_FACES:
+        if _normalized_name(material.get("name")) != f"mat_{name}":
+            raise ValueError("wrong semantic material binding")
+        texture = material.get("pbrMetallicRoughness", {}).get("baseColorTexture", {})
+        factor = _finite_vector(_base_color_factor(material), 4)
+        expected_factor = [PAPER_ALBEDO_LINEAR]*3 + [1.0]
+        if any(abs(a-b) > 1e-4 for a,b in zip(factor, expected_factor)):
+            raise ValueError("artwork base colour factor changes pixels")
+        if texture.get("texCoord", 0) != 0 or texture.get("extensions"):
+            raise ValueError("unsupported texture coordinates or transform")
+        uvs = _artifact_accessor(artifact, attributes.get("TEXCOORD_0"), "VEC2")
+        if len(uvs) != len(points):
+            raise ValueError("UV and position counts differ")
+        result["samples"] = [{"position": points[i], "uv": [uvs[i][0], 1-uvs[i][1]]} for i in indexes]
+        # Flat panel must actually cover its rectangle, not just contain four
+        # convenient UV corners among degenerate/unreferenced vertices.
+        uv_triangles = [[uvs[i] for i in indexes[n:n+3]] for n in range(0, len(indexes), 3)]
+        signed = [((b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]))/2 for a,b,c in uv_triangles]
+        if not shell and (len(signed) != 2 or abs(abs(sum(signed))-1) > 1e-4 or any(abs(v) < 0.49 for v in signed)):
+            raise ValueError("incomplete artwork triangles")
+        edges = Counter(tuple(sorted((tuple(a), tuple(b)))) for tri in uv_triangles for a,b in zip(tri, tri[1:]+tri[:1]))
+        shared = [edge for edge, count in edges.items() if count == 2]
+        if not shell and (len(shared) != 1 or any(abs(shared[0][0][i]-shared[0][1][i]) < 0.99 for i in (0,1))):
+            raise ValueError("artwork triangles do not share a diagonal")
+    elif not name.endswith("_box_core"):
+        raise ValueError("unexpected visible mesh")
+    elif "baseColorTexture" in material.get("pbrMetallicRoughness", {}):
+        raise ValueError("core substrate must not carry an artwork texture")
+    return result
+
+
+def compare_glb_artifact_contract(
+    artifact: GlbArtifact, expected_assets: Mapping[str, object],
+    dimensions_mm: Mapping[str, float], tolerance_mm: float, substrate_rgba: Sequence[float],
+    *, geometry: Mapping[str, Any] | None = None,
+    render_identity: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """Verify the static exported box directly, without bpy or worker measurements.
+
+    Intentionally supports the current uncompressed, non-skinned Blender output
+    subset. Unsupported geometry fails closed, never passes as an empty scene.
+    """
+    try:
+        shell = bool(geometry and geometry.get("closure_detail") == "closed-carton-shell-v1")
+        if geometry and (geometry.get("family") not in {"rectangular_carton_v1", "pouch_thin_card_v1"}
+                         or (shell and geometry.get("family") != "rectangular_carton_v1")):
+            raise ValueError("unsupported artifact geometry family")
+        if shell and (not render_identity or not render_identity.get("render_profile_id") or not render_identity.get("render_contract_hash")):
+            raise ValueError("shell verification requires trusted render identity")
+        dims = _finite_vector([dimensions_mm[k] for k in AXIS_TO_DIMENSION], 3)
+        if min(dims) <= 0 or not math.isfinite(tolerance_mm) or not 0 < tolerance_mm < min(dims):
+            raise ValueError("invalid dimension tolerance")
+        doc = artifact.document
+        if doc.get("asset", {}).get("version") != "2.0" or doc.get("animations") or doc.get("skins") or doc.get("extensionsRequired"):
+            raise ValueError("unsupported dynamic or required-extension artifact")
+        buffers = doc.get("buffers")
+        if (not isinstance(buffers, list) or len(buffers) != 1 or "uri" in buffers[0]
+                or _integer(buffers[0].get("byteLength"), "buffer.byteLength") > len(artifact.binary)):
+            raise ValueError("expected embedded buffer")
+        views = doc.get("bufferViews")
+        if not isinstance(views, list) or len(views) > 256:
+            raise ValueError("bufferView budget exceeded")
+        for view in views:
+            if (view.get("buffer", 0) != 0 or "extensions" in view
+                    or _integer(view.get("byteOffset", 0), "bufferView.byteOffset")
+                    + _integer(view.get("byteLength"), "bufferView.byteLength", minimum=1) > buffers[0]["byteLength"]):
+                raise ValueError("bufferView exceeds declared embedded buffer")
+        materials = doc.get("materials")
+        expected_names = {f"mat_{face}" for face in SEMANTIC_FACES} | {"mat_paperboardedge"}
+        if (not isinstance(materials, list) or len(materials) != 7
+                or {_normalized_name(m.get("name")) for m in materials} != expected_names):
+            raise ValueError("exactly one material per semantic face and core required")
+        nodes = doc.get("nodes")
+        if not isinstance(nodes, list) or not 1 <= len(nodes) <= 64:
+            raise ValueError("scene node budget")
+        scene = _runtime_row(doc.get("scenes"), doc.get("scene", 0))
+        roots = scene.get("nodes")
+        if not isinstance(roots, list) or not roots:
+            raise ValueError("empty scene")
+        identity = [1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]
+        pending = [(i, identity) for i in roots]
+        seen = set()
+        meshes = []
+        while pending:
+            index, parent = pending.pop()
+            node = _runtime_row(nodes, index)
+            if index in seen or any(k in node for k in ("skin", "weights", "extensions")):
+                raise ValueError("shared/cyclic or unsupported node")
+            seen.add(index)
+            world = _matrix_product(parent, _node_matrix(node))
+            if "mesh" in node:
+                if shell:
+                    expected_metadata = {"render_family": geometry["family"], "geometry_model": geometry["closure_detail"],
+                                         "render_profile_id": render_identity["render_profile_id"], "render_contract_hash": render_identity["render_contract_hash"]}
+                    extras = node.get("extras", {})
+                    if any(extras.get(key) != value for key,value in expected_metadata.items()):
+                        raise ValueError("shell metadata does not match trusted render identity")
+                meshes.append(_artifact_mesh(artifact, node, world, shell=shell))
+                if len(meshes) > 7:
+                    raise ValueError("mesh budget exceeded")
+            children = node.get("children", [])
+            if not isinstance(children, list) or len(children) > 64:
+                raise ValueError("children budget exceeded")
+            pending.extend((i, world) for i in children)
+        surfaces = {}
+        cores = []
+        for mesh in meshes:
+            name = mesh["name"]
+            if name in SEMANTIC_FACES:
+                if name in surfaces:
+                    raise ValueError("duplicate semantic face")
+                surfaces[name] = mesh["samples"]
+            else:
+                cores.append(mesh)
+        if set(surfaces) != set(SEMANTIC_FACES) or len(cores) != 1:
+            raise ValueError("six semantic panels and one core required")
+        bounds = _point_bounds(cores[0]["points"])
+        planes = {"front": (1,0), "back": (1,1), "right": (0,1), "left": (0,0), "top": (2,1), "bottom": (2,0)}
+        for face, samples in surfaces.items():
+            axis, side = planes[face]
+            if not shell and any(abs(s["position"][axis]-bounds[axis][side])*1000 > tolerance_mm for s in samples):
+                raise ValueError("artwork detached from core boundary")
+        points = [p for mesh in meshes for p in mesh["points"]]
+        spans = [max(p[i] for p in points)-min(p[i] for p in points) for i in range(3)]
+        reports = {
+            "dimensions": compare_glb_dimensions(spans, dimensions_mm, tolerance_mm),
+            "surface": compare_glb_surface_contract(surfaces, dimensions_mm, tolerance_mm, geometry=geometry),
+            "core": compare_glb_core_contract(cores, dimensions_mm, tolerance_mm, geometry=geometry),
+            "material": compare_glb_material_contract(artifact, expected_assets, substrate_rgba),
+        }
+        return {"ok": all(r["ok"] for r in reports.values()), **reports}
+    except (ValueError, TypeError, KeyError, AttributeError, IndexError, OverflowError, struct.error) as error:
+        return {"ok": False, "errors": [{"code": "glb_artifact_contract_invalid", "detail": str(error)[:160]}]}
 
 
 def _indexed(items: object, index: object) -> Mapping[str, Any] | None:
@@ -152,7 +393,7 @@ def _paeth(left: int, up: int, upper_left: int) -> int:
     return upper_left
 
 
-def _decode_png_rgba(payload: bytes) -> dict[str, Any]:
+def _decode_png_rgba(payload: bytes, *, max_pixels: int = 32_000_000) -> dict[str, Any]:
     """Decode generated PNG pixels without relying on Pillow inside Blender."""
     if not payload.startswith(PNG_SIGNATURE):
         raise ValueError("image is not a PNG")
@@ -189,6 +430,8 @@ def _decode_png_rgba(payload: bytes) -> dict[str, Any]:
                 or interlace != 0
             ):
                 raise ValueError("PNG must be a non-interlaced 8-bit RGBA image")
+            if width * height > max_pixels:
+                raise ValueError("PNG exceeds pixel budget")
             saw_ihdr = True
         elif chunk_type == b"IDAT":
             if not saw_ihdr:
@@ -202,8 +445,13 @@ def _decode_png_rgba(payload: bytes) -> dict[str, Any]:
     if not saw_ihdr or not saw_iend or offset != len(payload) or not idat:
         raise ValueError("PNG is missing required chunks")
     stride = width * 4
-    decompressed = zlib.decompress(bytes(idat))
-    if len(decompressed) != (stride + 1) * height:
+    expected_bytes = (stride + 1) * height
+    inflater = zlib.decompressobj()
+    # One sentinel detects overflow without materializing the rest of a bomb.
+    # flush(length) is NOT a limit, so never use it to finish this bounded read.
+    decompressed = inflater.decompress(bytes(idat), expected_bytes + 1)
+    if (len(decompressed) != expected_bytes or not inflater.eof
+            or inflater.unconsumed_tail or inflater.unused_data):
         raise ValueError("PNG scanlines do not match its dimensions")
     rows: list[bytes] = []
     zero_row = bytes(stride)
@@ -440,8 +688,12 @@ def compare_glb_surface_contract(
     tolerance_mm: float,
     *,
     uv_tolerance: float = 1e-4,
+    geometry: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Verify UV direction and mirror state after importing the exported GLB."""
+    if geometry and geometry.get("closure_detail") == "closed-carton-shell-v1":
+        from render_geometry import compare_shell_surfaces
+        return compare_shell_surfaces(surfaces, dimensions_mm, geometry)
     expected = {
         "front": (float(dimensions_mm["width"]), float(dimensions_mm["height"])),
         "back": (float(dimensions_mm["width"]), float(dimensions_mm["height"])),
@@ -571,8 +823,12 @@ def compare_glb_core_contract(
     core_objects: Sequence[Mapping[str, Any]],
     dimensions_mm: Mapping[str, float],
     tolerance_mm: float,
+    *, geometry: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Verify one opaque core spans and physically backs every box boundary."""
+    if geometry and geometry.get("closure_detail") == "closed-carton-shell-v1":
+        from render_geometry import compare_shell_core
+        return compare_shell_core(core_objects, dimensions_mm, geometry)
     errors: list[dict[str, Any]] = []
     if len(core_objects) != 1:
         return {

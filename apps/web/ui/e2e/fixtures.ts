@@ -48,6 +48,10 @@ export type SyntheticTask = {
 };
 
 export type SyntheticMockup = {
+  current_render_generation_id?: import("../src/api").MockupJob["current_render_generation_id"];
+  render_mutation?: import("../src/api").MockupJob["render_mutation"];
+  render_generation_capabilities?: import("../src/api").MockupJob["render_generation_capabilities"];
+  has_render_generations?: boolean;
   id: string;
   status: "queued" | "running" | "review_required" | "unsupported" | "done" | "failed";
   title: string;

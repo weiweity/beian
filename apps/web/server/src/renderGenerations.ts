@@ -17,7 +17,6 @@
 import {
   closeSync,
   constants as fsConstants,
-  copyFileSync,
   existsSync,
   fstatSync,
   fsyncSync,
@@ -25,7 +24,7 @@ import {
   mkdirSync,
   openSync,
   readdirSync,
-  readFileSync,
+  readSync,
   realpathSync,
   renameSync,
   statfsSync,
@@ -34,6 +33,7 @@ import {
 } from "node:fs";
 import { createHash, createHmac, randomBytes as cryptoRandomBytes, timingSafeEqual } from "node:crypto";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import type { RenderLifecycle } from "./renderGenerationBudget.js";
 
 const RENDER_GENERATION_SCHEMA = "render-generation/1";
 const RENDER_GENERATION_INDEX_SCHEMA = "render-generation-index/1";
@@ -45,6 +45,10 @@ const RENDER_GENERATION_DISK_SAFETY_MULTIPLIER = 2;
 export const RENDER_GENERATION_DISK_SAFETY_FLOOR_BYTES = 64 * 1024 * 1024;
 export const RENDER_GENERATION_UNWIRED_NOTE = "外部质量验证尚未接线";
 const RENDER_GENERATION_MAX_FILE_BYTES = 256 * 1024 * 1024;
+const INDEX_MAX_BYTES = 8 * 1024 * 1024;
+// Old stores may have no persisted cursor key. A bounded process-local fallback
+// keeps GET read-only; a restart then expires that cursor, never authorizes it.
+const READ_CURSOR_SECRET = cryptoRandomBytes(32);
 
 const INDEX_NAME = "index.jsonl";
 const CURSOR_KEY_NAME = ".cursor-key";
@@ -54,7 +58,8 @@ const JOB_ID_RE = /^[0-9a-f]{12}$/;
 const SHA256_RE = /^[a-f0-9]{64}$/;
 const PROFILE_RE = /^[a-zA-Z0-9._-]{1,64}$/;
 const GEN_ID_RE = /^g[1-9][0-9]*-[a-z0-9]+(?:-[a-z0-9]+)*-[a-f0-9]{8}-[a-f0-9]{8}$/;
-const VIRTUAL_ID_RE = /^legacy-current-[a-f0-9]{8}$/;
+const VIRTUAL_ID_RE = /^legacy-current-v2-[a-f0-9]{64}$/;
+const OLD_VIRTUAL_ID_RE = /^legacy-current-[a-f0-9]{8}$/;
 const ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
 
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -114,13 +119,14 @@ const FILE_ROW_KEYS = new Set(["key", "name", "sha256", "bytes", "rel"]);
 const FACE_ROW_KEYS = new Set(["sha256", "name"]);
 const OMITTED_KEYS = new Set(["key", "reason"]);
 const INDEX_KEYS = new Set(["schema", "event", "generation_id", "at", "seq"]);
+const ACTIVATION_KEYS = new Set([...INDEX_KEYS,"event_id","from_generation_id","mode","actor_id"]);
 
 type RenderGenerationMode = "legacy_import" | "legacy_relight" | "upgrade";
 export type RenderGenerationErrorCode =
   | "render_generation_invalid"
   | "render_generation_stale"
   | "render_generation_disk_guard";
-type RenderGenerationQualityStatus = "unwired" | "failed";
+type RenderGenerationQualityStatus = "unwired" | "failed" | "runtime_verified";
 type DiskSpaceSource = "statfs" | "injected";
 
 type JobFileMirror = { key: string; path: string; name: string };
@@ -151,6 +157,8 @@ type DurabilityNotes = {
 };
 
 export type QualityVerifyInput = {
+  /** In-process seal context; never persisted or exposed in public JSON. */
+  resource_lifecycle?: Pick<RenderLifecycle, "check" | "beforeWrite">;
   generation_id: string;
   contract_sha256: string;
   content_fingerprint: string;
@@ -197,8 +205,11 @@ type SealResult = {
   generation_id: string;
   patch: RenderGenerationPatch;
   public_summary: PublicGenerationSummary;
+  /** Process-local final barrier; rehashes ready bytes and checks exact manifest
+   * identity. Must run inside the jobs CAS lock immediately before job commit. */
+  prepareCommit(): RenderGenerationPatch;
   report: {
-    quality_wired: false;
+    quality_wired: boolean;
     quality_status: RenderGenerationQualityStatus;
     note: string;
     optional_omitted: OptionalOmitted[];
@@ -242,17 +253,25 @@ export type RenderGenerationStoreOptions = {
   randomBytes?: (n: number) => Buffer;
   probeDisk?: () => DiskSpaceProbe;
   qualityVerifier?: QualityVerifier;
+  lifecycle?: Pick<RenderLifecycle, "check" | "beforeWrite">;
   failpoints?: RenderGenerationFailpoints;
 };
 
 export type RenderGenerationStore = {
   virtualLegacyCurrentId(): string;
+  openFile(generationId: string, key: string): HeldGenerationFile;
+  assertHistoryWritable(): void;
+  assertRerenderSourceFresh(sourceId?: string): void;
+  hasActivation(fact: RenderActivationFact): boolean;
+  appendActivation(fact: RenderActivationFact): void;
   sealGeneration(input: SealGenerationInput): SealResult;
   prepareActivationPatch(input: PrepareActivationInput): RenderGenerationPatch;
   recoverOrphans(): RecoverResult;
   listHistory(query?: HistoryQuery): HistoryPage;
   publicSummary(generationId: string, currentGenerationId: string | null): PublicGenerationSummary;
 };
+
+export type HeldGenerationFile = { fd: number; name: string; sha256: string; bytes: number; close(): void };
 
 export class RenderGenerationError extends Error {
   readonly code: RenderGenerationErrorCode;
@@ -365,6 +384,7 @@ function looksLikePath(id: string): boolean {
 }
 
 function assertSafeId(id: string, cause: string): void {
+  if (OLD_VIRTUAL_ID_RE.test(id)) throw stale("legacy_identity_expired");
   if (looksLikePath(id) || (!isGenerationId(id) && !VIRTUAL_ID_RE.test(id))) {
     throw invalid("代际 id 非法", cause, "只使用服务端公开的代际 id");
   }
@@ -551,7 +571,7 @@ function assertGlb(buf: Buffer, causePrefix: string): void {
   if (!sawJson) throw invalid("GLB 缺少 JSON chunk", `${causePrefix}:glb_json_missing`, "提供有效 GLB");
 }
 
-function contentFingerprint(
+export function contentFingerprint(
   files: Array<{ key: string; sha256: string }>,
   faces: Record<string, string>,
 ): string {
@@ -665,12 +685,22 @@ type Manifest = {
   actor_label?: string;
 };
 
+export type RenderActivationFact = {
+  event_id: string;
+  from_generation_id: string;
+  generation_id: string;
+  mode: "activate" | "legacy_relight" | "upgrade";
+  at: string;
+  actor_id: string;
+};
+
 type IndexEvent = {
   schema: typeof RENDER_GENERATION_INDEX_SCHEMA;
-  event: "ready" | "recovered";
+  event: "ready" | "recovered" | "activated";
   generation_id: string;
   at: string;
   seq: number;
+  activation?: RenderActivationFact;
 };
 
 function parseQuality(raw: unknown): QualityBlock {
@@ -681,7 +711,7 @@ function parseQuality(raw: unknown): QualityBlock {
     throw invalid("质量结果非法", "quality.verifier_status", "保留当前代");
   }
   const qualityStatus = asString(obj.quality_status, "quality.quality_status");
-  if (qualityStatus !== "unwired" && qualityStatus !== "failed") {
+  if (qualityStatus !== "unwired" && qualityStatus !== "failed" && qualityStatus !== "runtime_verified") {
     throw invalid("质量状态非法", "quality.quality_status", "保留当前代");
   }
   return {
@@ -768,7 +798,7 @@ function parseManifest(raw: unknown): Manifest {
   if (quality.content_fingerprint !== expectedFp) {
     throw invalid("内容指纹与文件表不一致", "content_fingerprint", "保留当前代");
   }
-  if (quality.verifier_status !== "accepted" || quality.quality_status !== "unwired") {
+  if (quality.verifier_status !== "accepted" || !["unwired", "runtime_verified"].includes(quality.quality_status)) {
     throw invalid("质量验证未接受，不能当 ready", "quality_rejected", "保留当前代");
   }
   return {
@@ -798,19 +828,29 @@ function parseIndexEvent(line: string): IndexEvent | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const obj = raw as Record<string, unknown>;
   for (const key of Object.keys(obj)) {
-    if (!INDEX_KEYS.has(key)) return null;
+    if (!(obj.event === "activated" ? ACTIVATION_KEYS : INDEX_KEYS).has(key)) return null;
   }
   if (obj.schema !== RENDER_GENERATION_INDEX_SCHEMA) return null;
-  if (obj.event !== "ready" && obj.event !== "recovered") return null;
+  if (obj.event !== "ready" && obj.event !== "recovered" && obj.event !== "activated") return null;
   if (typeof obj.generation_id !== "string" || !isGenerationId(obj.generation_id)) return null;
   if (typeof obj.at !== "string" || !ISO_RE.test(obj.at)) return null;
   if (typeof obj.seq !== "number" || !Number.isInteger(obj.seq) || obj.seq < 1) return null;
+  let activation: RenderActivationFact | undefined;
+  if (obj.event === "activated") {
+    if (typeof obj.event_id !== "string" || !/^a[a-f0-9]{32}$/.test(obj.event_id)
+      || typeof obj.from_generation_id !== "string" || (!isGenerationId(obj.from_generation_id) && !VIRTUAL_ID_RE.test(obj.from_generation_id))
+      || !["activate","legacy_relight","upgrade"].includes(String(obj.mode))
+      || typeof obj.actor_id !== "string" || !obj.actor_id || obj.actor_id.length > 256) return null;
+    activation = {event_id:obj.event_id,from_generation_id:obj.from_generation_id,generation_id:obj.generation_id,
+      mode:obj.mode as RenderActivationFact["mode"],at:obj.at,actor_id:obj.actor_id};
+  }
   return {
     schema: RENDER_GENERATION_INDEX_SCHEMA,
     event: obj.event,
     generation_id: obj.generation_id,
     at: obj.at,
     seq: obj.seq,
+    activation,
   };
 }
 
@@ -824,7 +864,7 @@ function readIndexFile(path: string): { events: IndexEvent[]; truncatedTail: boo
   const lst = lstatIfExists(path);
   if (!lst) return { events: [], truncatedTail: false };
   if (lst.isSymbolicLink() || !lst.isFile()) throw invalid("索引不是普通文件", "index_not_file", "不要用路径式 cursor");
-  const raw = readFileSync(path, "utf8");
+  const raw = readBoundedMetadata(path, INDEX_MAX_BYTES, "history_capacity").toString("utf8");
   if (!raw) return { events: [], truncatedTail: false };
   const trailingNewline = raw.endsWith("\n");
   const parts = raw.split("\n");
@@ -841,6 +881,34 @@ function readIndexFile(path: string): { events: IndexEvent[]; truncatedTail: boo
   }
   if (!trailingNewline) truncatedTail = true;
   return { events, truncatedTail };
+}
+
+/** Fixed bound on the held inode, not just a path stat followed by readFile. */
+function readBoundedMetadata(path: string, maxBytes: number, cause: string): Buffer {
+  const before = lstatSync(path);
+  const problem = cause === "history_capacity" ? "索引容量已满" : "代际元数据非法";
+  if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || before.size > maxBytes) {
+    throw invalid(problem,cause,"保留当前文件，核验元数据");
+  }
+  const fd = openSync(path,fsConstants.O_RDONLY | noFollowFlag());
+  try {
+    const opened = fstatSync(fd);
+    if (opened.ino !== before.ino || opened.dev !== before.dev || opened.nlink !== 1 || opened.size !== before.size) {
+      throw invalid(problem,cause,"保留当前文件，重新读取");
+    }
+    const buf = Buffer.alloc(before.size + 1);
+    let count = 0;
+    while (count < buf.length) {
+      const n = readSync(fd,buf,count,Math.min(1024*1024,buf.length-count),count);
+      if (!n) break;
+      count += n;
+    }
+    const after = fstatSync(fd);
+    if (count !== before.size || after.size !== before.size || after.mtimeMs !== before.mtimeMs) {
+      throw invalid(problem,cause,"保留当前文件，重新读取");
+    }
+    return buf.subarray(0,count);
+  } finally { closeSync(fd); }
 }
 
 export function openRenderGenerationStore(opts: RenderGenerationStoreOptions): RenderGenerationStore {
@@ -860,6 +928,7 @@ export function openRenderGenerationStore(opts: RenderGenerationStoreOptions): R
   const now = opts.now || (() => new Date());
   const randomBytes = opts.randomBytes || cryptoRandomBytes;
   const failpoints = opts.failpoints || {};
+  const check = () => opts.lifecycle?.check("seal");
 
   function genDir(): string {
     return join(jobRoot, RENDER_GENERATION_DIR);
@@ -1009,14 +1078,17 @@ export function openRenderGenerationStore(opts: RenderGenerationStoreOptions): R
   }
 
   function writeFileExclusive(path: string, data: string | Buffer, opts?: { mode?: number; cause?: string }): void {
+    check();
     const cause = opts?.cause || "target_exists";
     assertTargetAbsent(path, cause);
     const buf = typeof data === "string" ? Buffer.from(data, "utf8") : data;
+    chargeWrite(buf.length);
     const flags = fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY | noFollowFlag();
     const fd = openWriteFd(path, flags, cause, opts?.mode ?? 0o644);
     try {
       writeAllSync(fd, buf);
       fsyncSync(fd);
+      check();
     } finally {
       closeSync(fd);
     }
@@ -1028,6 +1100,7 @@ export function openRenderGenerationStore(opts: RenderGenerationStoreOptions): R
   }
 
   function appendFileExclusive(path: string, data: string): void {
+    check();
     assertNoSymlinkChain(path, { targetMayBeMissing: true });
     const st = lstatIfExists(path);
     if (!st) {
@@ -1039,6 +1112,7 @@ export function openRenderGenerationStore(opts: RenderGenerationStoreOptions): R
     if (st.nlink !== 1) throw invalid("拒绝 hardlink 外部写入", "hardlink", "索引/清单/cursor 不能 hardlink 到外部文件");
     jailRel(jobRoot, realpathSync(path));
     const buf = Buffer.from(data, "utf8");
+    chargeWrite(buf.length);
     const fd = openWriteFd(path, fsConstants.O_APPEND | fsConstants.O_WRONLY | noFollowFlag(), "hardlink");
     try {
       const opened = fstatSync(fd);
@@ -1047,19 +1121,45 @@ export function openRenderGenerationStore(opts: RenderGenerationStoreOptions): R
       }
       writeAllSync(fd, buf);
       fsyncSync(fd);
+      check();
     } finally {
       closeSync(fd);
     }
   }
 
   function copyFileExclusive(srcPath: string, dest: string, cause: string): void {
+    check();
     assertInside(dest);
     assertTargetAbsent(dest, cause);
+    const before = lstatSync(srcPath);
+    if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1
+      || before.size > RENDER_GENERATION_MAX_FILE_BYTES) throw invalid("复制源非法", cause, "检查源文件");
+    const source = openSync(srcPath, fsConstants.O_RDONLY | noFollowFlag());
     try {
-      copyFileSync(srcPath, dest, fsConstants.COPYFILE_EXCL);
+      const opened = fstatSync(source);
+      if (opened.ino !== before.ino || opened.dev !== before.dev) throw invalid("复制源已变化", cause, "重新验证");
+      const target = openWriteFd(dest, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY | noFollowFlag(), cause);
+      try {
+        const chunk = Buffer.alloc(1024 * 1024);
+        let count = 0;
+        while (true) {
+          check();
+          const n = readSync(source, chunk, 0, chunk.length, null);
+          if (!n) break;
+          count += n;
+          if (count > before.size) throw invalid("复制源增长", cause, "重新验证");
+          chargeWrite(n);
+          writeAllSync(target, chunk.subarray(0, n));
+        }
+        const after = fstatSync(source);
+        if (count !== before.size || after.size !== before.size || after.mtimeMs !== before.mtimeMs) {
+          throw invalid("复制源已变化", cause, "重新验证");
+        }
+        check();
+      } finally { closeSync(target); }
     } catch (err) {
       mapUnsafeWriteError(err, cause);
-    }
+    } finally { closeSync(source); }
     const destStat = lstatSync(dest);
     if (destStat.isSymbolicLink() || !destStat.isFile()) {
       throw invalid("复制结果不是普通文件", cause, "不要使用 hardlink/symlink");
@@ -1068,6 +1168,8 @@ export function openRenderGenerationStore(opts: RenderGenerationStoreOptions): R
       throw invalid("拒绝 hardlink 外部写入", "hardlink", "必须复制字节，不能 hardlink");
     }
   }
+
+  function chargeWrite(bytes: number): void { opts.lifecycle?.beforeWrite(bytes); }
 
   function assertInside(candidate: string): string {
     const full = resolve(candidate);
@@ -1127,18 +1229,21 @@ export function openRenderGenerationStore(opts: RenderGenerationStoreOptions): R
   function discoverSources(): RenderGenerationSource[] {
     const found: RenderGenerationSource[] = [];
     const seen = new Set<string>();
-    const walk = (dir: string) => {
+    let count = 0;
+    const walk = (dir: string, depth = 0) => {
+      if (depth > 6) throw invalid("输出目录超过读取预算","source_budget","核验任务目录");
       if (!existsSync(dir)) return;
       const lst = lstatSync(dir);
       if (lst.isSymbolicLink()) throw invalid("拒绝目录符号链接", "symlink_dir", "不要用 symlink 当任务目录");
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (++count > 256) throw invalid("输出目录超过读取预算","source_budget","核验任务目录");
         const p = join(dir, entry.name);
         if (entry.isSymbolicLink()) {
           continue;
         }
         if (entry.isDirectory()) {
           if (entry.name.startsWith(".") || entry.name === "assets") continue;
-          walk(p);
+          walk(p, depth + 1);
           continue;
         }
         if (!entry.isFile()) continue;
@@ -1153,17 +1258,48 @@ export function openRenderGenerationStore(opts: RenderGenerationStoreOptions): R
     return found;
   }
 
-  function hashAndValidate(path: string, key: string): { sha256: string; bytes: number } {
+  function holdAndHash(path: string, key: string, validate = true): HeldGenerationFile {
+    check();
+    assertNoSymlinkChain(path);
     const st = lstatSync(path);
     if (st.isSymbolicLink() || !st.isFile()) throw invalid("输出不是普通文件", `${key}:not_file`, "复制必须得到普通文件");
-    if (st.size <= 0 || st.size > RENDER_GENERATION_MAX_FILE_BYTES) {
+    // Legacy identity must distinguish a damaged optional file from a missing one.
+    // Serving files and validating required/ready outputs still reject empty bytes.
+    const identityOnlyOptional = !validate && !(REQUIRED_KEYS as readonly string[]).includes(key);
+    if ((st.size === 0 && !identityOnlyOptional) || st.size > RENDER_GENERATION_MAX_FILE_BYTES) {
       throw invalid("输出体积非法", `${key}:size`, "检查文件大小");
     }
-    const buf = readFileSync(path);
-    if (buf.length !== st.size) throw invalid("读取长度不一致", `${key}:short_read`, "重试复制");
-    if (key === "glb") assertGlb(buf, key);
-    else assertPng(buf, key);
-    return { sha256: sha256Buffer(buf), bytes: buf.length };
+    const buf = Buffer.alloc(st.size);
+    const fd = openSync(path, fsConstants.O_RDONLY | noFollowFlag());
+    try {
+      const opened = fstatSync(fd);
+      if (opened.ino !== st.ino || opened.dev !== st.dev || opened.nlink !== 1) throw invalid("读取身份变化", `${key}:changed`, "重新验证");
+      let position = 0;
+      while (position < buf.length) {
+        check();
+        const n = readSync(fd, buf, position, Math.min(1024 * 1024, buf.length - position), position);
+        if (!n) throw invalid("读取长度不一致", `${key}:short_read`, "重试复制");
+        position += n;
+      }
+      const after = fstatSync(fd);
+      if (after.size !== st.size || after.mtimeMs !== st.mtimeMs) throw invalid("读取期间变化", `${key}:changed`, "重新验证");
+      check();
+      if (validate) {
+        if (key === "glb") assertGlb(buf, key);
+        else assertPng(buf, key);
+      }
+      const hash = createHash("sha256");
+      for (let p = 0; p < buf.length; p += 1024 * 1024) { check(); hash.update(buf.subarray(p, p + 1024 * 1024)); }
+      check();
+      let closed = false;
+      return { fd, name:basename(path), sha256:hash.digest("hex"), bytes:buf.length,
+        close:() => { if (!closed) { closed = true; closeSync(fd); } } };
+    } catch (error) { closeSync(fd); throw error; }
+  }
+
+  function hashAndValidate(path: string, key: string): { sha256: string; bytes: number } {
+    const held = holdAndHash(path,key);
+    try { return {sha256:held.sha256, bytes:held.bytes}; } finally { held.close(); }
   }
 
   function readFaces(): Record<RenderFace, FaceRow> {
@@ -1181,17 +1317,44 @@ export function openRenderGenerationStore(opts: RenderGenerationStoreOptions): R
     return faces;
   }
 
-  function virtualLegacyCurrentId(): string {
+  function legacySnapshot() {
     const sources = discoverSources();
-    const required = REQUIRED_KEYS.map((key) => {
+    const rows = [...ALLOWED_KEYS].sort().map((key) => {
       const src = sources.find((item) => item.key === key);
-      if (!src) throw invalid("缺少必需输出，无法计算虚拟当前代", `missing_${key}`, "补齐产品 PNG 和 GLB");
+      if (!src) {
+        if ((REQUIRED_KEYS as readonly string[]).includes(key)) throw invalid("缺少必需输出，无法计算虚拟当前代", `missing_${key}`, "补齐产品 PNG 和 GLB");
+        return {key,missing:true};
+      }
       const meta = assertExistingInside(src.path);
-      const hashed = hashAndValidate(meta.path, key);
-      return `${key}=${hashed.sha256}`;
+      const held = holdAndHash(meta.path,key,(REQUIRED_KEYS as readonly string[]).includes(key));
+      try { return {key, sha256:held.sha256, bytes:held.bytes, path:meta.path}; } finally { held.close(); }
     });
-    const digest = sha256Text(`${jobId}\n${required.join("\n")}\n`);
-    return `legacy-current-${digest.slice(0, 8)}`;
+    const digest = sha256Text(JSON.stringify({schema:"legacy-current/2",jobId,
+      files:rows.map(({path: _path,...identity}) => identity)}));
+    return {id:`legacy-current-v2-${digest}`, rows};
+  }
+
+  function virtualLegacyCurrentId(): string { return legacySnapshot().id; }
+
+  function openFile(generationId: string, key: string): HeldGenerationFile {
+    assertSafeId(generationId,"generation_id");
+    if (!ALLOWED_KEYS.has(key)) throw invalid("本代没有这张图","generation_missing","只读取本代公开资源");
+    let row;
+    if (VIRTUAL_ID_RE.test(generationId)) {
+      const snapshot = legacySnapshot();
+      if (snapshot.id !== generationId) throw stale("legacy_identity_changed");
+      row = snapshot.rows.find(item => item.key === key && item.path);
+    } else {
+      const manifest = loadVerifiedManifest(generationId);
+      const found = manifest.files.find(item => item.key === key);
+      row = found ? {...found,path:resolve(readyDir(generationId),found.rel)} : undefined;
+    }
+    if (!row?.path) throw invalid("本代没有这张图","generation_missing","只读取本代公开资源");
+    const held = holdAndHash(row.path,key);
+    if (held.sha256 !== row.sha256 || held.bytes !== row.bytes) {
+      held.close(); throw stale("file_identity_changed");
+    }
+    return held;
   }
 
   function assertPointer(id: string | null): void {
@@ -1247,26 +1410,25 @@ export function openRenderGenerationStore(opts: RenderGenerationStoreOptions): R
     return id;
   }
 
-  function ensureCursorKey(): Buffer {
+  function readCursorKey(): Buffer {
     assertNoSymlinkChain(cursorKeyPath(), { targetMayBeMissing: true });
-    ensurePhysicalDir(genDir());
     const path = cursorKeyPath();
     assertPhysicalFileForWrite(path);
     const existing = lstatIfExists(path);
     if (!existing) {
-      writeFileExclusive(path, randomBytes(32).toString("hex"), { mode: 0o600, cause: "cursor_exists" });
+      return createHmac("sha256",READ_CURSOR_SECRET).update(jobId).digest();
     }
     const written = lstatSync(path);
     if (written.isSymbolicLink() || !written.isFile() || written.nlink !== 1) {
       throw invalid("拒绝 hardlink 外部写入", written.isSymbolicLink() ? "symlink" : "hardlink", "不要把 cursor 做成指向外部的 symlink/hardlink");
     }
-    const raw = readFileSync(path, "utf8").trim();
+    const raw = readBoundedMetadata(path,128,"cursor_key").toString("utf8").trim();
     if (!/^[a-f0-9]{64}$/.test(raw)) throw invalid("cursor 密钥损坏", "cursor_key", "不要使用伪造 cursor");
     return Buffer.from(raw, "hex");
   }
 
   function encodeCursor(seq: number, generationId: string): string {
-    const key = ensureCursorKey();
+    const key = readCursorKey();
     const payload = `${jobId}:${seq}:${generationId}`;
     const mac = createHmac("sha256", key).update(payload).digest("base64url");
     return `${Buffer.from(payload).toString("base64url")}.${mac}`;
@@ -1284,7 +1446,7 @@ export function openRenderGenerationStore(opts: RenderGenerationStoreOptions): R
     } catch {
       throw invalid("cursor 非法", "cursor_invalid", "使用本单签发的 cursor");
     }
-    const key = ensureCursorKey();
+    const key = readCursorKey();
     const expectedMac = createHmac("sha256", key).update(payload).digest();
     let givenMac: Buffer;
     try {
@@ -1321,7 +1483,39 @@ export function openRenderGenerationStore(opts: RenderGenerationStoreOptions): R
       seq,
     };
     const prefix = truncatedTail ? "\n" : "";
+    assertHistoryWritable(Buffer.byteLength(`${prefix}${JSON.stringify(record)}\n`));
     appendFileExclusive(path, `${prefix}${JSON.stringify(record)}\n`);
+  }
+
+  function assertHistoryWritable(additionalBytes = 2048): void {
+    readIndexFile(indexPath());
+    const size = Number(lstatIfExists(indexPath())?.size ?? 0);
+    if (size + additionalBytes > INDEX_MAX_BYTES) throw invalid("索引容量已满","history_capacity","保留当前代，停止新增写入");
+  }
+
+  function hasActivation(fact: RenderActivationFact): boolean {
+    const record = {schema:RENDER_GENERATION_INDEX_SCHEMA,event:"activated",...fact,seq:1};
+    if (!parseIndexEvent(JSON.stringify(record))) throw invalid("切换记账无效","audit_pending","保留当前代及待记账事实");
+    const existing = readIndexFile(indexPath()).events.find(row => row.activation?.event_id === fact.event_id)?.activation;
+    if (!existing) return false;
+    if (Object.keys(fact).some(key => existing[key as keyof RenderActivationFact] !== fact[key as keyof RenderActivationFact])) {
+      throw invalid("切换记账冲突","audit_pending","保留当前代及待记账事实");
+    }
+    return true;
+  }
+
+  function appendActivation(fact: RenderActivationFact): void {
+    if (hasActivation(fact)) return;
+    const path = indexPath();
+    assertNoSymlinkChain(path,{targetMayBeMissing:true});
+    ensurePhysicalDir(genDir());
+    assertPhysicalFileForWrite(path);
+    const {events,truncatedTail} = readIndexFile(path);
+    const record = {schema:RENDER_GENERATION_INDEX_SCHEMA,event:"activated",...fact,
+      seq:events.reduce((max,row) => Math.max(max,row.seq),0)+1};
+    const line = `${truncatedTail ? "\n" : ""}${JSON.stringify(record)}\n`;
+    assertHistoryWritable(Buffer.byteLength(line));
+    appendFileExclusive(path,line);
   }
 
   function loadVerifiedManifest(id: string): Manifest {
@@ -1338,7 +1532,7 @@ export function openRenderGenerationStore(opts: RenderGenerationStoreOptions): R
     const manifestMeta = assertExistingInside(manifestPath);
     let parsedJson: unknown;
     try {
-      parsedJson = JSON.parse(readFileSync(manifestMeta.path, "utf8"));
+      parsedJson = JSON.parse(readBoundedMetadata(manifestMeta.path,1024*1024,"manifest_budget").toString("utf8"));
     } catch {
       throw invalid("代际清单无法解析", "manifest_json", "保留当前代");
     }
@@ -1371,14 +1565,16 @@ export function openRenderGenerationStore(opts: RenderGenerationStoreOptions): R
   }
 
   // 贴图变化后旧代仍可查看/激活；用该代继续重渲必须单独证明当前六面仍与源代绑定一致。
-  function assertRerenderSourceFresh(sourceId: string): void {
-    const manifest = loadVerifiedManifest(sourceId);
+  function assertRerenderSourceFresh(sourceId?: string): void {
+    const manifest = sourceId === undefined ? undefined : loadVerifiedManifest(sourceId);
     let live: Record<RenderFace, FaceRow>;
     try {
       live = readFaces();
     } catch {
       throw invalid("贴图已缺失，不能用旧代继续重渲", "rerender_source_missing", "查看历史仍可用；补齐当前六面后再重渲");
     }
+    // An unarchived legacy job has no source manifest yet; validate its six faces without importing g0.
+    if (!manifest) return;
     for (const face of FACES) {
       if (live[face].sha256 !== manifest.faces[face].sha256) {
         throw invalid("贴图已变化，不能用旧代继续重渲", `rerender_source_unfresh_${face}`, "查看历史仍可用；不能拿旧代继续重渲");
@@ -1411,6 +1607,7 @@ export function openRenderGenerationStore(opts: RenderGenerationStoreOptions): R
   }
 
   function sealGeneration(input: SealGenerationInput): SealResult {
+    check();
     if (!input || (input.mode !== "legacy_import" && input.mode !== "legacy_relight" && input.mode !== "upgrade")) {
       throw invalid("mode 非法", "mode", "只使用 legacy_import / legacy_relight / upgrade");
     }
@@ -1432,6 +1629,7 @@ export function openRenderGenerationStore(opts: RenderGenerationStoreOptions): R
     assertNoSymlinkChain(cursorKeyPath(), { targetMayBeMissing: true });
     assertPhysicalFileForWrite(indexPath());
     assertPhysicalFileForWrite(cursorKeyPath());
+    assertHistoryWritable();
     assertExpectedCurrent(input.expectedCurrentGenerationId, input.observedCurrentGenerationId);
     if (input.mode === "legacy_import") {
       if (input.observedCurrentGenerationId !== null) throw stale("legacy_import_after_current");
@@ -1527,6 +1725,7 @@ export function openRenderGenerationStore(opts: RenderGenerationStoreOptions): R
             throw invalid("复制结果与源共享 inode", `${key}:hardlink`, "必须复制字节，不能 hardlink");
           }
           fsyncFile(dest);
+          check();
           const hashed = hashAndValidate(dest, key);
           copied.push({
             key,
@@ -1557,6 +1756,7 @@ export function openRenderGenerationStore(opts: RenderGenerationStoreOptions): R
         Object.fromEntries(FACES.map((face) => [face, faces[face].sha256])),
       );
       const verifyInput: QualityVerifyInput = {
+        resource_lifecycle: opts.lifecycle,
         generation_id: generationId,
         contract_sha256: input.contractSha256,
         content_fingerprint: fp,
@@ -1565,6 +1765,7 @@ export function openRenderGenerationStore(opts: RenderGenerationStoreOptions): R
         faces: Object.fromEntries(FACES.map((face) => [face, faces[face].sha256])) as Record<RenderFace, string>,
       };
       const verified = opts.qualityVerifier(verifyInput);
+      check();
       if (
         !verified
         || verified.generation_id !== generationId
@@ -1576,7 +1777,7 @@ export function openRenderGenerationStore(opts: RenderGenerationStoreOptions): R
       if (verified.verifier_status !== "accepted") {
         throw invalid("质量验证失败，不能 ready", "quality_rejected", RENDER_GENERATION_UNWIRED_NOTE);
       }
-      if (verified.quality_status !== "unwired" && verified.quality_status !== "failed") {
+      if (verified.quality_status !== "unwired" && verified.quality_status !== "failed" && verified.quality_status !== "runtime_verified") {
         throw invalid("质量状态非法", "quality_status", "不要伪造质量绿灯");
       }
       if (verified.quality_status === "failed") {
@@ -1611,25 +1812,36 @@ export function openRenderGenerationStore(opts: RenderGenerationStoreOptions): R
       writeFileExclusive(manifestPath, `${JSON.stringify(validatedManifest, null, 2)}\n`, { cause: "manifest_exists" });
       failpoints.afterManifestWrite?.();
       dirFsync = tryFsyncDir(stagingDir);
+      check();
       failpoints.beforeRename?.();
       const destDir = readyDir(generationId);
       assertNoSymlinkChain(destDir, { targetMayBeMissing: true });
       if (lstatIfExists(destDir)) throw invalid("该代已固化，拒绝重复写入", "duplicate_ready", "新动作必须生成新代");
+      check();
       renameSync(stagingDir, destDir);
       const parentFsync = tryFsyncDir(genDir());
       if (dirFsync === "ok" && parentFsync !== "ok") dirFsync = parentFsync;
+      check();
       failpoints.afterRenameBeforeIndex?.();
       appendIndex("ready", generationId);
       const loaded = loadVerifiedManifest(generationId);
       const patch = patchFromManifest(loaded);
+      check();
       return {
         generation_id: generationId,
         patch,
         public_summary: publicFromManifest(loaded, null),
+        prepareCommit: () => {
+          check();
+          const final = loadVerifiedManifest(generationId);
+          if (JSON.stringify(final) !== JSON.stringify(loaded)) throw invalid("封存身份已变化", "seal_identity_changed", "保留旧 current");
+          check();
+          return patchFromManifest(final);
+        },
         report: {
-          quality_wired: false,
+          quality_wired: loaded.quality.quality_status === "runtime_verified",
           quality_status: loaded.quality.quality_status,
-          note: RENDER_GENERATION_UNWIRED_NOTE,
+          note: loaded.quality.note,
           optional_omitted: omitted,
           durability: {
             fsync_files: true,
@@ -1663,7 +1875,7 @@ export function openRenderGenerationStore(opts: RenderGenerationStoreOptions): R
     const skippedInvalid: string[] = [];
     const already: string[] = [];
     const { events } = readIndexFile(indexPath());
-    const indexed = new Set(events.map((item) => item.generation_id));
+    const indexed = new Set(events.filter(item => item.event !== "activated").map((item) => item.generation_id));
     for (const id of listReadyIds()) {
       if (indexed.has(id)) {
         already.push(id);
@@ -1691,6 +1903,7 @@ export function openRenderGenerationStore(opts: RenderGenerationStoreOptions): R
     const seen = new Set<string>();
     const ordered: Array<{ seq: number; generationId: string }> = [];
     for (const event of [...events].sort((a, b) => b.seq - a.seq)) {
+      if (event.event === "activated") continue;
       if (seen.has(event.generation_id)) continue;
       seen.add(event.generation_id);
       ordered.push({ seq: event.seq, generationId: event.generation_id });
@@ -1728,6 +1941,11 @@ export function openRenderGenerationStore(opts: RenderGenerationStoreOptions): R
 
   return {
     virtualLegacyCurrentId,
+    openFile,
+    assertHistoryWritable,
+    assertRerenderSourceFresh,
+    hasActivation,
+    appendActivation,
     sealGeneration,
     prepareActivationPatch,
     recoverOrphans,

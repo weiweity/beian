@@ -28,6 +28,242 @@ PACKAGING = Path(__file__).resolve().parents[4] / "workers" / "packaging"
 PYTHON = sys.executable
 
 
+@pytest.mark.parametrize("damage", [None, "front_width", "bottom_height", "asset_identity"])
+def test_source_sampling_checks_actual_face_pngs(tmp_path, damage):
+    gen = generation_module()
+    dimensions = {"width": 2.01, "depth": 3.01, "height": 4.01}
+    axes = {"front": (41, 81), "back": (41, 81), "right": (61, 81),
+            "left": (61, 81), "top": (41, 61), "bottom": (41, 61)}
+    assets, hashes = {}, {}
+    for face, size in axes.items():
+        if damage == face + "_width": size = (size[0] - 1, size[1])
+        if damage == face + "_height": size = (size[0], size[1] - 1)
+        path = tmp_path / f"{face}.png"
+        Image.new("RGBA", size, (1, 2, 3, 255)).save(path)
+        assets[face] = str(path)
+        hashes[face] = gen._sha256_file(path)
+    if damage == "asset_identity": hashes["front"] = "sha256:" + "0" * 64
+    job = {"assets": assets}
+    plan = {"spec": {"geometry": {"outer_dimensions_mm": dimensions}},
+            "sampling": {"strategy": "minimum-floor-v1", "maximum_face_pixels": 32_000_000,
+                         "per_face_target_pixels_per_mm": {face: 20.0 for face in axes}}}
+    if damage:
+        with pytest.raises(gen.RenderGenerationError) as caught:
+            gen.verify_source_sampling(job, plan, hashes)
+        assert caught.value.cause == "source_sampling_quality"
+    else:
+        report = gen.verify_source_sampling(job, plan, hashes)
+        assert report["faces"]["front"]["required_size_px"] == [41, 81]
+        assert report["faces"]["front"]["source_pixels_per_mm"][0] >= 20.0
+        assert report["faces"]["front"]["source_sha256"] == hashes["front"]
+        assert report["upstream_resample_count"] is None
+        assert report["projected_pixels_per_mm"] is None
+
+
+def test_low_density_source_rejected_before_prepare_or_blender(tmp_path, monkeypatch):
+    gen = generation_module()
+    _pipeline, job, root = make_spec_source(tmp_path)
+    Image.new("RGBA", (8, 8), (1, 2, 3, 255)).save(job["assets"]["front"])
+    request = request_payload(root, action="prepare", candidate_dir=str(tmp_path / "candidate"))
+    before = inventory(root)
+    with pytest.raises(gen.RenderGenerationError) as caught:
+        gen.run_request(request)
+    assert caught.value.cause == "source_sampling_quality"
+    assert not (tmp_path / "candidate").exists()
+    assert inventory(root) == before
+
+
+@pytest.mark.parametrize("timeout", [True, 0, -1, 1_260_001, 1.5])
+def test_request_timeout_budget_is_bounded(tmp_path, timeout):
+    gen = generation_module()
+    _pipeline, _job, root = make_spec_source(tmp_path)
+    with pytest.raises(gen.RenderGenerationError) as caught:
+        gen.run_request(request_payload(root, timeout_ms=timeout))
+    assert caught.value.cause == "timeout_budget"
+
+
+def test_deadline_covers_source_read_and_resets_after_failure(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    gen = generation_module()
+    _pipeline, _job, root = make_spec_source(tmp_path)
+    clock = [100.0]
+    monkeypatch.setattr(gen, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    original = gen.read_source_job
+
+    def slow_read(path):
+        result = original(path)
+        clock[0] += 2
+        return result
+
+    monkeypatch.setattr(gen, "read_source_job", slow_read)
+    payload = request_payload(root, action="prepare", candidate_dir=str(tmp_path / "candidate"), timeout_ms=1000)
+    with pytest.raises(gen.RenderGenerationError) as caught:
+        gen.run_request(payload)
+    assert caught.value.cause == "timeout"
+    assert not (tmp_path / "candidate").exists()
+    assert gen._REQUEST_DEADLINE.get() is None
+    assert gen.run_request(request_payload(root, timeout_ms=10000))["ok"] is True
+
+
+def test_disk_admission_rejects_before_creating_candidate(tmp_path, monkeypatch):
+    gen = generation_module()
+    _pipeline, _job, root = make_spec_source(tmp_path)
+    monkeypatch.setattr(gen, "_available_disk_bytes", lambda path: 0, raising=False)
+    before = inventory(root)
+    with pytest.raises(gen.RenderGenerationError) as caught:
+        gen.run_request(request_payload(root, action="prepare", candidate_dir=str(tmp_path / "candidate")))
+    assert caught.value.cause == "candidate_disk_budget"
+    assert not (tmp_path / "candidate").exists()
+    assert inventory(root) == before
+
+
+def test_aggregate_source_pixel_budget_rejects_before_candidate(tmp_path, monkeypatch):
+    gen = generation_module()
+    _pipeline, _job, root = make_spec_source(tmp_path)
+    monkeypatch.setattr(gen, "MAX_SOURCE_PIXELS", 1, raising=False)
+    with pytest.raises(gen.RenderGenerationError) as caught:
+        gen.run_request(request_payload(root, action="prepare", candidate_dir=str(tmp_path / "candidate")))
+    assert caught.value.cause == "source_aggregate_budget"
+    assert not (tmp_path / "candidate").exists()
+
+
+def test_candidate_enforces_admitted_output_ceiling(tmp_path, monkeypatch):
+    gen = generation_module()
+    _pipeline, _job, root = make_spec_source(tmp_path)
+    fake_blender(gen, monkeypatch)
+    monkeypatch.setattr(gen, "check_candidate_disk_budget", lambda *args: {"candidate_output_ceiling_bytes": 1})
+    with pytest.raises(gen.RenderGenerationError) as caught:
+        gen.run_request(request_payload(root, action="render-candidate", candidate_dir=str(tmp_path / "candidate"),
+                                        blender_executable=str(dummy_blender(tmp_path / "blender"))))
+    assert caught.value.cause == "output_aggregate_budget"
+
+
+def test_capture_failure_keeps_bounded_log_without_quality_or_seal(tmp_path, monkeypatch):
+    gen = generation_module()
+    _pipeline, _job, root = make_spec_source(tmp_path)
+
+    def limited(*args, **kwargs):
+        raise gen.packaging_pipeline.BlenderProcessError("blender_log_budget", b"synthetic bounded evidence")
+
+    monkeypatch.setattr(gen.packaging_pipeline, "run_bounded_blender", limited)
+    candidate = tmp_path / "candidate"
+    with pytest.raises(gen.RenderGenerationError) as caught:
+        gen.run_request(request_payload(root, action="render-candidate", candidate_dir=str(candidate),
+                                        blender_executable=str(dummy_blender(tmp_path / "blender"))))
+    assert caught.value.cause == "blender_log_budget"
+    assert (candidate / "blender.log").read_bytes() == b"synthetic bounded evidence"
+    assert not (candidate / "generation.json").exists()
+
+
+def test_invalid_optional_output_cannot_evade_disk_byte_budget(tmp_path, monkeypatch):
+    gen = generation_module()
+    optional = tmp_path / "bad_ground.png"
+    optional.write_bytes(b"not-png" * 10)
+    job = {"outputs": {"front_right_ground": str(optional)}}
+    with pytest.raises(gen.RenderGenerationError) as caught:
+        gen.check_output_byte_budget(job, ceiling=32)
+    assert caught.value.cause == "output_aggregate_budget"
+    monkeypatch.setattr(gen, "MAX_FILE_BYTES", 32)
+    with pytest.raises(gen.RenderGenerationError) as caught:
+        gen.check_output_byte_budget(job)
+    assert caught.value.cause == "output_file_budget"
+
+
+@pytest.mark.parametrize("max_edge", [10, 40])
+@pytest.mark.parametrize("damage", [None, "resolution", "opaque", "empty", "card_size", "card_pixels", "card_alpha", "changed_bytes"])
+def test_full_card_runtime_contract(tmp_path, damage, max_edge):
+    gen = generation_module()
+    outputs = {}
+    for index, key in enumerate(("front_right", "back_left")):
+        full = Image.new("RGBA", (16, 20), (0, 0, 0, 0))
+        full.paste((40 + index * 50, 60, 80, 255), (4, 4, 12, 16))
+        if key == "front_right":
+            if damage == "resolution": full = full.resize((8, 10))
+            if damage == "opaque": full.putalpha(255)
+            if damage == "empty": full.putalpha(0)
+        path = tmp_path / f"{key}.png"
+        full.save(path)
+        card = full.resize((8, 10), Image.Resampling.LANCZOS) if max_edge == 10 else full.copy()
+        if key == "front_right":
+            if damage == "card_size": card = card.resize((4, 5))
+            if damage == "card_pixels": card.putpixel((4, 5), (255, 0, 0, 255))
+            if damage == "card_alpha": card.putalpha(255)
+        card_path = tmp_path / f"{key}_card.png"
+        card.save(card_path)
+        for name, file in ((key, path), (key + "_card", card_path)):
+            outputs[name] = {"path": str(file), "sha256": gen._sha256_file(file), "bytes": file.stat().st_size}
+    if damage == "changed_bytes":
+        outputs["front_right"]["sha256"] = "sha256:" + "0" * 64
+    job = {"render": {"resolution_x": 16, "resolution_y": 20}}
+    if damage:
+        with pytest.raises(gen.RenderGenerationError) as caught:
+            gen.verify_full_card_contract(job, outputs, max_edge=max_edge)
+        assert caught.value.cause == "runtime_full_card_quality"
+    else:
+        gen.verify_full_card_contract(job, outputs, max_edge=max_edge)
+
+
+@pytest.mark.parametrize("damage", ["full_resolution", "wrong_card", "opaque"])
+def test_candidate_rejects_full_card_damage_after_successful_nonce(tmp_path, monkeypatch, damage):
+    gen = generation_module()
+    _pipeline, _job, root = make_spec_source(tmp_path)
+    fake_blender(gen, monkeypatch)
+    original = gen.packaging_pipeline.run_blender_candidate
+
+    def damaged(*args, **kwargs):
+        result = original(*args, **kwargs)
+        outputs = result["outputs"]
+        if damage == "wrong_card":
+            shutil.copyfile(outputs["back_left_card"], outputs["front_right_card"])
+        else:
+            with Image.open(outputs["front_right"]) as opened:
+                image = opened.copy()
+            if damage == "full_resolution": image = image.resize((8, 8))
+            if damage == "opaque": image.putalpha(255)
+            image.save(outputs["front_right"])
+        return result
+
+    monkeypatch.setattr(gen.packaging_pipeline, "run_blender_candidate", damaged)
+    with pytest.raises(gen.RenderGenerationError) as caught:
+        gen.run_request(request_payload(root, action="render-candidate", candidate_dir=str(tmp_path / "candidate"),
+                        blender_executable=str(dummy_blender(tmp_path / "blender"))))
+    assert caught.value.cause == "runtime_full_card_quality"
+
+
+def test_source_plan_budget_before_json_parse(tmp_path, monkeypatch):
+    gen = generation_module()
+    monkeypatch.setattr(gen, "MAX_PLAN_BYTES", 32, raising=False)
+    (tmp_path / "resolved_job.json").write_bytes(b" " * 33)
+    with pytest.raises(gen.RenderGenerationError) as caught:
+        gen.read_source_job(tmp_path)
+    assert caught.value.cause == "source_plan_budget"
+
+
+def test_hash_file_budget_before_read(tmp_path, monkeypatch):
+    gen = generation_module()
+    monkeypatch.setattr(gen, "MAX_FILE_BYTES", 16, raising=False)
+    path = tmp_path / "large.png"
+    path.write_bytes(b"x" * 17)
+    with pytest.raises(gen.RenderGenerationError) as caught:
+        gen._sha256_file(path)
+    assert caught.value.cause == "file_budget"
+
+
+def test_source_pixel_budget_rejects_before_candidate_creation(tmp_path, monkeypatch):
+    gen = generation_module()
+    _pipeline, _job, root = make_spec_source(tmp_path)
+    payload = request_payload(root, action="prepare")
+    candidate = tmp_path / "too-large-candidate"
+    payload["candidate_dir"] = str(candidate)
+    before = inventory(root)
+    monkeypatch.setattr(gen, "MAX_IMAGE_PIXELS", 1, raising=False)
+    with pytest.raises(gen.RenderGenerationError) as caught:
+        gen.run_request(payload)
+    assert caught.value.cause == "asset_pixel_budget"
+    assert not candidate.exists()
+    assert inventory(root) == before
+
+
 def test_cli_stdin_validate_and_prepare(tmp_path: Path):
     _pipeline, _job, root = make_spec_source(tmp_path)
     before = inventory(root)
@@ -64,13 +300,20 @@ def test_cli_request_budget_before_json_or_source_reads(tmp_path: Path, use_stdi
 
 
 @pytest.mark.skipif(sys.platform not in ("darwin", "linux"), reason="C2 bridge requires POSIX group evidence; Windows containment is not implemented")
-@pytest.mark.parametrize("entry", ["missing", "bridge", "adapter", "jobs"])
-def test_node_bridge_calls_real_rf02_validator_without_blender(tmp_path: Path, entry: str):
-    controlled_render = entry != "missing"
+@pytest.mark.parametrize("entry", ["missing", "bridge", "adapter", "jobs", "seal-proof", "seal-tamper"])
+def test_node_bridge_calls_real_rf02_validator_without_blender(tmp_path: Path, entry: str, profile_id="compat-legacy-v0"):
+    actual_blender = entry == "actual-blender"
+    uses_jobs = entry in {"jobs", "actual-blender"}
+    controlled_render = entry not in {"missing", "actual-blender"}
     data_root = tmp_path
-    if entry == "jobs":
+    if uses_jobs:
         _pipeline = pipeline_module()
         product, _source = prepare_v2_product(tmp_path)
+        if profile_id != "compat-legacy-v0":
+            template_path = tmp_path / product["template"]
+            template = json.loads(template_path.read_text())
+            template["render_profile_id"] = profile_id
+            template_path.write_text(json.dumps(template))
         product["code"] = "00000000c222"
         data_root = tmp_path / "data"
         _job = _pipeline.preflight_product(product, tmp_path, data_root / "mockups", False, {"enabled": False}, False)
@@ -79,6 +322,8 @@ def test_node_bridge_calls_real_rf02_validator_without_blender(tmp_path: Path, e
         root = Path(_job["project_dir"])
     else:
         _pipeline, _job, root = make_spec_source(tmp_path)
+    if entry.startswith("seal-"):
+        Path(_job["outputs"]["glb"]).write_bytes(minimal_valid_glb())
     before = inventory(root)
     node = shutil.which("node")
     assert node, "Node is required for the Node-to-Python bridge contract test"
@@ -101,7 +346,7 @@ def test_node_bridge_calls_real_rf02_validator_without_blender(tmp_path: Path, e
         )
     script = r"""
 import assert from 'node:assert/strict';
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir, readFile, copyFile } from 'node:fs/promises';
 import { join } from 'node:path';
 const config = JSON.parse(process.argv[1]);
 const { createRenderGenerationBridge } = await import(config.module);
@@ -117,8 +362,8 @@ assert.equal(stages.includes('validate'), true);
 if (!config.useJobs) await mkdir(join(config.input.jobRoot, '.render-generations'));
 if (config.useJobs) {
   process.env.WB_DATA_DIR = config.dataRoot;
-  process.env.VITEST = '1';
-  const { createRenderGenerationPreparer } = await import(config.adapter);
+  delete process.env.VITEST;
+  const { registerLocalRenderGenerationRuntime } = await import(config.runtime);
   const jobs = await import(config.jobs);
   const mockup = await import(config.mockup);
   const generations = await import(config.generations);
@@ -129,28 +374,33 @@ if (config.useJobs) {
   mockup.saveMockup({id:config.jobId, owner:'test-owner',created_by:'test',status:'done',
     created_at:'2026-09-05T00:00:00.000Z',job_kind:'mockup',job_status:'succeeded',
     files:[['white_a','front_right'],['white_b','back_left'],['glb','glb']].map(([key,k])=>({key,path:plan.outputs[k],name:k}))});
-  jobs.setJobsTestHooks({ qualityVerifier, prepareRenderGeneration:createRenderGenerationPreparer({
-    pythonExecutable:config.python, packagingDir:config.packaging, dataRoot:config.dataRoot, blenderExecutable:config.blender}) });
+  const unregister = registerLocalRenderGenerationRuntime({
+    pythonExecutable:config.python, packagingDir:config.packaging, dataRoot:config.dataRoot, blenderExecutable:config.blender,
+    timeoutMs:config.timeoutMs,
+    resourcePolicy:{diskBytes:config.actualBlender ? 512*1024*1024 : 64*1024*1024,
+      memoryBytes:(config.actualBlender ? 4 : 2)*1024*1024*1024}});
   const source = generations.openRenderGenerationStore({jobRoot:config.input.jobRoot,jobId:config.jobId,qualityVerifier}).virtualLegacyCurrentId();
   jobs.enqueueRenderGenerationMutation({jobId:config.jobId,viewer:{id:'test-owner',name:'test',admin:false},
     clientRequestId:'actual-bridge-test',mode:'legacy_relight',sourceGenerationId:source,expectedCurrentGenerationId:source,
     studioAdjustment:config.input.studioAdjustment});
-  const deadline=Date.now()+30000;
-  while (Date.now()<deadline && mockup.loadMockup(config.jobId)?.render_mutation?.status !== 'failed') {
+  const deadline=Date.now()+config.timeoutMs+6000;
+  while (Date.now()<deadline && !['succeeded','failed'].includes(mockup.loadMockup(config.jobId)?.render_mutation?.status)) {
     await new Promise(resolve=>setTimeout(resolve,30));
   }
   const final=mockup.readMockupFromDisk(config.jobId);
-  assert.equal(final.render_mutation.status,'failed');
-  assert.match(final.render_mutation.error,/质量门/);
-  assert.equal(final.current_render_generation_id,undefined);
+  assert.equal(final.render_mutation.status,'succeeded', JSON.stringify(final.render_mutation));
+  assert.match(final.current_render_generation_id,/^g1-/);
   assert.equal(final.render_generation_request.worker_pid,undefined);
   assert.equal(final.render_generation_request.worker_protocol,'render-generation/1');
-  jobs.resetJobsTestHooks();
-  console.log('REAL_RF02_JOBS_ADAPTER_CANDIDATE_QUALITY_UNWIRED_NO_ACTIVATION');
+  assert.equal(generations.openRenderGenerationStore({jobRoot:config.input.jobRoot,jobId:config.jobId})
+    .publicSummary(final.current_render_generation_id,final.current_render_generation_id).quality_status,'runtime_verified');
+  unregister();
+  console.log('REAL_RF02_NORMAL_LOCAL_REGISTRY_RUNTIME_VERIFIED_CURRENT_NO_TEST_HOOKS');
 } else if (config.useAdapter) {
   const { createRenderGenerationPreparer } = await import(config.adapter);
   const prepare = createRenderGenerationPreparer({pythonExecutable:config.python,
-    packagingDir:config.packaging, dataRoot:config.dataRoot, blenderExecutable:config.blender});
+    packagingDir:config.packaging, dataRoot:config.dataRoot, blenderExecutable:config.blender,
+    resourcePolicy:{diskBytes:64*1024*1024,memoryBytes:2*1024*1024*1024}});
   const lifecycle = [];
   const bytes = await readFile(join(config.input.jobRoot, 'resolved_job.json'));
   const prepared = await prepare({jobId:'testjob', mutationId:'mtest', jobRoot:config.input.jobRoot,
@@ -161,7 +411,8 @@ if (config.useJobs) {
     mode:'legacy_relight', sourceGenerationId:'g0-legacy-original',
     candidateDir:join(config.input.jobRoot,'.render-generations','.candidate-adapter'),
     plan:prepared.plan, sourceOutputs:[], studioAdjustment:config.input.studioAdjustment});
-  assert.equal(result.runtimeQuality, 'unwired');
+  assert.equal(result.runtimeQuality, 'verified');
+  assert.equal(typeof result.qualityVerifier,'function');
   assert.equal(result.contract_sha256, config.input.expectedSourceSha256.slice(7));
   assert.equal(prepared.plan.sourceAssets.length, 6);
   assert.ok(result.outputs.some(row=>row.key === 'white_a_card'));
@@ -170,6 +421,7 @@ if (config.useJobs) {
   assert.equal(lifecycle[2][2], lifecycle[3][2]);
   assert.notEqual(lifecycle[0][2], lifecycle[2][2]);
   assert.match(lifecycle[0][2], /^testjob:mtest:[a-f0-9]{32}$/);
+  prepared.lifecycle.release(true);
   console.log('REAL_RF02_ADAPTER_LIFECYCLE_AND_CANDIDATE_VERIFIED');
 } else if (config.controlledRender) {
   const result = await bridge.render(receipt,
@@ -178,6 +430,35 @@ if (config.useJobs) {
   assert.match(result.executionNonce, /^[a-f0-9]{32}$/);
   assert.ok(result.outputs.front_right_card.bytes > 0);
   assert.ok(result.outputs.glb.bytes > 0);
+  if (config.sealProof) {
+    const {openRenderGenerationStore} = await import(config.generations);
+    const {RENDER_GENERATION_OUTPUT_KEYS} = await import(config.module);
+    // Historical archival integrity is explicitly separate from new artifact proof.
+    const archive = openRenderGenerationStore({jobRoot:config.input.jobRoot,jobId:'00000000c222',
+      qualityVerifier:input=>({...input,verifier_status:'accepted',quality_status:'unwired',verifier:'test-g0-archive',note:'synthetic archive only'})});
+    const bytes = await readFile(join(config.input.jobRoot,'resolved_job.json'));
+    const g0 = archive.sealGeneration({mode:'legacy_import',profile:receipt.profile,
+      contractSha256:receipt.sourceSha256.slice(7),contractBytes:bytes,
+      observedCurrentGenerationId:null,expectedCurrentGenerationId:archive.virtualLegacyCurrentId()});
+    const verifier = bridge.createPartialSealVerifier(result);
+    if (config.sealTamper) await copyFile(result.outputs.back_left.path,result.outputs.front_right.path);
+    let called = 0;
+    const store = openRenderGenerationStore({jobRoot:config.input.jobRoot,jobId:'00000000c222',
+      qualityVerifier: input=>{called++; return verifier(input);}});
+    const seal = ()=>store.sealGeneration({mode:'legacy_relight',profile:receipt.profile,
+      contractSha256:receipt.sourceSha256.slice(7),contractBytes:bytes,
+      sources:Object.entries(result.outputs).filter(([key])=>RENDER_GENERATION_OUTPUT_KEYS[key])
+        .map(([key,row])=>({key:RENDER_GENERATION_OUTPUT_KEYS[key],path:row.path})),
+      observedCurrentGenerationId:g0.generation_id,expectedCurrentGenerationId:g0.generation_id});
+    if (config.sealTamper) assert.throws(seal,error=>error.cause === 'quality_rejected');
+    else {
+      const sealed = seal();
+      assert.equal(sealed.report.quality_status,'unwired');
+      assert.equal(sealed.report.quality_wired,false);
+      assert.ok(sealed.patch.files.some(row=>row.key === 'white_a_card'));
+    }
+    assert.equal(called,1); // Real store invoked proof AFTER copying and hashing.
+  }
   console.log('REAL_RF02_CONTROLLED_RENDER_NONCE_AND_OUTPUTS_VERIFIED');
 } else {
   await assert.rejects(bridge.render(receipt,
@@ -188,13 +469,20 @@ if (config.useJobs) {
 """
     ids = identities_for(root)
     controlled_blender = dummy_blender(tmp_path / "controlled-blender")
+    if actual_blender:
+        installed = shutil.which("blender")
+        assert installed, "explicit synthetic full/card test requires installed Blender"
+        controlled_blender = Path(installed).resolve()
     config = {
         "module": (repo / "apps/web/server/src/renderGenerationBridge.ts").as_uri(),
         "adapter": (repo / "apps/web/server/src/renderGenerationAdapter.ts").as_uri(),
+        "runtime": (repo / "apps/web/server/src/renderGenerationRuntime.ts").as_uri(),
         "jobs": (repo / "apps/web/server/src/jobs.ts").as_uri(),
         "mockup": (repo / "apps/web/server/src/mockup.ts").as_uri(),
         "generations": (repo / "apps/web/server/src/renderGenerations.ts").as_uri(),
-        "useJobs": entry == "jobs", "jobId": root.name,
+        "useJobs": uses_jobs, "jobId": root.name,
+        "actualBlender": actual_blender, "timeoutMs": 180_000 if actual_blender else 30_000,
+        "sealProof": entry.startswith("seal-"), "sealTamper": entry == "seal-tamper",
         "useAdapter": entry == "adapter",
         "python": PYTHON,
         "packaging": str(command_dir),
@@ -202,7 +490,7 @@ if (config.useJobs) {
         "blender": str(controlled_blender),
         "dataRoot": str(data_root),
         "input": {
-            "jobRoot": str(root), "mode": "preserve",
+            "jobRoot": str(root), "mode": "legacy_relight" if entry.startswith("seal-") else "preserve",
             "expectedSourceSha256": ids["expected_source_sha256"],
             "expectedAssetSha256": ids["expected_asset_sha256"],
             "studioAdjustment": {"product_light": 1.2, "background_light": 0.8},
@@ -210,18 +498,26 @@ if (config.useJobs) {
     }
     run = subprocess.run(
         [node, "--import", "tsx", "--input-type=module", "-e", script, json.dumps(config)],
-        cwd=repo, capture_output=True, text=True, timeout=60,
+        cwd=repo, capture_output=True, text=True, timeout=240 if actual_blender else 60,
     )
     assert run.returncode == 0, run.stderr
     assert "REAL_RF02_" in run.stdout
     after = inventory(root)
     assert {name: value for name, value in after.items() if not name.startswith(".render-generations/")
-            and not (entry == "jobs" and name == "job.json")} == before
-    if entry != "jobs":
+            and not (uses_jobs and name == "job.json")} == before
+    if entry not in {"jobs", "actual-blender", "seal-proof", "seal-tamper"}:
         assert all(not name.endswith("generation.json") for name in after)
-    else:
+    elif entry == "seal-tamper":
         assert not any(name.startswith(".render-generations/g1-") for name in after)
     assert not (root / ".render-generations/.candidate-missing-blender").exists()
+
+
+@pytest.mark.skipif(os.environ.get("BEIAN_TEST_BLENDER_FULL") != "1", reason="explicit local synthetic full/card/GLB render")
+@pytest.mark.parametrize("profile_id", ["compat-legacy-v0", "packshot-carton-geometry-v1"])
+def test_normal_local_runtime_with_actual_synthetic_blender_full_card_glb(tmp_path, profile_id):
+    # Explicit profiles at unchanged registry resolution; synthetic artwork only.
+    # No approved baseline, production registration or fake subprocess.
+    test_node_bridge_calls_real_rf02_validator_without_blender(tmp_path, "actual-blender", profile_id)
 
 
 
@@ -375,7 +671,15 @@ def fake_blender(
             dest = Path(str(raw))
             dest.parent.mkdir(parents=True, exist_ok=True)
             if key == "glb":
-                dest.write_bytes(minimal_valid_glb() if corrupt_glb is None else corrupt_glb)
+                if corrupt_glb is not None:
+                    dest.write_bytes(corrupt_glb)
+                else:
+                    from test_packaging_glb_verify import glb_verify, _runtime_artifact, _write_artifact
+                    module = glb_verify()
+                    artifact, _assets = _runtime_artifact(module, project,
+                        expected_assets=snapshot["assets"], dimensions=snapshot["dimensions_mm"],
+                        substrate=snapshot["render"].get("substrate_rgba", [module.PAPER_ALBEDO_LINEAR]*3 + [1.0]))
+                    _write_artifact(module, project, artifact).replace(dest)
             elif key == "blend":
                 dest.write_bytes(b"BLENDER-v293")
             elif "ground" in key or key.endswith("_set"):
@@ -386,7 +690,11 @@ def fake_blender(
                 else:
                     Image.new("RGBA", (8, 8), (9, 9, 9, 255)).save(dest)
             else:
-                Image.new("RGBA", (8, 8), (11, 22, 33, 255)).save(dest)
+                width, height = (snapshot["render"][k] for k in ("resolution_x", "resolution_y"))
+                image = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+                image.paste((11 if key.startswith("front") else 111, 22, 33, 255),
+                            (width // 4, height // 4, width * 3 // 4, height * 3 // 4))
+                image.save(dest)
         if conflict_output is not None:
             conflict_output.write_bytes(b"stolen")
             result_outputs["front_right"] = str(conflict_output)
@@ -401,12 +709,52 @@ def fake_blender(
         return subprocess.CompletedProcess(command, returncode, stdout, "")
 
     monkeypatch.setattr(gen.packaging_pipeline.subprocess, "run", fake_run)
+    def bounded_fake(command, *, deadline):
+        assert deadline > 0
+        result = gen.packaging_pipeline.subprocess.run(command)
+        return subprocess.CompletedProcess(command, result.returncode,
+                                            (result.stdout + "\n" + result.stderr).encode(), b"")
+    monkeypatch.setattr(gen.packaging_pipeline, "run_bounded_blender", bounded_fake)
     return seen
 
 
 def dummy_blender(path: Path) -> Path:
     path.write_bytes(b"not-real-blender")
     return path
+
+
+def test_candidate_rejects_parseable_empty_glb_despite_success_nonce(tmp_path, monkeypatch):
+    gen = generation_module()
+    _pipeline, _job, root = make_spec_source(tmp_path)
+    before = inventory(root)
+    fake_blender(gen, monkeypatch, corrupt_glb=minimal_valid_glb())
+    with pytest.raises(gen.RenderGenerationError) as raised:
+        gen.run_request(request_payload(root, action="render-candidate",
+            candidate_dir=str(tmp_path / "empty-model"), blender_executable=str(dummy_blender(tmp_path / "fake-blender"))))
+    assert raised.value.cause == "runtime_glb_quality"
+    assert inventory(root) == before
+
+
+@pytest.mark.parametrize("target", ["glb", "face"])
+def test_candidate_rechecks_quality_bytes_before_return(tmp_path, monkeypatch, target):
+    gen = generation_module()
+    _pipeline, _job, root = make_spec_source(tmp_path)
+    candidate = tmp_path / "changed-after-quality"
+    before = inventory(root)
+    seen = fake_blender(gen, monkeypatch)
+    original = gen.compare_glb_artifact_contract
+    def changing_verifier(artifact, expected_assets, *args, **kwargs):
+        report = original(artifact, expected_assets, *args, **kwargs)
+        assert report["ok"], report
+        path = Path(seen["snapshot"]["outputs"]["glb"] if target == "glb" else expected_assets["front"])
+        path.write_bytes(path.read_bytes() + b"changed")
+        return report
+    monkeypatch.setattr(gen, "compare_glb_artifact_contract", changing_verifier)
+    with pytest.raises(gen.RenderGenerationError) as raised:
+        gen.run_request(request_payload(root, action="render-candidate", candidate_dir=str(candidate),
+            blender_executable=str(dummy_blender(tmp_path / "fake-blender"))))
+    assert raised.value.cause == "runtime_glb_quality"
+    assert inventory(root) == before
 
 
 def test_validate_legal_spec_distinguishes_source_bytes_from_plan_identity(tmp_path: Path):
@@ -429,10 +777,19 @@ def test_validate_legal_spec_distinguishes_source_bytes_from_plan_identity(tmp_p
     assert job["render_spec"]["schema"] == "packaging-render-spec/1"
 
 
-def test_legacy_relight_synthesizes_known_pre_rf02_v2_job(tmp_path: Path):
+@pytest.mark.parametrize("sufficient_density", [False, True])
+def test_legacy_relight_requires_sampling_even_for_known_pre_rf02(tmp_path: Path, sufficient_density: bool):
     gen = generation_module()
-    write_legacy_blender_job(tmp_path)
+    job = write_legacy_blender_job(tmp_path)
     root = tmp_path / "LEGACYBOX"
+    if not sufficient_density:
+        with pytest.raises(gen.RenderGenerationError) as caught:
+            gen.run_request(request_payload(root, mode="legacy_relight"))
+        assert caught.value.cause == "source_sampling_quality"
+        return
+    for face, path in job["assets"].items():
+        # Fresh synthetic full-density fixture, never upscale a source image.
+        Image.new("RGBA", (950, 950 if face in {"top", "bottom"} else 3550), (1, 2, 3, 255)).save(path)
     result = gen.run_request(request_payload(root, mode="legacy_relight"))
     assert result["ok"] is True
     disk = json.loads((root / "resolved_job.json").read_text(encoding="utf-8"))

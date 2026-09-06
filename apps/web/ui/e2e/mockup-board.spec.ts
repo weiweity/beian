@@ -1,4 +1,34 @@
 import { completedMockup, expect, test, type SyntheticMockup } from "./fixtures";
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+let artifactDist: string | undefined;
+const artifactAssets = new Map<string, Buffer>();
+test.beforeAll(() => {
+  if (process.env.PLAYWRIGHT_ARTIFACT_ONLY !== "1") return;
+  artifactDist = mkdtempSync(join(tmpdir(), "beian-board-artifact-"));
+  execFileSync("npm", ["run", "build", "--", "--outDir", artifactDist], {
+    cwd: fileURLToPath(new URL("../", import.meta.url)), timeout: 60_000, stdio: "pipe",
+  });
+  for (const name of readdirSync(join(artifactDist, "assets"))) {
+    artifactAssets.set(`/assets/${name}`, readFileSync(join(artifactDist, "assets", name)));
+  }
+});
+test.beforeEach(async ({ page }) => {
+  if (!artifactDist) return;
+  await page.route("**/*", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.startsWith("/api/")) return route.fallback();
+    const body = artifactAssets.get(path) ?? (!path.split("/").at(-1)?.includes(".")
+      ? readFileSync(join(artifactDist!, "index.html")) : undefined);
+    return body ? route.fulfill({ body, contentType: path.endsWith(".js") ? "text/javascript"
+      : path.endsWith(".css") ? "text/css" : "text/html" }) : route.fulfill({ status: 404, body: "" });
+  });
+});
+test.afterAll(() => { if (artifactDist) rmSync(artifactDist, { recursive: true }); });
 
 test("打样台与审稿台共用一行品名状态和底部日期", async ({ page, syntheticApi }) => {
   const running: SyntheticMockup = {
@@ -140,7 +170,7 @@ test("完成态打样单可分开调产品和背景灯光，原图灯箱也能�
     { key: "white_b", name: "反面与侧面.png" },
   ];
   syntheticApi.mockups.push(mockup);
-  const image = "<svg xmlns='http://www.w3.org/2000/svg' width='3000' height='3600'><rect width='3000' height='3600' fill='white'/></svg>";
+  const image = "<svg xmlns='http://www.w3.org/2000/svg' width='3000' height='3600'><rect width='3000' height='3600' fill='rgb(160,160,160)'/></svg>";
   for (const key of ["white_a", "white_b"]) {
     const pattern = new RegExp(`/api/mockups/${mockup.id}/files/${key}(?:\\?.*)?$`);
     await page.route(pattern, async (route) => {
@@ -159,15 +189,14 @@ test("完成态打样单可分开调产品和背景灯光，原图灯箱也能�
   await expect(productLight).toBeVisible();
   await expect(backgroundLight).toBeVisible();
   await expect(page.locator(".mockup-sheet-photos [role='slider']")).toHaveCount(0);
-  await expect(page.locator(".mockup-sheet-photo .mockup-sheet-frame img").first()).toHaveCSS(
-    "filter",
-    /contrast\(1\.04\).*brightness\(1\)/,
-  );
+  const productCanvas = page.locator(".mockup-sheet-photo canvas").first();
+  await expect(productCanvas).toBeVisible();
+  const red = () => productCanvas.evaluate((element: HTMLCanvasElement) =>
+    element.getContext("2d")!.getImageData(Math.floor(element.width / 2), Math.floor(element.height / 2), 1, 1).data[0]);
+  await expect.poll(red).toBeGreaterThan(100);
+  const initialRed = await red();
   await productLight.fill("1.2");
-  await expect(page.locator(".mockup-sheet-photo .mockup-sheet-frame img").first()).toHaveCSS(
-    "filter",
-    /brightness\(1\.2\)/,
-  );
+  await expect.poll(red).toBeGreaterThan(initialRed);
   await backgroundLight.fill("0.6");
   await expect(page.locator(".mockup-sheet-photo .mockup-sheet-frame").first()).toHaveCSS(
     "background-color",
@@ -182,10 +211,7 @@ test("完成态打样单可分开调产品和背景灯光，原图灯箱也能�
   await expect(dialog.getByRole("slider", { name: "产品灯光" })).toBeVisible();
   await expect(dialog.getByRole("slider", { name: "背景灯光" })).toBeVisible();
   await dialog.getByRole("slider", { name: "产品灯光" }).fill("0.8");
-  await expect(page.locator(".mockup-sheet-photo .mockup-sheet-frame img").first()).toHaveCSS(
-    "filter",
-    /brightness\(0\.8\)/,
-  );
+  await expect.poll(red).toBeLessThan(initialRed);
   await dialog.getByRole("button", { name: "关闭" }).click();
   await expect(dialog).toHaveCount(0);
 });
@@ -241,7 +267,7 @@ test("完成态打样单在三图下用印刷面读字并可放大", async ({ pa
   await expect(read.getByText("这单没有印刷面图。")).toHaveCount(0);
   await expect(read.getByRole("img", { name: "正面印刷面" })).toBeVisible();
   await expect(read.getByRole("img", { name: "反面印刷面" })).toBeVisible();
-  await expect(page.getByRole("img", { name: "正面与侧面白底" })).toBeVisible();
+  await expect(page.locator("canvas[aria-label='正面与侧面白底']")).toBeVisible();
   await expect(page.locator(".mockup-sheet-photos").getByRole("img", { name: /印刷面/ })).toHaveCount(0);
   await expect(read.getByRole("link", { name: "打开正面印刷面" })).toHaveAttribute(
     "href",
@@ -283,7 +309,7 @@ test("完成态打样单没有印刷面时提示重新打样，不用 GLB 读字
   await expect(page.getByRole("button", { name: "补印刷面" })).toHaveCount(0);
   await expect(read.getByRole("img")).toHaveCount(0);
   await expect(read.getByRole("link")).toHaveCount(0);
-  await expect(page.getByRole("img", { name: "正面与侧面白底" })).toBeVisible();
+  await expect(page.locator("canvas[aria-label='正面与侧面白底']")).toBeVisible();
 });
 
 test("缺印刷面且可补时点补印刷面后读字出现，看板仍已出图", async ({ page, syntheticApi }) => {
@@ -324,7 +350,7 @@ test("缺印刷面且可补时点补印刷面后读字出现，看板仍已出�
   await expect(page.locator(".wait-card")).toHaveCount(0);
 });
 
-test("已出图可重渲棚时点按钮保持已出图", async ({ page, syntheticApi }) => {
+test("旧单未取得逐动作授权时不能退回原位重渲棚", async ({ page, syntheticApi }) => {
   const mockup = completedMockup("aa11bb22cc33", "可重渲棚盒");
   mockup.files = [
     { key: "white_a", name: "正面与侧面.png" },
@@ -343,11 +369,10 @@ test("已出图可重渲棚时点按钮保持已出图", async ({ page, syntheti
     await route.fulfill({ status: 200, contentType: "model/gltf-binary", body: "glTF" });
   });
   await page.goto(`/mockup/${mockup.id}`);
-  await expect(page.getByRole("button", { name: "重渲棚" })).toBeEnabled();
-  await page.getByRole("button", { name: "重渲棚" }).click();
+  await expect(page.getByRole("button", { name: "重渲棚" })).toHaveCount(0);
   expect(
     syntheticApi.calls.some((call) => call.method === "POST" && call.path === `/api/mockups/${mockup.id}/relight`),
-  ).toBeTruthy();
+  ).toBeFalsy();
   await expect(page.locator(".wait-card")).toHaveCount(0);
   await expect(page.getByRole("heading", { name: mockup.title })).toBeVisible();
 });
@@ -498,7 +523,7 @@ test("成片 ground 损坏时隐藏原图和下载", async ({ page, syntheticApi
   await expect(shot.getByRole("button", { name: /原图|下载/ })).toHaveCount(0);
 });
 
-test("无 ground 的已出图单保持 CSS 滤镜、描边和 PPT", async ({ page, syntheticApi }) => {
+test("无 ground 的已出图单保持 canvas 合成、三栏和 PPT", async ({ page, syntheticApi }) => {
   const mockup = completedMockup("bb22cc33dd44", "旧白底图");
   mockup.files = [
     { key: "white_a", name: "正面与侧面.png" },
@@ -513,10 +538,8 @@ test("无 ground 的已出图单保持 CSS 滤镜、描边和 PPT", async ({ pag
     });
   }
   await page.goto(`/mockup/${mockup.id}`);
-  await expect(page.locator(".mockup-sheet-photo .mockup-sheet-frame img").first()).toHaveCSS(
-    "filter",
-    /contrast\(1\.04\).*brightness\(1\)/,
-  );
+  await expect(page.locator("canvas[aria-label='正面与侧面白底']")).toBeVisible();
+  await expect(page.locator(".mockup-sheet-photos > figure")).toHaveCount(3);
   await expect(page.getByRole("link", { name: "下载 PPT" })).toBeVisible();
   await expect(page.getByRole("button", { name: "调灯" })).toBeVisible();
   await expect(page.getByRole("slider", { name: "产品灯光" })).toHaveCount(0);

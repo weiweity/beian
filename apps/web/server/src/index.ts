@@ -5,6 +5,7 @@ import {
   existsSync,
   mkdirSync,
   openSync,
+  read,
   readFileSync,
   readSync,
   rmSync,
@@ -35,12 +36,17 @@ import { notifyTaskComplete, sendText } from "./notify.js";
 import {
   decorateQueueAhead,
   enqueue,
+  enqueueRenderGenerationMutation,
+  activateRenderGeneration,
   launchNotification,
   notificationSnapshot,
   publicTask,
   queueSnapshot,
   reclaimOnBoot,
   relightMockupStudio,
+  readRenderGenerationHistory,
+  openRenderGenerationFile,
+  renderGenerationView,
   repairMockupPrintFaces,
   retryMockup,
 } from "./jobs.js";
@@ -90,6 +96,7 @@ import {
   listJobs,
   publicMockup,
   publicMockupSummary,
+  readMockupFromDisk,
   prepareStructureConfirmation,
   prepareStructureInputSelection,
   queueMockup,
@@ -99,6 +106,7 @@ import {
   type StructureAnchorDecision,
   type StructureConfirmationDecision,
 } from "./mockup.js";
+import { isRenderGenerationError, type HeldGenerationFile } from "./renderGenerations.js";
 import { assertIllustratorReady } from "./aiRaster.js";
 import {
   assertIllustratorAgentReady,
@@ -217,7 +225,85 @@ function need(
 }
 
 function publishMockup(job: Parameters<typeof publicMockup>[0], s: Session) {
-  return publicMockup(job, { structureDesk: s.role === "admin" });
+  return {...publicMockup(job, { structureDesk: s.role === "admin" }),
+    ...renderGenerationView(job,viewerFromSession(s),hasPerm(s.role,"create"))};
+}
+
+function generationHttpError(c: Context, error: unknown): Response {
+  if (error instanceof HTTPException) throw error;
+  const e = error as {status?:number; code?:string; cause?:string; reason?:string};
+  if (e.status === 401 || e.status === 403) throw new HTTPException(e.status,{message:e.status === 401 ? "未登录" : "没有权限"});
+  let status = e.status ?? (isRenderGenerationError(error) ? 409 : 500);
+  let reason = e.reason || "generation_corrupt";
+  if (isRenderGenerationError(error)) {
+    if (error.code === "render_generation_stale") reason = "current_changed";
+    else if (error.cause === "cursor_invalid" || error.cause === "limit") { reason = "cursor_invalid"; status = 400; }
+    else if (error.cause === "generation_id" || error.cause === "pointer_id") { reason = "payload_invalid"; status = 400; }
+    else if (error.cause === "generation_missing") { reason = "generation_missing"; status = 404; }
+    else if (error.cause === "history_capacity") reason = "history_capacity";
+  } else if (e.code === "render_generation_stale") reason = "current_changed";
+  else if (e.code === "render_generation_busy" && !e.reason) reason = "mutation_busy";
+  else if (status === 404) reason = "generation_missing";
+  const messages: Record<string,string> = {
+    current_changed:"当前版本已变化，请刷新后再操作", cursor_invalid:"分页参数无效", payload_invalid:"请求参数无效",
+    generation_missing:"没有这个版本或文件", history_capacity:"版本记录容量已满，当前图片仍可查看",
+    mutation_busy:"这单正在更新，请稍后再试", generation_corrupt:"版本文件未通过校验，不能混用其他版本",
+    ownership_unconfirmed:"上次执行是否结束尚未确认，请等待核验", request_id_conflict:"本次请求内容已变化，请重新操作",
+    idempotency_capacity:"本单暂不能继续生成新版本，历史仍可查看", audit_pending:"上次切换尚待记账，当前图片仍可用",
+    runtime_quality_unwired:"产物校验尚未接通，暂不能重新出图", production_registration_disabled:"重新出图尚未开放，历史仍可查看",
+    process_containment_unavailable:"执行环境尚未就绪", upgrade_unwired:"新版出图尚未开放", source_changed:"底稿已变化，请重新核对",
+  };
+  if (!messages[reason]) reason = status === 400 ? "payload_invalid" : "generation_corrupt";
+  return c.json({code:e.code?.startsWith("render_generation_") ? e.code : "render_generation_invalid",
+    reason,message:messages[reason] || "本次操作不可用"},status as 400);
+}
+
+async function generationBody(c: Context, allowed: readonly string[]): Promise<Record<string,unknown>> {
+  try {
+    const reader = c.req.raw.body?.getReader();
+    const chunks: Uint8Array[] = [];
+    let bytes = 0;
+    if (reader) try {
+      for (;;) {
+        const next = await reader.read(); if (next.done) break;
+        bytes += next.value.byteLength;
+        if (bytes > 4096) { await reader.cancel(); throw new Error("body too large"); }
+        chunks.push(next.value);
+      }
+    } finally { reader.releaseLock(); }
+    const text = Buffer.concat(chunks).toString("utf8");
+    const body: unknown = text ? JSON.parse(text) : {};
+    if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).some(key => !allowed.includes(key))) throw new Error("schema");
+    return body as Record<string,unknown>;
+  } catch { throw Object.assign(new Error("请求参数无效"),{status:400,reason:"payload_invalid"}); }
+}
+
+function generationString(body: Record<string,unknown>, key: string): string {
+  if (typeof body[key] !== "string" || !body[key]) throw Object.assign(new Error("请求参数无效"),{status:400,reason:"payload_invalid"});
+  return body[key];
+}
+
+function generationFileResponse(c: Context, file: HeldGenerationFile): Response {
+  const download = c.req.query("download") === "1";
+  const headers = {ETag:`"sha256-${file.sha256}"`,"Cache-Control":download ? "private, no-store" : "private, no-cache",
+    "X-Content-Type-Options":"nosniff"};
+  if (!download && c.req.header("if-none-match") === headers.ETag) { file.close(); return new Response(null,{status:304,headers}); }
+  const ascii = file.name.replace(/[^\x20-\x7E]/g,"_").replace(/"/g,"");
+  try {
+    const responseHeaders = {...headers,
+      "Content-Type":file.name.endsWith(".glb") ? "model/gltf-binary" : "image/png",
+      "Content-Disposition":`${download ? "attachment" : "inline"}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(file.name)}`,
+    };
+    // Hono dispatches HEAD through GET but drops its response body. Do not leave an unread stream owning the descriptor.
+    if (c.req.raw.method === "HEAD") { file.close(); return new Response(null,{headers:responseHeaders}); }
+    // Use the already verified held descriptor, never reopen the pathname.
+    // The stream waits for pending reads before calling its one close owner on end/error/cancel.
+    // autoClose:false still closes on destroy; mixing it with manual error/end closes races on cancellation.
+    const stream = createReadStream("",{fd:file.fd,autoClose:true,start:0,end:file.bytes-1,fs:{read,
+      close:(_fd,callback)=>{try { file.close();callback(null); } catch(error) { callback(error as NodeJS.ErrnoException); }},
+    }});
+    return new Response(Readable.toWeb(stream) as ReadableStream,{headers:responseHeaders});
+  } catch (error) { file.close(); throw error; }
 }
 
 function safeLogCause(err: unknown): string {
@@ -1316,9 +1402,46 @@ app.get("/api/mockups", (c) => {
 
 app.get("/api/mockups/:id", (c) => {
   const s = need(c, "read");
-  const job = getJob(assertTid(c.req.param("id")));
+  const job = readMockupFromDisk(assertTid(c.req.param("id")));
   if (!job) throw new HTTPException(404, { message: "没有这单打样" });
   return c.json(decorateQueueAhead([publishMockup(job, s)])[0]);
+});
+
+app.get("/api/mockups/:id/render-generations", (c) => {
+  need(c,"read");
+  try {
+    const id = assertTid(c.req.param("id"));
+    const limit = c.req.query("limit");
+    const cursor = c.req.query("cursor");
+    if ((limit !== undefined && !/^[1-9][0-9]?$/.test(limit)) || cursor === ""
+      || Object.entries(c.req.queries()).some(([key,values]) => !["limit","cursor"].includes(key) || values.length !== 1)) {
+      throw Object.assign(new Error("分页参数无效"),{status:400,reason:"cursor_invalid"});
+    }
+    return c.json(readRenderGenerationHistory(id,{limit:limit === undefined ? undefined : Number(limit),cursor}));
+  } catch (error) { return generationHttpError(c,error); }
+});
+
+app.post("/api/mockups/:id/render-generations", async (c) => {
+  const s = need(c,"create");
+  try {
+    const body = await generationBody(c,["client_request_id","mode","source_generation_id","expected_current_generation_id","studio_adjustment"]);
+    const mode = generationString(body,"mode");
+    if (mode !== "legacy_relight" && mode !== "upgrade") throw Object.assign(new Error("请求参数无效"),{status:400,reason:"payload_invalid"});
+    const result = enqueueRenderGenerationMutation({jobId:assertTid(c.req.param("id")),viewer:viewerFromSession(s),
+      clientRequestId:generationString(body,"client_request_id"),mode,sourceGenerationId:generationString(body,"source_generation_id"),
+      expectedCurrentGenerationId:generationString(body,"expected_current_generation_id"),studioAdjustment:body.studio_adjustment as never});
+    return c.json(result,202);
+  } catch (error) { return generationHttpError(c,error); }
+});
+
+app.post("/api/mockups/:id/render-generations/:generation_id/activate", async (c) => {
+  const s = need(c,"create");
+  try {
+    const body = await generationBody(c,["expected_current_generation_id"]);
+    const job = activateRenderGeneration({jobId:assertTid(c.req.param("id")),viewer:viewerFromSession(s),
+      generationId:c.req.param("generation_id"),expectedCurrentGenerationId:generationString(body,"expected_current_generation_id")});
+    return c.json(publishMockup(job,s));
+  } catch (error) { return generationHttpError(c,error); }
 });
 
 app.delete("/api/mockups/:id", (c) => {
@@ -1358,15 +1481,21 @@ app.post("/api/mockups/:id/print-faces", async (c) => {
 app.post("/api/mockups/:id/relight", async (c) => {
   const s = need(c, "create");
   try {
-    const job = await relightMockupStudio(assertTid(c.req.param("id")), viewerFromSession(s));
-    return c.json(decorateQueueAhead([publishMockup(job, s)])[0]);
-  } catch (e) {
-    boom(e);
-  }
+    const body = await generationBody(c,["studio_adjustment"]);
+    const result = await relightMockupStudio(assertTid(c.req.param("id")), viewerFromSession(s),body.studio_adjustment);
+    return c.json(result,202);
+  } catch (error) { return generationHttpError(c,error); }
 });
 
 app.get("/api/mockups/:id/files/:key", (c) => {
   need(c, "read");
+  const generationId = c.req.query("generation_id");
+  if (generationId !== undefined) {
+    try {
+      if (c.req.queries("generation_id")?.length !== 1) throw Object.assign(new Error("版本参数无效"),{status:400,reason:"payload_invalid"});
+      return generationFileResponse(c,openRenderGenerationFile(assertTid(c.req.param("id")),generationId,c.req.param("key")));
+    } catch (error) { return generationHttpError(c,error); }
+  }
   const job = getJob(assertTid(c.req.param("id")));
   if (!job) throw new HTTPException(404, { message: "没有这单打样" });
   const key = c.req.param("key");

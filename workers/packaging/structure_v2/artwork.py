@@ -132,10 +132,13 @@ def _sampling_plan(
     page_height_mm: float,
     layer_corners: list[list[tuple[float, float]]],
     pixels_per_mm: float,
+    minimum_pixels_per_mm: float,
 ) -> tuple[tuple[int, int], int, list[tuple[tuple[float, float, float, float], int]]]:
+    # Preserve legacy rounding above the floor; only the minimum is a hard lower
+    # bound. PDF page-coordinate noise must not add a pixel to every larger grid.
     output_size = (
-        max(8, round(width_mm * pixels_per_mm)),
-        max(8, round(height_mm * pixels_per_mm)),
+        max(8, round(width_mm * pixels_per_mm), math.ceil(width_mm * minimum_pixels_per_mm)),
+        max(8, round(height_mm * pixels_per_mm), math.ceil(height_mm * minimum_pixels_per_mm)),
     )
     clips: list[tuple[tuple[float, float, float, float], int]] = []
     for corners in layer_corners:
@@ -184,6 +187,7 @@ def _bounded_pixels_per_mm(
         page_height_mm,
         layer_corners,
         minimum_pixels_per_mm,
+        minimum_pixels_per_mm,
     )
     if not _plan_fits(minimum_plan, max_raster_pixels):
         return minimum_pixels_per_mm, minimum_plan
@@ -194,6 +198,7 @@ def _bounded_pixels_per_mm(
         page_height_mm,
         layer_corners,
         desired_pixels_per_mm,
+        minimum_pixels_per_mm,
     )
     if _plan_fits(desired_plan, max_raster_pixels):
         return desired_pixels_per_mm, desired_plan
@@ -209,6 +214,7 @@ def _bounded_pixels_per_mm(
             page_height_mm,
             layer_corners,
             candidate,
+            minimum_pixels_per_mm,
         )
         if _plan_fits(candidate_plan, max_raster_pixels):
             low = candidate
@@ -221,6 +227,7 @@ def _bounded_pixels_per_mm(
         page_height_mm,
         layer_corners,
         low,
+        minimum_pixels_per_mm,
     )
 
 
@@ -314,8 +321,8 @@ def render_face_assets(
             if face.get("paper_only") is True and not raw_layers:
                 pixels_per_mm = float(minimum_face_pixels_per_mm)
                 output_size = (
-                    max(8, round(width_mm * pixels_per_mm)),
-                    max(8, round(height_mm * pixels_per_mm)),
+                    max(8, math.ceil(width_mm * pixels_per_mm)),
+                    max(8, math.ceil(height_mm * pixels_per_mm)),
                 )
                 paper = Image.new("RGBA", output_size, (0, 0, 0, 0))
                 try:

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { deflateSync } from "node:zlib";
@@ -32,7 +32,7 @@ const {
   setJobsTestHooks,
   tryStart,
 } = await import("./jobs.js");
-const { fileOf, loadMockup, publicMockup, publicMockupSummary, readMockupFromDisk, saveMockup } = await import("./mockup.js");
+const { fileOf, loadMockup, publicMockup, publicMockupSummary, readMockupFromDisk, saveMockup, beginStructureConfirmation } = await import("./mockup.js");
 const {
   G0_LEGACY_ORIGINAL_ID,
   RENDER_GENERATION_DIR,
@@ -335,6 +335,28 @@ function enqueueAsync(id: string, requestId = "async-request") {
 }
 
 describe("RF-03C2.2 asynchronous preparation and ownership", () => {
+  it("extends the original lifecycle through seal and current commit; expiry keeps old current and releases confirmed credit", async () => {
+    const id = tid(461); seedDoneJob(id);
+    let expired = false, releases = 0, writes = 0;
+    setJobsTestHooks({ qualityVerifier: unwiredVerifier, prepareRenderGeneration: async input => ({
+      ...asyncPrepared(input), lifecycle: {
+        deadline: performance.now() + 10000,
+        check: () => { if (expired) throw new Error("lifecycle_timeout"); },
+        beforeWrite: () => { writes++; }, observe: () => {},
+        release: gone => { assert.equal(gone, true); releases++; },
+      },
+    }), generationFailpoints: { afterSealBeforePointer: () => { expired = true; } } });
+    enqueueAsync(id);
+    await waitUntil(() => loadMockup(id)?.render_mutation?.status === "failed", "expired before commit");
+    assert.equal(readMockupFromDisk(id)?.current_render_generation_id, undefined);
+    assert.deepEqual(fileBytes(loadMockup(id)!, "white_a"), WHITE_A);
+    assert.ok(writes > 0); assert.ok(releases > 0);
+    assert.equal(queueSnapshot().blender.running, 0);
+    const store = openRenderGenerationStore({jobRoot:jobDir(id),jobId:id,qualityVerifier:unwiredVerifier});
+    assert.ok(store.listHistory().items.some(row => row.mode === "legacy_relight"));
+    reclaimOnBoot(); assert.equal(readMockupFromDisk(id)?.current_render_generation_id, undefined);
+  });
+
   it("rejects malformed admission fields without persisting a mutation", () => {
     const id = tid(602);
     seedDoneJob(id);
@@ -609,6 +631,32 @@ describe("RF-03C2.2 asynchronous preparation and ownership", () => {
 });
 
 describe("RF-03B generation queue", () => {
+  it("blocks generation admission while legacy print-face repair owns the same job", async () => {
+    const id = tid(404);
+    const seeded = seedDoneJob(id);
+    const source = virtualId(id);
+    const artwork = join(seeded.dir, "synthetic-artwork.pdf");
+    const resolved = join(seeded.dir, "resolved_job.json");
+    writeFileSync(artwork, "%PDF-1.4 synthetic fixture; never opened by a renderer");
+    writeFileSync(resolved, JSON.stringify({ schema: "resolved-packaging-job/3", faces: {} }));
+    unlinkSync(join(seeded.dir, "assets", "panel_front.png"));
+    saveMockup({ ...readMockupFromDisk(id)!, structure_artwork_path: artwork, structure_resolution_path: resolved });
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    setJobsTestHooks(generationHooks({ runPrintFaceRepair: async () => {
+      await gate;
+      writeFileSync(join(seeded.dir, "assets", "panel_front.png"), syntheticPng(1,2,3));
+      return { code: 0, stdout: "", stderr: "", timedOut: false };
+    }}));
+    const repair = repairMockupPrintFaces(id, viewer);
+    try {
+      expectCode(() => enqueueRenderGenerationMutation({ jobId: id, viewer,
+        clientRequestId: "req-printface-busy", mode: "legacy_relight",
+        sourceGenerationId: source, expectedCurrentGenerationId: source }), "render_generation_busy");
+      assert.equal(readMockupFromDisk(id)?.render_mutation, undefined);
+    } finally { release(); await repair; }
+  });
+
   it("refuses enqueue when trusted adapters are missing and leaves no fake queued mutation", () => {
     const id = tid(1);
     seedDoneJob(id);
@@ -890,14 +938,21 @@ describe("RF-03B generation queue", () => {
       sourceGenerationId: source,
       expectedCurrentGenerationId: source,
     });
+    const pendingBytes = readFileSync(join(seeded.dir, "job.json"));
+    expectCode(() => beginStructureConfirmation(loadMockup(id)!), "render_generation_busy");
+    assert.deepEqual(readFileSync(join(seeded.dir, "job.json")), pendingBytes);
+    await assert.rejects(repairMockupPrintFaces(id, viewer), { code: "render_generation_busy" });
     gate.release(true);
     await waitUntil(() => loadMockup(id)?.render_mutation?.status === "succeeded", "managed");
     const before = fileBytes(loadMockup(id)!, "white_a");
+    const stale = { ...loadMockup(id)!, current_render_generation_id: undefined, render_mutation: undefined };
+    expectCode(() => beginStructureConfirmation(stale), "render_generation_managed");
+    resetJobsTestHooks();
     try {
       await relightMockupStudio(id, viewer);
       assert.fail("relight should reject");
     } catch (err) {
-      assert.equal((err as { code?: string }).code, "render_generation_managed");
+      assert.equal((err as { code?: string }).code, "render_generation_unavailable");
     }
     try {
       await repairMockupPrintFaces(id, viewer);
@@ -942,6 +997,43 @@ describe("RF-03B generation queue", () => {
     assert.equal(activated.current_render_generation_id, G0_LEGACY_ORIGINAL_ID);
     assert.equal(fileBytes(activated, "white_a").equals(WHITE_A), true);
     assert.equal(queueSnapshot().blender.running >= 1, true);
+    const indexPath = join(jobDir(id), RENDER_GENERATION_DIR, "index.jsonl");
+    const audit = () => readFileSync(indexPath,"utf8").trim().split("\n").map(line => JSON.parse(line)).filter(row => row.event === "activated");
+    assert.equal(audit().length,2);
+    assert.equal(audit()[1].generation_id,G0_LEGACY_ORIGINAL_ID);
+    assert.equal(audit()[1].from_generation_id,current);
+    activateRenderGeneration({jobId:id,viewer,generationId:G0_LEGACY_ORIGINAL_ID,expectedCurrentGenerationId:G0_LEGACY_ORIGINAL_ID});
+    assert.equal(audit().length,2,"current activation is a no-op");
+    const store = openRenderGenerationStore({jobId:id,jobRoot:jobDir(id),qualityVerifier:unwiredVerifier});
+    assert.equal(store.listHistory().items.length,2,"audit does not create version rows");
+    setJobsTestHooks(generationHooks({generationFailpoints:{beforeActivationAudit:() => { throw new Error("audit unavailable"); }}}));
+    const committed = activateRenderGeneration({jobId:id,viewer,generationId:current,expectedCurrentGenerationId:G0_LEGACY_ORIGINAL_ID});
+    assert.equal(committed.current_render_generation_id,current,"post-commit audit failure must not report rollback");
+    assert.equal(audit().length,2);
+    assert.throws(() => activateRenderGeneration({jobId:id,viewer,generationId:G0_LEGACY_ORIGINAL_ID,expectedCurrentGenerationId:current}),
+      (error: {reason?:string}) => error.reason === "audit_pending");
+    setJobsTestHooks(generationHooks());
+    reclaimOnBoot();
+    reclaimOnBoot();
+    assert.equal(audit().length,3,"boot repairs once by event ID");
+  });
+
+  it("compatibility relight queues under the same lock, deduplicates only in-flight, never calls the in-place runner", async () => {
+    const id=tid(615); const before=readFileSync(seedDoneJob(id).whiteA);
+    const gate=gatedExecutor();
+    setJobsTestHooks(generationHooks({runRenderGeneration:gate.run,runRelight:async () => { assert.fail("old in-place runner"); }}));
+    const first=await relightMockupStudio(id,viewer);
+    const again=await relightMockupStudio(id,viewer,{product_light:1,background_light:1});
+    assert.equal(first.mutation.id,again.mutation.id);
+    await assert.rejects(relightMockupStudio(id,viewer,{product_light:1.1}), (error:{code?:string}) => error.code === "render_generation_busy");
+    gate.release(true);
+    await waitUntil(() => readMockupFromDisk(id)?.render_mutation?.status === "succeeded","compat success");
+    const gate2=gatedExecutor(); setJobsTestHooks(generationHooks({runRenderGeneration:gate2.run}));
+    const next=await relightMockupStudio(id,viewer);
+    assert.notEqual(next.mutation.id,first.mutation.id,"explicit next click after terminal is new work");
+    gate2.release(false);
+    await waitUntil(() => readMockupFromDisk(id)?.render_mutation?.status === "failed","compat failure");
+    assert.deepEqual(readFileSync(join(jobDir(id),`${id}_pack_front_right_white.png`)),before,"legacy root untouched");
   });
 
   const RECOVERY_MUTATION_ID = "m0123456789abcdef";
@@ -976,6 +1068,34 @@ describe("RF-03B generation queue", () => {
       sourceGenerationId: source,
       expectedCurrentGenerationId: source,
     });
+  }
+
+  for (const parent of ["owned", "unknown", "other", "missing"] as const) {
+    for (const container of ["present", "unknown", "missing"] as const) {
+      it(`native recovery retains fence until supervisor and exact job are gone: ${parent}/${container}`, () => {
+        const id = tid(720); seedInterruptedRunning(id, 71237);
+        const job = readMockupFromDisk(id)!;
+        const executionId = `${id}:${RECOVERY_MUTATION_ID}:${"d".repeat(32)}`;
+        job.render_generation_request!.worker_protocol = "windows-job-object/1";
+        job.render_generation_request!.worker_execution_id = executionId;
+        saveMockup(job);
+        let containerProbes = 0;
+        setJobsTestHooks({inspectWorker: (_pid, expected) => {
+          assert.equal(expected.kind,"render_generation");
+          if (expected.kind === "render_generation") assert.equal(expected.container,"windows-job-object/1");
+          return parent;
+        },recoverWindowsGeneration: (identity, options) => {
+          assert.equal(identity,executionId); assert.equal(options.cancel,true); containerProbes++; return container;
+        },killTree: () => assert.fail("no taskkill or PID fallback"),
+          killGenerationGroup: () => assert.fail("not a POSIX group"),
+          inspectGenerationGroup: () => { assert.fail("not a POSIX group"); } });
+        reclaimOnBoot(); reclaimOnBoot();
+        const released = (parent === "other" || parent === "missing") && container === "missing";
+        assert.equal(readMockupFromDisk(id)?.render_generation_request?.worker_pid === undefined, released);
+        assert.equal(queueSnapshot().blender.running > 0,!released);
+        if (parent === "owned" || parent === "unknown") assert.equal(containerProbes,0);
+      });
+    }
   }
 
   for (const parentState of ["missing", "other"] as const) {
