@@ -7,6 +7,8 @@ import { describe, it } from "node:test";
 import { makeTestTempDir } from "./testTemp.js";
 import { createRenderGenerationBridge, type RenderBridgeValidation } from "./renderGenerationBridge.js";
 import { renderGenerationProcessSupported } from "./renderGenerationProcess.js";
+import { contentFingerprint, type QualityVerifyInput } from "./renderGenerations.js";
+import { createRenderLifecycle, renderReservationPath } from "./renderGenerationBudget.js";
 
 const faces = ["front", "right", "back", "left", "top", "bottom"] as const;
 const hash = (bytes: string | Buffer) => `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
@@ -20,7 +22,14 @@ process.stdin.setEncoding('utf8');
 process.stdin.on('data', b => input += b);
 process.stdin.on('end', () => {
   const req = JSON.parse(input);
+  if (!Number.isSafeInteger(req.timeout_ms) || req.timeout_ms < 1 || req.timeout_ms > 1260000) throw Error('missing remaining time budget');
   const behavior = fs.readFileSync(path.join(__dirname, 'behavior'), 'utf8');
+  if (behavior === 'disk-growth' || behavior === 'memory-growth') {
+    fs.mkdirSync(req.candidate_dir);
+    if (behavior === 'disk-growth') fs.writeFileSync(path.join(req.candidate_dir,'undeclared.bin'), Buffer.alloc(16*1024*1024,3));
+    else global.retained = Buffer.alloc(256*1024*1024,3);
+    setInterval(()=>{},1000); return;
+  }
   const hash = b => 'sha256:' + crypto.createHash('sha256').update(b).digest('hex');
   const id = hash('plan');
   const result = { ok:true, schema:'packaging-render-generation-result/1', action:req.action, mode:req.mode,
@@ -73,6 +82,7 @@ process.stdin.on('end', () => {
       result.outputs[key]={path:filename,sha256:hash(bytes),bytes:bytes.length};
     }
     result.execution={status:'rendered',nonce:'0123456789abcdef0123456789abcdef'};
+    result.artifact_checks={glb:'passed',full_card:'passed',source_sampling:'passed'}; // Transport double, not real artifact QA.
     process.stderr.write('STAGE prepare\nSTAGE blender\n');
   }
   if (behavior === 'source-mismatch') result.source_identity.resolved_job_sha256=hash('wrong');
@@ -88,6 +98,9 @@ process.stdin.on('end', () => {
   if (behavior === 'output-symlink') {fs.unlinkSync(result.outputs.glb.path);fs.symlinkSync(path.join(req.job_root,'resolved_job.json'),result.outputs.glb.path);}
   if (behavior === 'missing-output') delete result.outputs.glb;
   if (behavior === 'missing-nonce') result.execution.nonce=null;
+  if (behavior === 'missing-checks') delete result.artifact_checks;
+  if (behavior === 'failed-check') result.artifact_checks.full_card='failed';
+  if (behavior === 'failed-sampling') result.artifact_checks.source_sampling='failed';
   if (behavior === 'execution-identity') result.candidate_identity=hash('wrong');
   if (behavior === 'candidate-path') result.candidate_dir=req.job_root;
   if (behavior === 'optional-warning') result.optional_warnings=[{key:'blend',cause:'optional_missing'}];
@@ -137,6 +150,135 @@ it("refuses the uncontained Windows bridge before spawn or stdin delivery", { sk
 });
 
 describe("RF-03C2.1 async render bridge", { skip: !renderGenerationProcessSupported() }, () => {
+  for (const sealContext of ["same", "missing", "closed"] as const) {
+    it(`runtime proof requires the real live seal resource context: ${sealContext}`, async () => {
+      const f = fixture(5000); f.input.mode = "legacy_relight";
+      const lifecycle = createRenderLifecycle({root:join(f.jobRoot,".render-generations"),mutationId:"proof",
+        timeoutMs:5000,diskBytes:8*1024*1024,memoryBytes:512*1024*1024});
+      try {
+        const receipt = await f.bridge.verify(f.input,{lifecycle});
+        const candidate = await f.bridge.render(receipt,f.candidate,process.execPath,{lifecycle});
+        const proof = f.bridge.createRuntimeSealVerifier(candidate);
+        assert.throws(() => f.bridge.createPartialSealVerifier(candidate),/candidate_unknown_or_used/);
+        const mapping: Record<string,string> = {front_right:"white_a",back_left:"white_b",glb:"glb",
+          front_right_card:"white_a_card",back_left_card:"white_b_card"};
+        const files = Object.entries(candidate.outputs).map(([key,row]) => ({key:mapping[key],sha256:row.sha256.slice(7),bytes:row.bytes}));
+        const faceHashes = Object.fromEntries(faces.map(face => [face,hash("synthetic-face").slice(7)])) as QualityVerifyInput["faces"];
+        const input: QualityVerifyInput = {generation_id:"g1-runtime",contract_sha256:receipt.sourceSha256.slice(7),mode:"legacy_relight",
+          files,faces:faceHashes,content_fingerprint:contentFingerprint(files,faceHashes),resource_lifecycle:sealContext === "missing" ? undefined : lifecycle};
+        if (sealContext === "closed") {
+          lifecycle.release(true); assert.throws(() => proof(input),/lifecycle_closed/);
+        } else assert.equal(proof(input).quality_status,sealContext === "same" ? "runtime_verified" : "failed");
+        assert.throws(() => proof(input),/seal_proof_used/);
+      } finally { lifecycle.release(true); }
+    });
+  }
+
+  it("an unbudgeted bridge cannot mint a runtime proof from successful protocol/artifact results", async () => {
+    const f = fixture(); f.input.mode = "legacy_relight";
+    const receipt = await f.bridge.verify(f.input);
+    const candidate = await f.bridge.render(receipt,f.candidate,process.execPath);
+    assert.throws(() => f.bridge.createRuntimeSealVerifier(candidate),/runtime_proof_unavailable/);
+  });
+
+  for (const resource of ["disk", "memory"]) {
+    it(`stops a real owned worker on sampled ${resource} excess and confirms exit before release`, async () => {
+      const f = fixture(5000);
+      const root = join(f.jobRoot, ".render-generations");
+      const lifecycle = createRenderLifecycle({root, mutationId: "resources", timeoutMs: 5000,
+        diskBytes: 8*1024*1024, memoryBytes: 256*1024*1024});
+      let owned = false;
+      const observer = { lifecycle, onSpawn: () => { owned = true; }, onClose: () => { owned = false; } };
+      try {
+        const receipt = await f.bridge.verify(f.input, observer);
+        f.behavior(resource + "-growth");
+        await assert.rejects(f.bridge.render(receipt, f.candidate, process.execPath, observer), new RegExp(resource + "_budget"));
+        assert.equal(owned, false);
+      } finally { lifecycle.release(!owned); }
+      assert.equal(existsSync(renderReservationPath(root, "resources")), false);
+      if (resource === "disk") assert.equal(existsSync(join(f.candidate, "undeclared.bin")), true);
+    });
+  }
+
+  for (const damage of ["none", "files", "bytes", "faces", "contract", "fingerprint", "mode", "extra", "missing", "duplicate"]) {
+    it(`binds one-shot partial seal proof to copied evidence: ${damage}`, async () => {
+      const f = fixture();
+      f.input.mode = "legacy_relight";
+      const receipt = await f.bridge.verify(f.input);
+      const candidate = await f.bridge.render(receipt, f.candidate, process.execPath);
+      const mapping: Record<string, string> = {front_right:'white_a',back_left:'white_b',glb:'glb',
+        front_right_card:'white_a_card',back_left_card:'white_b_card'};
+      const files = Object.entries(candidate.outputs).map(([key,row]) => ({key:mapping[key],sha256:row.sha256.slice(7),bytes:row.bytes}));
+      const faceHashes = Object.fromEntries(faces.map(face => [face,hash('synthetic-face').slice(7)])) as QualityVerifyInput['faces'];
+      const input: QualityVerifyInput = {generation_id:'g1-test',contract_sha256:receipt.sourceSha256.slice(7),
+        mode:'legacy_relight',files,faces:faceHashes,content_fingerprint:contentFingerprint(files,faceHashes)};
+      assert.throws(() => f.bridge.createPartialSealVerifier({...candidate}), /candidate_unknown_or_used/);
+      assert.throws(() => createRenderGenerationBridge(f.options).createPartialSealVerifier(candidate), /candidate_unknown_or_used/);
+      const verifier = f.bridge.createPartialSealVerifier(candidate);
+      assert.throws(() => f.bridge.createPartialSealVerifier(candidate), /candidate_unknown_or_used/);
+      // Caller mutations cannot rewrite bridge-private expected evidence.
+      candidate.outputs.glb.sha256 = hash('forged');
+      if (damage === 'files') input.files[0].sha256 = hash('wrong').slice(7);
+      if (damage === 'bytes') input.files[0].bytes++;
+      if (damage === 'faces') input.faces.front = hash('wrong').slice(7);
+      if (damage === 'contract') input.contract_sha256 = hash('wrong').slice(7);
+      if (damage === 'fingerprint') input.content_fingerprint = hash('wrong').slice(7);
+      if (damage === 'mode') input.mode = 'legacy_import';
+      if (damage === 'extra') input.files.push({key:'white_a_ground',sha256:hash('extra').slice(7),bytes:12});
+      if (damage === 'missing') input.files.pop();
+      if (damage === 'duplicate') input.files.push({...input.files[0]});
+      const result = verifier(input);
+      assert.equal(result.verifier_status, damage === 'none' ? 'accepted' : 'rejected');
+      assert.equal(result.quality_status, damage === 'none' ? 'unwired' : 'failed');
+      assert.throws(() => verifier(input), /seal_proof_used/);
+    });
+  }
+
+  for (const behavior of ['missing-checks', 'failed-check', 'failed-sampling']) {
+    it(`refuses missing or failed CLI artifact checks: ${behavior}`, async () => {
+      const f = fixture();
+      const receipt = await f.bridge.verify(f.input);
+      f.behavior(behavior);
+      await assert.rejects(f.bridge.render(receipt, f.candidate, process.execPath), /artifact_checks/);
+    });
+  }
+
+  for (const reason of ['cancelled', 'timeout']) {
+    it(`consumes partial seal proof when ${reason} before sealing`, async () => {
+      const f = fixture(reason === 'timeout' ? 1000 : 2000);
+      f.input.mode = 'legacy_relight';
+      const controller = new AbortController();
+      const receipt = await f.bridge.verify(f.input, {signal:controller.signal});
+      const candidate = await f.bridge.render(receipt, f.candidate, process.execPath, {signal:controller.signal});
+      const verifier = f.bridge.createPartialSealVerifier(candidate);
+      if (reason === 'cancelled') controller.abort();
+      else await delay(1050);
+      // Cancellation/deadline is checked before reading any caller-supplied evidence.
+      assert.throws(() => verifier(undefined as unknown as QualityVerifyInput), new RegExp(reason));
+      assert.throws(() => verifier(undefined as unknown as QualityVerifyInput), /seal_proof_used/);
+    });
+  }
+
+  it("shares one deadline between validation and candidate execution", async () => {
+    const f = fixture(1000);
+    const receipt = await f.bridge.verifyBytes({ jobRoot: f.jobRoot, bytes: f.raw, mode: "preserve" });
+    await delay(1050);
+    await assert.rejects(f.bridge.render(receipt, f.candidate, process.execPath, {
+      onSpawn: () => assert.fail("expired receipt must not start another process"),
+    }), /timeout/);
+    assert.equal(existsSync(f.candidate), false);
+    await assert.rejects(f.bridge.render(receipt, f.candidate, process.execPath), /receipt_unknown_or_used/);
+  });
+
+  it("honors cancellation before reading input files", async () => {
+    const f = fixture();
+    const controller = new AbortController();
+    controller.abort();
+    await assert.rejects(f.bridge.verifyBytes({ jobRoot: join(f.root, "missing"), bytes: f.raw, mode: "preserve" }, {
+      signal: controller.signal,
+    }), /cancelled/);
+  });
+
   it("validates bounded bytes and freezes all receipt evidence without a lighting adjustment", async () => {
     const f = fixture();
     const receipt = await f.bridge.verifyBytes({ jobRoot: f.jobRoot, bytes: f.raw, mode: "preserve" });

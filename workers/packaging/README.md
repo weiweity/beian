@@ -2,7 +2,9 @@
 
 这是包装平面稿到既有 Blender 流水线的本地批处理入口。V2 不再把“红线、间距或 bbox 看起来像盒子”当作可自动接受的结构事实；它消费版本化 `PackagingStructure`，把结构识别、拓扑验证、人工确认和 3D 生成分开。旧 `dieline.py` 只保留给命令行诊断，不在网页新任务路径中。
 
-结构事实与成盒闸门以 `docs/adr-005-packaging-structure-v2.md` 为准；渲染真实感、family 几何分派、纸材/涂层、棚光、清晰度预算和质量评测以 `docs/adr-007-packaging-render-fidelity.md` 为准。RF-00 测量尺、RF-01 独立合同和 RF-02 流水线接线（含 RF-02.3 磁盘执行边界）已交 Code/L0：新 V2 任务在切面栅格前解析 persistable render plan，写入 resolved job、fingerprint 和 result；这没有改变 Blender 几何或棚光。非 V2 只是命令行诊断路径，不是网页产品通道。approved baseline、RF-03 输出代际、L1、L2、UAT 均未完成。`0.21.25.0` 起的膜袋仍只是 `add_box` 生成的 3 mm 薄盒预览，不是写实软袋。
+结构事实与成盒闸门以 `docs/adr-005-packaging-structure-v2.md` 为准；渲染真实感、family 几何分派、纸材/涂层、棚光、清晰度预算和质量评测以 `docs/adr-007-packaging-render-fidelity.md` 为准。RF-00 测量尺、RF-01 独立合同和 RF-02 流水线接线（含 RF-02.3 磁盘执行边界）已交 Code/L0：新 V2 任务在切面栅格前解析 persistable render plan，写入 resolved job、fingerprint 和 result；这没有改变 Blender 几何或棚光。非 V2 只是命令行诊断路径，不是网页产品通道。RF-03 本地产物验证、资源生命周期与 Windows 托管代码已实现；生产注册、原生 Windows 验证、RF-04+、approved baseline、L1/L2/UAT 和断电耐久性仍未完成。`0.21.25.0` 起的膜袋仍只是 `add_box` 生成的 3 mm 薄盒预览，不是写实软袋。
+
+RF-03 新候选路径由 `render_generation.py` 校验实际 GLB、full/card 和六面 PNG 网格，Hono 的 `renderGenerationBudget.ts` 把磁盘预留、运行输出/RSS 采样、封存与最终 current 提交绑定到同一资源和时间预算。一次性 `runtime_verified` 凭证仅表示本轮产物合同与资源执行验证，不代表人工视觉通过。正常 registry 只接受系统临时目录内的显式本地评审数据根，生产注册与主 Node 桥的 Windows 新建仍关闭，没有可打开生产能力的环境开关。独立候选 L0、历史开发证据和未完成门见 [RF-03 收口记录](../../docs/designs/packaging-quality-rf03-runtime-closeout.md)。
 
 当前可验证的语义来源有两种：
 
@@ -67,11 +69,11 @@ V2 任务在产品项中写 `"structure_engine": "v2"`。显式 sidecar 可写 `
 
 所有非 cache Blender 任务都从当前内存 job 写成私有执行快照并注入本轮 `execution_nonce`，subprocess 不再直接读可被改写的 `resolved_job.json`。V2 在生成快照前仍走 `blender_execution_plan` 的磁盘/内存/spec/路径/asset 校验。非 V2 诊断路径跳过该 V2 合同校验，但仍用同一套私有快照和 nonce。Blender 返回的 `blender_result.json` 是不可信边界：必须回传同 nonce，只接受测量字段，`code`/`outputs` 必须与执行快照 canonical 全等；未知字段、越界输出或 `project_dir`/`render`/`spec`/identity 注入在写核对卡和 relight 提交前失败。
 
-首次运行加 `--force`；同一源文件、结构、artwork、流程版本和 plan fingerprint token 未变化时，去掉 `--force` 会复用缓存。缓存命中还要求：result 绑定本次实际 `project_dir` 与预期 `resolved_job.json`（不信 previous 自报路径），sidecar `validation.status=accepted`，result 带完整 spec，四项 identity 一致，六面 assets 与 blend/glb/front/back 均在本单目录内互不重复（已存在文件比 inode，未存在目标按 casefold）、非 symlink、非空、带格式签名；未知 output key 或与 resolved_job/六面 assets/source/template（含 symlink 目标与 hardlink 同 inode）重叠只 miss。格式检查只读文件头 8 字节。内容 SHA 与不可变 generation manifest 留给 RF-03。只改 JSON 空白不改变规范化合同 hash；registry 原始字节变化通过 plan identity 使缓存失效。
+首次运行加 `--force`；同一源文件、结构、artwork、流程版本和 plan fingerprint token 未变化时，去掉 `--force` 会复用缓存。缓存命中还要求：result 绑定本次实际 `project_dir` 与预期 `resolved_job.json`（不信 previous 自报路径），sidecar `validation.status=accepted`，result 带完整 spec，四项 identity 一致，六面 assets 与 blend/glb/front/back 均在本单目录内互不重复（已存在文件比 inode，未存在目标按 casefold）、非 symlink、非空、带格式签名；未知 output key 或与 resolved_job/六面 assets/source/template（含 symlink 目标与 hardlink 同 inode）重叠只 miss。该缓存路径的格式检查只读文件头 8 字节；RF-03 新候选路径另有内容 SHA、实际产物验证和不可变 generation manifest，不能用旧缓存命中替代它。只改 JSON 空白不改变规范化合同 hash；registry 原始字节变化通过 plan identity 使缓存失效。
 
 `--blender-only` 只处理已有 `resolved_job.json`：已含完整 spec 时严格绑定到本单 family/hash/三轴尺寸，四项顶层 identity 与派生 flat render 必须存在且一致，hash / profile / registry 身份被篡改则拒绝。缺 spec 时，只有已知 pre-RF02 V2 作业（`pipeline_version=1.4.0` 且 `structure_engine=v2`）才合成 `source=legacy_synthesized` 的 `compat-legacy-v0`；当前/未来/未知/缺版本且缺 spec 一律拒绝。合成还要求历史实际持久化的最小 render 键（substrate/resolution/camera/rotation）完整且逐项匹配 compat；`None`、`{}` 或缺键失败，不要求当时未持久化、由 Blender 默认提供的新键。缺少可证明 family / 完整六面 / 结构身份时失败，不按文件名、颜色或任务 ID 猜。
 
-重渲先在临时目录生成并验证全部新输出；提交前才对流式拷贝到磁盘的原已存在文件建备份，并记录每个目标提交前是否存在。任一第 1..N 个替换或最终 job 写入失败，恢复原文件、删除本轮新建目标（含 optional ground/set/card），并恢复内存 job。备份不把 Blend/GLB/大 PNG 读进 RAM。`resolved_job.json` 使用同目录临时文件 + `os.replace`。这覆盖同步异常回滚；进程崩溃/断电级原子 current pointer 仍由 RF-03 解决，本轮不是 generation 完成。
+现有 `--blender-only` 重渲先在临时目录生成并验证全部新输出；提交前才对流式拷贝到磁盘的原已存在文件建备份，并记录每个目标提交前是否存在。任一第 1..N 个替换或最终 job 写入失败，恢复原文件、删除本轮新建目标（含 optional ground/set/card），并恢复内存 job。备份不把 Blend/GLB/大 PNG 读进 RAM。`resolved_job.json` 使用同目录临时文件 + `os.replace`。这只覆盖该路径的同步异常回滚；RF-03 新候选路径另走不可变 ready 代与原子 current 提交，尚未注册为生产路径，也未取得断电耐久性验收。
 
 网页新建打样单一律写 `structure_engine=v2`，不再提供运行时旧引擎开关。杭州 Windows 的 Illustrator/Blender 验证是合并部署门：失败时保持上一生产版本；任务本身若缺少可验证结构，则停在 `review_required` / `unsupported`，不会用旧引擎伪造成功。
 

@@ -22,7 +22,8 @@ export type RunPythonOpts = {
 export type WorkerProcessIdentity = {
   kind: "compare" | "rework" | "mockup";
   id: string;
-} | { kind: "render_generation"; id: string; mutationId: string; executionId: string };
+} | { kind: "render_generation"; id: string; mutationId: string; executionId: string;
+  container?: "windows-job-object/1" };
 
 export type WorkerProcessState = "owned" | "missing" | "other" | "unknown";
 
@@ -96,6 +97,11 @@ export function workerCommandMatches(commandLine: string, expected: WorkerProces
   if (expected.kind === "render_generation") {
     const prefix = `${expected.id}:${expected.mutationId}:`;
     if (!expected.executionId.startsWith(prefix) || !/^[a-f0-9]{32}$/.test(expected.executionId.slice(prefix.length))) return false;
+    if (expected.container === "windows-job-object/1") {
+      const script = tokens.findIndex(token => /(^|[\\/])windows_render_supervisor\.py$/i.test(token));
+      return script >= 0 && tokens[script + 1] === "--execution-id"
+        && tokens[script + 2] === expected.executionId && tokens.length === script + 3;
+    }
     const script = tokens.findIndex(token => /(^|[\\/])render_generation\.py$/i.test(token));
     return script >= 0 && tokens[script + 1] === "-" && tokens[script + 2] === "--execution-id"
       && tokens[script + 3] === expected.executionId && tokens.length === script + 4;

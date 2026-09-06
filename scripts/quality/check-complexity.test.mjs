@@ -400,7 +400,7 @@ describe("repository quality policy", () => {
     const production = readFileSync(join(root, ".github/workflows/hangzhou-release.yml"), "utf8");
     assert.match(quality, /^\s{2}pull_request:\s*$/m);
     assert.match(quality, /runs-on:\s*ubuntu-latest/);
-    assert.match(quality, /timeout-minutes:\s*12/);
+    assert.match(quality, /timeout-minutes:\s*30/);
     assert.match(quality, /cancel-in-progress:\s*true/);
     assert.match(quality, /npm run quality/);
     assert.match(quality, /npm run test:quality/);
