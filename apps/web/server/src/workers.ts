@@ -22,7 +22,7 @@ export type RunPythonOpts = {
 export type WorkerProcessIdentity = {
   kind: "compare" | "rework" | "mockup";
   id: string;
-};
+} | { kind: "render_generation"; id: string; mutationId: string; executionId: string };
 
 export type WorkerProcessState = "owned" | "missing" | "other" | "unknown";
 
@@ -93,6 +93,13 @@ function commandTokens(commandLine: string): string[] {
 /** Persisted PIDs are only hints. A command must prove both the worker kind and exact task id. */
 export function workerCommandMatches(commandLine: string, expected: WorkerProcessIdentity): boolean {
   const tokens = commandTokens(commandLine);
+  if (expected.kind === "render_generation") {
+    const prefix = `${expected.id}:${expected.mutationId}:`;
+    if (!expected.executionId.startsWith(prefix) || !/^[a-f0-9]{32}$/.test(expected.executionId.slice(prefix.length))) return false;
+    const script = tokens.findIndex(token => /(^|[\\/])render_generation\.py$/i.test(token));
+    return script >= 0 && tokens[script + 1] === "-" && tokens[script + 2] === "--execution-id"
+      && tokens[script + 3] === expected.executionId && tokens.length === script + 4;
+  }
   if (expected.kind === "mockup") {
     const pipeline = tokens.findIndex((token) => /(^|[\\/])pipeline\.py$/i.test(token));
     if (pipeline < 0) return false;
