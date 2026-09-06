@@ -1,0 +1,27 @@
+{
+  "schema": "beian-rfe02-candidate-decision/1",
+  "id": "normalized-f-shadow-1024",
+  "status": "isolated_synthetic_verified_not_product_profile",
+  "base_lighting": "normalized-rig-v1",
+  "changes_from_base": {
+    "fill_energy_multiplier": 0.35,
+    "key_orbit_elevation_delta_degrees": -15,
+    "key_orbit_target": "box_center",
+    "preserve_key_distance_azimuth_energy_and_size": true,
+    "eevee_shadow_pool_size_mb": 1024
+  },
+  "unchanged": ["geometry", "materials", "textures", "camera", "world_strength", "shadow_resolution", "render_resolution"],
+  "verified_resolution": [3000, 3600],
+  "verified_fixtures": ["rf00-white-carton", "rf00-wide-carton", "rf00-dark-carton", "rf00-type-frequency"],
+  "verified_blender": "5.2.0 LTS",
+  "human_review": {
+    "f_diagnostic_stills": "accepted",
+    "f_full_compositions_before_shadow_pool_fix": "accepted",
+    "shadow_pool_fix_compositions": "not_separately_user_reviewed"
+  },
+  "product_default_changed": false,
+  "approved_baseline_written": false,
+  "windows_verified": false,
+  "real_artwork_l2_verified": false,
+  "evidence_note": "Temporary source-bound receipts and warning logs are described in docs/designs/packaging-quality-rfe02-shadow-budget.md. This decision file is not loaded by the product registry."
+}
