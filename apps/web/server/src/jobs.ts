@@ -1,20 +1,28 @@
-import { existsSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { createHash, randomBytes } from "node:crypto";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { DATA_DIR } from "./config.js";
 import { compareBookkeeping } from "./billing.js";
 import { notifyJobFinished } from "./notify.js";
 import {
+  applyRenderGenerationPatch,
   assertCanManageMockup,
   acceptStructureConfirmation,
   beginStructureConfirmation,
   collectOutputs,
+  fileOf,
   finishStructureConfirmation,
+  generationManagedReject,
+  isGenerationManagedMockup,
   isMockupJobFile,
   loadAllMockups,
   loadMockup,
+  mockupJobDir,
+  mockupRenderPlanBytes,
   mockupStoreSnapshot,
   prepareStructureConfirmation,
   printFaceRepairSource,
+  readMockupFromDisk,
   relightStudioSource,
   requiredPrintFacesReady,
   resetMockupCache,
@@ -23,7 +31,18 @@ import {
   stampAutoConfirmed,
   uniqueConfirmableAnchor,
   type MockupJob,
+  type PublicRenderMutationSummary,
+  type RenderGenerationIdempotencyFact,
+  type RenderGenerationRequestRecord,
 } from "./mockup.js";
+import {
+  G0_LEGACY_ORIGINAL_ID,
+  RENDER_GENERATION_DIR,
+  isRenderGenerationError,
+  openRenderGenerationStore,
+  type QualityVerifier,
+  type RenderGenerationSource,
+} from "./renderGenerations.js";
 import {
   loadAllTasks,
   loadTasksForRecovery,
@@ -51,8 +70,10 @@ import {
   type WorkerProcessIdentity,
   type WorkerProcessState,
 } from "./workers.js";
+import { inspectRenderGenerationGroup, signalRenderGenerationGroup } from "./renderGenerationProcess.js";
 import { rasterAiFile } from "./aiRaster.js";
 import { readIllustratorAgentStatus } from "./illustratorAgent.js";
+import type { RenderBridgeObserver } from "./renderGenerationBridge.js";
 
 const STAGE_LABEL: Record<string, string> = {
   structure: "正在出图",
@@ -111,6 +132,69 @@ const printFaceRepairJobs = new Set<string>();
 let printFaceRepairBusy: string | null = null;
 const relightStudioJobs = new Set<string>();
 
+/** 服务端验证适配器入参。生产未接线；不得把 JSON.parse 当 RF-02 已验证。 */
+export type RenderPlanVerifierInput = {
+  jobId: string;
+  jobRoot: string;
+  mode: "legacy_relight" | "upgrade";
+  bytes: Buffer;
+  sourcePath: string;
+};
+
+/**
+ * 验证适配器的受信结果。identitySha256 必须等于 jobs 对同一字节的独立哈希；
+ * 不得改写计划字节或自报哈希。profile 由验证结果给出，不信客户端。
+ */
+export type VerifiedRenderPlanSnapshot = {
+  identitySha256: string;
+  bytes: Buffer;
+  profile: string;
+  verifier: string;
+  sourceAssets?: RenderSourceOutputSnapshot[];
+};
+
+type RenderSourceOutputSnapshot = {
+  key: string;
+  path: string;
+  sha256: string;
+  bytes: number;
+};
+
+type RenderPlanVerifier = (input: RenderPlanVerifierInput) => VerifiedRenderPlanSnapshot;
+
+export type RenderGenerationExecuteInput = {
+  jobId: string;
+  jobRoot: string;
+  mutationId: string;
+  mode: "legacy_relight" | "upgrade";
+  sourceGenerationId: string;
+  candidateDir: string;
+  plan: {
+    identitySha256: string;
+    bytes: Buffer;
+    profile: string;
+    verifier: string;
+  };
+  sourceOutputs: RenderSourceOutputSnapshot[];
+  studioAdjustment?: { product_light: number; background_light: number };
+};
+
+export type RenderGenerationExecuteResult = {
+  outputs: RenderGenerationSource[];
+  contract_sha256: string;
+  plan_identity_sha256: string;
+  source_generation_id: string;
+  runtimeQuality?: "unwired";
+};
+
+type RenderGenerationExecutor = (input: RenderGenerationExecuteInput) => Promise<RenderGenerationExecuteResult>;
+
+export type RenderGenerationPreparer = (input: RenderPlanVerifierInput & {
+  mutationId: string;
+  studioAdjustment?: { product_light: number; background_light: number };
+  observer: RenderBridgeObserver;
+}) => Promise<{ plan: VerifiedRenderPlanSnapshot; execute: RenderGenerationExecutor }>;
+
 export type JobsTestHooks = {
   runCompare?: typeof compareTask;
   runRework?: typeof reworkTask;
@@ -123,7 +207,39 @@ export type JobsTestHooks = {
   notify?: typeof notifyJobFinished;
   killTree?: typeof killTree;
   inspectWorker?: typeof inspectWorkerProcess;
+  inspectGenerationGroup?: typeof inspectRenderGenerationGroup;
+  killGenerationGroup?: typeof signalRenderGenerationGroup;
   bookkeeping?: typeof compareBookkeeping;
+  /** 测试注入。生产不得默认用 unwired 验证结果激活。 */
+  runRenderGeneration?: RenderGenerationExecutor;
+  qualityVerifier?: QualityVerifier;
+  /**
+   * 服务端渲染计划验证适配器。生产未接线。
+   * 测试必须注入明确受控验证器；禁止 JSON.parse 或自报哈希冒充 RF-02。
+   */
+  verifyRenderPlan?: RenderPlanVerifier;
+  /** Async RF-02 preparation. No default registration while runtime quality is unwired. */
+  prepareRenderGeneration?: RenderGenerationPreparer;
+  generationFailpoints?: {
+    afterSealBeforePointer?: (jobId: string) => void;
+  };
+};
+
+export type RenderGenerationMutationEnqueueInput = {
+  jobId: string;
+  viewer: Viewer;
+  clientRequestId: string;
+  mode: "legacy_relight" | "upgrade";
+  sourceGenerationId: string;
+  expectedCurrentGenerationId: string;
+  studioAdjustment?: { product_light?: number; background_light?: number };
+};
+
+export type RenderGenerationMutationEnqueueResult = {
+  mutation: PublicRenderMutationSummary;
+  current_render_generation_id?: string;
+  has_render_generations: boolean;
+  job_status: MockupJob["status"];
 };
 
 const TEST_MOCKUP_STOP: JobsTestHooks = {
@@ -154,6 +270,7 @@ export function resetJobsTestHooks(): void {
   printFaceRepairJobs.clear();
   printFaceRepairBusy = null;
   relightStudioJobs.clear();
+  generationCommitLocks.clear();
   resetMockupCache();
 }
 
@@ -180,7 +297,9 @@ export function queueSnapshot(): {
   const ocrRunning = tasks.filter((t) => isOcr(t.job_kind) && t.job_status === "running").length;
   const ai = mocks.filter((j) => needsIllustrator(j));
   const rest = mocks.filter((j) => !needsIllustrator(j));
-  const bQueued = rest.filter((j) => j.job_status === "queued").length;
+  const bQueued =
+    rest.filter((j) => j.job_status === "queued").length +
+    mocks.filter((j) => j.status === "done" && j.render_mutation?.status === "queued").length;
   const bRunning = rest.filter((j) => j.job_status === "running" && j.job_stage !== "illustrator").length;
   return {
     // Disk state is durable; live slots close the short window before a worker
@@ -276,6 +395,7 @@ export function retryMockup(id: string, viewer: Viewer): MockupJob {
 }
 
 function persistPrintFaceFiles(job: MockupJob): MockupJob {
+  if (isGenerationManagedMockup(job)) throw generationManagedReject("print-faces");
   job.files = collectOutputs(join(DATA_DIR, "mockups", job.id));
   saveMockup(job);
   return job;
@@ -284,6 +404,7 @@ function persistPrintFaceFiles(job: MockupJob): MockupJob {
 export async function repairMockupPrintFaces(id: string, viewer: Viewer): Promise<MockupJob> {
   const job = loadMockup(id);
   if (!job) throw Object.assign(new Error("没有这单打样"), { status: 404 });
+  if (isGenerationManagedMockup(job)) throw generationManagedReject("print-faces");
   // Team-shared read already; create may repair any job. Viewer is rejected at HTTP.
   if (live.blender === id || job.status === "queued" || job.status === "running") {
     throw Object.assign(new Error("出图还在跑，现在不能补切面。"), { status: 409 });
@@ -331,6 +452,9 @@ export async function repairMockupPrintFaces(id: string, viewer: Viewer): Promis
 export async function relightMockupStudio(id: string, viewer: Viewer): Promise<MockupJob> {
   const job = loadMockup(id);
   if (!job) throw Object.assign(new Error("没有这单打样"), { status: 404 });
+  if (isGenerationManagedMockup(job) || job.render_mutation?.status === "queued" || job.render_mutation?.status === "running") {
+    throw generationManagedReject("relight");
+  }
   if (live.blender || job.status === "queued" || job.status === "running") {
     throw Object.assign(new Error("出图还在跑，现在不能重渲棚。"), { status: 409 });
   }
@@ -375,12 +499,1323 @@ export async function relightMockupStudio(id: string, viewer: Viewer): Promise<M
   }
 }
 
+const REQUEST_ID_RE = /^[A-Za-z0-9_-]{8,128}$/;
+const MUTATION_ID_RE = /^m[a-f0-9]{16}$/;
+/**
+ * 每单最多保留的幂等事实（含在途）。覆盖成功/失败终态。
+ * 满员 fail-closed：拒绝新 requestId，不 shift/驱逐旧记录，不扩建无界账本。
+ * 已接受的 requestId 仍按原终态重放；同号异 payload 仍拒绝。
+ */
+export const RENDER_GENERATION_IDEMPOTENCY_LIMIT = 16 as const;
+const ENQUEUE_INPUT_KEYS = new Set([
+  "jobId",
+  "viewer",
+  "clientRequestId",
+  "mode",
+  "sourceGenerationId",
+  "expectedCurrentGenerationId",
+  "studioAdjustment",
+]);
+const generationCommitLocks = new Set<string>();
+
+function generationError(code: string, message: string, status: number, fix: string): Error {
+  return Object.assign(new Error(message), { status, code, problem: message, cause: code, fix });
+}
+
+function looksLikePath(value: string): boolean {
+  return !value || isAbsolute(value) || /[\\/]/.test(value) || value.includes("..") || value.startsWith(".");
+}
+
+const SOURCE_OUTPUT_KEYS = ["white_a", "white_b", "glb"] as const;
+const G0_IMPORT_PROFILE = "compat-legacy-v0";
+const RENDER_PLAN_PROFILE_RE = /^[a-zA-Z0-9._-]{1,64}$/;
+const SHA256_HEX_RE = /^[a-f0-9]{64}$/;
+
+function sha256Bytes(buf: Buffer | Uint8Array): string {
+  return createHash("sha256").update(buf).digest("hex");
+}
+
+function generationAdaptersReady(): boolean {
+  return (
+    typeof hooks.qualityVerifier === "function"
+    && (typeof hooks.prepareRenderGeneration === "function"
+      || (typeof hooks.runRenderGeneration === "function" && typeof hooks.verifyRenderPlan === "function"))
+  );
+}
+
+function adaptersUnavailableError(): Error {
+  return generationError(
+    "render_generation_unavailable",
+    "渲染代际验证、执行或质量适配器尚未接线，不能排队",
+    412,
+    "缺真实 RF-02 验证适配器、staging 执行器和质量适配器时拒绝入队；不能用 JSON.parse、自报哈希或测试 hook 冒充生产完成",
+  );
+}
+
+type FrozenStudioAdjustment = { product_light: number; background_light: number };
+type FrozenRequestIdentity = {
+  client_request_id: string;
+  payload_sha256: string;
+  mutation_id: string;
+  mode: "legacy_relight" | "upgrade";
+  source_generation_id: string;
+  expected_current_generation_id: string;
+  started_current_generation_id: string | null;
+  studio_adjustment: FrozenStudioAdjustment | null;
+  source_plan_sha256: string | null;
+};
+type FrozenVerifiedPlan = {
+  identitySha256: string;
+  bytes: Buffer;
+  profile: string;
+  verifier: string;
+  sourcePath: string;
+  sourceAssets?: RenderSourceOutputSnapshot[];
+};
+type ExecutionSnapshot = {
+  mutationId: string;
+  request: FrozenRequestIdentity;
+  plan: FrozenVerifiedPlan;
+  sourceOutputs: RenderSourceOutputSnapshot[];
+  sourceGenerationId: string;
+};
+
+function freezeStudioAdjustment(
+  value: { product_light: number; background_light: number } | undefined | null,
+): FrozenStudioAdjustment | null {
+  if (!value) return null;
+  return { product_light: value.product_light, background_light: value.background_light };
+}
+
+function freezeRequestIdentity(request: RenderGenerationRequestRecord | undefined): FrozenRequestIdentity | null {
+  if (
+    !request
+    || typeof request.client_request_id !== "string"
+    || !request.client_request_id
+    || typeof request.payload_sha256 !== "string"
+    || !SHA256_HEX_RE.test(request.payload_sha256)
+    || typeof request.mutation_id !== "string"
+    || !request.mutation_id
+    || (request.mode !== "legacy_relight" && request.mode !== "upgrade")
+    || typeof request.source_generation_id !== "string"
+    || !request.source_generation_id
+    || typeof request.expected_current_generation_id !== "string"
+    || !request.expected_current_generation_id
+  ) {
+    return null;
+  }
+  if (
+    request.started_current_generation_id !== null
+    && request.started_current_generation_id !== undefined
+    && typeof request.started_current_generation_id !== "string"
+  ) {
+    return null;
+  }
+  let studio: FrozenStudioAdjustment | null = null;
+  if (request.source_plan_sha256 !== undefined && !SHA256_HEX_RE.test(request.source_plan_sha256)) return null;
+  if (request.worker_protocol === "render-generation/1" && !request.source_plan_sha256) return null;
+  if (request.studio_adjustment !== undefined && request.studio_adjustment !== null) {
+    if (
+      typeof request.studio_adjustment.product_light !== "number"
+      || typeof request.studio_adjustment.background_light !== "number"
+      || !Number.isFinite(request.studio_adjustment.product_light)
+      || !Number.isFinite(request.studio_adjustment.background_light)
+    ) {
+      return null;
+    }
+    studio = freezeStudioAdjustment(request.studio_adjustment);
+  }
+  return {
+    client_request_id: request.client_request_id,
+    payload_sha256: request.payload_sha256,
+    mutation_id: request.mutation_id,
+    mode: request.mode,
+    source_generation_id: request.source_generation_id,
+    expected_current_generation_id: request.expected_current_generation_id,
+    started_current_generation_id: request.started_current_generation_id ?? null,
+    studio_adjustment: studio,
+    source_plan_sha256: request.source_plan_sha256 ?? null,
+  };
+}
+
+function requestIdentityEqual(a: FrozenRequestIdentity, b: FrozenRequestIdentity): boolean {
+  const aLight = a.studio_adjustment;
+  const bLight = b.studio_adjustment;
+  return (
+    a.client_request_id === b.client_request_id
+    && a.payload_sha256 === b.payload_sha256
+    && a.mutation_id === b.mutation_id
+    && a.mode === b.mode
+    && a.source_generation_id === b.source_generation_id
+    && a.expected_current_generation_id === b.expected_current_generation_id
+    && a.started_current_generation_id === b.started_current_generation_id
+    && a.source_plan_sha256 === b.source_plan_sha256
+    && Boolean(aLight) === Boolean(bLight)
+    && aLight?.product_light === bLight?.product_light
+    && aLight?.background_light === bLight?.background_light
+  );
+}
+
+function acceptVerifiedPlan(job: MockupJob, mode: "legacy_relight" | "upgrade"): FrozenVerifiedPlan {
+  const verifier = hooks.verifyRenderPlan;
+  if (typeof verifier !== "function") throw adaptersUnavailableError();
+  const raw = mockupRenderPlanBytes(job);
+  if (!raw) {
+    throw generationError(
+      "render_generation_invalid",
+      "缺少渲染合同，不能出新代",
+      409,
+      "需要磁盘上的 resolved_job，并由服务端验证适配器验收",
+    );
+  }
+  let verified: VerifiedRenderPlanSnapshot;
+  try {
+    verified = verifier({
+      jobId: job.id,
+      jobRoot: mockupJobDir(job.id),
+      mode,
+      bytes: Buffer.from(raw.bytes),
+      sourcePath: raw.path,
+    });
+  } catch (err) {
+    if (err && typeof err === "object" && "code" in err && (err as { code?: string }).code) throw err;
+    throw generationError(
+      "render_generation_invalid",
+      "渲染合同未通过服务端验证",
+      400,
+      "不要把 JSON.parse 或自报哈希当作 RF-02 已验证",
+    );
+  }
+  return checkVerifiedPlan(raw, verified);
+}
+
+function checkVerifiedPlan(raw: { bytes: Buffer; path: string }, verified: VerifiedRenderPlanSnapshot): FrozenVerifiedPlan {
+  if (!verified || !Buffer.isBuffer(verified.bytes) || verified.bytes.length === 0) {
+    throw generationError(
+      "render_generation_invalid",
+      "验证器没有返回合同字节",
+      400,
+      "验证适配器必须返回其验收的原始字节",
+    );
+  }
+  if (!raw.bytes.equals(verified.bytes)) {
+    throw generationError("render_generation_invalid", "验证器不得改写计划字节", 400, "只验收磁盘原件");
+  }
+  const hashed = sha256Bytes(raw.bytes);
+  const claimed = typeof verified.identitySha256 === "string" ? verified.identitySha256.toLowerCase() : "";
+  if (!SHA256_HEX_RE.test(claimed) || claimed !== hashed) {
+    throw generationError("render_generation_invalid", "合同身份与字节不一致", 400, "不要自报哈希");
+  }
+  if (!verified.profile || !RENDER_PLAN_PROFILE_RE.test(verified.profile) || looksLikePath(verified.profile)) {
+    throw generationError(
+      "render_generation_invalid",
+      "profile 必须来自受信验证结果",
+      400,
+      "不要使用客户端或硬编码冒充的 profile",
+    );
+  }
+  if (!verified.verifier || typeof verified.verifier !== "string" || looksLikePath(verified.verifier)) {
+    throw generationError(
+      "render_generation_invalid",
+      "验证器身份非法",
+      400,
+      "测试注入须具名；生产 RF-02 适配器未接线",
+    );
+  }
+  return {
+    identitySha256: hashed,
+    bytes: Buffer.from(raw.bytes),
+    profile: verified.profile,
+    verifier: verified.verifier,
+    sourcePath: raw.path,
+    sourceAssets: verified.sourceAssets?.map(row => ({ ...row })),
+  };
+}
+
+function snapshotSourceOutputs(job: MockupJob): RenderSourceOutputSnapshot[] {
+  const rows: RenderSourceOutputSnapshot[] = [];
+  for (const key of SOURCE_OUTPUT_KEYS) {
+    const file = fileOf(job, key);
+    if (!file?.path || !isMockupJobFile(job.id, file.path)) {
+      throw generationError("render_generation_invalid", "缺少源代输出", 409, "源代至少要有两张产品 PNG 和 GLB");
+    }
+    const bytes = readFileSync(file.path);
+    rows.push({
+      key,
+      path: file.path,
+      sha256: sha256Bytes(bytes),
+      bytes: bytes.length,
+    });
+  }
+  return rows;
+}
+
+function assertSourceOutputsFresh(job: MockupJob, snapshot: RenderSourceOutputSnapshot[]): void {
+  for (const row of snapshot) {
+    if (!isMockupJobFile(job.id, row.path)) {
+      throw generationError("render_generation_invalid", "源代输出已变化，放弃本次提交", 409, "保留旧 current");
+    }
+    const diskBytes = readFileSync(row.path);
+    if (sha256Bytes(diskBytes) !== row.sha256 || diskBytes.length !== row.bytes) {
+      throw generationError("render_generation_invalid", "源代输出已变化，放弃本次提交", 409, "保留旧 current");
+    }
+    const live = fileOf(job, row.key);
+    if (!live?.path || !isMockupJobFile(job.id, live.path)) {
+      throw generationError("render_generation_invalid", "源代输出已变化，放弃本次提交", 409, "保留旧 current");
+    }
+    const liveBytes = live.path === row.path ? diskBytes : readFileSync(live.path);
+    if (sha256Bytes(liveBytes) !== row.sha256) {
+      throw generationError("render_generation_invalid", "源代输出已变化，放弃本次提交", 409, "保留旧 current");
+    }
+  }
+}
+
+function assertGenerationExecutable(
+  job: MockupJob,
+  mode: "legacy_relight" | "upgrade",
+): { plan: FrozenVerifiedPlan; sourceOutputs: RenderSourceOutputSnapshot[] } {
+  if (!generationAdaptersReady()) throw adaptersUnavailableError();
+  return {
+    plan: acceptVerifiedPlan(job, mode),
+    sourceOutputs: snapshotSourceOutputs(job),
+  };
+}
+
+function assertExecutionSnapshotFresh(job: MockupJob, snapshot: ExecutionSnapshot): void {
+  if (job.status !== "done") {
+    throw generationError("render_generation_invalid", "任务状态已变，放弃本次提交", 409, "保留旧 current");
+  }
+  const mutation = job.render_mutation;
+  if (!mutation || mutation.id !== snapshot.mutationId || mutation.mode !== snapshot.request.mode) {
+    throw generationError("render_generation_busy", "提交时 mutation 已变", 409, "保留旧 current");
+  }
+  if (mutation.status !== "running") {
+    throw generationError("render_generation_invalid", "mutation 状态已变，放弃本次提交", 409, "保留旧 current");
+  }
+  const frozen = freezeRequestIdentity(job.render_generation_request);
+  if (!frozen || frozen.mutation_id !== snapshot.mutationId || !requestIdentityEqual(frozen, snapshot.request)) {
+    throw generationError(
+      "render_generation_invalid",
+      "请求身份已变，放弃本次提交",
+      409,
+      "保留旧 current，新代留作 orphan",
+    );
+  }
+  const nowCurrent = job.current_render_generation_id || null;
+  if (nowCurrent !== snapshot.request.started_current_generation_id) {
+    throw generationError("render_generation_stale", "当前代已变化，放弃本次提交", 409, "保留旧 current，新代留作 orphan");
+  }
+  const raw = mockupRenderPlanBytes(job);
+  const plan = snapshot.plan.sourceAssets
+    ? (raw ? checkVerifiedPlan(raw, { ...snapshot.plan }) : null)
+    : acceptVerifiedPlan(job, snapshot.request.mode);
+  if (!plan) throw generationError("render_generation_invalid", "渲染计划缺失", 409, "保留当前代");
+  if (plan.identitySha256 !== snapshot.plan.identitySha256 || plan.profile !== snapshot.plan.profile) {
+    throw generationError(
+      "render_generation_invalid",
+      "渲染计划已变化，放弃本次提交",
+      409,
+      "保留旧 current，新代留作 orphan",
+    );
+  }
+  if (!plan.bytes.equals(snapshot.plan.bytes)) {
+    throw generationError(
+      "render_generation_invalid",
+      "渲染计划已变化，放弃本次提交",
+      409,
+      "保留旧 current，新代留作 orphan",
+    );
+  }
+  assertSourceOutputsFresh(job, snapshot.sourceOutputs);
+  if (snapshot.plan.sourceAssets) assertPlanAssetsFresh(job.id, snapshot.plan.sourceAssets);
+}
+
+function assertPlanAssetsFresh(id: string, rows: RenderSourceOutputSnapshot[]): void {
+  const faces = ["front", "right", "back", "left", "top", "bottom"];
+  if (!Array.isArray(rows) || rows.length !== 6 || faces.some(face => rows.filter(row => row.key === face).length !== 1)) {
+    throw generationError("render_generation_invalid", "六面验证凭证缺失", 409, "重新验证源资产");
+  }
+  for (const row of rows) {
+    if (!isMockupJobFile(id, row.path) || !SHA256_HEX_RE.test(row.sha256)) {
+      throw generationError("render_generation_invalid", "六面验证凭证非法", 409, "保留当前代");
+    }
+    const st = lstatSync(row.path);
+    if (!st.isFile() || st.isSymbolicLink() || st.nlink !== 1 || st.size !== row.bytes
+      || sha256Bytes(readFileSync(row.path)) !== row.sha256) {
+      throw generationError("render_generation_stale", "六面资产已变化", 409, "重新验证源资产");
+    }
+  }
+}
+
+function bindExecutorResult(executed: RenderGenerationExecuteResult, snapshot: ExecutionSnapshot): void {
+  if (
+    !executed
+    || executed.contract_sha256 !== snapshot.plan.identitySha256
+    || executed.plan_identity_sha256 !== snapshot.plan.identitySha256
+    || executed.source_generation_id !== snapshot.sourceGenerationId
+    || !Array.isArray(executed.outputs)
+  ) {
+    throw generationError("render_generation_invalid", "执行器返回身份与快照不符", 400, "结果必须绑定已验证计划与源代");
+  }
+}
+
+function cloneIdempotencyFacts(
+  facts: RenderGenerationIdempotencyFact[] | undefined,
+): RenderGenerationIdempotencyFact[] | undefined {
+  if (!facts || !Array.isArray(facts)) return undefined;
+  return facts.map((fact) => ({
+    client_request_id: fact.client_request_id,
+    payload_sha256: fact.payload_sha256,
+    mutation: { ...fact.mutation },
+  }));
+}
+
+function cloneMockup(job: MockupJob): MockupJob {
+  return {
+    ...job,
+    files: (job.files || []).map((file) => ({ ...file })),
+    render_mutation: job.render_mutation ? { ...job.render_mutation } : undefined,
+    render_generation_request: job.render_generation_request
+      ? {
+          ...job.render_generation_request,
+          studio_adjustment: job.render_generation_request.studio_adjustment
+            ? { ...job.render_generation_request.studio_adjustment }
+            : undefined,
+        }
+      : undefined,
+    render_generation_idempotency: cloneIdempotencyFacts(job.render_generation_idempotency),
+  };
+}
+
+function withGenerationJobLock<T>(id: string, fn: () => T): T {
+  if (generationCommitLocks.has(id)) {
+    throw generationError("render_generation_busy", "这单正在切换渲染代，请稍候", 409, "等当前提交结束后再试");
+  }
+  generationCommitLocks.add(id);
+  try {
+    return fn();
+  } finally {
+    generationCommitLocks.delete(id);
+  }
+}
+
+function canonicalizeStudioAdjustment(
+  value: unknown,
+): { product_light: number; background_light: number } | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw generationError("render_generation_invalid", "灯光调整非法", 400, "只传 product_light / background_light");
+  }
+  const rec = value as Record<string, unknown>;
+  for (const key of Object.keys(rec)) {
+    if (key !== "product_light" && key !== "background_light") {
+      throw generationError("render_generation_invalid", "不能指定内部渲染参数", 400, "不要传 profile、路径或输出文件名");
+    }
+  }
+  const product = rec.product_light;
+  const background = rec.background_light;
+  if (product !== undefined && (typeof product !== "number" || !Number.isFinite(product))) {
+    throw generationError("render_generation_invalid", "灯光调整非法", 400, "灯光必须是有限数字");
+  }
+  if (background !== undefined && (typeof background !== "number" || !Number.isFinite(background))) {
+    throw generationError("render_generation_invalid", "灯光调整非法", 400, "灯光必须是有限数字");
+  }
+  return {
+    product_light: product === undefined ? 1 : product,
+    background_light: background === undefined ? 1 : background,
+  };
+}
+
+function mutationPayloadSha(opts: {
+  mode: "legacy_relight" | "upgrade";
+  sourceGenerationId: string;
+  studioAdjustment?: { product_light: number; background_light: number };
+}): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        mode: opts.mode,
+        source_generation_id: opts.sourceGenerationId,
+        studio_adjustment: opts.studioAdjustment || null,
+      }),
+    )
+    .digest("hex");
+}
+
+function openJobGenerationStore(jobId: string) {
+  return openRenderGenerationStore({
+    jobRoot: mockupJobDir(jobId),
+    jobId,
+    qualityVerifier: hooks.qualityVerifier,
+  });
+}
+
+function generationFailureMessage(err: unknown, fallback: string): string {
+  if (isRenderGenerationError(err)) return err.problem;
+  if (err && typeof err === "object" && "problem" in err && typeof (err as { problem: unknown }).problem === "string") {
+    return (err as { problem: string }).problem;
+  }
+  if (err instanceof Error && err.message) return err.message;
+  return fallback;
+}
+
+function liveCurrentIdentity(job: MockupJob): { observed: string | null; live: string } {
+  const observed = job.current_render_generation_id || null;
+  if (observed) return { observed, live: observed };
+  return { observed: null, live: openJobGenerationStore(job.id).virtualLegacyCurrentId() };
+}
+
+function assertSourceIsCurrent(sourceGenerationId: string, live: string, observed: string | null): void {
+  if (sourceGenerationId === live) return;
+  if (!observed) {
+    throw generationError(
+      "render_generation_stale",
+      "源代已变化，请刷新后再试",
+      409,
+      "第一次变更只能引用当前虚拟代；排队后源被换掉则失败并保留旧图，不导入、不执行",
+    );
+  }
+  throw generationError(
+    "render_generation_invalid",
+    "本切片只接受当前代作为源，不能排队历史源",
+    409,
+    "历史源尚未接线；入队即拒绝，不留假队列，也不能拿当前 files 冒充",
+  );
+}
+
+function acceptedPayloadSha(frozen: FrozenRequestIdentity): string {
+  return mutationPayloadSha({
+    mode: frozen.mode,
+    sourceGenerationId: frozen.source_generation_id,
+    studioAdjustment: frozen.studio_adjustment || undefined,
+  });
+}
+
+function wrapStoreIdentityError(err: unknown): never {
+  if (isRenderGenerationError(err)) {
+    throw generationError(err.code, err.problem, err.code === "render_generation_stale" ? 409 : 400, err.fix);
+  }
+  throw err;
+}
+
+/** 出队前从磁盘重核 expected current、source 与入队时已接受的身份。任何 g0/候选目录/执行器之前调用。 */
+function assertAcceptedQueuedIdentity(job: MockupJob, mutationId: string): FrozenRequestIdentity {
+  if (job.status !== "done") {
+    throw generationError("render_generation_invalid", "任务状态已变，放弃本次排队", 409, "保留旧 current");
+  }
+  const mutation = job.render_mutation;
+  if (!mutation || mutation.id !== mutationId) {
+    throw generationError("render_generation_busy", "提交时 mutation 已变", 409, "保留旧 current");
+  }
+  if (mutation.status !== "queued" && mutation.status !== "running") {
+    throw generationError("render_generation_invalid", "mutation 状态已变，放弃本次排队", 409, "保留旧 current");
+  }
+  const frozen = freezeRequestIdentity(job.render_generation_request);
+  if (!frozen || frozen.mutation_id !== mutationId) {
+    throw generationError("render_generation_invalid", "请求身份不完整，不能出新代", 409, "保留旧 current");
+  }
+  if (acceptedPayloadSha(frozen) !== frozen.payload_sha256) {
+    throw generationError("render_generation_invalid", "请求身份已变，放弃本次排队", 409, "保留旧 current，不执行");
+  }
+  const fact = findIdempotencyFact(job, frozen.client_request_id);
+  if (!fact || fact.payload_sha256 !== frozen.payload_sha256 || fact.mutation.id !== mutationId) {
+    throw generationError("render_generation_invalid", "已接受的请求身份已变，放弃本次排队", 409, "保留旧 current，不执行");
+  }
+  let observed: string | null;
+  let live: string;
+  try {
+    ({ observed, live } = liveCurrentIdentity(job));
+  } catch (err) {
+    wrapStoreIdentityError(err);
+  }
+  if (frozen.expected_current_generation_id !== live) {
+    throw generationError(
+      "render_generation_stale",
+      "当前代已变化，放弃本次排队",
+      409,
+      "保留旧 current 与文件，不导入被换掉的源，不执行",
+    );
+  }
+  if ((frozen.started_current_generation_id || null) !== observed) {
+    throw generationError(
+      "render_generation_stale",
+      "当前代已变化，放弃本次排队",
+      409,
+      "保留旧 current 与文件，不导入被换掉的源，不执行",
+    );
+  }
+  assertSourceIsCurrent(frozen.source_generation_id, live, observed);
+  return frozen;
+}
+
+function jobHasGenerationArtifacts(job: MockupJob): boolean {
+  if (job.current_render_generation_id || job.render_mutation || job.render_generation_request) return true;
+  if (job.render_generation_idempotency && job.render_generation_idempotency.length > 0) return true;
+  try {
+    return existsSync(join(mockupJobDir(job.id), RENDER_GENERATION_DIR));
+  } catch {
+    return false;
+  }
+}
+
+function findIdempotencyFact(job: MockupJob, clientRequestId: string): RenderGenerationIdempotencyFact | undefined {
+  const facts = job.render_generation_idempotency || [];
+  for (let i = facts.length - 1; i >= 0; i -= 1) {
+    const fact = facts[i];
+    if (fact && fact.client_request_id === clientRequestId) return fact;
+  }
+  const req = job.render_generation_request;
+  if (!req || req.client_request_id !== clientRequestId) return undefined;
+  const mutation =
+    job.render_mutation && job.render_mutation.id === req.mutation_id
+      ? job.render_mutation
+      : { id: req.mutation_id, mode: req.mode, status: "failed" as const };
+  return {
+    client_request_id: req.client_request_id,
+    payload_sha256: req.payload_sha256,
+    mutation: { ...mutation },
+  };
+}
+
+function idempotencyCapacityError(): Error {
+  return generationError(
+    "render_generation_invalid",
+    "本单幂等账本已满，不能再接受新请求",
+    409,
+    "已接受的请求仍按原终态重放；满员后不能挤掉旧记录，也不扩建无界账本",
+  );
+}
+
+function rememberIdempotencyFact(job: MockupJob, fact: RenderGenerationIdempotencyFact): void {
+  const current = job.render_generation_idempotency || [];
+  const exists = current.some((row) => row.client_request_id === fact.client_request_id);
+  if (exists) {
+    job.render_generation_idempotency = current.map((row) =>
+      row.client_request_id === fact.client_request_id
+        ? {
+            client_request_id: fact.client_request_id,
+            payload_sha256: fact.payload_sha256,
+            mutation: { ...fact.mutation },
+          }
+        : row,
+    );
+    return;
+  }
+  if (current.length >= RENDER_GENERATION_IDEMPOTENCY_LIMIT) {
+    throw idempotencyCapacityError();
+  }
+  job.render_generation_idempotency = [
+    ...current,
+    {
+      client_request_id: fact.client_request_id,
+      payload_sha256: fact.payload_sha256,
+      mutation: { ...fact.mutation },
+    },
+  ];
+}
+
+function syncIdempotencyMutation(job: MockupJob): void {
+  const req = job.render_generation_request;
+  const mutation = job.render_mutation;
+  if (!req || !mutation) return;
+  rememberIdempotencyFact(job, {
+    client_request_id: req.client_request_id,
+    payload_sha256: req.payload_sha256,
+    mutation,
+  });
+}
+
+function publicMutationResultFromFact(
+  job: MockupJob,
+  fact: RenderGenerationIdempotencyFact,
+): RenderGenerationMutationEnqueueResult {
+  return {
+    mutation: {
+      id: fact.mutation.id,
+      mode: fact.mutation.mode,
+      status: fact.mutation.status,
+      stage: fact.mutation.stage,
+      error: fact.mutation.error,
+    },
+    current_render_generation_id: job.current_render_generation_id,
+    has_render_generations: isGenerationManagedMockup(job),
+    job_status: job.status,
+  };
+}
+
+function publicMutationResult(job: MockupJob): RenderGenerationMutationEnqueueResult {
+  const mutation = job.render_mutation;
+  if (!mutation) {
+    throw generationError("render_generation_invalid", "没有渲染代际请求", 400, "重新提交服务端已公开的动作");
+  }
+  return {
+    mutation: {
+      id: mutation.id,
+      mode: mutation.mode,
+      status: mutation.status,
+      stage: mutation.stage,
+      error: mutation.error,
+    },
+    current_render_generation_id: job.current_render_generation_id,
+    has_render_generations: isGenerationManagedMockup(job),
+    job_status: job.status,
+  };
+}
+
+function persistGenerationJob(next: MockupJob): MockupJob {
+  syncIdempotencyMutation(next);
+  saveMockup(next);
+  const saved = loadMockup(next.id);
+  if (!saved) throw generationError("render_generation_invalid", "打样记录写完后读不到", 500, "检查任务目录后重试");
+  return saved;
+}
+
+function failPersistedMutation(jobId: string, mutationId: string, message: string): void {
+  const disk = readMockupFromDisk(jobId);
+  if (!disk || disk.render_mutation?.id !== mutationId) return;
+  if (disk.render_mutation.status === "succeeded" && disk.current_render_generation_id) return;
+  const next = cloneMockup(disk);
+  next.status = "done";
+  next.job_status = "succeeded";
+  next.render_mutation = {
+    id: mutationId,
+    mode: disk.render_mutation.mode,
+    status: "failed",
+    error: message,
+  };
+  try {
+    persistGenerationJob(next);
+  } catch (err) {
+    console.error(
+      `jobs ${jobId}: problem=generation_fail_persist cause=${err instanceof Error ? err.message : String(err)} fix=保留旧 current，不要切图`,
+    );
+  }
+}
+
+export function enqueueRenderGenerationMutation(
+  input: RenderGenerationMutationEnqueueInput,
+): RenderGenerationMutationEnqueueResult {
+  if (!input || typeof input !== "object") {
+    throw generationError("render_generation_invalid", "请求非法", 400, "只传服务端已公开的动作字段");
+  }
+  for (const key of Object.keys(input)) {
+    if (!ENQUEUE_INPUT_KEYS.has(key)) {
+      throw generationError("render_generation_invalid", "不能指定内部渲染参数", 400, "不要传 profile、路径或输出文件名");
+    }
+  }
+  const jobId = String(input.jobId || "");
+  const clientRequestId = String(input.clientRequestId || "");
+  const sourceGenerationId = String(input.sourceGenerationId || "");
+  const expectedCurrent = String(input.expectedCurrentGenerationId || "");
+  const mode = input.mode;
+  if (mode !== "legacy_relight" && mode !== "upgrade") {
+    throw generationError("render_generation_invalid", "不支持的渲染动作", 400, "只用旧版重渲或升级新版");
+  }
+  if (!REQUEST_ID_RE.test(clientRequestId) || looksLikePath(clientRequestId)) {
+    throw generationError("render_generation_invalid", "请求号非法", 400, "使用服务端可接受的 client_request_id");
+  }
+  if (looksLikePath(sourceGenerationId) || looksLikePath(expectedCurrent)) {
+    throw generationError("render_generation_invalid", "代际 id 非法", 400, "只使用服务端公开的代际 id");
+  }
+  const studioAdjustment = canonicalizeStudioAdjustment(input.studioAdjustment);
+  const job = loadMockup(jobId);
+  if (!job) throw Object.assign(new Error("没有这单打样"), { status: 404 });
+  assertCanManageMockup(job, input.viewer);
+  if (job.status !== "done") {
+    throw generationError("render_generation_invalid", "只有已出图的纸盒才能生成新代", 409, "等这单出图完成后再试");
+  }
+  const payloadSha = mutationPayloadSha({ mode, sourceGenerationId, studioAdjustment });
+  return withGenerationJobLock(jobId, () => {
+    const disk = readMockupFromDisk(jobId);
+    if (!disk) throw Object.assign(new Error("没有这单打样"), { status: 404 });
+    const replay = findIdempotencyFact(disk, clientRequestId);
+    if (replay) {
+      if (replay.payload_sha256 !== payloadSha) {
+        throw generationError("render_generation_invalid", "同一请求号不能改内容", 409, "换新的 client_request_id 再提交");
+      }
+      return publicMutationResultFromFact(disk, replay);
+    }
+    if ((disk.render_generation_idempotency || []).length >= RENDER_GENERATION_IDEMPOTENCY_LIMIT) {
+      throw idempotencyCapacityError();
+    }
+    if (disk.status !== "done") {
+      throw generationError("render_generation_invalid", "只有已出图的纸盒才能生成新代", 409, "等这单出图完成后再试");
+    }
+    let observed: string | null;
+    let live: string;
+    try {
+      ({ observed, live } = liveCurrentIdentity(disk));
+    } catch (err) {
+      wrapStoreIdentityError(err);
+    }
+    if (expectedCurrent !== live) {
+      throw generationError("render_generation_stale", "当前代已变化，请刷新后再试", 409, "刷新详情后重新选择");
+    }
+    assertSourceIsCurrent(sourceGenerationId, live, observed);
+    const inflight = disk.render_mutation?.status;
+    if (inflight === "queued" || inflight === "running" || disk.render_generation_request?.worker_pid) {
+      throw generationError("render_generation_busy", "这单正在生成或切换渲染代", 409, "等当前动作结束后再试");
+    }
+    let sourcePlanSha: string | undefined;
+    if (hooks.prepareRenderGeneration) {
+      if (!generationAdaptersReady()) throw adaptersUnavailableError();
+      const raw = mockupRenderPlanBytes(disk);
+      if (!raw || !raw.bytes.length || raw.bytes.length > 8 * 1024 * 1024) {
+        throw generationError("render_generation_invalid", "缺少有界渲染计划", 409, "重新打样");
+      }
+      sourcePlanSha = sha256Bytes(raw.bytes);
+    } else {
+      assertGenerationExecutable(disk, mode);
+    }
+    const mutationId = `m${randomBytes(8).toString("hex")}`;
+    if (!MUTATION_ID_RE.test(mutationId)) {
+      throw generationError("render_generation_invalid", "无法分配 mutation id", 500, "重试一次");
+    }
+    const request: RenderGenerationRequestRecord = {
+      client_request_id: clientRequestId,
+      payload_sha256: payloadSha,
+      mutation_id: mutationId,
+      mode,
+      source_generation_id: sourceGenerationId,
+      expected_current_generation_id: expectedCurrent,
+      started_current_generation_id: observed,
+      studio_adjustment: studioAdjustment,
+      created_at: nowIso(),
+      actor_id: input.viewer.id,
+      worker_protocol: hooks.prepareRenderGeneration ? "render-generation/1" : undefined,
+      source_plan_sha256: sourcePlanSha,
+    };
+    const next = cloneMockup(disk);
+    next.status = "done";
+    next.job_status = "succeeded";
+    next.render_generation_request = request;
+    next.render_mutation = {
+      id: mutationId,
+      mode,
+      status: "queued",
+      stage: "排队出图",
+    };
+    persistGenerationJob(next);
+    try {
+      tryStart();
+    } catch (err) {
+      console.warn("generation tryStart failed:", err instanceof Error ? err.message : err);
+    }
+    const latest = loadMockup(jobId) || next;
+    return publicMutationResult(latest);
+  });
+}
+
+export function activateRenderGeneration(opts: {
+  jobId: string;
+  viewer: Viewer;
+  generationId: string;
+  expectedCurrentGenerationId: string;
+}): MockupJob {
+  const job = loadMockup(opts.jobId);
+  if (!job) throw Object.assign(new Error("没有这单打样"), { status: 404 });
+  assertCanManageMockup(job, opts.viewer);
+  if (looksLikePath(opts.generationId) || looksLikePath(opts.expectedCurrentGenerationId)) {
+    throw generationError("render_generation_invalid", "代际 id 非法", 400, "只使用服务端公开的代际 id");
+  }
+  return withGenerationJobLock(opts.jobId, () => {
+    const disk = readMockupFromDisk(opts.jobId);
+    if (!disk) throw Object.assign(new Error("没有这单打样"), { status: 404 });
+    const inflight = disk.render_mutation?.status;
+    if (inflight === "queued" || inflight === "running" || disk.render_generation_request?.worker_pid) {
+      throw generationError("render_generation_busy", "这单正在生成或切换渲染代", 409, "等当前动作结束后再试");
+    }
+    if (!disk.current_render_generation_id) {
+      throw generationError("render_generation_invalid", "还没有可激活的渲染代", 409, "等第一次生成提交后再切历史代");
+    }
+    const store = openJobGenerationStore(opts.jobId);
+    let patch;
+    try {
+      patch = store.prepareActivationPatch({
+        generationId: opts.generationId,
+        observedCurrentGenerationId: disk.current_render_generation_id,
+        expectedCurrentGenerationId: opts.expectedCurrentGenerationId,
+      });
+    } catch (err) {
+      if (isRenderGenerationError(err)) {
+        throw generationError(err.code, err.problem, err.code === "render_generation_stale" ? 409 : 400, err.fix);
+      }
+      throw err;
+    }
+    const next = applyRenderGenerationPatch(cloneMockup(disk), patch);
+    next.status = "done";
+    next.job_status = "succeeded";
+    return persistGenerationJob(next);
+  });
+}
+
+function claimGenerationMutation(job: MockupJob): boolean {
+  const disk = readMockupFromDisk(job.id) || job;
+  if (disk.render_mutation?.status !== "queued" || disk.status !== "done") return true;
+  if (!generationAdaptersReady()) return true;
+  const mutationId = disk.render_mutation.id;
+  try {
+    assertAcceptedQueuedIdentity(disk, mutationId);
+  } catch (err) {
+    failPersistedMutation(
+      disk.id,
+      mutationId,
+      generationFailureMessage(err, "当前代或源代已变化，放弃本次排队").slice(0, 80),
+    );
+    const latest = readMockupFromDisk(disk.id);
+    return latest?.render_mutation?.status === "queued";
+  }
+  const next = cloneMockup(disk);
+  next.status = "done";
+  next.job_status = "succeeded";
+  next.render_mutation = { ...disk.render_mutation, status: "running", stage: "导入原图" };
+  persistGenerationJob(next);
+  live.blender = job.id;
+  void runGenerationMutation(job.id, mutationId);
+  return true;
+}
+
+function candidateDirFor(jobId: string, mutationId: string): string {
+  return join(mockupJobDir(jobId), RENDER_GENERATION_DIR, `.candidate-${mutationId}`);
+}
+
+function generationProcessObserver(jobId: string, mutationId: string): RenderBridgeObserver {
+  return {
+    context: { jobId, mutationId },
+    onSpawn: (pid, executionId) => {
+      const job = readMockupFromDisk(jobId);
+      const request = job?.render_generation_request;
+      if (!job || job.render_mutation?.status !== "running" || job.render_mutation.id !== mutationId
+        || !request || request.mutation_id !== mutationId || request.worker_pid
+        || !Number.isSafeInteger(pid) || pid <= 0 || !executionId.startsWith(`${jobId}:${mutationId}:`)
+        || !/^[a-f0-9]{32}$/.test(executionId.slice(`${jobId}:${mutationId}:`.length))) {
+        throw generationError("render_generation_stale", "执行身份已变", 409, "保留旧 current");
+      }
+      const next = cloneMockup(job);
+      next.render_generation_request!.worker_pid = pid;
+      next.render_generation_request!.worker_execution_id = executionId;
+      next.render_generation_request!.worker_protocol = "render-generation/1";
+      persistGenerationJob(next);
+    },
+    onClose: (pid, executionId) => {
+      const job = readMockupFromDisk(jobId);
+      const request = job?.render_generation_request;
+      if (!job || !request || request.mutation_id !== mutationId
+        || request.worker_pid !== pid || request.worker_execution_id !== executionId) return;
+      const next = cloneMockup(job);
+      delete next.render_generation_request!.worker_pid;
+      delete next.render_generation_request!.worker_execution_id;
+      persistGenerationJob(next);
+    },
+  };
+}
+
+async function prepareGenerationExecution(job: MockupJob, request: FrozenRequestIdentity) {
+  const prepare = hooks.prepareRenderGeneration;
+  if (!prepare) return { ...assertGenerationExecutable(job, request.mode), execute: hooks.runRenderGeneration!, ownsCandidate: false };
+  if (!generationAdaptersReady()) throw adaptersUnavailableError();
+  const raw = mockupRenderPlanBytes(job);
+  if (!raw) throw generationError("render_generation_invalid", "渲染计划缺失", 409, "重新验证");
+  if (!request.source_plan_sha256 || sha256Bytes(raw.bytes) !== request.source_plan_sha256) {
+    throw generationError("render_generation_stale", "排队期间渲染计划已变化", 409, "保留当前代，重新验证");
+  }
+  const sourceOutputs = snapshotSourceOutputs(job);
+  const prepared = await prepare({ jobId: job.id, jobRoot: mockupJobDir(job.id), mode: request.mode,
+    bytes: Buffer.from(raw.bytes), sourcePath: raw.path, mutationId: request.mutation_id,
+    studioAdjustment: request.studio_adjustment ?? undefined,
+    observer: generationProcessObserver(job.id, request.mutation_id) });
+  const plan = checkVerifiedPlan(raw, prepared.plan);
+  if (typeof prepared.execute !== "function" || !plan.sourceAssets) throw adaptersUnavailableError();
+  assertPlanAssetsFresh(job.id, plan.sourceAssets);
+  return { plan, sourceOutputs, execute: prepared.execute, ownsCandidate: true };
+}
+
+function mkdirCandidateExclusive(dir: string): void {
+  try {
+    if (lstatSync(dir)) {
+      throw generationError("render_generation_invalid", "本次候选目录已存在", 409, "每个 mutation 独占新建候选目录");
+    }
+  } catch (err) {
+    if (err && typeof err === "object" && "code" in err && (err as { code: string }).code !== "ENOENT") throw err;
+  }
+  mkdirSync(dir);
+  const st = lstatSync(dir);
+  if (st.isSymbolicLink() || !st.isDirectory()) {
+    throw generationError("render_generation_invalid", "候选目录非法", 400, "不要用 symlink 当候选目录");
+  }
+}
+
+function assertOutputInsideCandidate(candidateDir: string, jobRoot: string, path: string): string {
+  const full = resolve(path);
+  const candRel = relative(resolve(candidateDir), full);
+  if (!candRel || candRel.startsWith("..") || isAbsolute(candRel)) {
+    throw generationError("render_generation_invalid", "新输出必须写在本次候选目录内", 400, "不能把旧原位路径当安全适配器");
+  }
+  const jobRel = relative(resolve(jobRoot), full);
+  if (!jobRel || jobRel.startsWith("..") || isAbsolute(jobRel)) {
+    throw generationError("render_generation_invalid", "新输出越出任务目录", 400, "只使用任务目录内文件");
+  }
+  return full;
+}
+
+async function runGenerationMutation(id: string, mutationId: string): Promise<void> {
+  const release = (): void => {
+    // A failed close-persistence callback must not silently free the shared slot.
+    if (readMockupFromDisk(id)?.render_generation_request?.worker_pid) {
+      live.blender = id;
+      return;
+    }
+    if (live.blender === id) live.blender = null;
+    try {
+      tryStart();
+    } catch (err) {
+      console.warn("generation release tryStart failed:", err instanceof Error ? err.message : err);
+    }
+  };
+  try {
+    const disk = readMockupFromDisk(id);
+    const request = disk?.render_generation_request;
+    if (!disk || disk.render_mutation?.id !== mutationId || !request || request.mutation_id !== mutationId) {
+      release();
+      return;
+    }
+    if (disk.status !== "done") {
+      failPersistedMutation(id, mutationId, "任务状态已变，生成取消");
+      release();
+      return;
+    }
+    let frozenRequest: FrozenRequestIdentity;
+    try {
+      frozenRequest = assertAcceptedQueuedIdentity(disk, mutationId);
+    } catch (err) {
+      failPersistedMutation(
+        id,
+        mutationId,
+        generationFailureMessage(err, "请求身份不完整，不能出新代").slice(0, 80),
+      );
+      release();
+      return;
+    }
+    let executable;
+    try {
+      executable = await prepareGenerationExecution(disk, frozenRequest);
+      const latest = readMockupFromDisk(id);
+      if (!latest) throw generationError("render_generation_stale", "任务已变化", 409, "保留旧 current");
+      assertExecutionSnapshotFresh(latest, { mutationId, request: frozenRequest, plan: executable.plan,
+        sourceOutputs: executable.sourceOutputs, sourceGenerationId: frozenRequest.source_generation_id });
+    } catch (err) {
+      failPersistedMutation(
+        id,
+        mutationId,
+        generationFailureMessage(err, "渲染代际适配器尚未接线").slice(0, 80),
+      );
+      release();
+      return;
+    }
+    const store = openJobGenerationStore(id);
+    store.recoverOrphans();
+    let sourceId = frozenRequest.source_generation_id;
+    if (!disk.current_render_generation_id) {
+      let g0Ready = false;
+      try {
+        store.publicSummary(G0_LEGACY_ORIGINAL_ID, null);
+        g0Ready = true;
+      } catch {
+        g0Ready = false;
+      }
+      if (!g0Ready) {
+        store.sealGeneration({
+          mode: "legacy_import",
+          contractSha256: executable.plan.identitySha256,
+          contractBytes: executable.plan.bytes,
+          profile: G0_IMPORT_PROFILE,
+          observedCurrentGenerationId: null,
+          expectedCurrentGenerationId: frozenRequest.expected_current_generation_id,
+          actorLabel: disk.created_by || disk.owner,
+        });
+      }
+      sourceId = G0_LEGACY_ORIGINAL_ID;
+    }
+    const snapshot: ExecutionSnapshot = {
+      mutationId,
+      request: frozenRequest,
+      plan: executable.plan,
+      sourceOutputs: executable.sourceOutputs,
+      sourceGenerationId: sourceId,
+    };
+    const running = cloneMockup(readMockupFromDisk(id) || disk);
+    if (running.render_mutation?.id !== mutationId) {
+      release();
+      return;
+    }
+    running.status = "done";
+    running.job_status = "succeeded";
+    running.render_mutation = { ...running.render_mutation, status: "running", stage: "出图" };
+    persistGenerationJob(running);
+    const jobRoot = mockupJobDir(id);
+    const candidateDir = candidateDirFor(id, mutationId);
+    if (!executable.ownsCandidate) mkdirCandidateExclusive(candidateDir);
+    const executor = executable.execute;
+    if (!executor) {
+      failPersistedMutation(id, mutationId, "渲染代际执行器尚未接线");
+      release();
+      return;
+    }
+    const executeInput: RenderGenerationExecuteInput = {
+      jobId: id,
+      jobRoot,
+      mutationId,
+      mode: snapshot.request.mode,
+      sourceGenerationId: snapshot.sourceGenerationId,
+      candidateDir,
+      plan: {
+        identitySha256: snapshot.plan.identitySha256,
+        bytes: Buffer.from(snapshot.plan.bytes),
+        profile: snapshot.plan.profile,
+        verifier: snapshot.plan.verifier,
+      },
+      sourceOutputs: snapshot.sourceOutputs.map((row) => ({ ...row })),
+    };
+    if (snapshot.request.studio_adjustment) {
+      executeInput.studioAdjustment = { ...snapshot.request.studio_adjustment };
+    }
+    let executed: RenderGenerationExecuteResult;
+    try {
+      executed = await executor(executeInput);
+    } catch (err) {
+      failPersistedMutation(id, mutationId, err instanceof Error ? err.message.slice(0, 80) : "出图失败");
+      release();
+      return;
+    }
+    const still = readMockupFromDisk(id);
+    if (!still || still.render_mutation?.id !== mutationId) {
+      release();
+      return;
+    }
+    try {
+      assertExecutionSnapshotFresh(still, snapshot);
+      bindExecutorResult(executed, snapshot);
+      if (still.render_generation_request?.worker_pid || executed.runtimeQuality === "unwired") {
+        throw generationError("render_generation_unavailable", "运行时质量门尚未接线", 412, "候选保留，不固化或切换 current");
+      }
+    } catch (err) {
+      failPersistedMutation(id, mutationId, err instanceof Error ? err.message.slice(0, 80) : "执行快照已失效");
+      release();
+      return;
+    }
+    let sources: RenderGenerationSource[];
+    try {
+      sources = executed.outputs.map((row) => ({
+        key: row.key,
+        path: assertOutputInsideCandidate(candidateDir, jobRoot, row.path),
+      }));
+      if (!sources.some((row) => row.key === "white_a") || !sources.some((row) => row.key === "white_b") || !sources.some((row) => row.key === "glb")) {
+        throw generationError("render_generation_invalid", "执行器缺少必需输出", 400, "至少写出两张产品 PNG 和 GLB");
+      }
+    } catch (err) {
+      failPersistedMutation(id, mutationId, err instanceof Error ? err.message.slice(0, 80) : "输出非法");
+      release();
+      return;
+    }
+    let sealed;
+    try {
+      sealed = store.sealGeneration({
+        mode: snapshot.request.mode,
+        contractSha256: snapshot.plan.identitySha256,
+        contractBytes: snapshot.plan.bytes,
+        profile: snapshot.plan.profile,
+        sources,
+        observedCurrentGenerationId: snapshot.sourceGenerationId,
+        expectedCurrentGenerationId: snapshot.sourceGenerationId,
+        actorLabel: still.created_by || still.owner,
+      });
+    } catch (err) {
+      const message = isRenderGenerationError(err) ? err.problem : err instanceof Error ? err.message : "固化失败";
+      failPersistedMutation(id, mutationId, message.slice(0, 80));
+      release();
+      return;
+    }
+    try {
+      hooks.generationFailpoints?.afterSealBeforePointer?.(id);
+    } catch (err) {
+      failPersistedMutation(id, mutationId, err instanceof Error ? err.message.slice(0, 80) : "提交前失败");
+      release();
+      return;
+    }
+    try {
+      withGenerationJobLock(id, () => {
+        const latest = readMockupFromDisk(id);
+        if (!latest || latest.render_mutation?.id !== mutationId) {
+          throw generationError("render_generation_busy", "提交时 mutation 已变", 409, "保留旧 current");
+        }
+        assertExecutionSnapshotFresh(latest, snapshot);
+        const next = applyRenderGenerationPatch(cloneMockup(latest), sealed.patch);
+        next.status = "done";
+        next.job_status = "succeeded";
+        next.render_mutation = {
+          id: mutationId,
+          mode: snapshot.request.mode,
+          status: "succeeded",
+          stage: "已提交",
+        };
+        persistGenerationJob(next);
+      });
+    } catch (err) {
+      failPersistedMutation(id, mutationId, err instanceof Error ? err.message.slice(0, 80) : "提交失败");
+    }
+  } catch (err) {
+    const message = isRenderGenerationError(err)
+      ? err.problem
+      : err instanceof Error
+        ? err.message
+        : "生成失败";
+    failPersistedMutation(id, mutationId, message.slice(0, 80));
+    console.error(
+      `jobs ${id}: problem=generation_mutation cause=${isRenderGenerationError(err) ? err.cause : message} fix=保留旧 current，不切图`,
+    );
+  } finally {
+    release();
+  }
+}
+
+/**
+ * 终态 failed 不能代替进程退出。running + 仍待核验的 worker_pid 占住共享 Blender 槽，
+ * 直到 confirmGenerationWorkerSlotReleased 确认安全。tryStart 不得在此时领其他 Blender 工作。
+ */
+function occupyUnconfirmedGenerationBlenderFence(): void {
+  if (live.blender) return;
+  for (const job of loadAllMockups()) {
+    const pid = job.render_generation_request?.worker_pid;
+    if (
+      job.status === "done" &&
+      job.render_mutation &&
+      typeof pid === "number" &&
+      Number.isSafeInteger(pid) &&
+      pid > 0
+    ) {
+      live.blender = job.id;
+      return;
+    }
+  }
+}
+
+/**
+ * 与 clearPersistedWorker 相同的 inspect → 仅 owned 才 kill → 再 inspect。
+ * 旧协议 missing / other 沿用原恢复语义；新协议还必须确认独立组消失。
+ * unknown：不 kill，不能当已退出。owned 终止失败或杀完仍 owned/unknown：保留围栏。
+ */
+function confirmGenerationWorkerSlotReleased(pid: number, expected: WorkerProcessIdentity): boolean {
+  const inspect = hooks.inspectWorker || inspectWorkerProcess;
+  const probe = (): WorkerProcessState => {
+    try {
+      return inspect(pid, expected);
+    } catch {
+      return "unknown";
+    }
+  };
+  const groupReleased = (): boolean => {
+    if (expected.kind !== "render_generation") return true;
+    try { return (hooks.inspectGenerationGroup || inspectRenderGenerationGroup)(pid) === "missing"; }
+    catch { return false; }
+  };
+  const before = probe();
+  if (before === "missing" || before === "other") {
+    if (before === "other") {
+      console.warn(
+        `jobs ${expected.id}: problem=generation_worker cause=pid_reused_other fix=不杀无关进程，新协议仍须确认进程组消失`,
+      );
+    }
+    return groupReleased();
+  }
+  if (before !== "owned") {
+    console.warn(
+      `jobs ${expected.id}: problem=generation_worker cause=${before} fix=不杀不明进程，保留共享槽围栏，不把失败当退出`,
+    );
+    return false;
+  }
+  try {
+    if (expected.kind === "render_generation") {
+      (hooks.killGenerationGroup || signalRenderGenerationGroup)(pid, true);
+    } else {
+      (hooks.killTree || killTree)(pid, true);
+    }
+  } catch {
+    console.warn(
+      `jobs ${expected.id}: problem=generation_worker cause=owned_pid_kill_failed fix=不盲重跑，保留共享槽围栏`,
+    );
+    return false;
+  }
+  const after = probe();
+  if (after === "missing" || after === "other") return groupReleased();
+  console.warn(
+    `jobs ${expected.id}: problem=generation_worker cause=${after} fix=终止后仍无法确认退出，保留共享槽围栏`,
+  );
+  return false;
+}
+
+function recoverInterruptedMutation(job: MockupJob): void {
+  const mutation = job.render_mutation;
+  if (!mutation || (mutation.status !== "queued" && mutation.status !== "running"
+    && !job.render_generation_request?.worker_pid)) return;
+  if (mutation.status === "queued" && !job.render_generation_request?.worker_pid) {
+    if (!generationAdaptersReady()) {
+      failPersistedMutation(job.id, mutation.id, "渲染代际执行器尚未接线，不能保留假排队");
+    }
+    return;
+  }
+  const pid = job.render_generation_request?.worker_pid;
+  if (!pid) {
+    failPersistedMutation(job.id, mutation.id, "生成中断");
+    return;
+  }
+  const executionId = job.render_generation_request?.worker_execution_id;
+  if (job.render_generation_request?.worker_protocol !== undefined
+    && (job.render_generation_request.worker_protocol !== "render-generation/1" || !executionId)) {
+    live.blender = job.id;
+    return;
+  }
+  if (executionId !== undefined && (typeof executionId !== "string"
+    || !executionId.startsWith(`${job.id}:${mutation.id}:`)
+    || !/^[a-f0-9]{32}$/.test(executionId.slice(`${job.id}:${mutation.id}:`.length)))) {
+    live.blender = job.id;
+    return; // Corrupt ownership evidence is unknown, never proof of an unrelated/gone worker.
+  }
+  const expected: WorkerProcessIdentity = executionId
+    ? { kind: "render_generation", id: job.id, mutationId: mutation.id, executionId }
+    : { kind: "mockup", id: job.id };
+  if (!confirmGenerationWorkerSlotReleased(pid, expected)) {
+    live.blender = job.id;
+    return;
+  }
+  const next = cloneMockup(job);
+  delete next.render_generation_request!.worker_pid;
+  delete next.render_generation_request!.worker_execution_id;
+  persistGenerationJob(next);
+  failPersistedMutation(job.id, mutation.id, "生成中断");
+}
+
+function recoverRenderGenerationsOnBoot(): void {
+  for (const job of loadAllMockups()) {
+    if (!jobHasGenerationArtifacts(job)) continue;
+    try {
+      const store = openJobGenerationStore(job.id);
+      store.recoverOrphans();
+    } catch (err) {
+      console.error(
+        `jobs ${job.id}: problem=generation_recover cause=${isRenderGenerationError(err) ? err.cause : err instanceof Error ? err.message : String(err)} fix=只补索引，不自动激活`,
+      );
+    }
+    recoverInterruptedMutation(job);
+  }
+}
+
 export function reclaimOnBoot(): void {
   live.ocr = null;
   live.blender = null;
   live.illustrator = null;
   for (const task of loadTasksForRecovery()) reclaimTask(task);
   for (const job of loadAllMockups()) reclaimMockup(job);
+  recoverRenderGenerationsOnBoot();
   for (const task of loadAllTasks()) {
     if (task.notify_job_id && !task.notify_sent && (task.job_status === "succeeded" || task.job_status === "failed")) {
       launchNotification(`task ${task.id}`, () => fireTaskNotify(task, task.job_status === "succeeded"));
@@ -435,9 +1870,19 @@ export function tryStart(): void {
     const next = oldestAiQueued();
     if (next) claimAi(next);
   }
+  if (!live.blender) occupyUnconfirmedGenerationBlenderFence();
   if (!live.blender) {
-    const next = oldestMockupQueued();
-    if (next) claimMockup(next);
+    for (;;) {
+      if (live.blender) break;
+      const next = oldestBlenderWaiter();
+      if (!next) break;
+      if (next.kind === "generation") {
+        if (claimGenerationMutation(next.job) || live.blender) break;
+        continue;
+      }
+      claimMockup(next.job);
+      break;
+    }
   }
 }
 
@@ -487,6 +1932,27 @@ function oldestMockupQueued(): MockupJob | undefined {
         (j.structure_engine !== "v2" || j.structure_status === "ready"),
     )
     .sort((a, b) => a.created_at.localeCompare(b.created_at))[0];
+}
+
+type BlenderWaiter = { kind: "pipeline" | "generation"; job: MockupJob; at: string };
+
+function oldestBlenderWaiter(): BlenderWaiter | undefined {
+  const waiters: BlenderWaiter[] = [];
+  const pipeline = oldestMockupQueued();
+  if (pipeline) waiters.push({ kind: "pipeline", job: pipeline, at: pipeline.created_at });
+  if (generationAdaptersReady()) {
+    for (const job of loadAllMockups()) {
+      if (job.status === "done" && job.render_mutation?.status === "queued") {
+        waiters.push({
+          kind: "generation",
+          job,
+          at: job.render_generation_request?.created_at || job.created_at,
+        });
+      }
+    }
+  }
+  waiters.sort((a, b) => a.at.localeCompare(b.at) || a.job.id.localeCompare(b.job.id));
+  return waiters[0];
 }
 
 type QueueRanks = { ocr: Map<string, number>; mockup: Map<string, number> };
@@ -1001,6 +2467,10 @@ function finishMockup(id: string, startedAt: string, result: RunPythonResult): v
     const failure = cliFailure(result.stderr);
     logCliFailure(`mockup ${job.id} render`, failure);
     markMockupFailed(job, publicJobError(failure.error) || "打样中断");
+    return;
+  }
+  if (isGenerationManagedMockup(job)) {
+    markMockupFailed(job, "已托管代际输出，不能用旧出图覆盖");
     return;
   }
   const files = collectOutputs(outDir);

@@ -27,6 +27,18 @@ describe("killTree", () => {
 });
 
 describe("worker process identity", () => {
+  it("binds generation workers to exact job, mutation, token and CLI position", () => {
+    const expected = { kind: "render_generation" as const, id: "job1", mutationId: "m1",
+      executionId: `job1:m1:${"a".repeat(32)}` };
+    const command = `python /trusted/render_generation.py - --execution-id ${expected.executionId}`;
+    assert.equal(workerCommandMatches(command, expected), true);
+    for (const bad of [command.replace("job1:m1:", "job2:m1:"), command.replace("job1:m1:", "job1:m2:"),
+      command.replace("a".repeat(32), "b".repeat(32)), command.replace("render_generation.py", "pipeline.py"),
+      `${command} --execution-id other`, command.replace(" - --execution-id", " request.json --execution-id")]) {
+      assert.equal(workerCommandMatches(bad, expected), false);
+    }
+    assert.equal(workerCommandMatches(command, { ...expected, mutationId: "different" }), false);
+  });
   it("requires both the job kind and exact task id", () => {
     const id = "00000000abcd";
     assert.equal(
