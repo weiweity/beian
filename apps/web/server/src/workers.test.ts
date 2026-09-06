@@ -27,6 +27,17 @@ describe("killTree", () => {
 });
 
 describe("worker process identity", () => {
+  it("binds the native supervisor to its exact execution and never confuses it with the worker CLI", () => {
+    const executionId = `job:mutation:${"a".repeat(32)}`;
+    const expected = {kind:"render_generation" as const,id:"job",mutationId:"mutation",executionId,
+      container:"windows-job-object/1" as const};
+    const command = `C:\\Python\\python.exe C:\\packaging\\windows_render_supervisor.py --execution-id ${executionId}`;
+    assert.equal(workerCommandMatches(command,expected), true);
+    assert.equal(workerCommandMatches(command + " extra",expected), false);
+    assert.equal(workerCommandMatches(command.replace(executionId,executionId.replace(/a/g,"b")),expected), false);
+    assert.equal(workerCommandMatches(command,{...expected,container:undefined}), false);
+    assert.equal(workerCommandMatches(`python render_generation.py - --execution-id ${executionId}`,expected), false);
+  });
   it("binds generation workers to exact job, mutation, token and CLI position", () => {
     const expected = { kind: "render_generation" as const, id: "job1", mutationId: "m1",
       executionId: `job1:m1:${"a".repeat(32)}` };

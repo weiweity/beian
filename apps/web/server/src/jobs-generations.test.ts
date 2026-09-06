@@ -335,6 +335,28 @@ function enqueueAsync(id: string, requestId = "async-request") {
 }
 
 describe("RF-03C2.2 asynchronous preparation and ownership", () => {
+  it("extends the original lifecycle through seal and current commit; expiry keeps old current and releases confirmed credit", async () => {
+    const id = tid(461); seedDoneJob(id);
+    let expired = false, releases = 0, writes = 0;
+    setJobsTestHooks({ qualityVerifier: unwiredVerifier, prepareRenderGeneration: async input => ({
+      ...asyncPrepared(input), lifecycle: {
+        deadline: performance.now() + 10000,
+        check: () => { if (expired) throw new Error("lifecycle_timeout"); },
+        beforeWrite: () => { writes++; }, observe: () => {},
+        release: gone => { assert.equal(gone, true); releases++; },
+      },
+    }), generationFailpoints: { afterSealBeforePointer: () => { expired = true; } } });
+    enqueueAsync(id);
+    await waitUntil(() => loadMockup(id)?.render_mutation?.status === "failed", "expired before commit");
+    assert.equal(readMockupFromDisk(id)?.current_render_generation_id, undefined);
+    assert.deepEqual(fileBytes(loadMockup(id)!, "white_a"), WHITE_A);
+    assert.ok(writes > 0); assert.ok(releases > 0);
+    assert.equal(queueSnapshot().blender.running, 0);
+    const store = openRenderGenerationStore({jobRoot:jobDir(id),jobId:id,qualityVerifier:unwiredVerifier});
+    assert.ok(store.listHistory().items.some(row => row.mode === "legacy_relight"));
+    reclaimOnBoot(); assert.equal(readMockupFromDisk(id)?.current_render_generation_id, undefined);
+  });
+
   it("rejects malformed admission fields without persisting a mutation", () => {
     const id = tid(602);
     seedDoneJob(id);
@@ -976,6 +998,34 @@ describe("RF-03B generation queue", () => {
       sourceGenerationId: source,
       expectedCurrentGenerationId: source,
     });
+  }
+
+  for (const parent of ["owned", "unknown", "other", "missing"] as const) {
+    for (const container of ["present", "unknown", "missing"] as const) {
+      it(`native recovery retains fence until supervisor and exact job are gone: ${parent}/${container}`, () => {
+        const id = tid(720); seedInterruptedRunning(id, 71237);
+        const job = readMockupFromDisk(id)!;
+        const executionId = `${id}:${RECOVERY_MUTATION_ID}:${"d".repeat(32)}`;
+        job.render_generation_request!.worker_protocol = "windows-job-object/1";
+        job.render_generation_request!.worker_execution_id = executionId;
+        saveMockup(job);
+        let containerProbes = 0;
+        setJobsTestHooks({inspectWorker: (_pid, expected) => {
+          assert.equal(expected.kind,"render_generation");
+          if (expected.kind === "render_generation") assert.equal(expected.container,"windows-job-object/1");
+          return parent;
+        },recoverWindowsGeneration: (identity, options) => {
+          assert.equal(identity,executionId); assert.equal(options.cancel,true); containerProbes++; return container;
+        },killTree: () => assert.fail("no taskkill or PID fallback"),
+          killGenerationGroup: () => assert.fail("not a POSIX group"),
+          inspectGenerationGroup: () => { assert.fail("not a POSIX group"); } });
+        reclaimOnBoot(); reclaimOnBoot();
+        const released = (parent === "other" || parent === "missing") && container === "missing";
+        assert.equal(readMockupFromDisk(id)?.render_generation_request?.worker_pid === undefined, released);
+        assert.equal(queueSnapshot().blender.running > 0,!released);
+        if (parent === "owned" || parent === "unknown") assert.equal(containerProbes,0);
+      });
+    }
   }
 
   for (const parentState of ["missing", "other"] as const) {

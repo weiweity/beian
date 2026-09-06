@@ -270,6 +270,46 @@ function importG0(store: RenderGenerationStore) {
 }
 
 describe("renderGenerations", () => {
+  for (const damage of ["output", "manifest"]) {
+    it(`final commit barrier rejects ${damage} replacement after sealing`, () => {
+      const job = seedJob();
+      const store = openStore(job);
+      const sealed = importG0(store);
+      const original = readFileSync(job.files.white_a);
+      if (damage === "output") writeFileSync(sealed.patch.files[0].path, syntheticPng(99,88,77));
+      else {
+        const manifest = join(job.root, RENDER_GENERATION_DIR, sealed.generation_id, "generation.json");
+        const data = JSON.parse(readFileSync(manifest,"utf8")); data.actor_label = "changed";
+        writeFileSync(manifest,JSON.stringify(data));
+      }
+      assert.throws(() => sealed.prepareCommit());
+      assert.deepEqual(readFileSync(job.files.white_a), original);
+    });
+  }
+
+  for (const phase of ["copy", "fsync", "rename", "after-rename"] as const) {
+    it(`lifecycle failure during ${phase} retains source bytes and never returns a current patch`, () => {
+      const job = seedJob();
+      const before = snapshotAll(job.root);
+      let expired = false;
+      const store = openStore(job, {
+        lifecycle: { check: () => { if (expired) throw new Error("lifecycle_timeout"); },
+          beforeWrite: () => { if (phase === "copy") throw new Error("lifecycle_disk_budget"); } },
+        failpoints: {
+          duringCopy: () => { if (phase === "fsync") expired = true; },
+          beforeRename: () => { if (phase === "rename") expired = true; },
+          afterRenameBeforeIndex: () => { if (phase === "after-rename") expired = true; },
+        },
+      });
+      assert.throws(() => importG0(store), /lifecycle_/);
+      for (const [path, hash] of before) assert.equal(snapshotAll(job.root).get(path), hash);
+      const fresh = openStore(job);
+      const recovered = fresh.recoverOrphans();
+      assert.equal(recovered.recovered.length, phase === "after-rename" ? 1 : 0);
+      assert.equal(fresh.virtualLegacyCurrentId(), openStore(job).virtualLegacyCurrentId());
+    });
+  }
+
   it("accepts indexed palettes grayscale alpha RGBA and 16-bit container variants", () => {
     for (const [colorType, bitDepth] of [[3, 8], [4, 8], [6, 8], [0, 16], [2, 16], [4, 16], [6, 16]]) {
       const job = seedJob();
