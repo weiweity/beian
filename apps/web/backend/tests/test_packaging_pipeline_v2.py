@@ -1951,6 +1951,48 @@ def test_run_blender_job_v1_accepts_this_round_nonce_result(
     assert "execution_nonce" not in disk
 
 
+def test_run_blender_job_verified_nonce_holder_keeps_job_clean(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    pipeline, job = prepare_v1_diagnostic_job(tmp_path, monkeypatch)
+    holder = ["preexisting"]
+    seen = {}
+
+    def fake_run(command, *_args, **_kwargs):
+        snapshot = json.loads(Path(command[-1]).read_text(encoding="utf-8"))
+        seen["nonce"] = snapshot["execution_nonce"]
+        seed_required_outputs(job)
+        pipeline.save_json(
+            Path(job["project_dir"]) / "blender_result.json",
+            blender_measurement_result(snapshot),
+        )
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(pipeline.subprocess, "run", fake_run)
+    rendered = pipeline.run_blender_job(
+        job, tmp_path / "missing-blender", verified_nonce_holder=holder
+    )
+    assert holder == [seen["nonce"]]
+    assert "execution_nonce" not in rendered
+    assert "execution_nonce" not in job
+    stale_holder = ["keep-on-fail"]
+
+    def stale_run(command, *_args, **_kwargs):
+        snapshot = json.loads(Path(command[-1]).read_text(encoding="utf-8"))
+        seed_required_outputs(job)
+        payload = blender_measurement_result(snapshot)
+        payload["execution_nonce"] = "from-old-file"
+        pipeline.save_json(Path(job["project_dir"]) / "blender_result.json", payload)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(pipeline.subprocess, "run", stale_run)
+    with pytest.raises(pipeline.PipelineError):
+        pipeline.run_blender_job(
+            job, tmp_path / "missing-blender", verified_nonce_holder=stale_holder
+        )
+    assert stale_holder == ["keep-on-fail"]
+
+
 @pytest.mark.parametrize("failure", ["serialization", "replace"])
 def test_save_json_failure_preserves_original_and_cleans_temp(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
