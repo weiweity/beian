@@ -22,6 +22,7 @@ from camera_frame import (
     white_set_wall_y_mm,
 )
 from glb_verify import (
+    PAPER_ALBEDO_LINEAR,
     SEMANTIC_FACES,
     compare_glb_core_contract,
     compare_glb_dimensions,
@@ -58,7 +59,7 @@ def clean_scene():
 
 # sRGB 210–225 → scene-linear ~0.64–0.75. Printed white lives on the texture,
 # not the paperboard core, so grade Base Color here. Read-face PNGs stay ungraded.
-PAPER_ALBEDO_LINEAR = 0.70
+# PAPER_ALBEDO_LINEAR is shared with the exported artifact verifier.
 
 
 def _multiply_paper_albedo(nodes, links, texture_color):

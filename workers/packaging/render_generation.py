@@ -10,23 +10,30 @@ renderer.  Production quality remains unwired.
 from __future__ import annotations
 
 import hashlib
+from contextvars import ContextVar
+import io
 import json
+import math
 import os
 import re
+import shutil
 import stat
 import struct
 import sys
 import tempfile
+import time
 import zlib
 from pathlib import Path
 from typing import Any, Mapping
+
+from PIL import Image
 
 ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import pipeline as packaging_pipeline  # noqa: E402
-from glb_verify import _decode_png_rgba, load_glb_artifact  # noqa: E402
+from glb_verify import _decode_png_rgba, load_glb_artifact, compare_glb_artifact_contract, PAPER_ALBEDO_LINEAR  # noqa: E402
 from render_contract import (  # noqa: E402
     OPTIONAL_RENDERER_OUTPUT_KEYS,
     RenderContractError,
@@ -55,11 +62,21 @@ REQUEST_KEYS = frozenset(
         "expected_asset_sha256",
         "studio_adjustment",
         "blender_executable",
+        "timeout_ms",
     }
 )
 STUDIO_KEYS = frozenset({"product_light", "background_light"})
 MAX_PATH_CHARS = 1024
 MAX_REQUEST_BYTES = 64 * 1024
+MAX_PLAN_BYTES = 8 * 1024 * 1024
+MAX_FILE_BYTES = 512 * 1024 * 1024
+MAX_IMAGE_PIXELS = 32_000_000
+MAX_SOURCE_PIXELS = 96_000_000  # Aggregate decoded face grid, not a process RSS claim.
+MAX_SOURCE_BYTES = 256 * 1024 * 1024
+MAX_OUTPUT_BYTES = 2 * 1024 * 1024 * 1024
+DISK_HEADROOM_BYTES = 128 * 1024 * 1024
+MAX_EXECUTION_MS = 1_260_000
+_REQUEST_DEADLINE: ContextVar[float | None] = ContextVar("render_generation_deadline", default=None)
 STUDIO_LIGHT_LOWER = 0.1
 STUDIO_LIGHT_UPPER = 4.0
 SOURCE_RESOLVED_NAME = "resolved_job.json"
@@ -155,10 +172,24 @@ def _sha256_bytes(raw: bytes) -> str:
 
 
 def _sha256_file(path: Path) -> str:
+    _check_deadline()
     digest = hashlib.sha256()
-    with path.open("rb") as handle:
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    with os.fdopen(os.open(path, flags), "rb") as handle:
+        before = os.fstat(handle.fileno())
+        if not _is_reg(before) or before.st_size > MAX_FILE_BYTES:
+            _fail("文件超过读取预算或不是普通文件", cause="file_budget")
+        total = 0
         while chunk := handle.read(1024 * 1024):
+            _check_deadline()
+            total += len(chunk)
+            if total > MAX_FILE_BYTES:
+                _fail("文件超过读取预算", cause="file_budget")
             digest.update(chunk)
+        after = os.fstat(handle.fileno())
+        _check_deadline()
+        if total != before.st_size or (after.st_size, after.st_mtime_ns) != (before.st_size, before.st_mtime_ns):
+            _fail("读取中文件已变化", cause="file_changed")
     return "sha256:" + digest.hexdigest()
 
 
@@ -528,6 +559,9 @@ def parse_request(payload: Mapping[str, Any]) -> dict[str, Any]:
         _fail("请求 schema 不受支持", cause="schema")
     action = _text(payload.get("action"), "action", allowed=ACTIONS)
     mode = _text(payload.get("mode"), "mode", allowed=MODES)
+    timeout_ms = payload.get("timeout_ms", MAX_EXECUTION_MS)
+    if type(timeout_ms) is not int or not 1 <= timeout_ms <= MAX_EXECUTION_MS:
+        _fail("执行时间预算非法", cause="timeout_budget")
     job_root = _absolute_path(payload.get("job_root"), "job_root")
     expected_source = _require_sha(payload.get("expected_source_sha256"), "expected_source_sha256")
     raw_assets = payload.get("expected_asset_sha256")
@@ -564,6 +598,7 @@ def parse_request(payload: Mapping[str, Any]) -> dict[str, Any]:
         "expected_asset_sha256": expected_assets,
         "studio_adjustment": _studio_adjustment(payload.get("studio_adjustment")),
         "blender_executable": blender,
+        "timeout_ms": timeout_ms,
     }
 
 
@@ -572,6 +607,7 @@ def _source_resolved_path(job_root: Path) -> Path:
 
 
 def read_source_job(job_root: Path) -> tuple[bytes, dict[str, Any], Path]:
+    _check_deadline()
     root = _lexical(job_root)
     resolved_path = _source_resolved_path(root)
     info = _lstat(resolved_path)
@@ -579,7 +615,17 @@ def read_source_job(job_root: Path) -> tuple[bytes, dict[str, Any], Path]:
         _fail("源 resolved_job.json 不能是符号链接", cause="source_symlink")
     if not _is_reg(info):
         _fail("源 resolved_job.json 缺失", cause="source_missing", fix="只读合成 fixture 的 resolved_job.json")
-    raw = resolved_path.read_bytes()
+    if info.st_size > MAX_PLAN_BYTES:
+        _fail("源合同超过 8 MiB 预算", cause="source_plan_budget")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    with os.fdopen(os.open(resolved_path, flags), "rb") as handle:
+        opened = os.fstat(handle.fileno())
+        if not _is_reg(opened) or (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
+            _fail("源合同读取前身份已变化", cause="source_changed")
+        raw = handle.read(MAX_PLAN_BYTES + 1)
+    _check_deadline()
+    if len(raw) > MAX_PLAN_BYTES:
+        _fail("源合同超过 8 MiB 预算", cause="source_plan_budget")
     try:
         payload = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -624,6 +670,7 @@ def verify_source_bindings(
         path = Path(str(assets[face]))
         if _is_link(_lstat(path)):
             _fail("印刷面贴图不能是符号链接", cause=f"assets.{face}")
+        _check_asset_pixel_budget(path)
         digest = _sha256_file(path)
         actual_assets[face] = digest
         if digest != expected_asset_sha256[face]:
@@ -633,6 +680,102 @@ def verify_source_bindings(
                 fix="缺失或篡改的资产在启动前拒绝",
             )
     return actual_assets
+
+
+def _check_asset_pixel_budget(path: Path) -> tuple[int, int]:
+    """Header-only admission, before private copies or Blender allocations.
+
+    This is not a pixel/quality approval. The renderer still validates textures.
+    """
+    _check_deadline()
+    with path.open("rb") as handle:
+        header = handle.read(33)
+    if (len(header) != 33 or header[:16] != b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
+            or zlib.crc32(header[12:29]) & 0xffffffff != struct.unpack(">I", header[29:33])[0]):
+        _fail("印刷面贴图 PNG 头无效", cause="asset_png_header")
+    width, height = struct.unpack(">II", header[16:24])
+    if not width or not height or width * height > MAX_IMAGE_PIXELS:
+        _fail("印刷面贴图超过 32 MP 预算", cause="asset_pixel_budget")
+    return width, height
+
+
+def verify_source_sampling(
+    job: Mapping[str, Any], plan: Mapping[str, Any], asset_hashes: Mapping[str, str],
+) -> dict[str, Any]:
+    """Inspect the source face PNG grid against RF-02's validated minimum-floor plan.
+
+    This cannot reconstruct a PDF's intrinsic resolution or past resampling.
+    Actual RGBA decoding/GLB embedding remains a later gate over these same SHAs.
+    """
+    axes = {"front": ("width", "height"), "back": ("width", "height"),
+            "right": ("depth", "height"), "left": ("depth", "height"),
+            "top": ("width", "depth"), "bottom": ("width", "depth")}
+    rows = {}
+    total_pixels = 0
+    total_bytes = 0
+    try:
+        dimensions = plan["spec"]["geometry"]["outer_dimensions_mm"]
+        sampling = plan["sampling"]
+        if sampling["strategy"] != "minimum-floor-v1":
+            raise ValueError("sampling_strategy")
+        for face, (horizontal, vertical) in axes.items():
+            width_mm, height_mm = float(dimensions[horizontal]), float(dimensions[vertical])
+            target = float(sampling["per_face_target_pixels_per_mm"][face])
+            if not all(math.isfinite(n) and n > 0 for n in (width_mm, height_mm, target)):
+                raise ValueError("sampling_number")
+            required = [max(8, math.ceil(width_mm * target)), max(8, math.ceil(height_mm * target))]
+            path = Path(job["assets"][face])
+            width, height = _check_asset_pixel_budget(path)
+            total_pixels += width * height
+            total_bytes += path.stat().st_size
+            if total_pixels > MAX_SOURCE_PIXELS or total_bytes > MAX_SOURCE_BYTES:
+                _fail("六面源资产总量超过候选预算", cause="source_aggregate_budget")
+            if (width < required[0] or height < required[1]
+                    or width * height > sampling["maximum_face_pixels"]
+                    or _sha256_file(path) != asset_hashes[face]):
+                raise ValueError("sampling_grid_or_identity")
+            rows[face] = {"source_sha256": asset_hashes[face], "source_size_px": [width, height],
+                          "source_pixels_per_mm": [width / width_mm, height / height_mm],
+                          "target_pixels_per_mm": target, "required_size_px": required}
+    except (OSError, ValueError, KeyError, TypeError, OverflowError) as error:
+        raise RenderGenerationError(
+            "源印刷面未达到合同采样要求", cause="source_sampling_quality",
+            fix="保留旧成片；从原矢量稿按当前合同重新切面，不能把低清 PNG 放大充当高密度来源",
+        ) from error
+    return {"schema": "packaging-source-sampling/1", "strategy": sampling["strategy"],
+            "source_stage": "resolved_face_png", "faces": rows,
+            "total_source_pixels": total_pixels, "total_source_bytes": total_bytes,
+            "upstream_resample_count": None, "projected_pixels_per_mm": None}
+
+
+def _available_disk_bytes(path: Path) -> int:
+    return shutil.disk_usage(path).free
+
+
+def check_candidate_disk_budget(path: Path, plan: Mapping[str, Any], sampling: Mapping[str, Any]) -> dict[str, int]:
+    """Conservative preflight waterline, NOT a filesystem reservation or quota.
+
+    Budget full product/ground/set and cards, two capped binary outputs, source
+    snapshots and a second output copy for sealing. Actual output bytes are also
+    checked after render. Concurrent writers can still consume the free space.
+    """
+    _check_deadline()
+    width, height = (plan["render"][key] for key in ("resolution_x", "resolution_y"))
+    scale = min(1.0, packaging_pipeline.REVIEW_CARD_MAX_EDGE / max(width, height))
+    card_w, card_h = max(1, round(width * scale)), max(1, round(height * scale))
+    # PNG raw scanlines + conservative per-stream overhead; no compression savings assumed.
+    raster_bytes = 6 * ((width * 4 + 1) * height + (card_w * 4 + 1) * card_h + 256 * 1024)
+    output_ceiling = min(MAX_OUTPUT_BYTES, raster_bytes + 2 * MAX_FILE_BYTES)
+    required = 2 * output_ceiling + sampling["total_source_bytes"] + MAX_PLAN_BYTES + DISK_HEADROOM_BYTES
+    try:
+        available = _available_disk_bytes(path)
+    except OSError as error:
+        raise RenderGenerationError("无法确认候选磁盘水位", cause="candidate_disk_budget") from error
+    if available < required:
+        _fail("磁盘余量不足，未启动新候选", cause="candidate_disk_budget",
+              fix="保留已有代际，释放经确认可清理的空间或扩容后重试；不会自动删除历史代")
+    return {"required_free_bytes": required, "observed_free_bytes": available,
+            "candidate_output_ceiling_bytes": output_ceiling}
 
 
 def plan_for_mode(job: Mapping[str, Any], mode: str) -> dict[str, Any]:
@@ -756,6 +899,8 @@ def copy_candidate_assets(
         before = source_path.lstat()
         if not _is_reg(before):
             _fail("候选贴图源不是普通文件", cause=f"asset_snapshot_{face}")
+        if before.st_size > MAX_FILE_BYTES:
+            _fail("候选贴图超过文件预算", cause="file_budget")
         dest = assets_dir / f"panel_{face}.png"
         digest = hashlib.sha256()
         flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
@@ -766,7 +911,12 @@ def copy_candidate_assets(
             ):
                 _fail("复制前源贴图身份已变化", cause=f"asset_snapshot_{face}")
             with dest.open("xb") as target:
+                total = 0
                 while chunk := source.read(1024 * 1024):
+                    _check_deadline()
+                    total += len(chunk)
+                    if total > MAX_FILE_BYTES:
+                        _fail("候选贴图超过文件预算", cause="file_budget")
                     target.write(chunk)
                     digest.update(chunk)
         expected = expected_asset_sha256[face]
@@ -818,10 +968,14 @@ def _png_structurally_ok(path: Path) -> bool:
     """Reuse glb_verify's PNG decoder. Magic-only / truncated files fail."""
 
     info = _lstat(path)
-    if _is_link(info) or not _is_reg(info) or info.st_size <= 0:
+    if _is_link(info) or not _is_reg(info) or info.st_size <= 0 or info.st_size > MAX_FILE_BYTES:
         return False
     try:
-        decoded = _decode_png_rgba(path.read_bytes())
+        with path.open("rb") as handle:
+            payload = handle.read(MAX_FILE_BYTES + 1)
+        if len(payload) > MAX_FILE_BYTES:
+            return False
+        decoded = _decode_png_rgba(payload, max_pixels=MAX_IMAGE_PIXELS)
     except (OSError, ValueError, zlib.error, struct.error):
         return False
     return (
@@ -835,10 +989,10 @@ def _glb_structurally_ok(path: Path) -> bool:
     """Header + declared length + chunk alignment + JSON object. Not geometry QA."""
 
     info = _lstat(path)
-    if _is_link(info) or not _is_reg(info) or info.st_size <= 0:
+    if _is_link(info) or not _is_reg(info) or info.st_size <= 0 or info.st_size > MAX_FILE_BYTES:
         return False
     try:
-        artifact = load_glb_artifact(path)
+        artifact = load_glb_artifact(path, max_bytes=MAX_FILE_BYTES)
     except (OSError, ValueError, json.JSONDecodeError, UnicodeDecodeError, struct.error):
         return False
     return isinstance(getattr(artifact, "document", None), dict)
@@ -852,7 +1006,60 @@ def _output_kind(key: str) -> str:
     return "png"
 
 
+def verify_full_card_contract(
+    job: Mapping[str, Any], evidence: Mapping[str, Any], *,
+    max_edge: int = packaging_pipeline.REVIEW_CARD_MAX_EDGE,
+) -> None:
+    """Bind decoded full/card pixels to the exact evidence bytes, not PNG metadata.
+
+    This is a mechanical subgate, not a visual baseline or source-density pass.
+    The caller supplies the RF-02-bound job, never worker-reported dimensions.
+    """
+    def read_image(key: str) -> Image.Image:
+        row = evidence[key]
+        path = Path(row["path"])
+        info = _lstat(path)
+        if (_is_link(info) or not _is_reg(info) or info.st_nlink != 1
+                or not 0 < info.st_size <= MAX_FILE_BYTES):
+            raise ValueError("file_budget_or_type")
+        with path.open("rb") as handle:
+            payload = handle.read(MAX_FILE_BYTES + 1)
+        if (len(payload) > MAX_FILE_BYTES or len(payload) != row["bytes"]
+                or _sha256_bytes(payload) != row["sha256"]):
+            raise ValueError("file_identity")
+        _decode_png_rgba(payload, max_pixels=MAX_IMAGE_PIXELS)
+        with Image.open(io.BytesIO(payload)) as opened:
+            if opened.mode != "RGBA":
+                raise ValueError("rgba_required")
+            return opened.copy()
+
+    try:
+        width, height = (job["render"][key] for key in ("resolution_x", "resolution_y"))
+        if (type(width) is not int or type(height) is not int or min(width, height) <= 0
+                or width * height > MAX_IMAGE_PIXELS or type(max_edge) is not int or max_edge <= 0):
+            raise ValueError("resolution_budget")
+        scale = min(1.0, max_edge / max(width, height))
+        card_size = (max(1, round(width * scale)), max(1, round(height * scale)))
+        for key in ("front_right", "back_left"):
+            with read_image(key) as full, read_image(key + "_card") as card:
+                if full.size != (width, height) or card.size != card_size:
+                    raise ValueError("resolution")
+                # Actual transparent background and opaque product must both exist.
+                # No percentage heuristic: framing/coverage belongs to later visual QA.
+                if full.getchannel("A").getextrema() != (0, 255):
+                    raise ValueError("empty_or_no_transparent_background")
+                with full.resize(card_size, Image.Resampling.LANCZOS) as expected:
+                    if card.tobytes() != expected.tobytes():
+                        raise ValueError("card_pixels_or_alpha")
+    except (OSError, ValueError, KeyError, TypeError, zlib.error, struct.error) as error:
+        raise RenderGenerationError(
+            "候选全图和核对卡未通过校验", cause="runtime_full_card_quality",
+            fix="核查合同分辨率、透明背景、非空产品及对应全图生成的核对卡",
+        ) from error
+
+
 def collect_output_evidence(job: Mapping[str, Any]) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    check_output_byte_budget(job)
     outputs = job.get("outputs") if isinstance(job.get("outputs"), Mapping) else {}
     evidence: dict[str, Any] = {}
     warnings: list[dict[str, str]] = []
@@ -912,6 +1119,20 @@ def collect_output_evidence(job: Mapping[str, Any]) -> tuple[dict[str, Any], lis
     return evidence, warnings
 
 
+def check_output_byte_budget(job: Mapping[str, Any], ceiling: int | None = None) -> None:
+    """Invalid optional outputs still occupy disk and cannot evade resource limits."""
+    total = 0
+    for path in {str(raw) for raw in job.get("outputs", {}).values() if raw}:
+        _check_deadline()
+        info = _lstat(Path(path))
+        if _is_reg(info):
+            if info.st_size > MAX_FILE_BYTES:
+                _fail("候选输出文件超过预算", cause="output_file_budget")
+            total += info.st_size
+    if total > (MAX_OUTPUT_BYTES if ceiling is None else min(ceiling, MAX_OUTPUT_BYTES)):
+        _fail("候选输出总量超过预算", cause="output_aggregate_budget")
+
+
 def _result_base(
     *,
     action: str,
@@ -951,7 +1172,7 @@ def _result_base(
 
 def _refresh_source(
     request: Mapping[str, Any],
-) -> tuple[bytes, dict[str, Any], Path, dict[str, Any], dict[str, str]]:
+) -> tuple[bytes, dict[str, Any], Path, dict[str, Any], dict[str, str], dict[str, Any]]:
     job_root = request["job_root"]
     raw, parsed, resolved_path = read_source_job(job_root)
     bound = bind_source_job(parsed, job_root, resolved_path)
@@ -963,16 +1184,33 @@ def _refresh_source(
         expected_asset_sha256=request["expected_asset_sha256"],
     )
     plan = plan_for_mode(bound, request["mode"])
-    return raw, bound, resolved_path, plan, assets
+    sampling = verify_source_sampling(bound, plan, assets)
+    return raw, bound, resolved_path, plan, assets, sampling
 
 
 def run_request(payload: Mapping[str, Any]) -> dict[str, Any]:
     request = parse_request(payload)
+    token = _REQUEST_DEADLINE.set(time.monotonic() + request["timeout_ms"] / 1000)
+    try:
+        result = _run_request(request)
+        _check_deadline()
+        return result
+    finally:
+        _REQUEST_DEADLINE.reset(token)
+
+
+def _check_deadline() -> None:
+    deadline = _REQUEST_DEADLINE.get()
+    if deadline is not None and time.monotonic() >= deadline:
+        _fail("候选执行超过时间预算", code="render_generation_timeout", cause="timeout")
+
+
+def _run_request(request: Mapping[str, Any]) -> dict[str, Any]:
     action = request["action"]
     _emit("validate")
     roots = _configured_roots(request["job_root"])
     _assert_trusted_ancestors(request["job_root"], roots, must_exist=True)
-    raw, bound, _resolved_path, plan, assets = _refresh_source(request)
+    raw, bound, _resolved_path, plan, assets, sampling = _refresh_source(request)
     source_sha = _sha256_bytes(raw)
     cand_id = candidate_identity_sha(
         source_plan_identity=plan["fingerprint_token"],
@@ -991,6 +1229,7 @@ def run_request(payload: Mapping[str, Any]) -> dict[str, Any]:
         candidate_dir=request["candidate_dir"],
         status="validated",
     )
+    result["source_sampling"] = sampling
     if action == "validate":
         return result
 
@@ -1011,7 +1250,9 @@ def run_request(payload: Mapping[str, Any]) -> dict[str, Any]:
         candidate_dir=candidate_dir,
         source_job=bound,
     )
+    result["resource_admission"] = check_candidate_disk_budget(candidate_dir.parent, plan, sampling)
     _emit("prepare")
+    _check_deadline()
     mkdir_exclusive(candidate_dir)
     remapped = prepare_candidate_job(
         source_job=bound,
@@ -1041,7 +1282,7 @@ def run_request(payload: Mapping[str, Any]) -> dict[str, Any]:
 
     blender = request["blender_executable"]
     assert blender is not None
-    _raw_again, bound_again, _resolved_again, plan_again, _assets_again = _refresh_source(request)
+    _raw_again, bound_again, _resolved_again, plan_again, _assets_again, _sampling_again = _refresh_source(request)
     if _sha256_bytes(_raw_again) != source_sha:
         _fail("启动前源合同身份已变化", cause="source_changed_after_validate")
     if plan_again["fingerprint_token"] != plan["fingerprint_token"]:
@@ -1051,6 +1292,7 @@ def run_request(payload: Mapping[str, Any]) -> dict[str, Any]:
         if _sha256_file(path) != assets[face]:
             _fail("启动前六面资产身份已变化", cause=f"asset_changed_{face}")
     _emit("blender")
+    check_candidate_disk_budget(candidate_dir, plan, sampling)
     nonce_holder: list[str] = []
     try:
         rendered = packaging_pipeline.run_blender_candidate(
@@ -1059,6 +1301,7 @@ def run_request(payload: Mapping[str, Any]) -> dict[str, Any]:
             asset_project_dir=candidate_dir,
             studio_adjustment=request["studio_adjustment"],
             verified_nonce_holder=nonce_holder,
+            capture_deadline=_REQUEST_DEADLINE.get(),
         )
     except packaging_pipeline.PipelineError as error:
         raise _from_pipeline(error) from error
@@ -1073,7 +1316,24 @@ def run_request(payload: Mapping[str, Any]) -> dict[str, Any]:
             fix="只接受 run_blender_job 本轮验证成功的 nonce，不能从旧文件或自报字段抄回",
         )
     verified_nonce = nonce_holder[0]
+    _check_deadline()
     evidence, warnings = collect_output_evidence(rendered)
+    check_output_byte_budget(rendered, result["resource_admission"]["candidate_output_ceiling_bytes"])
+    # Inspect actual geometry/UV/material bytes, not the worker's dimensions or
+    # success boolean. This subgate alone does not authorize runtime quality.
+    glb_path = Path(evidence["glb"]["path"])
+    report = compare_glb_artifact_contract(
+        load_glb_artifact(glb_path, max_bytes=MAX_FILE_BYTES), rendered["assets"],
+        rendered["dimensions_mm"], float(rendered["glb_tolerance_mm"]),
+        rendered["render"].get("substrate_rgba", [PAPER_ALBEDO_LINEAR]*3 + [1.0]),
+    )
+    if (not report["ok"] or _sha256_file(glb_path) != evidence["glb"]["sha256"]
+            or any(_sha256_file(Path(rendered["assets"][face])) != assets[face] for face in SEMANTIC_FACES)):
+        _fail("候选 GLB 未通过六面和几何校验", cause="runtime_glb_quality",
+              fix="保留当前成片，核查实际六面贴图、UV、毫米尺寸和闭合纸芯")
+    verify_full_card_contract(remapped, evidence)
+    _check_deadline()
+    result["artifact_checks"] = {"glb": "passed", "full_card": "passed", "source_sampling": "passed"}
     log_path = Path(str(rendered["project_dir"])) / "blender.log"
     result["outputs"] = evidence
     result["optional_warnings"] = warnings
