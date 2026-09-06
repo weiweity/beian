@@ -8,6 +8,7 @@ import {
   readdirSync,
   readFileSync,
   readlinkSync,
+  renameSync,
   realpathSync,
   symlinkSync,
   unlinkSync,
@@ -270,6 +271,89 @@ function importG0(store: RenderGenerationStore) {
 }
 
 describe("renderGenerations", () => {
+  it("RF-04 history pagination never creates a cursor key or any other file", () => {
+    const job = seedJob(); const store = openStore(job); importG0(store);
+    store.sealGeneration({ mode:"legacy_relight", contractSha256:CONTRACT_SHA, contractBytes:CONTRACT,
+      profile:"compat-legacy-v0", sources:writeUpgradeSources(job.root,"readonly"),
+      observedCurrentGenerationId:G0_LEGACY_ORIGINAL_ID, expectedCurrentGenerationId:G0_LEGACY_ORIGINAL_ID });
+    const cursorKey = join(job.root,RENDER_GENERATION_DIR,".cursor-key");
+    if (existsSync(cursorKey)) unlinkSync(cursorKey); // An older store may have ready rows but no key.
+    const before = snapshotAll(job.root);
+    const first = store.listHistory({limit:1});
+    assert.ok(first.next_cursor);
+    assert.equal(store.listHistory({limit:1,cursor:first.next_cursor}).items.length,1);
+    assertMapsEqual(snapshotAll(job.root),before);
+  });
+
+  it("RF-04 legacy identity binds every optional output and missing keys", () => {
+    const job = seedJob({ground:"valid"}); const store = openStore(job);
+    const first = store.virtualLegacyCurrentId();
+    assert.match(first,/^legacy-current-v2-[a-f0-9]{64}$/);
+    const ground = join(job.root,"26H06A_x_front_right_ground.png");
+    writeFileSync(ground,syntheticPng(45,67,89));
+    const second = store.virtualLegacyCurrentId(); assert.notEqual(second,first);
+    unlinkSync(ground); const third = store.virtualLegacyCurrentId(); assert.notEqual(third,second);
+    writeFileSync(join(job.root,"26H06A_x_front_right_card.png"),syntheticPng(9,8,7));
+    assert.notEqual(store.virtualLegacyCurrentId(),third);
+    assert.throws(() => store.openFile(first,"white_a"), /当前代已变化/);
+  });
+
+  for (const [key, suffix] of [["white_a_card", "card"], ["white_a_ground", "ground"], ["white_a_set", "set"]]) {
+    it(`RF-04 empty legacy optional ${key} preserves full reads but cannot be served`, () => {
+      const job = seedJob(); const store = openStore(job);
+      const missing = store.virtualLegacyCurrentId();
+      const optional = join(job.root, `26H06A_x_front_right_${suffix}.png`);
+      writeFileSync(optional, Buffer.alloc(0));
+      const before = snapshotAll(job.root);
+      const empty = store.virtualLegacyCurrentId();
+      assert.notEqual(empty, missing, "empty and missing are distinct source identities");
+      const full = store.openFile(empty, "white_a");
+      try { assert.deepEqual(readFileSync(full.fd), job.whiteA); } finally { full.close(); }
+      assert.throws(() => store.openFile(empty, key), /输出体积非法/);
+      assertMapsEqual(snapshotAll(job.root), before);
+      writeFileSync(optional, syntheticPng(1, 2, 3));
+      assert.notEqual(store.virtualLegacyCurrentId(), empty);
+      assert.throws(() => store.openFile(empty, "white_a"), /当前代已变化/);
+    });
+  }
+
+  it("RF-04 empty required legacy outputs and damaged ready outputs remain rejected", () => {
+    for (const key of ["white_a", "white_b", "glb"] as const) {
+      const job = seedJob(); const store = openStore(job);
+      writeFileSync(job.files[key], Buffer.alloc(0));
+      assert.throws(() => store.virtualLegacyCurrentId(), /输出体积非法/);
+    }
+    for (const key of ["white_a", "white_a_card"]) {
+      const job = seedJob(); const store = openStore(job);
+      writeFileSync(join(job.root, "26H06A_x_front_right_card.png"), syntheticPng(1, 2, 3));
+      const ready = importG0(store);
+      writeFileSync(ready.patch.files.find(row => row.key === key)!.path, Buffer.alloc(0));
+      assert.throws(() => store.openFile(ready.generation_id, "white_b"), /输出体积非法/);
+    }
+  });
+
+  it("RF-04 held file survives pathname replacement; corrupted ready never falls back to root", () => {
+    const job = seedJob(); const store = openStore(job); const g0 = importG0(store);
+    const before = snapshotAll(job.root);
+    const file = store.openFile(g0.generation_id,"white_a");
+    assertMapsEqual(snapshotAll(job.root),before);
+    const path = g0.patch.files.find(row => row.key === "white_a")!.path;
+    renameSync(path,path+".old"); writeFileSync(path,syntheticPng(1,1,1));
+    try { assert.deepEqual(readFileSync(file.fd),job.whiteA); } finally { file.close(); file.close(); }
+    assert.throws(() => store.openFile(g0.generation_id,"glb"));
+    assert.throws(() => store.openFile("legacy-current-deadbeef","white_a"), /当前代已变化/);
+    assert.throws(() => store.openFile(g0.generation_id,"read_front"));
+  });
+
+  it("RF-04 index is bounded on read and append without damaging current artifacts", () => {
+    const job = seedJob(); const store = openStore(job); const g0 = importG0(store);
+    writeFileSync(join(job.root,RENDER_GENERATION_DIR,"index.jsonl"),Buffer.alloc(8*1024*1024+1,32));
+    assert.throws(() => store.listHistory(), /索引容量/);
+    assert.throws(() => store.assertHistoryWritable(), /索引容量/);
+    const held = store.openFile(g0.generation_id,"white_a");
+    try { assert.deepEqual(readFileSync(held.fd),job.whiteA); } finally { held.close(); }
+  });
+
   for (const damage of ["output", "manifest"]) {
     it(`final commit barrier rejects ${damage} replacement after sealing`, () => {
       const job = seedJob();
@@ -1040,7 +1124,7 @@ describe("renderGenerations", () => {
     const job = seedJob();
     const store = openStore(job);
     const virtual = store.virtualLegacyCurrentId();
-    assert.match(virtual, /^legacy-current-[a-f0-9]{8}$/);
+    assert.match(virtual, /^legacy-current-v2-[a-f0-9]{64}$/);
     expectCode(
       () => store.sealGeneration({
         mode: "legacy_import",
@@ -1055,10 +1139,35 @@ describe("renderGenerations", () => {
     );
   });
 
+  it("RF-04 unarchived source preflight validates all six faces without creating storage", () => {
+    const job = seedJob(); const store = openStore(job);
+    const before = snapshotAll(job.root);
+    store.assertRerenderSourceFresh();
+    assertMapsEqual(snapshotAll(job.root), before);
+    assert.equal(existsSync(join(job.root, RENDER_GENERATION_DIR)), false);
+    for (const face of ["front", "right", "back", "left", "top", "bottom"]) {
+      const path = join(job.root, "assets", `panel_${face}.png`);
+      const original = readFileSync(path);
+      writeFileSync(path, Buffer.from("not a PNG"));
+      const damaged = snapshotAll(job.root);
+      assert.throws(() => store.assertRerenderSourceFresh(), /贴图已缺失/);
+      assertMapsEqual(snapshotAll(job.root), damaged);
+      writeFileSync(path, original);
+    }
+    unlinkSync(join(job.root, "assets", "panel_front.png"));
+    const missing = snapshotAll(job.root);
+    assert.throws(() => store.assertRerenderSourceFresh(), /贴图已缺失/);
+    assertMapsEqual(snapshotAll(job.root), missing);
+    assert.equal(existsSync(join(job.root, RENDER_GENERATION_DIR)), false);
+  });
+
   it("keeps history, summary and activation after shared faces change or vanish, but rejects stale-source rerender", () => {
     const job = seedJob();
     const store = openStore(job);
     const sealed = importG0(store);
+    const fresh = snapshotAll(job.root);
+    store.assertRerenderSourceFresh(G0_LEGACY_ORIGINAL_ID);
+    assertMapsEqual(snapshotAll(job.root), fresh);
     const virtual = store.virtualLegacyCurrentId();
     const sources = writeUpgradeSources(job.root, "stale");
     const face = join(job.root, "assets", "panel_front.png");
@@ -1091,6 +1200,9 @@ describe("renderGenerations", () => {
     };
 
     const assertRerenderRejected = () => {
+      const before = snapshotAll(job.root);
+      assert.throws(() => store.assertRerenderSourceFresh(G0_LEGACY_ORIGINAL_ID));
+      assertMapsEqual(snapshotAll(job.root), before);
       expectCode(
         () => store.sealGeneration({
           mode: "upgrade",

@@ -2095,12 +2095,12 @@ describe("mockup relight http", { concurrency: false }, () => {
     assert.equal("can_relight_studio" in (row || {}), false);
   });
 
-  it("POST keeps status done, stamps relit_by, and does not unlink stills on failure", async () => {
+  it("POST no longer lets a team peer overwrite another owner's stills", async () => {
     const { setJobsTestHooks, resetJobsTestHooks } = await import("./jobs.js");
     const { stillA } = seedRelightJob("bb02bb02bb02", "ou_rl_ok");
     const before = readFileSync(stillA);
     setJobsTestHooks({
-      runRelight: async () => ({ code: 0, stdout: '{"ok":true}', stderr: "", timedOut: false }),
+      runRelight: async () => { assert.fail("in-place relight is retired"); },
     });
     try {
       const peer = issueSessionForTest("籽烨", "reviewer", "ou_rl_peer");
@@ -2108,22 +2108,14 @@ describe("mockup relight http", { concurrency: false }, () => {
         method: "POST",
         headers: { authorization: `Bearer ${peer.token}` },
       });
-      assert.equal(res.status, 200);
-      const body = (await res.json()) as {
-        status?: string;
-        studio_relit_by?: string;
-        studio_relit_at?: string;
-      };
-      assert.equal(body.status, "done");
-      assert.equal(body.studio_relit_by, "ou_rl_peer");
-      assert.equal(typeof body.studio_relit_at, "string");
+      assert.equal(res.status, 403);
       assert.deepEqual(readFileSync(stillA), before);
     } finally {
       resetJobsTestHooks();
     }
   });
 
-  it("POST without resolved job is 409; viewer 403; blender-live 409; failure keeps stills", async () => {
+  it("POST remains production-disabled regardless of legacy sources/global slot; viewer stays 403 and files stay unchanged", async () => {
     const { setJobsTestHooks, setJobsLiveForTest, resetJobsTestHooks } = await import("./jobs.js");
     seedRelightJob("bb03bb03bb03", "ou_rl_miss", { resolved: false });
     seedRelightJob("bb04bb04bb04", "ou_rl_view");
@@ -2134,9 +2126,8 @@ describe("mockup relight http", { concurrency: false }, () => {
       method: "POST",
       headers: { authorization: `Bearer ${issueSessionForTest("籽烨", "reviewer", "ou_rl_miss").token}` },
     });
-    assert.equal(miss.status, 409);
-    const missBody = (await miss.json()) as { detail?: string };
-    assert.match(String(missBody.detail), /棚底稿/);
+    assert.equal(miss.status, 412);
+    assert.equal((await miss.json()).reason,"production_registration_disabled");
     const viewer = issueSessionForTest("只看", "viewer", "ou_rl_view");
     const forbidden = await app.request("/api/mockups/bb04bb04bb04/relight", {
       method: "POST",
@@ -2149,21 +2140,20 @@ describe("mockup relight http", { concurrency: false }, () => {
         method: "POST",
         headers: { authorization: `Bearer ${issueSessionForTest("籽烨", "reviewer", "ou_rl_live").token}` },
       });
-      assert.equal(live.status, 409);
-      const liveBody = (await live.json()) as { detail?: string };
-      assert.equal(liveBody.detail, "出图还在跑，现在不能重渲棚。");
+      assert.equal(live.status, 412);
+      assert.equal((await live.json()).reason,"production_registration_disabled");
     } finally {
       resetJobsTestHooks();
     }
     setJobsTestHooks({
-      runRelight: async () => ({ code: 1, stdout: "", stderr: "boom", timedOut: false }),
+      runRelight: async () => { assert.fail("in-place relight is retired"); },
     });
     try {
       const fail = await app.request("/api/mockups/bb06bb06bb06/relight", {
         method: "POST",
         headers: { authorization: `Bearer ${issueSessionForTest("籽烨", "reviewer", "ou_rl_fail").token}` },
       });
-      assert.equal(fail.status, 409);
+      assert.equal(fail.status, 412);
       assert.deepEqual(readFileSync(stillA), before);
       const detail = await app.request("/api/mockups/bb06bb06bb06", {
         headers: { authorization: `Bearer ${issueSessionForTest("籽烨", "reviewer", "ou_rl_fail").token}` },
@@ -2175,43 +2165,26 @@ describe("mockup relight http", { concurrency: false }, () => {
     }
   });
 
-  it("same-job second POST is 409 while blender slot is held", async () => {
+  it("repeated legacy POST cannot bypass a closed runtime through an old runner hook", async () => {
     const { setJobsTestHooks, resetJobsTestHooks } = await import("./jobs.js");
     seedRelightJob("bb07bb07bb07", "ou_rl_hold");
-    let release: () => void = () => {};
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    let started: () => void = () => {};
-    const startedAt = new Promise<void>((resolve) => {
-      started = resolve;
-    });
     setJobsTestHooks({
-      runRelight: async () => {
-        started();
-        await gate;
-        return { code: 0, stdout: '{"ok":true}', stderr: "", timedOut: false };
-      },
+      runRelight: async () => { assert.fail("in-place relight is retired"); },
     });
     try {
       const owner = issueSessionForTest("籽烨", "reviewer", "ou_rl_hold");
-      const first = app.request("/api/mockups/bb07bb07bb07/relight", {
+      const first = await app.request("/api/mockups/bb07bb07bb07/relight", {
         method: "POST",
         headers: { authorization: `Bearer ${owner.token}` },
       });
-      await startedAt;
       const again = await app.request("/api/mockups/bb07bb07bb07/relight", {
         method: "POST",
         headers: { authorization: `Bearer ${owner.token}` },
       });
-      assert.equal(again.status, 409);
-      const againBody = (await again.json()) as { detail?: string };
-      assert.match(String(againBody.detail), /正在重渲棚|出图还在跑/);
-      release();
-      const done = await first;
-      assert.equal(done.status, 200);
+      assert.equal(again.status, 412);
+      assert.equal((await again.json()).reason,"production_registration_disabled");
+      assert.equal(first.status, 412);
     } finally {
-      release();
       resetJobsTestHooks();
     }
   });

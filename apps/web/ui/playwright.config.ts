@@ -15,7 +15,8 @@ export default defineConfig({
     video: "retain-on-failure",
     viewport: { width: 1440, height: 900 },
   },
-  webServer: {
+  // Artifact suites intercept every URL; no Hono, live data, or listening test port.
+  webServer: process.env.PLAYWRIGHT_ARTIFACT_ONLY === "1" ? undefined : {
     command: "npm run dev -- --host 127.0.0.1 --port 5173",
     url: "http://127.0.0.1:5173",
     reuseExistingServer: !process.env.CI,
