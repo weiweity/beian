@@ -12,6 +12,7 @@
     "quality": "node scripts/quality/check-complexity.mjs",
     "quality:deep": "node scripts/quality/check-complexity.mjs --deep",
     "test:quality": "node --test scripts/quality/*.test.mjs",
+    "verify": "node scripts/quality/verify.mjs",
     "test": "npm run test -w beian-server && npm run test -w beian-ui && cd apps/web/backend && .venv/bin/python -m pytest -q",
     "test:e2e": "npm run test:e2e -w beian-ui",
     "typecheck": "npm run typecheck -w beian-server && npm run build -w beian-ui"
@@ -19,5 +20,5 @@
   "engines": {
     "node": ">=20"
   },
-  "version": "0.21.38"
+  "version": "0.21.39"
 }

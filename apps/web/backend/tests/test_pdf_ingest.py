@@ -279,11 +279,12 @@ def test_tiled_page_images_with_live_footer_still_route_to_ocr(tmp_path: Path):
     assert page["live_chars"] >= 40
 
 
+@pytest.mark.real_artwork
 def test_zhuanqu_artwork_is_outlined():
     """工作区审稿台转曲真稿（不 copy 进 git）。"""
     pdfs = _zhuanqu_pdfs()
     if not pdfs:
-        pytest.skip("工作区没有 测试/审稿台/**/转曲*.pdf")
+        pytest.fail("已显式选择真实稿测试，但工作区没有 测试/审稿台/**/转曲*.pdf")
     for pdf in pdfs:
         result = ingest_pdf(pdf, max_pages=1)
         assert result["mode"] == "outlined", (

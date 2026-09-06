@@ -11,6 +11,13 @@ PACKAGING = Path(__file__).resolve().parents[4] / "workers" / "packaging"
 SAMPLES = Path(__file__).resolve().parents[4] / "测试" / "打烊台" / "2D平面图"
 
 
+@pytest.fixture
+def real_artwork_samples():
+    if not SAMPLES.is_dir():
+        pytest.fail("已显式选择真实稿测试，但本地样张目录不存在；请在核定环境提供样张。")
+    return SAMPLES
+
+
 def _load(name: str, path: Path):
     spec = importlib.util.spec_from_file_location(name, path)
     assert spec and spec.loader
@@ -340,11 +347,11 @@ def test_parse_synthetic_pouch(tmp_path: Path):
     assert layout["dimensions_mm"]["depth"] == 3.0
 
 
-@pytest.mark.skipif(not SAMPLES.is_dir(), reason="本地打样样张不在 CI")
-def test_real_26h17_recovers_square_flower_box(tmp_path: Path):
+@pytest.mark.real_artwork
+def test_real_26h17_recovers_square_flower_box(tmp_path: Path, real_artwork_samples):
     d = dieline()
     p = pipeline()
-    src = SAMPLES / "转曲 D-达肤妍男士精华水花盒—26H17A.ai"
+    src = real_artwork_samples / "转曲 D-达肤妍男士精华水花盒—26H17A.ai"
     assert src.is_file()
     knife_pdf = tmp_path / "26h17.pdf"
     p.make_layer_pdf(src, knife_pdf, {"刀线"})
@@ -356,11 +363,11 @@ def test_real_26h17_recovers_square_flower_box(tmp_path: Path):
     assert abs(dims["height"] - 177.5) < 8
 
 
-@pytest.mark.skipif(not SAMPLES.is_dir(), reason="本地打样样张不在 CI")
-def test_real_26f23_collagen_stick_folds(tmp_path: Path):
+@pytest.mark.real_artwork
+def test_real_26f23_collagen_stick_folds(tmp_path: Path, real_artwork_samples):
     d = dieline()
     p = pipeline()
-    src = SAMPLES / "转曲-C-译龄紧颜抗皱胶原棒-花盒-26F23A.ai"
+    src = real_artwork_samples / "转曲-C-译龄紧颜抗皱胶原棒-花盒-26F23A.ai"
     assert src.is_file()
     knife_pdf = tmp_path / "26f23.pdf"
     p.make_layer_pdf(src, knife_pdf, {"刀线"})
@@ -373,11 +380,11 @@ def test_real_26f23_collagen_stick_folds(tmp_path: Path):
     assert 40 <= dims["height"] <= 160
 
 
-@pytest.mark.skipif(not SAMPLES.is_dir(), reason="本地打样样张不在 CI")
-def test_real_5pack_is_flat_carton(tmp_path: Path):
+@pytest.mark.real_artwork
+def test_real_5pack_is_flat_carton(tmp_path: Path, real_artwork_samples):
     d = dieline()
     p = pipeline()
-    src = SAMPLES / "转曲D-达肤妍祛痘细肤面膜-5片装花盒-26H06A.ai"
+    src = real_artwork_samples / "转曲D-达肤妍祛痘细肤面膜-5片装花盒-26H06A.ai"
     knife_pdf = tmp_path / "5pack.pdf"
     p.make_layer_pdf(src, knife_pdf, {"刀线"})
     layout = d.parse_knife_pdf(knife_pdf, "刀线")
@@ -388,11 +395,11 @@ def test_real_5pack_is_flat_carton(tmp_path: Path):
     assert dims["height"] > 180
 
 
-@pytest.mark.skipif(not SAMPLES.is_dir(), reason="本地打样样张不在 CI")
-def test_real_30ml_is_pouch(tmp_path: Path):
+@pytest.mark.real_artwork
+def test_real_30ml_is_pouch(tmp_path: Path, real_artwork_samples):
     d = dieline()
     p = pipeline()
-    src = SAMPLES / "转曲D-达肤妍祛痘细肤面膜30ml稿件-26H11A.ai"
+    src = real_artwork_samples / "转曲D-达肤妍祛痘细肤面膜30ml稿件-26H11A.ai"
     knife_pdf = tmp_path / "pouch.pdf"
     p.make_layer_pdf(src, knife_pdf, {"刀线"})
     layout = d.parse_knife_pdf(knife_pdf, "刀线")
