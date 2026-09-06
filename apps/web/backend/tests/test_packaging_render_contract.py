@@ -82,6 +82,7 @@ def test_registry_loads_strict_profiles_and_capability_matrix():
         "packshot-neutral-v1",
         "smoke-v1",
         "packshot-f-v1",
+        "packshot-carton-geometry-v1",
     ]
     assert all(
         profile["profile_sha256"] == contract.profile_declared_sha256(profile)
@@ -94,6 +95,7 @@ def test_registry_loads_strict_profiles_and_capability_matrix():
         "packshot-neutral-v1",
         "smoke-v1",
         "packshot-f-v1",
+        "packshot-carton-geometry-v1",
     ]
     assert matrix["pouch_thin_card_v1"] == [
         {
@@ -190,9 +192,97 @@ def test_f_spec_rejects_mutated_or_missing_parameters(section, key, missing):
 
 def test_f_registry_requires_shadow_budget():
     contract = contract_module()
-    profile = registry_payload()["profiles"][-1]
+    profile = next(p for p in registry_payload()["profiles"] if p["id"] == "packshot-f-v1")
     del profile["renderer"]["shadow_pool_size_mb"]
     assert_error(contract, "render_contract_invalid", lambda: contract.profile_declared_sha256(profile))
+
+
+def physical_renderer_job(contract, structure=None):
+    job = structure or carton_job()
+    profile = "compat-legacy-v0" if job.get("packaging_family") == "pouch" else "packshot-carton-geometry-v1"
+    plan = contract.render_plan_for_new_job(job, profile, None)
+    return {**job, "render_spec": plan["spec"], "render": plan["render"], **plan["identity"]}
+
+
+def test_geometry_profile_keeps_all_published_visual_identities_and_replays_pre_rf05():
+    contract = contract_module()
+    old = contract.load_profile_registry(PACKAGING / "profiles/history/pre-rf05.v1.json")
+    current = contract.load_profile_registry()
+    assert len(current["profiles"]) == len(old["profiles"])+1
+    for profile_id, profile in old["profiles"].items():
+        assert current["profiles"][profile_id] == profile
+        spec = contract.resolve_render_spec(carton_job(), profile_id, registry_path=PACKAGING / "profiles/history/pre-rf05.v1.json")
+        assert contract.validate_render_spec(spec) == spec
+        fresh = contract.resolve_render_spec(carton_job(), profile_id)
+        assert fresh["render_contract_hash"] == spec["render_contract_hash"]
+
+
+def test_renderer_geometry_binds_profile_hash_dimensions_and_family():
+    contract = contract_module()
+    job = physical_renderer_job(contract)
+    geometry = contract.renderer_geometry_config(job)
+    assert geometry["closure_detail"] == "closed-carton-shell-v1"
+    assert geometry["thickness_mm"] == 0.4
+    # RF-03 private studio adjustment is not a geometry mutation.
+    job["render"]["light_energy_scale"] *= 1.1
+    assert contract.renderer_geometry_config(job) == geometry
+    pouch = physical_renderer_job(contract, pouch_job())
+    assert contract.renderer_geometry_config(pouch)["preview_fidelity"] == "thin_card"
+
+
+@pytest.mark.parametrize("marker", [{"structure_engine": "v2"}, {"packaging_family": "bottle"}, {"render_registry_sha256": "sha256:"+"a"*64}])
+def test_renderer_does_not_fall_back_to_legacy_for_incomplete_v2(marker):
+    contract = contract_module()
+    with pytest.raises(contract.RenderContractError):
+        contract.renderer_geometry_config(marker)
+    assert contract.renderer_geometry_config({})["preview_fidelity"] == "legacy_box"
+
+
+def test_old_spec_cannot_smuggle_new_shell_parameters():
+    contract = contract_module()
+    spec = contract.resolve_render_spec(carton_job(), "compat-legacy-v0")
+    spec["geometry"]["thickness_mm"] = 0.4
+    with pytest.raises(contract.RenderContractError):
+        contract.validate_render_spec(spec)
+
+
+@pytest.mark.parametrize("change", ["family", "dimensions", "hash", "profile", "missing", "thickness", "pouch_depth"])
+def test_renderer_geometry_rejects_unbound_or_unknown_input(change):
+    contract = contract_module()
+    job = physical_renderer_job(contract, pouch_job() if change == "pouch_depth" else None)
+    if change == "family":
+        job["render_spec"]["geometry"]["family"] = "flexible_pouch_v1"
+    elif change in {"dimensions", "pouch_depth"}:
+        job["dimensions_mm"]["depth"] += 1
+    elif change == "hash":
+        job["render_contract_hash"] = "sha256:"+"f"*64
+    elif change == "profile":
+        job["render_profile_id"] = "packshot-neutral-v1"
+    elif change == "missing":
+        del job["render_spec"]
+    else:
+        job["render_spec"]["geometry"]["thickness_mm"] = 1
+        job["render_spec"]["render_contract_hash"] = contract.render_contract_sha256(job["render_spec"])
+    with pytest.raises(contract.RenderContractError):
+        contract.renderer_geometry_config(job)
+
+
+@pytest.mark.parametrize("change", [None, "missing", "counterfeit"])
+def test_blender_geometry_report_is_bound_not_self_attested(change):
+    contract = contract_module()
+    job = physical_renderer_job(contract)
+    job.update(code="synthetic", outputs={}, execution_nonce="synthetic-only")
+    result = {"code": job["code"], "outputs": {}, "execution_nonce": job["execution_nonce"],
+              "render_family": "rectangular_carton_v1", "preview_fidelity": "carton_physical_v1", "geometry_model": "closed-carton-shell-v1"}
+    if change == "missing":
+        del result["geometry_model"]
+    elif change == "counterfeit":
+        result["geometry_model"] = "legacy-closed-box-v0"
+    if change:
+        with pytest.raises(contract.RenderContractError):
+            contract.apply_blender_result(result, snapshot_job=job)
+    else:
+        assert contract.apply_blender_result(result, snapshot_job=job)["geometry_model"] == "closed-carton-shell-v1"
 
 
 @pytest.mark.parametrize("key", ["studio_profile", "shadow_pool_size_mb", "rig_reference_mm", "fill_energy_multiplier", "key_elevation_delta_deg"])

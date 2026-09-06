@@ -14,7 +14,7 @@
 
 ## P1 — 包装 3D 渲染真实感与清晰度
 
-主计划：`docs/adr-007-packaging-render-fidelity.md`。RF-00 测量尺、RF-01 独立合同和 RF-02 流水线接线（含 RF-02.3 磁盘执行边界、私有执行快照/nonce、V1 诊断路径、legacy 必存键、同步回滚删除新建目标和成对 registry snapshot）已完成 Code/L0；非 V2 只是命令行诊断路径，不是网页产品通道。三者都未改变产品画质，也没有批准正式 baseline。RF-03 本地产物合同、资源生命周期与临时 registry 已实现，详见 [RF-03 收口记录](docs/designs/packaging-quality-rf03-runtime-closeout.md)。RF-04 出图版本 API/UI 与历史切换已实现，详见 [RF-04 交付记录](docs/designs/packaging-quality-rf04-closeout.md)。Windows 原生、断电耐久性、生产注册、RF-05+ 视觉改造及真实画质验收继续保留为独立后续。下面只保留尚未闭环的工作。
+主计划：`docs/adr-007-packaging-render-fidelity.md`。RF-00 测量尺、RF-01 独立合同和 RF-02 流水线接线（含 RF-02.3 磁盘执行边界、私有执行快照/nonce、V1 诊断路径、legacy 必存键、同步回滚删除新建目标和成对 registry snapshot）已完成 Code/L0；非 V2 只是命令行诊断路径，不是网页产品通道。三者都未改变产品画质，也没有批准正式 baseline。RF-03 本地产物合同、资源生命周期与临时 registry 已实现，详见 [RF-03 收口记录](docs/designs/packaging-quality-rf03-runtime-closeout.md)。RF-04 出图版本 API/UI 与历史切换已实现，详见 [RF-04 交付记录](docs/designs/packaging-quality-rf04-closeout.md)。RF-05 显式纸盒壳几何与 family/GLB 合同已实现，详见 [RF-05 交付记录](docs/designs/packaging-quality-rf05-closeout.md)。Windows 原生、断电耐久性、生产注册、RF-06+ 视觉改造及真实画质验收继续保留为独立后续。下面只保留尚未闭环的工作。
 
 - [ ] **批准渲染质量基线与门槛**
   RF-00 已能用 Git 内脱敏合成样片重复记录几何、白盒边界、纸材、字体频率、Alpha 光边、渲染耗时和 full/card/read-face 像素身份；正式 approved baseline 仍不存在。必须由人工审阅现状报告后显式批准，后续参数变化才可用同一身份闭包比较；私有真稿仍只在杭州记录哈希、评分和结论。
