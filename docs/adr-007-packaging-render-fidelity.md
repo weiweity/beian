@@ -573,12 +573,13 @@ idle
 - ResizeObserver 或已有尺寸触发必须防止旧请求覆盖新尺寸；用 generation token，不新增全局状态库。
 - DOM 始终带非敏感来源状态，便于 E2E：`data-preview-source="card|mixed|full"` 只汇总本次成功 compose 实际画到的层；逐层 `data-preview-product|ground|set` 为 `card|full|none`，`data-preview-*-fetch` 为 `pending|ready|failed|absent`。`absent` 只表示未声明可选资产。生产 UI 不增加按钮或技术文案，不写 URL。
 - 当前实现用 `HTMLImageElement.decode()` 作为 CanvasImageSource，不引入 `createImageBitmap`。full 失败保留卡图，HUD 提示「高清图暂时未加载，重新打开此单可重试」。
-- 原图灯箱直接使用 full，不从当前 canvas 截图。
+- 原图灯箱保留打开时的可用图层，product/ground full 就绪后先替换，set full 独立升级；set 失败保留已显示的 set card，不改成 ground 背景。灯箱不从当前 canvas 截图。
 
 ### 12.5 下载与验字
 
-- 下载继续加载 full product/ground/set，在 full 尺寸 canvas 合成；输出尺寸写进质量报告。
-- 调灯后的下载与预览使用同一合成函数和参数，不能出现“页面清楚、下载模糊”或相反。
+- 下载继续加载同代 full 产品及所需背景源，在 full 尺寸 canvas 合成；输出尺寸写进质量报告。
+- 调灯后的下载与预览使用同一合成函数和参数；点击时冻结代际、背景选择和两组灯光。灯箱打开时按灯箱 sources 判断背景，显式 `set:null` 不被隐藏主预览后到的 set 覆盖。
+- 点击时显示 set 而 set full 未就绪或失败，提示重试，不把 set card 放大导出或悄悄换 ground；点击时显示 ground fallback 则保持该选择，不等未使用的 set。切代/卸载不取消已启动的同代下载。
 - 3D 静帧必须尽量保留品牌字，但法规小字、成分、条码仍只由 `assets/panel_*.png` 的 `read_*` 区核对。
 - 不能把 3D OCR 分数拿去改变审核结论；它只评估渲染链路是否损失了已知标定文本。
 
@@ -1447,7 +1448,8 @@ merge、ship 或 deploy，除非用户在当次任务明确授权。不要 git a
 - [ ] **T10（P1，human: ~2d / Grok: ~4h）— UI clarity — 让 card 原位升级 full 并释放资源**
   - Surfaced by: Test/Performance — **历史基线（RF-09 前）：** full 只预取不替换，且 resize/切代存在旧 decode 与内存风险。
   - Files: `MockupPage.tsx`、`mockupStudio.ts`、`mockupStudioPreview.test.ts`、`e2e/mockup-render-versions.spec.ts`、`e2e/mockup-preview-upgrade.spec.ts`
-  - Verify: 成功/双失败/单失败/resize/切代/unmount 路径全测；原图与下载只用 full。本分支实现待独立代码复核；不代表 L1/L2/UAT。
+  - Verify: 成功/双失败/单失败/resize/切代/unmount 路径全测；下载只用 full，灯箱可先保留可用图层再升级 full。
+  - Evidence: 本分支已完成完整本地 L0/类型/质量门、27 项合成 E2E 与独立代码复核；灯箱显式空 set 的下载冻结缺陷已由红绿回归闭环。性能与实机验收剩余项以 [TODOS.md](../TODOS.md) 为准，不代表 L1/L2/UAT 或生产发布。
 - [ ] **T11（P1，human: ~3d / Grok: ~6h）— quality — 实现三层质量门与 baseline identity**
   - Surfaced by: Architecture D7 — 确定性完整性、合成回归和人工审美不能混成一个总分。
   - Files: `render_quality_eval.py`、脱敏 fixtures、`test_packaging_render_quality.py`

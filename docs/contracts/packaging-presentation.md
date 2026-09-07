@@ -6,6 +6,8 @@
 
 打样单白底浅底+内描边；产品灯光和背景灯光分开调（静帧产品层 CSS 滤镜、白底/GLB 背景色、GLB 曝光），不重跑 Blender。下载白底是调过光的合成图。有 `white_a_ground` / `white_b_ground` 的新单走 grounded 成片：canvas 铺 `rgb(228,228,232)` 再 multiply 地面、叠产品，预览和下载同一合成器；布局仍是一屏三列（正面+侧面、反面+侧面、GLB），grounded 框 5:6，不要上 1 下 2；页头藏「下载 PPT」，灯光收到页头「调灯」后面。成片背景三键白底/银底/白桌白墙走 compositor，不排队 Blender；白/银不乘地面；白桌白墙有 `white_*_set` 时画 set+产品（不再 CSS 墙、不再乘旧 ground），缺则 CSS 近似加接触影，不是木桌。`*_set` 不能当产品静帧。GroundedShot 第一屏先读 `white_*_card`（Blender 后最长边 1440），解码成功的 full 原位替换 canvas 源；卡 415/失败回退全图，full 失败保留卡图并提示重新打开此单。`*_card` 不能当产品静帧，也不能当 `*_ground`。地面图坏了就藏原图和下载。`*_ground` 不能当产品静帧。没有地面图的旧单仍是三栏白底、浅底+内描边、页头「下载 PPT」。
 
+成片下载在点击时冻结出图版本、背景选择和产品/背景灯光；灯箱打开时以灯箱正在使用的图层选择背景。已显示布景但布景 full 尚未就绪或失败时提示重试，不放大卡图导出或改用地面背景；当前显示地面近似时继续使用同代 full 产品/地面，不等待未使用的布景。切换版本或离开页面后，已开始的下载继续完成。原图灯箱先保留可用图层，product/ground full 无需等待 set full；set full 失败保留已显示的 set card。
+
 ## 重试、补图与进度
 
 打样中和打样失败可重试，用机上已有稿再排，不必重传；先确认旧 worker 已退出；仍运行时遵守 [结构与宿主合同](packaging-structure.md) 的 Illustrator 禁杀阶段，无法安全退出就 409。已出图缺印刷面走 `POST /api/mockups/:id/print-faces`（V2 `render_face_assets`，不跑 pipeline/Blender，status 仍 done）；不要对 done 打 retry。下载提示走 `mockupHud.ts`（不挡点击）；GLB 全屏走 `mockupFullscreen.ts`。等待圆盘是 `WaitLoader`（对照中 / 对红中 / 打样中，不要英文 Generating）。结构导出阶段 WaitCard / `liveJobLine` 只写「打开稿件 / 盘点图层 / 保存印刷 PDF」等中文阶段，没有 `job_eta_s` 就不要编造 120 秒或 4 分钟。
