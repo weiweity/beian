@@ -1,0 +1,155 @@
+{
+  "schema": "packaging-render-profile-registry/1",
+  "profiles": [
+    {
+      "id": "packshot-studio-explicit-v1",
+      "declared_sha256": "sha256:36b8e4f5d6717a6e709813e363ea68307bdf901b7bd451eb56b9acd5dcd041b3",
+      "renderer": {
+        "engine": "BLENDER_EEVEE",
+        "minimum_blender_version": "project-supported",
+        "samples": 64,
+        "shadow_pool_size_mb": 1024
+      },
+      "geometry": {
+        "rectangular_carton_v1": {
+          "substrate_profile": "white-card-default-v1",
+          "closure_detail": "closed-carton-shell-v1",
+          "core_bevel_mm": 0.6,
+          "surface_gap_mm": 0.002,
+          "preview_fidelity": "carton_physical_v1",
+          "thickness_mm": 0.4,
+          "bevel_segments": 4
+        }
+      },
+      "material": {
+        "substrate_profile": "white-card-default-v1",
+        "print_layer": "process-ink-v1",
+        "finish_profile": "none",
+        "spot_finish_mask": null,
+        "substrate_rgba": [
+          0.7,
+          0.7,
+          0.7,
+          1.0
+        ],
+        "roughness": 0.52,
+        "specular_ior_level": 0.08,
+        "ink_color_space": "sRGB",
+        "core_roughness": 0.6,
+        "core_specular_ior_level": 0.5,
+        "substrate_micro_normal": {
+          "kind": "procedural-micro-v1",
+          "size_px": 64,
+          "seed": 7,
+          "strength": 0.12,
+          "color_space": "Non-Color"
+        },
+        "glb_export": {
+          "roughness": true,
+          "clearcoat": false,
+          "normal": true,
+          "extensions": []
+        }
+      },
+      "studio": {
+        "profile": "normalized-three-area-explicit-v1",
+        "projection": "ORTHOGRAPHIC",
+        "master_resolution_px": [
+          3000,
+          3600
+        ],
+        "views": [
+          "front_right",
+          "back_left"
+        ],
+        "camera_mode": "dimension-fit",
+        "camera_ortho_scale_mm": null,
+        "front_rotation_deg": 0,
+        "back_rotation_deg": 180,
+        "world_strength": 0.62,
+        "light_energy_scale": 4,
+        "exact_white_background": true,
+        "rig_reference_mm": 180.0,
+        "fill_energy_multiplier": 0.35,
+        "key_elevation_delta_deg": -15.0,
+        "reference_target_mm": [
+          0.0,
+          0.0,
+          90.0
+        ],
+        "camera_space_shots": true,
+        "world_hdri": false,
+        "world_color": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "lights": {
+          "key": {
+            "name": "Key softbox",
+            "location_mm": [
+              -135.0,
+              -190.0,
+              275.0
+            ],
+            "type": "AREA",
+            "shape": "RECTANGLE",
+            "size_mm": 120.0,
+            "size_y_mm": 150.0,
+            "energy_base": 105000.0,
+            "energy_ratio": 1.0
+          },
+          "fill": {
+            "name": "Fill softbox",
+            "location_mm": [
+              155.0,
+              -120.0,
+              175.0
+            ],
+            "type": "AREA",
+            "shape": "SQUARE",
+            "size_mm": 110.0,
+            "energy_base": 62000.0,
+            "energy_ratio": 0.35
+          },
+          "rim": {
+            "name": "Rim softbox",
+            "location_mm": [
+              -90.0,
+              210.0,
+              280.0
+            ],
+            "type": "AREA",
+            "shape": "RECTANGLE",
+            "size_mm": 70.0,
+            "size_y_mm": 1.0,
+            "energy_base": 72000.0,
+            "energy_ratio": 1.0
+          }
+        }
+      },
+      "color": {
+        "view_transform": "Standard",
+        "look": "None",
+        "exposure": 0,
+        "png_compression": 35,
+        "color_depth_bits": 8
+      },
+      "sampling": {
+        "strategy": "minimum-floor-v1",
+        "minimum_face_pixels_per_mm": 20,
+        "maximum_face_pixels_per_mm": 64,
+        "maximum_face_pixels": 32000000,
+        "oversample_ratio": 1.5,
+        "legacy_raster_width_px": 10000
+      },
+      "outputs": {
+        "product_rgba": true,
+        "ground_pass": "optional",
+        "white_set_pass": "optional",
+        "review_card_max_edge_px": 1440,
+        "preserve_legacy_keys": true
+      }
+    }
+  ]
+}

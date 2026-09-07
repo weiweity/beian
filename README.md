@@ -34,11 +34,12 @@
 | `docs/adr-004-ousterhout-design.md` | 深模块、唯一入口、8/31 前不拆引擎 |
 | `docs/adr-005-packaging-structure-v2.md` | 包装语义 IR、人工确认闸门与 V1 退场条件 |
 | `docs/adr-006-continuous-complexity-governance.md` | TypeScript 控制面 / Python 计算内核边界、死代码单调基线与 PR 质量门禁 |
-| `docs/adr-007-packaging-render-fidelity.md` | 包装 3D 渲染真实感、材质、棚光、清晰度、能力矩阵与评测合同；RF-00–02 Code/L0 与 RF-03 本地产物验证、资源生命周期、RF-04 出图版本 API/UI 与 RF-05 显式纸盒壳几何已实现；RF-06 显式分层材质已有 Code/L0 与本地合成产物证据；生产注册、原生 Windows、RF-07+、批准基线及 L1/L2/UAT 未完成 |
+| `docs/adr-007-packaging-render-fidelity.md` | 包装 3D 渲染真实感、材质、棚光、清晰度、能力矩阵与评测合同；RF-00–06 已有 Code/L0；RF-07 显式棚光与三变换对照已有 Code/普通 L0，仅诊断 registry；生产注册、原生 Windows、RF-08+、批准基线及 L1/L2/UAT 未完成 |
 | [RF-03 runtime 收口记录](docs/designs/packaging-quality-rf03-runtime-closeout.md) | 本次独立候选的 L0 证据、原开发树的历史轮次，以及生产注册、Windows 原生和真实验收边界 |
 | [RF-04 出图版本交付记录](docs/designs/packaging-quality-rf04-closeout.md) | 同代文件读取、历史切换、创建幂等、失败留图与本次独立验证；生产新代执行仍未开放 |
 | [RF-05 纸盒几何交付记录](docs/designs/packaging-quality-rf05-closeout.md) | 显式 family 分派、纸板壳/倒角、完整六面 UV 与 GLB 验证；旧 profile 保持，生产升级仍关闭 |
 | [RF-06 材质交付记录](docs/designs/packaging-quality-rf06-closeout.md) | 显式纸材/油墨/整体工艺、微法线与 GLB 可导出子集；本地候选及验证证据，生产 registry 与默认选择未切换 |
+| [RF-07 棚光与色彩对照记录](docs/designs/packaging-quality-rf07-closeout.md) | 尺寸归一显式三灯棚、Standard / Neutral / AgX 匿名对照；仅诊断 registry，未改生产默认或正式 baseline |
 | `docs/pouch-v1-acceptance.md` | 膜袋 v1 判定标准；L0 已接线为 3 mm 薄盒预览，杭州金标前不得宣称真实膜袋能力 |
 | `docs/designs/compare-pdf-ingest-v2.md` | PDF 按页选源、单 OCR、版面区域与单钉证据合同 |
 | `docs/designs/review-job-module.md` | 当前对照、对红、打样入队与失败语义合同 |
@@ -51,7 +52,7 @@
 | `TODOS.md` | 未做项 |
 | [AGENTS.md](AGENTS.md) | 授权、任务路由和完成条件；详细工程合同按主题链接读取 |
 | `scripts/windows/README.md` | 杭州 Windows 生产备忘 |
-| `workers/packaging/README.md` | 打样 CLI、`PackagingStructure` 语义合同、完整盒型与正面锚点确认、pymupdf 平面出图、白底/印刷面/PPT/GLB 产物合同，以及 RF-00 测量尺、RF-02 同步回滚与 RF-03 本地候选验证/资源生命周期边界 |
+| `workers/packaging/README.md` | 打样 CLI、`PackagingStructure` 语义合同、完整盒型与正面锚点确认、pymupdf 平面出图、白底/印刷面/PPT/GLB 产物合同，以及 RF-00 测量尺、RF-02 同步回滚、RF-03 本地候选验证/资源生命周期，以及 RF-06/RF-07 诊断 registry 边界 |
 
 ## 本机启动
 
