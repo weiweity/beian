@@ -703,7 +703,7 @@ def _check_asset_pixel_budget(path: Path) -> tuple[int, int]:
 def verify_source_sampling(
     job: Mapping[str, Any], plan: Mapping[str, Any], asset_hashes: Mapping[str, str],
 ) -> dict[str, Any]:
-    """Inspect the source face PNG grid against RF-02's validated minimum-floor plan.
+    """Inspect the source face PNG grid against the plan's declared sampling strategy.
 
     This cannot reconstruct a PDF's intrinsic resolution or past resampling.
     Actual RGBA decoding/GLB embedding remains a later gate over these same SHAs.
@@ -717,7 +717,7 @@ def verify_source_sampling(
     try:
         dimensions = plan["spec"]["geometry"]["outer_dimensions_mm"]
         sampling = plan["sampling"]
-        if sampling["strategy"] != "minimum-floor-v1":
+        if sampling["strategy"] not in {"minimum-floor-v1", "projection-jacobian-v1"}:
             raise ValueError("sampling_strategy")
         for face, (horizontal, vertical) in axes.items():
             width_mm, height_mm = float(dimensions[horizontal]), float(dimensions[vertical])
@@ -735,18 +735,39 @@ def verify_source_sampling(
                     or width * height > sampling["maximum_face_pixels"]
                     or _sha256_file(path) != asset_hashes[face]):
                 raise ValueError("sampling_grid_or_identity")
+            projection = ((plan.get("projection") or {}).get("faces") or {}).get(face) or {}
             rows[face] = {"source_sha256": asset_hashes[face], "source_size_px": [width, height],
                           "source_pixels_per_mm": [width / width_mm, height / height_mm],
-                          "target_pixels_per_mm": target, "required_size_px": required}
+                          "target_pixels_per_mm": target, "required_size_px": required,
+                          "projected_min_ppm": projection.get("projected_min_ppm"),
+                          "projected_max_ppm": projection.get("projected_max_ppm")}
     except (OSError, ValueError, KeyError, TypeError, OverflowError) as error:
         raise RenderGenerationError(
             "源印刷面未达到合同采样要求", cause="source_sampling_quality",
             fix="保留旧成片；从原矢量稿按当前合同重新切面，不能把低清 PNG 放大充当高密度来源",
         ) from error
+    job_sampling = job.get("face_sampling") if isinstance(job.get("face_sampling"), Mapping) else {}
+    resample = None
+    if sampling["strategy"] == "projection-jacobian-v1":
+        counts = [
+            (job_sampling.get("faces") or {}).get(face, {}).get("resample_count")
+            for face in axes
+        ]
+        numeric = [int(value) for value in counts if isinstance(value, int)]
+        resample = max(numeric) if numeric else None
+    projected = None
+    if sampling["strategy"] == "projection-jacobian-v1":
+        projected = {
+            face: {
+                "min": rows[face].get("projected_min_ppm"),
+                "max": rows[face].get("projected_max_ppm"),
+            }
+            for face in rows
+        }
     return {"schema": "packaging-source-sampling/1", "strategy": sampling["strategy"],
             "source_stage": "resolved_face_png", "faces": rows,
             "total_source_pixels": total_pixels, "total_source_bytes": total_bytes,
-            "upstream_resample_count": None, "projected_pixels_per_mm": None}
+            "upstream_resample_count": resample, "projected_pixels_per_mm": projected}
 
 
 def _available_disk_bytes(path: Path) -> int:

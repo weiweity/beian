@@ -1,8 +1,8 @@
 """Strict, versioned render semantics for the existing packaging pipeline.
 
 This module is deliberately the only reader of ``render-profiles.v1.json``,
-the RF-06 diagnostic material registry, and the RF-07 diagnostic studio
-registry.  It resolves accepted
+the RF-06 diagnostic material registry, the RF-07 diagnostic studio
+registry, and the RF-08 diagnostic projection-sampling registry.  It resolves accepted
 structure facts into a canonical render spec without calling Blender or
 changing product output.  Later pipeline slices consume the spec; they
 must not recreate profile defaults independently.
@@ -17,6 +17,7 @@ import math
 from pathlib import Path
 import re
 import struct
+import sys
 from typing import Any, Mapping
 import zlib
 
@@ -151,6 +152,14 @@ EXPERIMENTAL_MATERIAL_REGISTRY_PATH = (
 EXPERIMENTAL_STUDIO_REGISTRY_PATH = (
     Path(__file__).resolve().parent / "profiles" / "experiments" / "rf07-studio-color.v1.json"
 )
+EXPERIMENTAL_PROJECTION_REGISTRY_PATH = (
+    Path(__file__).resolve().parent
+    / "profiles"
+    / "experiments"
+    / "rf08-projection-sampling.v1.json"
+)
+PROJECTION_SAMPLING_STRATEGY = "projection-jacobian-v1"
+SAMPLING_STRATEGIES = frozenset({"minimum-floor-v1", PROJECTION_SAMPLING_STRATEGY})
 F_STUDIO_PROFILE = "normalized-three-area-f-v1"
 EXPLICIT_STUDIO_PROFILE = "normalized-three-area-explicit-v1"
 STUDIO_PROFILES = frozenset(
@@ -959,7 +968,7 @@ def _normalize_sampling(value: Any, label: str) -> dict[str, Any]:
         "strategy": _text(
             sampling.get("strategy"),
             f"{label}.strategy",
-            allowed={"minimum-floor-v1"},
+            allowed=set(SAMPLING_STRATEGIES),
         ),
         "minimum_face_pixels_per_mm": minimum,
         "maximum_face_pixels_per_mm": maximum,
@@ -1442,7 +1451,41 @@ def _spec_color(value: Any, profile: Mapping[str, Any]) -> dict[str, Any]:
     return color
 
 
-def _spec_sampling(value: Any, profile: Mapping[str, Any]) -> dict[str, Any]:
+def _projection_report(
+    dimensions: Mapping[str, float],
+    shots: Mapping[str, Any],
+    sampling: Mapping[str, Any],
+) -> dict[str, Any]:
+    root = str(Path(__file__).resolve().parent)
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from camera_frame import project_face_sampling
+
+    try:
+        return project_face_sampling(dict(dimensions), dict(shots), dict(sampling))
+    except (ValueError, KeyError, TypeError, ZeroDivisionError) as error:
+        _invalid(
+            "无法从实际相机计算切面投影采样",
+            field="spec.sampling",
+            cause=str(error),
+        )
+
+
+def _fail_projection_budget(violation: Mapping[str, Any]) -> None:
+    _fail(
+        "render_texture_budget_exceeded",
+        "语义面投影清晰度超过纹理预算，禁止静默降采样",
+        **dict(violation),
+    )
+
+
+def _spec_sampling(
+    value: Any,
+    profile: Mapping[str, Any],
+    *,
+    dimensions: Mapping[str, float],
+    shots: Mapping[str, Any],
+) -> dict[str, Any]:
     sampling = _mapping(value, "spec.sampling")
     _known_keys(
         sampling,
@@ -1473,6 +1516,31 @@ def _spec_sampling(value: Any, profile: Mapping[str, Any]) -> dict[str, Any]:
             "每个语义面都必须声明目标采样",
             field="spec.sampling.per_face_target_pixels_per_mm",
         )
+    if fixed["strategy"] == PROJECTION_SAMPLING_STRATEGY:
+        report = _projection_report(dimensions, shots, fixed)
+        if report["budget_violations"]:
+            _fail_projection_budget(report["budget_violations"][0])
+        expected = report["per_face_target_pixels_per_mm"]
+        normalized_targets = {
+            face: _number(
+                targets.get(face),
+                f"spec.sampling.per_face_target_pixels_per_mm.{face}",
+                lower=fixed["minimum_face_pixels_per_mm"],
+                upper=fixed["maximum_face_pixels_per_mm"],
+            )
+            for face in SEMANTIC_FACES
+        }
+        if any(
+            abs(normalized_targets[face] - expected[face]) > 1e-9
+            for face in SEMANTIC_FACES
+        ):
+            _invalid(
+                "投影采样目标必须等于未截断的相机需求",
+                field="spec.sampling.per_face_target_pixels_per_mm",
+                expected=expected,
+                actual=normalized_targets,
+            )
+        return {**fixed, "per_face_target_pixels_per_mm": expected}
     normalized_targets = {
         face: _number(
             targets.get(face),
@@ -1482,7 +1550,7 @@ def _spec_sampling(value: Any, profile: Mapping[str, Any]) -> dict[str, Any]:
         )
         for face in SEMANTIC_FACES
     }
-    if fixed["strategy"] == "minimum-floor-v1" and any(
+    if any(
         value != fixed["minimum_face_pixels_per_mm"]
         for value in normalized_targets.values()
     ):
@@ -1514,14 +1582,24 @@ def _enforce_texture_budget(
         height_px = max(8, math.ceil(dimensions[vertical] * ppm))
         required = width_px * height_px
         if required > allowed:
+            extra = {}
+            message = "语义面在最低清晰度下仍超过纹理像素预算，禁止静默降采样"
+            if sampling.get("strategy") == PROJECTION_SAMPLING_STRATEGY:
+                extra = {
+                    "required_pixels_per_mm": ppm,
+                    "allowed_pixels_per_mm": sampling["maximum_face_pixels_per_mm"],
+                    "oversample_ratio": sampling["oversample_ratio"],
+                }
+                message = "语义面在目标清晰度下仍超过纹理像素预算，禁止静默降采样"
             _fail(
                 "render_texture_budget_exceeded",
-                "语义面在最低清晰度下仍超过纹理像素预算，禁止静默降采样",
+                message,
                 face=face,
                 required_pixels=required,
                 allowed_pixels=allowed,
                 required_size_px=[width_px, height_px],
                 target_pixels_per_mm=ppm,
+                **extra,
             )
 
 
@@ -1570,6 +1648,7 @@ def _registry_for_persisted_identity(registry_hash: str, current: Mapping[str, A
         for diagnostic in (
             EXPERIMENTAL_MATERIAL_REGISTRY_PATH,
             EXPERIMENTAL_STUDIO_REGISTRY_PATH,
+            EXPERIMENTAL_PROJECTION_REGISTRY_PATH,
         ):
             if diagnostic.is_file():
                 loaded = load_profile_registry(diagnostic)
@@ -1623,7 +1702,12 @@ def _validate_render_spec_with_registry(
         _invalid("spec.material 与已登记 profile 不一致", field="spec.material")
     shots = _spec_shots(spec.get("shots"), profile)
     color = _spec_color(spec.get("color"), profile)
-    sampling = _spec_sampling(spec.get("sampling"), profile)
+    sampling = _spec_sampling(
+        spec.get("sampling"),
+        profile,
+        dimensions=geometry["outer_dimensions_mm"],
+        shots=shots,
+    )
     _enforce_texture_budget(geometry["outer_dimensions_mm"], sampling)
     outputs = _spec_outputs(spec.get("outputs"), profile)
     normalized = {
@@ -1687,7 +1771,18 @@ def _resolve_render_spec_with_registry(
         )
     studio = dict(profile["studio"])
     studio_profile = studio.pop("profile")
-    minimum_ppm = profile["sampling"]["minimum_face_pixels_per_mm"]
+    shots = {"studio_profile": studio_profile, **studio}
+    sampling = deepcopy(profile["sampling"])
+    if sampling["strategy"] == PROJECTION_SAMPLING_STRATEGY:
+        report = _projection_report(dimensions, shots, sampling)
+        if report["budget_violations"]:
+            _fail_projection_budget(report["budget_violations"][0])
+        sampling["per_face_target_pixels_per_mm"] = report["per_face_target_pixels_per_mm"]
+    else:
+        minimum_ppm = sampling["minimum_face_pixels_per_mm"]
+        sampling["per_face_target_pixels_per_mm"] = {
+            face: minimum_ppm for face in SEMANTIC_FACES
+        }
     spec: dict[str, Any] = {
         "schema": RENDER_SPEC_SCHEMA,
         "source": "profile_resolved",
@@ -1704,14 +1799,9 @@ def _resolve_render_spec_with_registry(
             **geometry_profile,
         },
         "material": deepcopy(profile["material"]),
-        "shots": {"studio_profile": studio_profile, **studio},
+        "shots": shots,
         "color": deepcopy(profile["color"]),
-        "sampling": {
-            **deepcopy(profile["sampling"]),
-            "per_face_target_pixels_per_mm": {
-                face: minimum_ppm for face in SEMANTIC_FACES
-            },
-        },
+        "sampling": sampling,
         "outputs": _resolved_output_contract(profile["outputs"], output_request),
     }
     spec["render_contract_hash"] = render_contract_sha256(spec)
@@ -1919,6 +2009,27 @@ def render_plan_for_experimental_studio_job(
         profile_id,
         output_request,
         registry_path=EXPERIMENTAL_STUDIO_REGISTRY_PATH,
+    )
+
+
+def load_experimental_projection_registry() -> dict[str, Any]:
+    """Load the RF-08 diagnostic projection-sampling registry.  Not a production default."""
+
+    return load_profile_registry(EXPERIMENTAL_PROJECTION_REGISTRY_PATH)
+
+
+def render_plan_for_experimental_projection_job(
+    structure_job: Mapping[str, Any],
+    profile_id: str,
+    output_request: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Explicit diagnostic entry for per-face camera Jacobian sampling."""
+
+    return render_plan_for_new_job(
+        structure_job,
+        profile_id,
+        output_request,
+        registry_path=EXPERIMENTAL_PROJECTION_REGISTRY_PATH,
     )
 
 
@@ -2189,14 +2300,24 @@ def _identity_from_spec(spec: Mapping[str, Any]) -> dict[str, str]:
 
 def _plan_from_spec(spec: Mapping[str, Any]) -> dict[str, Any]:
     identity = _identity_from_spec(spec)
-    return {
+    sampling = dict(spec["sampling"])
+    plan = {
         "schema": RENDER_PLAN_SCHEMA,
         "spec": dict(spec),
         "render": _renderer_config_from_normalized(spec),
-        "sampling": dict(spec["sampling"]),
+        "sampling": sampling,
         "identity": identity,
         "fingerprint_token": canonical_sha256(identity),
     }
+    if sampling.get("strategy") == PROJECTION_SAMPLING_STRATEGY:
+        geometry = _mapping(spec.get("geometry"), "spec.geometry")
+        shots = _mapping(spec.get("shots"), "spec.shots")
+        plan["projection"] = _projection_report(
+            geometry["outer_dimensions_mm"],
+            shots,
+            sampling,
+        )
+    return plan
 
 
 def _assert_spec_bound_to_job(spec: Mapping[str, Any], job: Mapping[str, Any]) -> None:
@@ -2369,6 +2490,13 @@ BLENDER_RESULT_MEASUREMENT_KEYS = (
     "glb_dimension_error_mm_sorted",
     "render_resolution",
     "blender_elapsed_s",
+    "engine",
+    "blender_version",
+    "samples",
+    "pixel_filter",
+    "view_transform",
+    "master_resolution_px",
+    "face_sampling",
 )
 BLENDER_RESULT_ALLOWED_KEYS = frozenset(
     {"code", "outputs", "execution_nonce", "render_family", "preview_fidelity", "geometry_model", *BLENDER_RESULT_MEASUREMENT_KEYS}

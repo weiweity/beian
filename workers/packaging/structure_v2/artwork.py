@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import math
+import os
 from pathlib import Path
+import shutil
+import stat
+import tempfile
 from typing import Any, Mapping
 
 from PIL import Image
@@ -21,6 +25,78 @@ ROLE_SIZE_KEYS = {
     "top": ("width", "depth"),
     "bottom": ("width", "depth"),
 }
+
+
+def _is_symlink(path: Path) -> bool:
+    try:
+        return stat.S_ISLNK(path.lstat().st_mode)
+    except FileNotFoundError:
+        return False
+
+
+def _require_real_directory(path: Path, *, code: str = "artwork_staging_invalid") -> None:
+    try:
+        info = path.lstat()
+    except FileNotFoundError as error:
+        raise ArtworkMappingError(code, "切面目录不存在") from error
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        raise ArtworkMappingError(code, "切面目录不能是符号链接")
+
+
+def _require_regular_file(path: Path, *, code: str = "artwork_staging_invalid") -> None:
+    try:
+        info = path.lstat()
+    except FileNotFoundError as error:
+        raise ArtworkMappingError(code, "切面暂存文件不存在") from error
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+        raise ArtworkMappingError(code, "切面文件不能是符号链接")
+
+
+def _exclusive_staging(destination: Path) -> Path:
+    _require_real_directory(destination)
+    staging = Path(tempfile.mkdtemp(prefix=".face-staging-", dir=destination))
+    try:
+        _require_real_directory(staging)
+    except ArtworkMappingError:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    return staging
+
+
+def _promote_face_pngs(staging: Path, destination: Path, roles: list[str]) -> None:
+    """Move a complete staged generation into destination, or restore the previous set."""
+
+    backup = Path(tempfile.mkdtemp(prefix=".face-backup-", dir=destination))
+    moved_old: list[str] = []
+    promoted: list[str] = []
+    try:
+        _require_real_directory(backup)
+        for role in roles:
+            source = staging / f"panel_{role}.png"
+            target = destination / f"panel_{role}.png"
+            _require_regular_file(source)
+            if target.exists() or _is_symlink(target):
+                if _is_symlink(target):
+                    raise ArtworkMappingError("artwork_staging_invalid", "切面输出不能是符号链接")
+                os.replace(target, backup / f"panel_{role}.png")
+                moved_old.append(role)
+            os.replace(source, target)
+            promoted.append(role)
+    except Exception:
+        for role in reversed(promoted):
+            target = destination / f"panel_{role}.png"
+            if target.exists() or _is_symlink(target):
+                target.unlink()
+        for role in reversed(moved_old):
+            previous = backup / f"panel_{role}.png"
+            target = destination / f"panel_{role}.png"
+            if previous.exists():
+                if target.exists() or _is_symlink(target):
+                    target.unlink()
+                os.replace(previous, target)
+        raise
+    finally:
+        shutil.rmtree(backup, ignore_errors=True)
 
 
 class ArtworkMappingError(RuntimeError):
@@ -240,6 +316,10 @@ def render_face_assets(
     max_raster_pixels: int = MAX_ARTWORK_RASTER_PIXELS,
     minimum_face_pixels_per_mm: float = MIN_FACE_TEXTURE_PIXELS_PER_MM,
     bounds_tolerance_mm: float = 0.2,
+    sampling_strategy: str | None = None,
+    face_target_pixels_per_mm: Mapping[str, float] | None = None,
+    projection: Mapping[str, Any] | None = None,
+    sampling_report: dict[str, Any] | None = None,
 ) -> dict[str, list[int]]:
     if resolved.get("schema") != "resolved-packaging-job/3":
         raise ArtworkMappingError("structure_schema_unsupported", "不是受支持的 ResolvedPackagingJob")
@@ -271,10 +351,39 @@ def render_face_assets(
 
     dimensions = resolved.get("dimensions_mm") or {}
     faces = resolved.get("faces") or {}
+    strategy = sampling_strategy or "minimum-floor-v1"
+    if strategy not in {"minimum-floor-v1", "projection-jacobian-v1"}:
+        raise ArtworkMappingError("structure_limit_exceeded", "采样策略不受支持")
+    projection_mode = strategy == "projection-jacobian-v1"
+    targets = dict(face_target_pixels_per_mm or {})
+    if projection_mode:
+        missing = [role for role in ROLE_SIZE_KEYS if role not in targets]
+        if missing:
+            raise ArtworkMappingError(
+                "structure_limit_exceeded",
+                "投影采样缺少每面目标 ppm",
+                details={"missing": missing},
+            )
+        for role, raw in targets.items():
+            if (
+                isinstance(raw, bool)
+                or not isinstance(raw, (int, float))
+                or not math.isfinite(float(raw))
+                or float(raw) <= 0.0
+            ):
+                raise ArtworkMappingError("structure_limit_exceeded", "投影采样目标无效")
     destination = Path(output_dir).expanduser().resolve()
     destination.mkdir(parents=True, exist_ok=True)
+    if _is_symlink(destination):
+        raise ArtworkMappingError("artwork_staging_invalid", "切面输出目录不能是符号链接")
+    staging = _exclusive_staging(destination)
     sizes: dict[str, list[int]] = {}
-    document = pymupdf.open(str(source))
+    face_rows: dict[str, dict[str, Any]] = {}
+    try:
+        document = pymupdf.open(str(source))
+    except Exception:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
     try:
         if document.page_count != 1:
             raise ArtworkMappingError("artwork_page_invalid", f"artwork PDF 必须是单页，实际={document.page_count}")
@@ -306,7 +415,7 @@ def render_face_assets(
             or page_height_mm <= 0.0
         ):
             raise ArtworkMappingError("artwork_page_invalid", "artwork PDF 画板尺寸无效")
-        desired_pixels_per_mm = max(
+        page_desired_pixels_per_mm = max(
             float(minimum_face_pixels_per_mm),
             raster_width_px / page_width_mm,
         )
@@ -319,16 +428,36 @@ def render_face_assets(
             height_mm = float(dimensions[keys[1]])
             raw_layers = face.get("artwork_layers")
             if face.get("paper_only") is True and not raw_layers:
-                pixels_per_mm = float(minimum_face_pixels_per_mm)
+                pixels_per_mm = (
+                    float(targets[role]) if projection_mode else float(minimum_face_pixels_per_mm)
+                )
                 output_size = (
                     max(8, math.ceil(width_mm * pixels_per_mm)),
                     max(8, math.ceil(height_mm * pixels_per_mm)),
                 )
+                if output_size[0] * output_size[1] > max_raster_pixels:
+                    raise ArtworkMappingError(
+                        "render_texture_budget_exceeded" if projection_mode else "structure_limit_exceeded",
+                        f"{role} 面在目标清晰度下仍需要过多像素",
+                        details={
+                            "role": role,
+                            "face": role,
+                            "required_pixels": output_size[0] * output_size[1],
+                            "allowed_pixels": max_raster_pixels,
+                            "required_size_px": [output_size[0], output_size[1]],
+                            "required_pixels_per_mm": pixels_per_mm,
+                        },
+                    )
                 paper = Image.new("RGBA", output_size, (0, 0, 0, 0))
                 try:
-                    output = destination / f"panel_{role}.png"
+                    output = staging / f"panel_{role}.png"
                     paper.save(output, compress_level=3)
                     sizes[role] = [paper.width, paper.height]
+                    face_rows[role] = {
+                        "source_ppm": pixels_per_mm,
+                        "target_ppm": pixels_per_mm,
+                        "resample_count": 0,
+                    }
                 finally:
                     paper.close()
                 continue
@@ -375,16 +504,32 @@ def render_face_assets(
                     )
                 layer_mappings.append((coverage, inverse, corners))
 
-            pixels_per_mm, plan = _bounded_pixels_per_mm(
-                width_mm,
-                height_mm,
-                page_width_mm,
-                page_height_mm,
-                [corners for _coverage, _inverse_transform, corners in layer_mappings],
-                desired_pixels_per_mm,
-                float(minimum_face_pixels_per_mm),
-                max_raster_pixels,
+            desired_pixels_per_mm = (
+                float(targets[role]) if projection_mode else page_desired_pixels_per_mm
             )
+            layer_corners = [corners for _coverage, _inverse_transform, corners in layer_mappings]
+            if projection_mode:
+                pixels_per_mm = desired_pixels_per_mm
+                plan = _sampling_plan(
+                    width_mm,
+                    height_mm,
+                    page_width_mm,
+                    page_height_mm,
+                    layer_corners,
+                    pixels_per_mm,
+                    pixels_per_mm,
+                )
+            else:
+                pixels_per_mm, plan = _bounded_pixels_per_mm(
+                    width_mm,
+                    height_mm,
+                    page_width_mm,
+                    page_height_mm,
+                    layer_corners,
+                    desired_pixels_per_mm,
+                    float(minimum_face_pixels_per_mm),
+                    max_raster_pixels,
+                )
             output_size, output_pixels, clips = plan
             oversized_clip = next(
                 (predicted_pixels for _bounds, predicted_pixels in clips if predicted_pixels > max_raster_pixels),
@@ -393,19 +538,25 @@ def render_face_assets(
             if output_pixels > max_raster_pixels or oversized_clip is not None:
                 source_limited = oversized_clip is not None and output_pixels <= max_raster_pixels
                 required_pixels = oversized_clip if source_limited else output_pixels
+                code = "render_texture_budget_exceeded" if projection_mode else "structure_limit_exceeded"
+                details = {
+                    "role": role,
+                    "face": role,
+                    "required_pixels": required_pixels,
+                    "allowed_pixels": max_raster_pixels,
+                    "required_size_px": [output_size[0], output_size[1]],
+                    "required_pixels_per_mm": pixels_per_mm,
+                    "max_pixels": max_raster_pixels,
+                    "pixels_per_mm": round(pixels_per_mm, 4),
+                }
                 raise ArtworkMappingError(
-                    "structure_limit_exceeded",
+                    code,
                     (
-                        f"{role} 面的矢量取样范围在最低清晰度下仍需要过多像素"
+                        f"{role} 面的矢量取样范围在目标清晰度下仍需要过多像素"
                         if source_limited
-                        else f"{role} 面在最低清晰度下仍需要过多像素"
+                        else f"{role} 面在目标清晰度下仍需要过多像素"
                     ),
-                    details={
-                        "role": role,
-                        "required_pixels": required_pixels,
-                        "max_pixels": max_raster_pixels,
-                        "pixels_per_mm": round(pixels_per_mm, 4),
-                    },
+                    details=details,
                 )
             output_ppm_x = output_size[0] / width_mm
             output_ppm_y = output_size[1] / height_mm
@@ -481,11 +632,39 @@ def render_face_assets(
                             masked_layer.close()
                     finally:
                         layer_image.close()
-                output = destination / f"panel_{role}.png"
+                output = staging / f"panel_{role}.png"
                 face_image.save(output, compress_level=3)
                 sizes[role] = [face_image.width, face_image.height]
+                face_rows[role] = {
+                    "source_ppm": min(
+                        face_image.width / width_mm,
+                        face_image.height / height_mm,
+                    ),
+                    "target_ppm": float(targets[role]) if projection_mode else float(minimum_face_pixels_per_mm),
+                    "resample_count": 2,
+                }
             finally:
                 face_image.close()
+        _promote_face_pngs(staging, destination, list(sizes))
+        if sampling_report is not None:
+            projection_faces = {}
+            if isinstance(projection, Mapping):
+                projection_faces = dict(projection.get("faces") or {})
+            sampling_report.clear()
+            sampling_report.update(
+                {
+                    "strategy": strategy,
+                    "faces": {
+                        role: {
+                            **face_rows.get(role, {}),
+                            "projected_max_ppm": (projection_faces.get(role) or {}).get("projected_max_ppm"),
+                            "projected_min_ppm": (projection_faces.get(role) or {}).get("projected_min_ppm"),
+                        }
+                        for role in sizes
+                    },
+                }
+            )
     finally:
         document.close()
+        shutil.rmtree(staging, ignore_errors=True)
     return sizes

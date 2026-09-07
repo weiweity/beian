@@ -1,11 +1,11 @@
 # RF-07 本地交付记录
 
-日期：2026-09-07。状态：**Code / 普通 L0 已验证；本分支已记 VERSION `0.21.41.0`，尚未合入 `origin/main`；未发布、未改生产默认**。分支 `codex/rf07-integration`，基线已发布 RF-06 `d2657f0331bba147c12e44d2d5c24c60eb9da42a` / `0.21.40.0`。Grok 接管完整 `/ship`。人工选择未批准。
+日期：2026-09-07。状态：**已合入 `origin/main` `88321a90` / `0.21.41.0`；未改生产默认，人工选择未批准**。分支 `codex/rf07-integration`，基线已发布 RF-06 `d2657f0331bba147c12e44d2d5c24c60eb9da42a` / `0.21.40.0`。Grok 接管完整 `/ship`。下文为该次交付切片；公网 health 对齐 VERSION 的发布证据见当时 land-and-deploy，不等于 L2/UAT。
 
 ## 交付与兼容
 
 - 独立诊断 profile `packshot-studio-explicit-v1` / `normalized-three-area-explicit-v1`：声明三灯位置、软箱边长、参考能量、fill 比 0.35、key 降仰角 15°、world strength 0.62、world color、无 HDRI 和 180 mm 参考最长边。位置与软箱边长按比例缩放，能量按比例平方；正反 shot 保持相机空间灯位。
-- 材质沿用 RF-06 白卡 none，纸芯不贴法线。未改 RF-06 材质 registry、生产 registry、F profile、Standard 默认或正式 baseline。非白 world_color 会写入真实 Background 节点并读回。VERSION / CHANGELOG 由后续 `/ship` 记为 `0.21.41.0`，不等于已合入 `origin/main`。
+- 材质沿用 RF-06 白卡 none，纸芯不贴法线。未改 RF-06 材质 registry、生产 registry、F profile、Standard 默认或正式 baseline。非白 world_color 会写入真实 Background 节点并读回。VERSION / CHANGELOG 为 `0.21.41.0`，已合入 `origin/main` `88321a90`。
 - 受控 Standard / Khronos PBR Neutral / AgX 对照固定几何、UV、材质、纹理、灯、相机、曝光、look、分辨率、samples 和帧。EEVEE 无可用采样 seed 时明确记录原因，存在的 cycles.seed 另行读取。
 - 渲染前写声明与 SHA256；匿名图只用 A/B/C，映射单独保存。每作业最多 300 秒，整轮最多 1800 秒，剩余时长限制下一作业预算。
 - 没有批准的 P0 阈值与私有真实稿盲评：`awaiting_human_approval`、`winner=null`，保持 Standard。色差、暗阶和斜面细线缺少校准 ROI，报告 unavailable，不用整图均值冒充测量。
@@ -38,4 +38,4 @@
 
 ## Git 与剩余门槛
 
-RF-06 已发布：`d2657f0` / `0.21.40.0`。本分支 VERSION `0.21.41.0`，尚未合入 `origin/main`。旧 RF-07 验证快照仅作增量来源：`/Users/hutou/Documents/Codex/audits/beian-rf06-rf07-20260907/rf07-verified-snapshot/manifest.json`。杭州 Windows Blender L1、真实稿 L2、UAT、生产注册、正式 baseline 与色彩赢家仍未批准。
+RF-06 已发布：`d2657f0` / `0.21.40.0`。RF-07 已发布：`88321a90` / `0.21.41.0`。旧 RF-07 验证快照仅作增量来源：`/Users/hutou/Documents/Codex/audits/beian-rf06-rf07-20260907/rf07-verified-snapshot/manifest.json`。杭州 Windows Blender L1、真实稿 L2、UAT、生产注册、正式 baseline 与色彩赢家仍未批准。
