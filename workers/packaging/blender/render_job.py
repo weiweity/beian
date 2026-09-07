@@ -1035,6 +1035,30 @@ def main():
         "render_resolution": [job["render"]["resolution_x"], job["render"]["resolution_y"]],
         "blender_elapsed_s": round(time.perf_counter() - started, 3),
     }
+    scene = bpy.context.scene
+    eevee = getattr(scene, "eevee", None)
+    result["engine"] = str(scene.render.engine)
+    result["blender_version"] = str(bpy.app.version_string)
+    samples = None
+    if eevee is not None and getattr(eevee, "taa_render_samples", None) is not None:
+        samples = int(eevee.taa_render_samples)
+    elif job.get("render", {}).get("samples") is not None:
+        samples = int(job["render"]["samples"])
+    result["samples"] = samples
+    result["pixel_filter"] = getattr(scene.render, "filter_size", None)
+    result["view_transform"] = str(scene.view_settings.view_transform)
+    result["master_resolution_px"] = [
+        int(job["render"]["resolution_x"]),
+        int(job["render"]["resolution_y"]),
+    ]
+    spec_sampling = ((job.get("render_spec") or {}).get("sampling") or {})
+    job_faces = (job.get("face_sampling") or {}).get("faces") if isinstance(job.get("face_sampling"), dict) else None
+    if spec_sampling or job_faces:
+        result["face_sampling"] = {
+            "strategy": spec_sampling.get("strategy"),
+            "per_face_target_pixels_per_mm": spec_sampling.get("per_face_target_pixels_per_mm"),
+            "faces": job_faces,
+        }
     nonce = job.get("execution_nonce")
     if not isinstance(nonce, str) or not nonce.strip():
         raise SystemExit("execution snapshot missing execution_nonce")
