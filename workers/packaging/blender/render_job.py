@@ -560,7 +560,7 @@ def render_view_pair(scene, camera, job, yaw_rad, product_key, ground_key, set_k
 
 
 def apply_studio_contract(scene, job, lights):
-    """Consume the resolved, versioned F contract; legacy jobs keep their rig."""
+    """Consume the resolved, versioned F/RF07 contract; legacy jobs keep their rig."""
     config = job["render"]
     pool = config.get("shadow_pool_size_mb")
     if pool is not None:
@@ -573,7 +573,42 @@ def apply_studio_contract(scene, job, lights):
             raise RuntimeError("render_resource_unsupported: shadow pool rejected") from error
         if eevee.shadow_pool_size != str(pool):
             raise RuntimeError("render_resource_unsupported: shadow pool not applied")
-    if config.get("studio_profile") != "normalized-three-area-f-v1":
+    profile = config.get("studio_profile")
+    if profile == "normalized-three-area-explicit-v1":
+        shots = (job.get("render_spec") or {}).get("shots") or {}
+        contract_lights = shots.get("lights") or {}
+        if set(contract_lights) != {"key", "fill", "rim"} or len(lights) != 3:
+            raise RuntimeError("render_studio_contract_invalid: explicit lights missing")
+        energy_scale = float(config.get("light_energy_scale", 4.0))
+        for light, role in zip(lights, ("key", "fill", "rim")):
+            spec_light = contract_lights[role]
+            light.location = Vector(tuple(spec_light["location_mm"]))
+            light.data.shape = spec_light["shape"]
+            light.data.size = float(spec_light["size_mm"])
+            if spec_light["shape"] in {"RECTANGLE", "ELLIPSE"}:
+                light.data.size_y = float(spec_light["size_y_mm"])
+            light.data.energy = float(spec_light["energy_base"]) * energy_scale
+        world_color = shots.get("world_color")
+        if not isinstance(world_color, (list, tuple)) or len(world_color) != 3:
+            raise RuntimeError("render_studio_contract_invalid: world_color missing")
+        world = getattr(scene, "world", None)
+        if world is None:
+            raise RuntimeError("render_studio_contract_invalid: world missing")
+        rgb = (float(world_color[0]), float(world_color[1]), float(world_color[2]))
+        world.color = rgb
+        tree = getattr(world, "node_tree", None)
+        applied = False
+        if getattr(world, "use_nodes", False) and tree is not None:
+            for node in list(tree.nodes):
+                if str(getattr(node, "type", "")) == "BACKGROUND":
+                    node.inputs["Color"].default_value = (rgb[0], rgb[1], rgb[2], 1.0)
+                    read = node.inputs["Color"].default_value
+                    if any(abs(float(read[i]) - rgb[i]) > 1e-5 for i in range(3)):
+                        raise RuntimeError("render_studio_contract_invalid: world_color not applied")
+                    applied = True
+        if not applied:
+            raise RuntimeError("render_studio_contract_invalid: world background missing")
+    if profile not in {"normalized-three-area-f-v1", "normalized-three-area-explicit-v1"}:
         return
     dims = job["dimensions_mm"]
     scale = max(float(dims[k]) for k in ("width", "depth", "height")) / config["rig_reference_mm"]
@@ -610,7 +645,13 @@ def add_studio(job):
     scene.render.film_transparent = exact_white_background
     scene.render.image_settings.compression = 35
     scene.render.image_settings.color_depth = "8"
-    scene.view_settings.view_transform = str(render_config.get("view_transform", "Standard"))
+    requested_transform = str(render_config.get("view_transform", "Standard"))
+    scene.view_settings.view_transform = requested_transform
+    actual_transform = str(scene.view_settings.view_transform)
+    if actual_transform != requested_transform:
+        raise RuntimeError(
+            f"color_transform_unsupported: requested={requested_transform} actual={actual_transform}"
+        )
     scene.view_settings.look = str(render_config.get("look", "None"))
     scene.view_settings.exposure = float(render_config.get("exposure", 0.0))
     scene.world.color = (1.0, 1.0, 1.0)

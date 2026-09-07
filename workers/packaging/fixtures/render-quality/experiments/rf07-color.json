@@ -1,0 +1,26 @@
+{
+  "schema": "beian-rf07-color-experiment/1",
+  "phase": "RF-07",
+  "id": "rf07-color",
+  "candidates": [
+    "Standard",
+    "Khronos PBR Neutral",
+    "AgX"
+  ],
+  "fixtures": [
+    "rf00-white-carton",
+    "rf00-dark-carton",
+    "rf00-tall-carton",
+    "rf00-wide-carton"
+  ],
+  "studio_profile_id": "packshot-studio-explicit-v1",
+  "look": "None",
+  "exposure": 0.0,
+  "purpose": "controlled view-transform comparison on a fixed RF07 studio; not a quality improvement claim and not a product profile",
+  "product_default_semantics": "Standard",
+  "notes": {
+    "fixed": "geometry, textures, materials, lights, exposure, look, resolution, samples, seed",
+    "varied": "view_transform only",
+    "selection": "keep Standard without approved P0 thresholds or private artwork blind review"
+  }
+}

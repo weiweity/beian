@@ -893,7 +893,7 @@ def declared_current_render() -> dict[str, Any]:
     compression = re.search(r"image_settings\.compression\s*=\s*(\d+)", source)
     color_depth = re.search(r'image_settings\.color_depth\s*=\s*"(\d+)"', source)
     view_transform = re.search(
-        r'view_transform\s*=\s*str\(render_config\.get\("view_transform",\s*"([^"]+)"\)\)',
+        r'(?:view_transform|requested_transform)\s*=\s*str\(render_config\.get\("view_transform",\s*"([^"]+)"\)\)',
         source,
     )
     return {
@@ -912,10 +912,17 @@ def declared_current_render() -> dict[str, Any]:
             None,
             "render_job.apply_eevee_engine declared choice",
         ),
-        "view_transform": measured(
-            view_transform.group(1) if view_transform else render.get("view_transform", "Standard"),
-            None,
-            "render_job view_transform default",
+        "view_transform": (
+            measured(
+                view_transform.group(1),
+                None,
+                "render_job view_transform default",
+            )
+            if view_transform
+            else unavailable(
+                "declared_constant_not_found",
+                method="render_job view_transform default",
+            )
         ),
         "png_compression": (
             measured(int(compression.group(1)), "1", "render_job image_settings.compression")
