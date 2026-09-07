@@ -430,6 +430,11 @@ def blender_measurement_result(snapshot: dict, **overrides) -> dict:
         ],
         "blender_elapsed_s": 0.01,
     }
+    geometry = (snapshot.get("render_spec") or {}).get("geometry") or {}
+    if geometry.get("closure_detail") == "closed-carton-shell-v1" or geometry.get("family") == "pouch_thin_card_v1":
+        payload["render_family"] = geometry.get("family")
+        payload["preview_fidelity"] = geometry.get("preview_fidelity")
+        payload["geometry_model"] = geometry.get("closure_detail")
     payload.update(overrides)
     return payload
 

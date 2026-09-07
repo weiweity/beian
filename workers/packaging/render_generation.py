@@ -40,6 +40,7 @@ from render_contract import (  # noqa: E402
     SEMANTIC_FACES,
     blender_execution_plan,
     canonical_sha256,
+    material_runtime_from_job,
     persistable_plan_from_bound_job,
     render_plan_for_resolved_job,
     validate_job_asset_contract,
@@ -1328,6 +1329,7 @@ def _run_request(request: Mapping[str, Any]) -> dict[str, Any]:
         rendered["render"].get("substrate_rgba", [PAPER_ALBEDO_LINEAR]*3 + [1.0]),
         geometry=rendered.get("render_spec", {}).get("geometry"),
         render_identity=rendered,
+        material_layers=material_runtime_from_job(rendered),
     )
     if (not report["ok"] or _sha256_file(glb_path) != evidence["glb"]["sha256"]
             or any(_sha256_file(Path(rendered["assets"][face])) != assets[face] for face in SEMANTIC_FACES)):

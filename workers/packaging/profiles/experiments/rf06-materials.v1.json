@@ -1,0 +1,373 @@
+{
+  "schema": "packaging-render-profile-registry/1",
+  "profiles": [
+    {
+      "id": "packshot-material-white-none-v1",
+      "declared_sha256": "sha256:dc95b34d9367d46ef3538e1ea2219a236abe011fe4309e36c7af43442b4e757a",
+      "renderer": {
+        "engine": "BLENDER_EEVEE",
+        "minimum_blender_version": "project-supported",
+        "samples": 64
+      },
+      "geometry": {
+        "rectangular_carton_v1": {
+          "substrate_profile": "white-card-default-v1",
+          "closure_detail": "closed-carton-shell-v1",
+          "core_bevel_mm": 0.6,
+          "surface_gap_mm": 0.002,
+          "preview_fidelity": "carton_physical_v1",
+          "thickness_mm": 0.4,
+          "bevel_segments": 4
+        }
+      },
+      "material": {
+        "substrate_profile": "white-card-default-v1",
+        "print_layer": "process-ink-v1",
+        "finish_profile": "none",
+        "spot_finish_mask": null,
+        "substrate_rgba": [
+          0.7,
+          0.7,
+          0.7,
+          1.0
+        ],
+        "roughness": 0.52,
+        "specular_ior_level": 0.08,
+        "ink_color_space": "sRGB",
+        "core_roughness": 0.6,
+        "core_specular_ior_level": 0.5,
+        "substrate_micro_normal": {
+          "kind": "procedural-micro-v1",
+          "size_px": 64,
+          "seed": 7,
+          "strength": 0.12,
+          "color_space": "Non-Color"
+        },
+        "glb_export": {
+          "roughness": true,
+          "clearcoat": false,
+          "normal": true,
+          "extensions": []
+        }
+      },
+      "studio": {
+        "profile": "three-softbox-no-hdri-v1",
+        "projection": "ORTHOGRAPHIC",
+        "master_resolution_px": [
+          3000,
+          3600
+        ],
+        "views": [
+          "front_right",
+          "back_left"
+        ],
+        "camera_mode": "dimension-fit",
+        "camera_ortho_scale_mm": null,
+        "front_rotation_deg": 0,
+        "back_rotation_deg": 180,
+        "world_strength": 0.62,
+        "light_energy_scale": 4,
+        "exact_white_background": true
+      },
+      "color": {
+        "view_transform": "Standard",
+        "look": "None",
+        "exposure": 0,
+        "png_compression": 35,
+        "color_depth_bits": 8
+      },
+      "sampling": {
+        "strategy": "minimum-floor-v1",
+        "minimum_face_pixels_per_mm": 20,
+        "maximum_face_pixels_per_mm": 64,
+        "maximum_face_pixels": 32000000,
+        "oversample_ratio": 1.5,
+        "legacy_raster_width_px": 10000
+      },
+      "outputs": {
+        "product_rgba": true,
+        "ground_pass": "optional",
+        "white_set_pass": "optional",
+        "review_card_max_edge_px": 1440,
+        "preserve_legacy_keys": true
+      }
+    },
+    {
+      "id": "packshot-material-kraft-none-v1",
+      "declared_sha256": "sha256:8dbaa39497af4cda5f68a2dc781f0f8f184566da75fb79da2248009e296f225f",
+      "renderer": {
+        "engine": "BLENDER_EEVEE",
+        "minimum_blender_version": "project-supported",
+        "samples": 64
+      },
+      "geometry": {
+        "rectangular_carton_v1": {
+          "substrate_profile": "kraft-card-v1",
+          "closure_detail": "closed-carton-shell-v1",
+          "core_bevel_mm": 0.6,
+          "surface_gap_mm": 0.002,
+          "preview_fidelity": "carton_physical_v1",
+          "thickness_mm": 0.4,
+          "bevel_segments": 4
+        }
+      },
+      "material": {
+        "substrate_profile": "kraft-card-v1",
+        "print_layer": "process-ink-v1",
+        "finish_profile": "none",
+        "spot_finish_mask": null,
+        "substrate_rgba": [
+          0.55,
+          0.38,
+          0.18,
+          1.0
+        ],
+        "roughness": 0.58,
+        "specular_ior_level": 0.06,
+        "ink_color_space": "sRGB",
+        "core_roughness": 0.62,
+        "core_specular_ior_level": 0.5,
+        "substrate_micro_normal": {
+          "kind": "procedural-micro-v1",
+          "size_px": 64,
+          "seed": 7,
+          "strength": 0.12,
+          "color_space": "Non-Color"
+        },
+        "glb_export": {
+          "roughness": true,
+          "clearcoat": false,
+          "normal": true,
+          "extensions": []
+        }
+      },
+      "studio": {
+        "profile": "three-softbox-no-hdri-v1",
+        "projection": "ORTHOGRAPHIC",
+        "master_resolution_px": [
+          3000,
+          3600
+        ],
+        "views": [
+          "front_right",
+          "back_left"
+        ],
+        "camera_mode": "dimension-fit",
+        "camera_ortho_scale_mm": null,
+        "front_rotation_deg": 0,
+        "back_rotation_deg": 180,
+        "world_strength": 0.62,
+        "light_energy_scale": 4,
+        "exact_white_background": true
+      },
+      "color": {
+        "view_transform": "Standard",
+        "look": "None",
+        "exposure": 0,
+        "png_compression": 35,
+        "color_depth_bits": 8
+      },
+      "sampling": {
+        "strategy": "minimum-floor-v1",
+        "minimum_face_pixels_per_mm": 20,
+        "maximum_face_pixels_per_mm": 64,
+        "maximum_face_pixels": 32000000,
+        "oversample_ratio": 1.5,
+        "legacy_raster_width_px": 10000
+      },
+      "outputs": {
+        "product_rgba": true,
+        "ground_pass": "optional",
+        "white_set_pass": "optional",
+        "review_card_max_edge_px": 1440,
+        "preserve_legacy_keys": true
+      }
+    },
+    {
+      "id": "packshot-material-white-matte-v1",
+      "declared_sha256": "sha256:245630b1858dd3f67fbd7858842e1b218f9a406709ae8adf37740ab00d0d66ca",
+      "renderer": {
+        "engine": "BLENDER_EEVEE",
+        "minimum_blender_version": "project-supported",
+        "samples": 64
+      },
+      "geometry": {
+        "rectangular_carton_v1": {
+          "substrate_profile": "white-card-default-v1",
+          "closure_detail": "closed-carton-shell-v1",
+          "core_bevel_mm": 0.6,
+          "surface_gap_mm": 0.002,
+          "preview_fidelity": "carton_physical_v1",
+          "thickness_mm": 0.4,
+          "bevel_segments": 4
+        }
+      },
+      "material": {
+        "substrate_profile": "white-card-default-v1",
+        "print_layer": "process-ink-v1",
+        "finish_profile": "overall-matte-lamination-v1",
+        "spot_finish_mask": null,
+        "substrate_rgba": [
+          0.7,
+          0.7,
+          0.7,
+          1.0
+        ],
+        "roughness": 0.86,
+        "specular_ior_level": 0.04,
+        "ink_color_space": "sRGB",
+        "core_roughness": 0.6,
+        "core_specular_ior_level": 0.5,
+        "substrate_micro_normal": {
+          "kind": "procedural-micro-v1",
+          "size_px": 64,
+          "seed": 7,
+          "strength": 0.12,
+          "color_space": "Non-Color"
+        },
+        "glb_export": {
+          "roughness": true,
+          "clearcoat": false,
+          "normal": true,
+          "extensions": []
+        }
+      },
+      "studio": {
+        "profile": "three-softbox-no-hdri-v1",
+        "projection": "ORTHOGRAPHIC",
+        "master_resolution_px": [
+          3000,
+          3600
+        ],
+        "views": [
+          "front_right",
+          "back_left"
+        ],
+        "camera_mode": "dimension-fit",
+        "camera_ortho_scale_mm": null,
+        "front_rotation_deg": 0,
+        "back_rotation_deg": 180,
+        "world_strength": 0.62,
+        "light_energy_scale": 4,
+        "exact_white_background": true
+      },
+      "color": {
+        "view_transform": "Standard",
+        "look": "None",
+        "exposure": 0,
+        "png_compression": 35,
+        "color_depth_bits": 8
+      },
+      "sampling": {
+        "strategy": "minimum-floor-v1",
+        "minimum_face_pixels_per_mm": 20,
+        "maximum_face_pixels_per_mm": 64,
+        "maximum_face_pixels": 32000000,
+        "oversample_ratio": 1.5,
+        "legacy_raster_width_px": 10000
+      },
+      "outputs": {
+        "product_rgba": true,
+        "ground_pass": "optional",
+        "white_set_pass": "optional",
+        "review_card_max_edge_px": 1440,
+        "preserve_legacy_keys": true
+      }
+    },
+    {
+      "id": "packshot-material-white-gloss-v1",
+      "declared_sha256": "sha256:82e7addabaf9e0d933e2fb13f41fb30a6163fb233b7013157656f7aef06d5e1b",
+      "renderer": {
+        "engine": "BLENDER_EEVEE",
+        "minimum_blender_version": "project-supported",
+        "samples": 64
+      },
+      "geometry": {
+        "rectangular_carton_v1": {
+          "substrate_profile": "white-card-default-v1",
+          "closure_detail": "closed-carton-shell-v1",
+          "core_bevel_mm": 0.6,
+          "surface_gap_mm": 0.002,
+          "preview_fidelity": "carton_physical_v1",
+          "thickness_mm": 0.4,
+          "bevel_segments": 4
+        }
+      },
+      "material": {
+        "substrate_profile": "white-card-default-v1",
+        "print_layer": "process-ink-v1",
+        "finish_profile": "overall-gloss-varnish-v1",
+        "spot_finish_mask": null,
+        "substrate_rgba": [
+          0.7,
+          0.7,
+          0.7,
+          1.0
+        ],
+        "roughness": 0.22,
+        "specular_ior_level": 0.18,
+        "ink_color_space": "sRGB",
+        "core_roughness": 0.6,
+        "core_specular_ior_level": 0.5,
+        "substrate_micro_normal": {
+          "kind": "procedural-micro-v1",
+          "size_px": 64,
+          "seed": 7,
+          "strength": 0.12,
+          "color_space": "Non-Color"
+        },
+        "glb_export": {
+          "roughness": true,
+          "clearcoat": true,
+          "normal": true,
+          "extensions": [
+            "KHR_materials_clearcoat"
+          ]
+        },
+        "coat_weight": 1.0,
+        "coat_roughness": 0.08
+      },
+      "studio": {
+        "profile": "three-softbox-no-hdri-v1",
+        "projection": "ORTHOGRAPHIC",
+        "master_resolution_px": [
+          3000,
+          3600
+        ],
+        "views": [
+          "front_right",
+          "back_left"
+        ],
+        "camera_mode": "dimension-fit",
+        "camera_ortho_scale_mm": null,
+        "front_rotation_deg": 0,
+        "back_rotation_deg": 180,
+        "world_strength": 0.62,
+        "light_energy_scale": 4,
+        "exact_white_background": true
+      },
+      "color": {
+        "view_transform": "Standard",
+        "look": "None",
+        "exposure": 0,
+        "png_compression": 35,
+        "color_depth_bits": 8
+      },
+      "sampling": {
+        "strategy": "minimum-floor-v1",
+        "minimum_face_pixels_per_mm": 20,
+        "maximum_face_pixels_per_mm": 64,
+        "maximum_face_pixels": 32000000,
+        "oversample_ratio": 1.5,
+        "legacy_raster_width_px": 10000
+      },
+      "outputs": {
+        "product_rgba": true,
+        "ground_pass": "optional",
+        "white_set_pass": "optional",
+        "review_card_max_edge_px": 1440,
+        "preserve_legacy_keys": true
+      }
+    }
+  ]
+}

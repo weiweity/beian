@@ -284,7 +284,7 @@ def test_blender_uses_the_artwork_alpha_as_a_binary_mask_over_the_opaque_core():
     assert 'links.new(texture.outputs["Alpha"], alpha_mask.inputs[0])' in source
     assert 'links.new(alpha_mask.outputs[0], shader.inputs["Alpha"])' in source
     assert 'material.blend_method = "CLIP"' in source
-    assert 'core.data.materials.append(make_core_material(substrate_rgba))' in source
+    assert 'core.data.materials.append(make_core_material(plan, normal_image=normal_image))' in source
     assert "compare_glb_material_contract(" in source
     assert "load_glb_artifact(" in source
     assert "compare_glb_surface_contract(" in source

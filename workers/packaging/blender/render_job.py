@@ -31,7 +31,12 @@ from glb_verify import (
     compare_glb_texture_bindings,
     load_glb_artifact,
 )
-from render_contract import renderer_geometry_config
+from render_contract import (
+    blender_material_plan,
+    material_runtime_from_job,
+    renderer_geometry_config,
+    substrate_micro_normal_png_bytes,
+)
 from render_geometry import SHELL_MODEL, carton_meshes
 
 
@@ -87,7 +92,70 @@ def _multiply_paper_albedo(nodes, links, texture_color):
         return mix.outputs["Color"]
 
 
-def make_material(name, image_path, roughness=0.52, specular_ior=0.08):
+def _set_socket(shader, names, value):
+    for name in names:
+        if name in shader.inputs:
+            shader.inputs[name].default_value = value
+            return True
+    return False
+
+
+def _set_image_colorspace(image, name):
+    try:
+        image.colorspace_settings.name = name
+    except Exception as error:
+        raise RuntimeError(f"cannot set image colorspace {name}: {error}") from error
+    if image.colorspace_settings.name != name:
+        raise RuntimeError(f"image colorspace stayed {image.colorspace_settings.name}, expected {name}")
+
+
+def _connect_normal(nodes, links, shader, image, strength):
+    texture = nodes.new("ShaderNodeTexImage")
+    texture.image = image
+    texture.interpolation = "Linear"
+    normal_map = nodes.new("ShaderNodeNormalMap")
+    if "Strength" in normal_map.inputs:
+        normal_map.inputs["Strength"].default_value = float(strength)
+    links.new(texture.outputs["Color"], normal_map.inputs["Color"])
+    if "Normal" not in shader.inputs:
+        raise RuntimeError("Principled BSDF has no Normal socket")
+    links.new(normal_map.outputs["Normal"], shader.inputs["Normal"])
+
+
+def _apply_surface(shader, *, roughness, specular_ior, coat_weight=None, coat_roughness=None):
+    if not _set_socket(shader, ["Roughness"], float(roughness)):
+        raise RuntimeError("Principled BSDF has no Roughness socket")
+    if specular_ior is not None and not _set_socket(
+        shader, ["Specular IOR Level", "Specular"], float(specular_ior)
+    ):
+        raise RuntimeError("Principled BSDF cannot bind specular")
+    if coat_weight is None:
+        return
+    if not _set_socket(shader, ["Coat Weight", "Coat"], float(coat_weight)):
+        raise RuntimeError("Principled BSDF cannot bind declared coat weight")
+    if coat_roughness is not None and not _set_socket(
+        shader, ["Coat Roughness"], float(coat_roughness)
+    ):
+        raise RuntimeError("Principled BSDF cannot bind declared coat roughness")
+
+
+def _load_micro_normal_image(job, plan):
+    micro = plan.get("micro_normal")
+    if not plan["use_normal"] or not micro:
+        return None
+    directory = Path(job.get("project_dir") or Path(job["outputs"]["glb"]).parent)
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"material_micro_normal_{micro['size_px']}_{micro['seed']}.png"
+    payload = substrate_micro_normal_png_bytes(micro)
+    if not path.is_file() or path.read_bytes() != payload:
+        path.write_bytes(payload)
+    image = bpy.data.images.load(str(path), check_existing=False)
+    image.pack()
+    _set_image_colorspace(image, "Non-Color")
+    return image
+
+
+def make_material(name, image_path, plan, *, normal_image=None):
     material = bpy.data.materials.new(name)
     material.use_nodes = True
     nodes = material.node_tree.nodes
@@ -99,16 +167,26 @@ def make_material(name, image_path, roughness=0.52, specular_ior=0.08):
     texture = nodes.new("ShaderNodeTexImage")
     image = bpy.data.images.load(str(image_path), check_existing=False)
     image.pack()
+    _set_image_colorspace(image, plan["ink_color_space"])
     texture.image = image
     texture.interpolation = "Linear"
     alpha_mask = nodes.new("ShaderNodeMath")
     alpha_mask.operation = "ROUND"
     alpha_mask.use_clamp = True
-    shader.inputs["Roughness"].default_value = roughness
-    shader.inputs["Specular IOR Level"].default_value = specular_ior
+    _apply_surface(
+        shader,
+        roughness=plan["face_roughness"],
+        specular_ior=plan["ink_specular_ior_level"],
+        coat_weight=plan["coat_weight"] if plan["face_use_coat"] else None,
+        coat_roughness=plan["coat_roughness"] if plan["face_use_coat"] else None,
+    )
     links.new(_multiply_paper_albedo(nodes, links, texture.outputs["Color"]), shader.inputs["Base Color"])
     links.new(texture.outputs["Alpha"], alpha_mask.inputs[0])
     links.new(alpha_mask.outputs[0], shader.inputs["Alpha"])
+    if plan["use_normal"]:
+        if normal_image is None:
+            raise RuntimeError("declared micro-normal is missing from the shared image")
+        _connect_normal(nodes, links, shader, normal_image, plan["normal_strength"])
     # Alpha is a binary physical-coverage mask, not translucent paper.  The
     # opaque core immediately behind the panel supplies the substrate colour.
     if hasattr(material, "blend_method"):
@@ -145,7 +223,7 @@ def add_panel(name, vertices, material):
     return obj
 
 
-def make_core_material(substrate_rgba):
+def make_core_material(plan, *, normal_image=None):
     material = bpy.data.materials.new("MAT_PaperboardEdge")
     material.use_nodes = True
     nodes = material.node_tree.nodes
@@ -154,8 +232,15 @@ def make_core_material(substrate_rgba):
         nodes.remove(node)
     output = nodes.new("ShaderNodeOutputMaterial")
     shader = nodes.new("ShaderNodeBsdfPrincipled")
-    shader.inputs["Base Color"].default_value = tuple(float(value) for value in substrate_rgba)
-    shader.inputs["Roughness"].default_value = 0.60
+    shader.inputs["Base Color"].default_value = tuple(float(value) for value in plan["substrate_rgba"])
+    _apply_surface(
+        shader,
+        roughness=plan["core_roughness"],
+        specular_ior=plan["core_specular_ior_level"],
+        coat_weight=None,
+    )
+    if hasattr(material, "blend_method"):
+        material.blend_method = "OPAQUE"
     links.new(shader.outputs["BSDF"], output.inputs["Surface"])
     return material
 
@@ -166,21 +251,18 @@ def add_box(job):
     depth = float(dims["depth"])
     height = float(dims["height"])
     assets = {name: Path(path) for name, path in job["assets"].items()}
-    roughness = float(job["render"].get("material_roughness", 0.52))
-    specular_ior = float(job["render"].get("material_specular_ior", 0.08))
-    substrate_rgba = job["render"].get(
-        "substrate_rgba",
-        [PAPER_ALBEDO_LINEAR, PAPER_ALBEDO_LINEAR, PAPER_ALBEDO_LINEAR, 1.0],
-    )
+    layers = material_runtime_from_job(job)
+    plan = blender_material_plan(layers)
     if (
-        not isinstance(substrate_rgba, list)
-        or len(substrate_rgba) != 4
-        or any(not isinstance(value, (int, float)) or not 0.0 <= float(value) <= 1.0 for value in substrate_rgba)
-        or float(substrate_rgba[3]) != 1.0
+        not isinstance(plan["substrate_rgba"], list)
+        or len(plan["substrate_rgba"]) != 4
+        or any(not isinstance(value, (int, float)) or not 0.0 <= float(value) <= 1.0 for value in plan["substrate_rgba"])
+        or float(plan["substrate_rgba"][3]) != 1.0
     ):
-        raise RuntimeError("render.substrate_rgba must be an opaque four-channel colour in the 0-1 range")
+        raise RuntimeError("resolved substrate_rgba must be an opaque four-channel colour in the 0-1 range")
+    normal_image = _load_micro_normal_image(job, plan)
     mats = {
-        name: make_material(f"MAT_{name}", path, roughness, specular_ior)
+        name: make_material(f"MAT_{name}", path, plan, normal_image=normal_image)
         for name, path in assets.items()
     }
     root = bpy.data.objects.new(f"{job['code']}_Model_Root", None)
@@ -193,7 +275,7 @@ def add_box(job):
     core.name = f"{job['code']}_Box_Core"
     core.dimensions = (width, depth, height)
     bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
-    core.data.materials.append(make_core_material(substrate_rgba))
+    core.data.materials.append(make_core_material(plan, normal_image=normal_image))
     bevel = core.modifiers.new("Paperboard edge radius", "BEVEL")
     bevel.width = 0.45
     bevel.segments = 4
@@ -238,13 +320,15 @@ def build_rectangular_carton(job, geometry):
     if geometry["closure_detail"] != SHELL_MODEL:
         return add_box(job)
     model = carton_meshes(job["dimensions_mm"], geometry)
-    render = job["render"]
+    layers = material_runtime_from_job(job)
+    plan = blender_material_plan(layers)
+    normal_image = _load_micro_normal_image(job, plan)
     root = bpy.data.objects.new(f"{job['code']}_Model_Root", None)
     bpy.context.collection.objects.link(root)
-    core = _physical_mesh(f"{job['code']}_Box_Core", model["core"], make_core_material(render["substrate_rgba"]))
+    core = _physical_mesh(f"{job['code']}_Box_Core", model["core"], make_core_material(plan, normal_image=normal_image))
     objects = [core]
     for face, mesh in model["surfaces"].items():
-        material = make_material(f"MAT_{face}", job["assets"][face], render.get("material_roughness", 0.52), render.get("material_specular_ior", 0.08))
+        material = make_material(f"MAT_{face}", job["assets"][face], plan, normal_image=normal_image)
         objects.append(_physical_mesh(face.title(), mesh, material))
     for obj in [root, *objects]:
         obj["render_family"] = geometry["family"]
@@ -708,16 +792,20 @@ def export_model(job, root, model_objects):
 
 
 def verify_glb(job):
-    substrate_rgba = job["render"].get(
+    layers = material_runtime_from_job(job)
+    plan = blender_material_plan(layers)
+    substrate_rgba = plan["substrate_rgba"] or job["render"].get(
         "substrate_rgba",
         [PAPER_ALBEDO_LINEAR, PAPER_ALBEDO_LINEAR, PAPER_ALBEDO_LINEAR, 1.0],
     )
+    pbr = layers if layers["still"]["coat"] or layers["still"]["normal"] or layers["glb_export"]["clearcoat"] or layers["glb_export"]["normal"] else None
     try:
         artifact = load_glb_artifact(job["outputs"]["glb"])
         material_report = compare_glb_material_contract(
             artifact,
             job["assets"],
             substrate_rgba,
+            pbr=pbr,
         )
     except (OSError, ValueError, json.JSONDecodeError) as error:
         raise RuntimeError(f"GLB verification failed: cannot inspect exported material contract: {error}") from error
