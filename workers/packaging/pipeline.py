@@ -1437,6 +1437,7 @@ def preflight_product_v2(
         previous["preflight_elapsed_s"] = round(time.perf_counter() - started, 4)
         return previous
 
+    sampling_report: dict[str, Any] = {}
     face_sizes = render_face_assets(
         artwork_pdf,
         structure_job,
@@ -1444,6 +1445,10 @@ def preflight_product_v2(
         raster_width_px=int(plan["sampling"]["legacy_raster_width_px"]),
         minimum_face_pixels_per_mm=float(plan["sampling"]["minimum_face_pixels_per_mm"]),
         max_raster_pixels=int(plan["sampling"]["maximum_face_pixels"]),
+        sampling_strategy=str(plan["sampling"].get("strategy") or "minimum-floor-v1"),
+        face_target_pixels_per_mm=plan["sampling"].get("per_face_target_pixels_per_mm"),
+        projection=plan.get("projection"),
+        sampling_report=sampling_report,
     )
     reader = PdfReader(str(artwork_pdf))
     media = reader.pages[0].mediabox
@@ -1466,6 +1471,7 @@ def preflight_product_v2(
         "page_size_points": page_size,
         "layers": illustrator_result.get("layers", []) if illustrator_result else [],
         "face_texture_sizes": face_sizes,
+        "face_sampling": sampling_report or None,
         "preflight_elapsed_s": round(time.perf_counter() - started, 4),
         "input_mode": "illustrator_semantic" if illustrator_result else "semantic_sidecar",
         "structure_engine": "v2",
