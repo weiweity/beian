@@ -1,6 +1,6 @@
 # RF-06 本地交付记录
 
-日期：2026-09-07。状态：**RF-06 PR 候选，未合并、未发布**。范围：显式纸材/油墨/整体工艺合同、分层材质与微法线、GLB 可导出子集校验。分支 `codex/rf06-materials`，基线 `66380894fc37463be49e1fa22ac472e5898bac1b` / `0.21.39.0`。本轮进入 `/ship` 提交、推送与 PR 准备；合并和部署不在本轮授权内。RF-07 棚光与色彩变换不在范围。
+日期：2026-09-07。状态：**已合入 `origin/main` `d2657f0` / `0.21.40.0`；生产 registry 与默认选择未切换**。范围：显式纸材/油墨/整体工艺合同、分层材质与微法线、GLB 可导出子集校验。分支 `codex/rf06-materials`，基线 `66380894fc37463be49e1fa22ac472e5898bac1b` / `0.21.39.0`。下文为该次交付切片；合并和部署当时不在该轮授权内。RF-07 棚光与色彩变换当时不在范围，后续诊断实现见 [RF-07 记录](packaging-quality-rf07-closeout.md)。
 
 ## 实现与兼容边界
 
@@ -54,7 +54,7 @@ GLB 声明并核验的子集为 roughness、印刷面的 clearcoat、normalTextu
 
 ## 未交范围
 
-- RF-07 尺寸归一棚光与 Standard / Khronos PBR Neutral / AgX 实验。
+- RF-07 尺寸归一棚光与 Standard / Khronos PBR Neutral / AgX 实验（本切片当时未做；后续诊断实现见 [RF-07 记录](packaging-quality-rf07-closeout.md)，仍未进生产 registry）。
 - 生产 generation 注册、网页 upgrade、默认 profile 切换。
 - 深色纸、金属、珠光、透明窗口、烫金/局部 UV。
 - Windows 原生、真实稿验证和人工画质批准。

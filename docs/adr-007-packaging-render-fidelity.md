@@ -1,11 +1,11 @@
 # ADR-007：包装 3D 渲染真实感、清晰度与能力合同
 
 - 日期：2026-09-04
-- 状态：PARTIAL IMPLEMENTATION / L0 — `/plan-eng-review` 已完成，D1–D8 已锁定；RF-00 测量尺、RF-01 独立合同和 RF-02 流水线接线（含 RF-02.3）已完成 Code/L0；RF-03 本地产物验证、资源生命周期、临时 registry 与 Windows 托管代码已实现；RF-04 出图版本 API/UI 与 RF-05 显式纸盒壳几何已实现；RF-06 材质已合入 `main` `d2657f0` / `0.21.40.0`；RF-07 棚光/受控色彩对照已有 Code/普通 L0，待合入 `0.21.41.0`，未进生产 registry；生产注册、原生 Windows、RF-08+、正式视觉批准、L1/L2/UAT 未完成
+- 状态：PARTIAL IMPLEMENTATION / L0 — `/plan-eng-review` 已完成，D1–D8 已锁定；RF-00 测量尺、RF-01 独立合同和 RF-02 流水线接线（含 RF-02.3）已完成 Code/L0；RF-03 本地产物验证、资源生命周期、临时 registry 与 Windows 托管代码已实现；RF-04 出图版本 API/UI 与 RF-05 显式纸盒壳几何已实现；RF-06 材质已合入 `main` `d2657f0` / `0.21.40.0`；RF-07 棚光/受控色彩对照已有 Code/普通 L0，本分支已记 `0.21.41.0`、尚未合入 `origin/main`，未进生产 registry；生产注册、原生 Windows、RF-08+、正式视觉批准、L1/L2/UAT 未完成
 - 目标执行者：Grok / Codex 等编码代理，人工负责人负责选择、金标与发布闸门
 - 关联：`docs/adr-005-packaging-structure-v2.md`、`DESIGN.md`、`workers/packaging/README.md`、`docs/pouch-v1-acceptance.md`
 - 基线：`origin/main` `b39f147`，版本 `0.21.25.0`
-- 实现快照：RF-00 / RF-01 / RF-02 已交 Code/L0（RF-02.3 收口磁盘执行边界与私有执行快照/nonce）。新任务消费 persistable render plan 并写入四项顶层 identity / fingerprint token / resolved job / result；Blender 启动前校验磁盘 payload 与派生 flat render。所有非 cache Blender 任务从当前内存 job 生成私有执行快照并注入本轮 nonce；非 V2 只是命令行诊断路径，不是网页产品通道。只有已知 pre-RF02 V2 作业可合成 `compat-legacy-v0`，且历史最小 render 键必须完整匹配。同步异常全量回滚（含删除本轮新建 optional 输出）；进程崩溃/断电级原子 current 仍是 RF-03。正式 approved baseline 未创建。RF-06 材质只在诊断 registry/候选 profile 中生效，不得称生产画质已改善
+- 实现快照：RF-00 / RF-01 / RF-02 已交 Code/L0（RF-02.3 收口磁盘执行边界与私有执行快照/nonce）。新任务消费 persistable render plan 并写入四项顶层 identity / fingerprint token / resolved job / result；Blender 启动前校验磁盘 payload 与派生 flat render。所有非 cache Blender 任务从当前内存 job 生成私有执行快照并注入本轮 nonce；非 V2 只是命令行诊断路径，不是网页产品通道。只有已知 pre-RF02 V2 作业可合成 `compat-legacy-v0`，且历史最小 render 键必须完整匹配。同步异常全量回滚（含删除本轮新建 optional 输出）；进程崩溃/断电级原子 current 仍是 RF-03。正式 approved baseline 未创建。RF-06 材质与 RF-07 显式棚光/三变换对照只在诊断 registry/候选 profile 中生效，未批准前保持 Standard，不得称生产画质已改善
 
 ## 1. 结论先行
 

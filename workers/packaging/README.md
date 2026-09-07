@@ -56,6 +56,21 @@ RF-03 新候选路径由 `render_generation.py` 校验实际 GLB、full/card 和
     cd apps/web/backend
     .venv/bin/python -m pytest -q tests/test_packaging_render_quality.py
 
+## RF-07 诊断棚光与色彩对照
+
+独立诊断 profile `packshot-studio-explicit-v1` / `normalized-three-area-explicit-v1` 只经 `load_experimental_studio_registry` / `render_plan_for_experimental_studio_job` 使用，不改生产 registry、F 灯光、`Standard` 或正式 baseline。对照工具固定几何、材质、灯和曝光，只替换 `Standard` / `Khronos PBR Neutral` / `AgX`，匿名图用 A/B/C。没有批准的 P0 阈值或真稿盲评时保持 Standard，不宣称画质改善。交付边界见 [RF-07 记录](../../docs/designs/packaging-quality-rf07-closeout.md)。
+
+默认只打印计划 JSON，不启动 Blender：
+
+    apps/web/backend/.venv/bin/python workers/packaging/tools/render_quality_color_experiment.py --suite smoke
+
+真正出图时加 `--render`。`--output` 必须是仓库、worktree 和产品数据目录之外、尚不存在的专用目录；省略则在系统临时目录创建。需要指定 Blender 时加 `--blender /absolute/path/to/blender`。缺 Blender 会明确失败。`--suite matrix` 为四盒 × 三变换。普通合同测试不需要 Blender：
+
+    cd apps/web/backend
+    .venv/bin/python -m pytest -q tests/test_packaging_studio_color.py tests/test_rf07_rf06_compat.py
+
+变换读回等原生用例仍须按 [TESTING.md](../../TESTING.md) 显式加 `--run-native`，不因本机已装 Blender 自动启用。
+
 ## 运行
 
     # 网页打样台会调这份 CLI。本机直接跑也可以。PPT 用白底写 OOXML，不依赖 Node。不要提交 node_modules。
