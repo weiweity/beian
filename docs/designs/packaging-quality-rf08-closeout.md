@@ -1,6 +1,6 @@
 # RF-08 本地交付记录
 
-日期：2026-09-07。状态：**Code / 普通 L0 已验证，进入 /ship**。范围：按实际相机与正反两张 shot 的 2×2 Jacobian 反推六面切图像素，超过 maximum ppm 或 32MP 时 `render_texture_budget_exceeded` 返回 required/allowed，禁止静默 clamp。分支 `codex/rf08-projection-sampling`，基线已发布 RF-07 `88321a90a8ab61803c66b28e04b25f46e64cb29d` / `0.21.41.0`。人工验收、杭州 L1、真实稿 L2/UAT、生产 registry 与正式 baseline 均未改变。
+日期：2026-09-07。状态：**Code / 普通 L0 已验证；本分支已记 VERSION `0.21.42.0`，尚未合入 `origin/main`；未改生产默认**。范围：按实际相机与正反两张 shot 的 2×2 Jacobian 反推六面切图像素，超过 maximum ppm 或 32MP 时 `render_texture_budget_exceeded` 返回 required/allowed，禁止静默 clamp。分支 `codex/rf08-projection-sampling`，基线已发布 RF-07 `88321a90a8ab61803c66b28e04b25f46e64cb29d` / `0.21.41.0`。人工验收、杭州 L1、真实稿 L2/UAT、生产 registry 与正式 baseline 均未改变。
 
 ## 实现与兼容
 
@@ -8,7 +8,7 @@
 - 每面：最大奇异值 = `projected_max_ppm`，最小奇异值 = `projected_min_ppm`；同一面取两张 shot 的最大需求。`untruncated_target_ppm = max(minimum_ppm, projected_max * oversample_ratio)`。超过 `maximum_face_pixels_per_mm` 或单面 32MP 时失败，不把需求压到上限。
 - `oversample_ratio` 只写在诊断 profile（候选 1.5），不散落魔法常量。现有 1–64 px/mm 与 32MP 上限未放宽。
 - 新策略 `projection-jacobian-v1` 只登记在 `workers/packaging/profiles/experiments/rf08-projection-sampling.v1.json` 的 `packshot-projection-sampling-v1`。生产 `render-profiles.v1.json`、`compat-legacy-v0` hash、Standard、registry 默认均未改。入口：`load_experimental_projection_registry` / `render_plan_for_experimental_projection_job`。
-- `artwork.py` 对投影策略按每面目标一次矢量栅格 + 一次 affine；预算失败在 `get_pixmap` 前；写入 `.rf08-face-staging`，成功才替换到输出目录，失败删除 staging，不留下新旧混合六面。
+- `artwork.py` 对投影策略按每面目标一次矢量栅格 + 一次 affine；预算失败在 `get_pixmap` 前；写入 `.face-staging-*`，成功才替换到输出目录；提交失败经 `.face-backup-*` 恢复上一套完整六面并删除暂存，不留下新旧混合面板。
 - 采样身份进入 spec `per_face_target_pixels_per_mm` 与 `render_contract_hash` / fingerprint。相机或主输出尺寸变化会改变目标与 cache。`blender_result.json` 增加 engine / Blender 版本 / samples / pixel filter / view transform / master 分辨率 / face_sampling。
 
 ## 旧/新采样（47.5×47.5×177.5 mm，3000×3600，oversample 1.5）
@@ -41,4 +41,4 @@
 - 杭州 Windows Blender L1、真实稿 L2、刘籽烨 UAT
 - 生产 registry 注册、正式 baseline、把投影策略设为产品默认
 - RF-09 浏览器 card→full、RF-10 质量平台、RF-11 Windows 发版烟测
-- 未改 VERSION/CHANGELOG，未提交、推送、PR、合并或部署
+- 本分支已记 VERSION `0.21.42.0` 与 CHANGELOG；尚未开 PR、合入 `origin/main` 或部署
