@@ -31,7 +31,7 @@
 - [ ] **端到端字体清晰度修复**
   预览容器尺寸同步、卡图→全图原位升级、失败保留卡图、同单重渲缓存切代及高光保护进入共用合成器与旧单。历史合成证据见 `docs/designs/packaging-quality-rfe02-browser-findings.md` 和 `docs/designs/packaging-quality-highlight-transfer.md`；不将原大工作树的测试数字当成本批独立运行结果。这些预览改动不代表端到端字体清晰度或真实稿验收完成。
   F 已追加为显式可选的版本化 profile，包含阴影资源预算、零退出码阴影溢出拒绝及受信任历史 registry 回放；默认未切换。合同与历史证据见 `docs/designs/packaging-quality-f-contract.md`；不代表 RF-03+、字体清晰度或生产验收完成。
-  PDF→切面的投影反推与 32MP 预算已在诊断 profile `packshot-projection-sampling-v1` 落地（见 RF-08 记录）；生产默认仍是 `minimum-floor-v1`。仍缺：每次采样写入产品质量报告的生产接线、浏览器 card→full 原位升级（RF-09）、下载与预览同一合成函数。3D 仍用于看形，`read_*` 印刷面仍是验字事实源。
+  PDF→切面的投影反推与 32MP 预算已在诊断 profile `packshot-projection-sampling-v1` 落地（见 RF-08 记录）；生产默认仍是 `minimum-floor-v1`。浏览器 card→full 原位升级（RF-09）的本地实现、针对性合成验证与独立复核已完成；下载与预览共用合成器。B5 已交付同 fixture 的有限前后对照，B7 已完成隔离页 browse 检查，真实 Claude 路由不可用的覆盖限制保留。仍缺：每次采样写入产品质量报告的生产接线、heap/帧预算和真实环境性能验证、杭州 L1、真稿 L2、UAT。3D 仍用于看形，`read_*` 印刷面仍是验字事实源。不把本项写成渲染质量验收完成。
 
 - [ ] **质量门与回归矩阵**
   L0 验证合同、像素预算、缓存、旧单兼容和浏览器升级；有 Blender 的显式质量命令验证合成样片；L1 记录 Blender 版本/合同 hash；L2/UAT 用白盒、深色盒、细长盒、矮宽盒、膜袋正负样本做人工 A/B。任何机器分数都不能替代人核“真实感”。
