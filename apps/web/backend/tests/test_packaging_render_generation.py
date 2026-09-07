@@ -723,6 +723,85 @@ def dummy_blender(path: Path) -> Path:
     return path
 
 
+def _bind_experimental_gloss(job: dict) -> dict:
+    from test_packaging_render_contract import carton_job, contract_module
+
+    contract = contract_module()
+    structure = carton_job(dimensions=job["dimensions_mm"])
+    structure["structure_hash"] = job["structure_hash"]
+    plan = contract.render_plan_for_experimental_material_job(
+        structure, "packshot-material-white-gloss-v1"
+    )
+    job["render_spec"] = plan["spec"]
+    job["render"] = plan["render"]
+    job.update(plan["identity"])
+    Path(job["resolved_job_path"]).write_text(json.dumps(job), encoding="utf-8")
+    return job
+
+
+@pytest.mark.parametrize("damage", ["clearcoat", "normal_scale"])
+def test_candidate_runtime_gate_rejects_declared_pbr_tampering(tmp_path, monkeypatch, damage):
+    from test_packaging_glb_verify import _write_artifact, glb_verify
+    from test_packaging_render_contract import contract_module
+    from test_packaging_render_materials import _pbr_carton_artifact
+
+    gen = generation_module()
+    _pipeline, job, root = make_spec_source(tmp_path)
+    job = _bind_experimental_gloss(job)
+    before = inventory(root)
+    module = glb_verify()
+    contract = contract_module()
+    pbr_dir = tmp_path / "pbr-src"
+    pbr_dir.mkdir()
+    geometry = job["render_spec"]["geometry"]
+    artifact, _assets = _pbr_carton_artifact(
+        module,
+        contract,
+        pbr_dir,
+        assets=job["assets"],
+        dimensions=job["dimensions_mm"],
+        substrate=job["render"]["substrate_rgba"],
+        extras={
+            "render_family": geometry["family"],
+            "geometry_model": geometry["closure_detail"],
+            "render_profile_id": job["render_profile_id"],
+            "render_contract_hash": job["render_contract_hash"],
+        },
+    )
+    if damage == "clearcoat":
+        for material in artifact.document["materials"]:
+            material.pop("extensions", None)
+        artifact.document.pop("extensionsUsed", None)
+    else:
+        for material in artifact.document["materials"]:
+            if isinstance(material.get("normalTexture"), dict):
+                material["normalTexture"]["scale"] = 0
+    glb_path = _write_artifact(module, pbr_dir, artifact)
+    fake_blender(gen, monkeypatch, corrupt_glb=glb_path.read_bytes())
+    original = gen.compare_glb_artifact_contract
+    seen_layers = {}
+
+    def wrapped(*args, **kwargs):
+        seen_layers["present"] = kwargs.get("material_layers") is not None
+        kwargs = dict(kwargs)
+        kwargs["geometry"] = None
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(gen, "compare_glb_artifact_contract", wrapped)
+    with pytest.raises(gen.RenderGenerationError) as raised:
+        gen.run_request(
+            request_payload(
+                root,
+                action="render-candidate",
+                candidate_dir=str(tmp_path / f"pbr-{damage}"),
+                blender_executable=str(dummy_blender(tmp_path / "fake-blender")),
+            )
+        )
+    assert raised.value.cause == "runtime_glb_quality"
+    assert seen_layers.get("present") is True
+    assert inventory(root) == before
+
+
 def test_candidate_rejects_parseable_empty_glb_despite_success_nonce(tmp_path, monkeypatch):
     gen = generation_module()
     _pipeline, _job, root = make_spec_source(tmp_path)

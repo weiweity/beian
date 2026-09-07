@@ -586,6 +586,19 @@ def test_runtime_reads_actual_blender_export_without_rendering(tmp_path, model):
         job["dimensions_mm"]["depth"] = 3.0
         geometry = {"family": "pouch_thin_card_v1", "closure_detail": "thin-card-preview-v1", "preview_fidelity": "thin_card"}
         job["render_spec"] = {"geometry": geometry}
+    if model != "legacy":
+        # Geometry-only export fixtures still need an explicit material under
+        # RF-06. Keep their historical white substrate and surface parameters;
+        # do not weaken the renderer's missing-material validation for tests.
+        job["render_spec"]["material"] = {
+            "substrate_profile": "white-card-default-v1",
+            "print_layer": "process-ink-v1",
+            "finish_profile": "none",
+            "spot_finish_mask": None,
+            "substrate_rgba": [1, 1, 1, 1],
+            "roughness": 0.52,
+            "specular_ior_level": 0.08,
+        }
     job_path = tmp_path / "job.json"
     job_path.write_text(json.dumps(job))
     script = tmp_path / "export_synthetic.py"
