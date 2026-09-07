@@ -1,9 +1,10 @@
 """Strict, versioned render semantics for the existing packaging pipeline.
 
-This module is deliberately the only reader of ``render-profiles.v1.json``.
-It resolves accepted structure facts into a canonical render spec without
-calling Blender or changing product output.  Later pipeline slices consume the
-spec; they must not recreate profile defaults independently.
+This module is deliberately the only reader of ``render-profiles.v1.json``
+and of the RF-06 diagnostic material registry.  It resolves accepted
+structure facts into a canonical render spec without calling Blender or
+changing product output.  Later pipeline slices consume the spec; they
+must not recreate profile defaults independently.
 """
 
 from __future__ import annotations
@@ -14,7 +15,9 @@ import json
 import math
 from pathlib import Path
 import re
+import struct
 from typing import Any, Mapping
+import zlib
 
 
 REGISTRY_SCHEMA = "packaging-render-profile-registry/1"
@@ -141,10 +144,22 @@ V1_DIAGNOSTIC_RENDER_BY_TEMPLATE_ID = {
 DEFAULT_REGISTRY_PATH = (
     Path(__file__).resolve().parent / "profiles" / "render-profiles.v1.json"
 )
+EXPERIMENTAL_MATERIAL_REGISTRY_PATH = (
+    Path(__file__).resolve().parent / "profiles" / "experiments" / "rf06-materials.v1.json"
+)
 
 SEMANTIC_FACES = ("front", "right", "back", "left", "top", "bottom")
 RENDER_FAMILIES = ("rectangular_carton_v1", "pouch_thin_card_v1")
 VIEW_IDS = ("front_right", "back_left")
+SUBSTRATE_PROFILES = frozenset({"white-card-default-v1", "kraft-card-v1"})
+FINISH_PROFILES = frozenset(
+    {"none", "overall-matte-lamination-v1", "overall-gloss-varnish-v1"}
+)
+MICRO_NORMAL_SIZES_PX = frozenset({16, 32, 64, 128})
+GLB_CLEARCOAT_EXTENSION = "KHR_materials_clearcoat"
+LEGACY_CORE_ROUGHNESS = 0.6
+LEGACY_CORE_SPECULAR_IOR = 0.5
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 MAX_REGISTRY_BYTES = 2 * 1024 * 1024
 MAX_DIMENSION_MM = 10_000.0
@@ -405,7 +420,7 @@ def _normalize_geometry_config(value: Any, label: str, family: str) -> dict[str,
         "substrate_profile": _text(
             geometry.get("substrate_profile"),
             f"{label}.substrate_profile",
-            allowed={"white-card-default-v1"},
+            allowed=set(SUBSTRATE_PROFILES),
         ),
         "closure_detail": _text(
             geometry.get("closure_detail"),
@@ -463,6 +478,65 @@ def _normalize_rgba(value: Any, label: str) -> list[float]:
     return result
 
 
+def _normalize_micro_normal(value: Any, label: str) -> dict[str, Any]:
+    normal = _mapping(value, label)
+    _known_keys(normal, {"kind", "size_px", "seed", "strength", "color_space"}, label)
+    size = _integer(normal.get("size_px"), f"{label}.size_px", lower=16, upper=128)
+    if size not in MICRO_NORMAL_SIZES_PX:
+        _invalid("微法线尺寸必须是固定预算档位", field=f"{label}.size_px", value=size)
+    strength = _number(normal.get("strength"), f"{label}.strength", lower=0.0, upper=1.0)
+    if strength <= 0:
+        _invalid("微法线强度必须大于零", field=f"{label}.strength")
+    return {
+        "kind": _text(normal.get("kind"), f"{label}.kind", allowed={"procedural-micro-v1"}),
+        "size_px": size,
+        "seed": _integer(normal.get("seed"), f"{label}.seed", lower=0, upper=2_147_483_647),
+        "strength": strength,
+        "color_space": _text(
+            normal.get("color_space"), f"{label}.color_space", allowed={"Non-Color"}
+        ),
+    }
+
+
+def _normalize_glb_export(
+    value: Any, label: str, *, has_coat: bool, has_normal: bool
+) -> dict[str, Any]:
+    export = _mapping(value, label)
+    _known_keys(export, {"roughness", "clearcoat", "normal", "extensions"}, label)
+    roughness = _boolean(export.get("roughness"), f"{label}.roughness")
+    if not roughness:
+        _invalid("GLB 必须导出 roughness", field=f"{label}.roughness")
+    clearcoat = _boolean(export.get("clearcoat"), f"{label}.clearcoat")
+    normal = _boolean(export.get("normal"), f"{label}.normal")
+    extensions: list[str] = []
+    for index, item in enumerate(_list(export.get("extensions"), f"{label}.extensions")):
+        ext = _text(
+            item,
+            f"{label}.extensions[{index}]",
+            allowed={GLB_CLEARCOAT_EXTENSION},
+        )
+        if ext in extensions:
+            _invalid("GLB extensions 不能重复", field=f"{label}.extensions")
+        extensions.append(ext)
+    if clearcoat and GLB_CLEARCOAT_EXTENSION not in extensions:
+        _invalid(
+            "clearcoat 导出必须列入 KHR_materials_clearcoat",
+            field=f"{label}.extensions",
+        )
+    if not clearcoat and extensions:
+        _invalid("未导出 clearcoat 时不得声明该扩展", field=f"{label}.extensions")
+    if clearcoat and not has_coat:
+        _invalid("声明 GLB clearcoat 必须有 coat 参数", field=label)
+    if normal and not has_normal:
+        _invalid("声明 GLB normal 必须有微法线", field=label)
+    return {
+        "roughness": True,
+        "clearcoat": clearcoat,
+        "normal": normal,
+        "extensions": extensions,
+    }
+
+
 def _normalize_material(value: Any, label: str) -> dict[str, Any]:
     material = _mapping(value, label)
     _known_keys(
@@ -475,6 +549,13 @@ def _normalize_material(value: Any, label: str) -> dict[str, Any]:
             "substrate_rgba",
             "roughness",
             "specular_ior_level",
+            "ink_color_space",
+            "coat_weight",
+            "coat_roughness",
+            "core_roughness",
+            "core_specular_ior_level",
+            "substrate_micro_normal",
+            "glb_export",
         },
         label,
     )
@@ -484,22 +565,75 @@ def _normalize_material(value: Any, label: str) -> dict[str, Any]:
             "局部工艺必须绑定后续切片提供的独立语义 mask",
             field=f"{label}.spot_finish_mask",
         )
+    finish = _text(
+        material.get("finish_profile"),
+        f"{label}.finish_profile",
+        allowed=set(FINISH_PROFILES),
+    )
+    extras: dict[str, Any] = {}
+    if "ink_color_space" in material:
+        extras["ink_color_space"] = _text(
+            material.get("ink_color_space"),
+            f"{label}.ink_color_space",
+            allowed={"sRGB"},
+        )
+    if "core_roughness" in material:
+        extras["core_roughness"] = _number(
+            material.get("core_roughness"),
+            f"{label}.core_roughness",
+            lower=0.0,
+            upper=1.0,
+        )
+    if "core_specular_ior_level" in material:
+        extras["core_specular_ior_level"] = _number(
+            material.get("core_specular_ior_level"),
+            f"{label}.core_specular_ior_level",
+            lower=0.0,
+            upper=1.0,
+        )
+    has_coat_fields = "coat_weight" in material or "coat_roughness" in material
+    if finish == "overall-gloss-varnish-v1":
+        if "coat_weight" not in material or "coat_roughness" not in material:
+            _invalid("整体上光必须显式声明 coat", field=label)
+        extras["coat_weight"] = _number(
+            material.get("coat_weight"), f"{label}.coat_weight", lower=0.0, upper=1.0
+        )
+        extras["coat_roughness"] = _number(
+            material.get("coat_roughness"),
+            f"{label}.coat_roughness",
+            lower=0.0,
+            upper=1.0,
+        )
+        if extras["coat_weight"] <= 0:
+            _invalid("整体上光的 coat_weight 必须大于零", field=f"{label}.coat_weight")
+    elif has_coat_fields:
+        _invalid("无涂层/哑膜不能声明 coat", field=label)
+    if "substrate_micro_normal" in material:
+        extras["substrate_micro_normal"] = _normalize_micro_normal(
+            material.get("substrate_micro_normal"), f"{label}.substrate_micro_normal"
+        )
+    if "glb_export" in material:
+        extras["glb_export"] = _normalize_glb_export(
+            material.get("glb_export"),
+            f"{label}.glb_export",
+            has_coat="coat_weight" in extras,
+            has_normal="substrate_micro_normal" in extras,
+        )
+        if finish == "overall-gloss-varnish-v1" and extras["glb_export"]["clearcoat"] is False:
+            # Explicit false is honest still-vs-GLB degradation, not a schema error.
+            pass
     return {
         "substrate_profile": _text(
             material.get("substrate_profile"),
             f"{label}.substrate_profile",
-            allowed={"white-card-default-v1"},
+            allowed=set(SUBSTRATE_PROFILES),
         ),
         "print_layer": _text(
             material.get("print_layer"),
             f"{label}.print_layer",
             allowed={"process-ink-v1"},
         ),
-        "finish_profile": _text(
-            material.get("finish_profile"),
-            f"{label}.finish_profile",
-            allowed={"none", "overall-matte-lamination-v1", "overall-gloss-varnish-v1"},
-        ),
+        "finish_profile": finish,
         "spot_finish_mask": None,
         "substrate_rgba": _normalize_rgba(
             material.get("substrate_rgba"), f"{label}.substrate_rgba"
@@ -513,6 +647,7 @@ def _normalize_material(value: Any, label: str) -> dict[str, Any]:
             lower=0.0,
             upper=1.0,
         ),
+        **extras,
     }
 
 
@@ -803,6 +938,13 @@ def _normalize_profile(
     }
     if payload["studio"]["profile"] == "normalized-three-area-f-v1" and payload["renderer"].get("shadow_pool_size_mb") != 1024:
         _invalid("F 灯光必须显式声明 1024 MB 阴影池", field=f"{label}.renderer")
+    material_substrate = payload["material"]["substrate_profile"]
+    for family, geometry in payload["geometry"].items():
+        if geometry["substrate_profile"] != material_substrate:
+            _invalid(
+                "geometry 与 material 的纸材声明必须一致",
+                field=f"{label}.geometry.{family}.substrate_profile",
+            )
     expected = canonical_sha256(payload)
     if verify_declared:
         declared = _hash_identity(
@@ -1295,6 +1437,11 @@ def _registry_for_persisted_identity(registry_hash: str, current: Mapping[str, A
         "sha256:38ee501b794e9979a8ab06f2e0e1a476271ea9c7897c41eed3460d0f0acfc77b": "pre-f.v1.json",
     }
     if registry_hash not in histories:
+        diagnostic = EXPERIMENTAL_MATERIAL_REGISTRY_PATH
+        if diagnostic.is_file():
+            loaded = load_profile_registry(diagnostic)
+            if loaded["registry_sha256"] == registry_hash:
+                return loaded
         _invalid("spec.registry_sha256 未在受信任历史中登记", field="spec.registry_sha256")
     historical = load_profile_registry(DEFAULT_REGISTRY_PATH.parent / "history" / histories[registry_hash])
     if historical["registry_sha256"] != registry_hash:
@@ -1573,6 +1720,15 @@ def _renderer_config_from_normalized(normalized: Mapping[str, Any]) -> dict[str,
             result[key] = shots[key]
     if "shadow_pool_size_mb" in normalized["renderer"]:
         result["shadow_pool_size_mb"] = normalized["renderer"]["shadow_pool_size_mb"]
+    if "coat_weight" in material:
+        result["material_coat_weight"] = material["coat_weight"]
+        result["material_coat_roughness"] = material["coat_roughness"]
+    if "ink_color_space" in material:
+        result["ink_color_space"] = material["ink_color_space"]
+    if "core_roughness" in material:
+        result["material_core_roughness"] = material["core_roughness"]
+    if "core_specular_ior_level" in material:
+        result["material_core_specular_ior"] = material["core_specular_ior_level"]
     return result
 
 
@@ -1589,6 +1745,212 @@ def current_renderer_config(
 
     normalized = validate_render_spec(spec, registry_path=registry_path)
     return _renderer_config_from_normalized(normalized)
+
+
+def load_experimental_material_registry() -> dict[str, Any]:
+    """Load the RF-06 diagnostic registry.  Not a production default."""
+
+    return load_profile_registry(EXPERIMENTAL_MATERIAL_REGISTRY_PATH)
+
+
+def render_plan_for_experimental_material_job(
+    structure_job: Mapping[str, Any],
+    profile_id: str,
+    output_request: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Explicit diagnostic entry for candidate paper/ink/finish profiles."""
+
+    return render_plan_for_new_job(
+        structure_job,
+        profile_id,
+        output_request,
+        registry_path=EXPERIMENTAL_MATERIAL_REGISTRY_PATH,
+    )
+
+
+def _hash32(x: int, y: int, seed: int) -> int:
+    value = (x * 374761393 + y * 668265263 + seed * 144737) & 0xFFFFFFFF
+    value = (value ^ (value >> 13)) * 1274126177 & 0xFFFFFFFF
+    return value & 0xFFFFFFFF
+
+
+def _png_rgba_bytes(width: int, height: int, pixels: bytes) -> bytes:
+    if len(pixels) != width * height * 4:
+        _invalid("微法线像素缓冲与尺寸不一致", field="substrate_micro_normal")
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(data))
+            + tag
+            + data
+            + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+        )
+
+    raw = b"".join(
+        b"\x00" + pixels[row * width * 4 : (row + 1) * width * 4]
+        for row in range(height)
+    )
+    header = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+    return PNG_SIGNATURE + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b"")
+
+
+def substrate_micro_normal_png_bytes(spec: Mapping[str, Any]) -> bytes:
+    """Deterministic, bounded tangent-space normal map.  Non-Color data."""
+
+    normal = _normalize_micro_normal(spec, "substrate_micro_normal")
+    size = int(normal["size_px"])
+    seed = int(normal["seed"])
+
+    def height(x: int, y: int) -> float:
+        return _hash32(x % size, y % size, seed) / 4294967295.0 * 2.0 - 1.0
+
+    pixels = bytearray(size * size * 4)
+    scale = 0.12
+    offset = 0
+    for y in range(size):
+        for x in range(size):
+            dx = height(x + 1, y) - height(x - 1, y)
+            dy = height(x, y + 1) - height(x, y - 1)
+            nx = -dx * scale
+            ny = -dy * scale
+            nz = 1.0
+            length = math.sqrt(nx * nx + ny * ny + nz * nz) or 1.0
+            pixels[offset] = int(round((nx / length * 0.5 + 0.5) * 255.0))
+            pixels[offset + 1] = int(round((ny / length * 0.5 + 0.5) * 255.0))
+            pixels[offset + 2] = int(round((nz / length * 0.5 + 0.5) * 255.0))
+            pixels[offset + 3] = 255
+            offset += 4
+    return _png_rgba_bytes(size, size, bytes(pixels))
+
+
+def resolved_material_layers(material: Mapping[str, Any]) -> dict[str, Any]:
+    """Single parser for substrate / ink / overall finish / unsupported spot."""
+
+    normalized = _normalize_material(material, "material")
+    micro = normalized.get("substrate_micro_normal")
+    coat_weight = normalized.get("coat_weight")
+    still_coat = coat_weight is not None and coat_weight > 0
+    still_normal = micro is not None
+    declared = normalized.get("glb_export")
+    if declared is None:
+        glb_export = {
+            "roughness": True,
+            "clearcoat": still_coat,
+            "normal": still_normal,
+            "extensions": [GLB_CLEARCOAT_EXTENSION] if still_coat else [],
+        }
+    else:
+        glb_export = deepcopy(declared)
+    micro_png = substrate_micro_normal_png_bytes(micro) if micro is not None else None
+    return {
+        "substrate": {
+            "profile": normalized["substrate_profile"],
+            "rgba": list(normalized["substrate_rgba"]),
+            "roughness": normalized["roughness"],
+            "core_roughness": normalized.get("core_roughness", LEGACY_CORE_ROUGHNESS),
+            "core_specular_ior_level": normalized.get(
+                "core_specular_ior_level", LEGACY_CORE_SPECULAR_IOR
+            ),
+            "specular_ior_level": normalized["specular_ior_level"],
+            "micro_normal": deepcopy(micro) if micro is not None else None,
+        },
+        "ink": {
+            "print_layer": normalized["print_layer"],
+            "color_space": normalized.get("ink_color_space", "sRGB"),
+            "alpha": "MASK",
+        },
+        "overall_finish": {
+            "profile": normalized["finish_profile"],
+            "coat_weight": coat_weight,
+            "coat_roughness": normalized.get("coat_roughness"),
+        },
+        "spot_finish": {
+            "supported": False,
+            "mask": None,
+            "reason": "局部工艺必须绑定独立语义 mask，当前不支持",
+        },
+        "still": {
+            "roughness": True,
+            "coat": still_coat,
+            "normal": still_normal,
+            "ink_color_space": normalized.get("ink_color_space", "sRGB"),
+            "normal_color_space": None if micro is None else micro["color_space"],
+        },
+        "glb_export": glb_export,
+        "visual": {
+            "substrate_rgba": list(normalized["substrate_rgba"]),
+            "face_roughness": normalized["roughness"],
+            "core_roughness": normalized.get("core_roughness", LEGACY_CORE_ROUGHNESS),
+            "core_specular_ior_level": normalized.get(
+                "core_specular_ior_level", LEGACY_CORE_SPECULAR_IOR
+            ),
+            "specular_ior_level": normalized["specular_ior_level"],
+            "coat_weight": coat_weight,
+            "coat_roughness": normalized.get("coat_roughness"),
+            "face_use_coat": still_coat,
+            "core_use_coat": False,
+            "normal_strength": None if micro is None else micro["strength"],
+            "micro_normal": deepcopy(micro) if micro is not None else None,
+            "micro_normal_png": micro_png,
+        },
+    }
+
+
+def blender_material_plan(layers: Mapping[str, Any]) -> dict[str, Any]:
+    """Wiring contract for Blender.  Not proof of an exported GLB subset."""
+
+    still = _mapping(layers.get("still"), "material.still")
+    ink = _mapping(layers.get("ink"), "material.ink")
+    visual = _mapping(layers.get("visual"), "material.visual")
+    return {
+        "ink_color_space": ink.get("color_space", "sRGB"),
+        "normal_color_space": still.get("normal_color_space"),
+        "alpha": ink.get("alpha", "MASK"),
+        "core_opaque": True,
+        "use_coat": bool(visual.get("face_use_coat", still.get("coat"))),
+        "face_use_coat": bool(visual.get("face_use_coat", still.get("coat"))),
+        "core_use_coat": False,
+        "use_normal": bool(still.get("normal")),
+        "face_roughness": visual.get("face_roughness"),
+        "core_roughness": visual.get("core_roughness"),
+        "coat_weight": visual.get("coat_weight"),
+        "coat_roughness": visual.get("coat_roughness"),
+        "normal_strength": visual.get("normal_strength"),
+        "substrate_rgba": list(visual.get("substrate_rgba") or []),
+        "specular_ior_level": visual.get("specular_ior_level"),
+        "ink_specular_ior_level": visual.get("specular_ior_level"),
+        "core_specular_ior_level": visual.get(
+            "core_specular_ior_level", LEGACY_CORE_SPECULAR_IOR
+        ),
+        "micro_normal": deepcopy(visual.get("micro_normal")),
+    }
+
+
+def material_runtime_from_job(job: Mapping[str, Any]) -> dict[str, Any]:
+    """Resolve material layers from a V2 spec or historical V1 flat render."""
+
+    payload = _mapping(job, "job")
+    spec = payload.get("render_spec")
+    if spec is not None:
+        material = _mapping(
+            _mapping(spec, "render_spec").get("material"), "render_spec.material"
+        )
+        return resolved_material_layers(material)
+    render = _mapping(payload.get("render"), "render")
+    rgba = render.get("substrate_rgba", [0.7, 0.7, 0.7, 1.0])
+    roughness = render.get("material_roughness", 0.52)
+    specular = render.get("material_specular_ior", 0.08)
+    return resolved_material_layers(
+        {
+            "substrate_profile": "white-card-default-v1",
+            "print_layer": "process-ink-v1",
+            "finish_profile": "none",
+            "spot_finish_mask": None,
+            "substrate_rgba": rgba,
+            "roughness": roughness,
+            "specular_ior_level": specular,
+        }
+    )
 
 
 def _identity_from_spec(spec: Mapping[str, Any]) -> dict[str, str]:

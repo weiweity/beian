@@ -8,6 +8,7 @@ import json
 import math
 from pathlib import Path
 import struct
+import sys
 from typing import Any, Mapping, Sequence
 import zlib
 
@@ -222,6 +223,7 @@ def compare_glb_artifact_contract(
     dimensions_mm: Mapping[str, float], tolerance_mm: float, substrate_rgba: Sequence[float],
     *, geometry: Mapping[str, Any] | None = None,
     render_identity: Mapping[str, str] | None = None,
+    material_layers: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Verify the static exported box directly, without bpy or worker measurements.
 
@@ -239,7 +241,16 @@ def compare_glb_artifact_contract(
         if min(dims) <= 0 or not math.isfinite(tolerance_mm) or not 0 < tolerance_mm < min(dims):
             raise ValueError("invalid dimension tolerance")
         doc = artifact.document
-        if doc.get("asset", {}).get("version") != "2.0" or doc.get("animations") or doc.get("skins") or doc.get("extensionsRequired"):
+        layers = material_layers if material_layers is not None else _layers_from_render_identity(render_identity)
+        pbr_layers = layers if _pbr_required(layers) else None
+        contract_extensions = set((layers or {}).get("glb_export", {}).get("extensions") or []) if layers else set()
+        required = doc.get("extensionsRequired")
+        if doc.get("asset", {}).get("version") != "2.0" or doc.get("animations") or doc.get("skins"):
+            raise ValueError("unsupported dynamic or required-extension artifact")
+        if required and (
+            not isinstance(required, list)
+            or any(item not in contract_extensions for item in required)
+        ):
             raise ValueError("unsupported dynamic or required-extension artifact")
         buffers = doc.get("buffers")
         if (not isinstance(buffers, list) or len(buffers) != 1 or "uri" in buffers[0]
@@ -314,9 +325,13 @@ def compare_glb_artifact_contract(
             "dimensions": compare_glb_dimensions(spans, dimensions_mm, tolerance_mm),
             "surface": compare_glb_surface_contract(surfaces, dimensions_mm, tolerance_mm, geometry=geometry),
             "core": compare_glb_core_contract(cores, dimensions_mm, tolerance_mm, geometry=geometry),
-            "material": compare_glb_material_contract(artifact, expected_assets, substrate_rgba),
+            "material": compare_glb_material_contract(
+                artifact, expected_assets, substrate_rgba, pbr=pbr_layers
+            ),
         }
-        return {"ok": all(r["ok"] for r in reports.values()), **reports}
+        if pbr_layers is not None:
+            reports["pbr"] = reports["material"].get("pbr") or compare_glb_pbr_capability(artifact, pbr_layers)
+        return {"ok": all(r["ok"] for r in reports.values() if isinstance(r, Mapping)), **reports}
     except (ValueError, TypeError, KeyError, AttributeError, IndexError, OverflowError, struct.error) as error:
         return {"ok": False, "errors": [{"code": "glb_artifact_contract_invalid", "detail": str(error)[:160]}]}
 
@@ -544,6 +559,7 @@ def compare_glb_material_contract(
     substrate_rgba: Sequence[float],
     *,
     colour_tolerance: float = 1e-4,
+    pbr: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Verify exported MASK artwork and the opaque paperboard core.
 
@@ -640,7 +656,404 @@ def compare_glb_material_contract(
                 break
     if not core_bound:
         errors.append({"code": "paperboard_core_binding_missing"})
-    return {"ok": not errors, "errors": errors}
+    result: dict[str, Any] = {"ok": not errors, "errors": errors}
+    if pbr is not None:
+        capability = compare_glb_pbr_capability(artifact, pbr)
+        result["pbr"] = capability
+        if not capability["ok"]:
+            result["ok"] = False
+            result["errors"] = [*errors, *capability["errors"]]
+    return result
+
+
+CLEARCOAT_EXTENSION = "KHR_materials_clearcoat"
+_PBR_FACTOR_TOLERANCE = 0.02
+_PBR_SCALE_TOLERANCE = 0.02
+
+
+def _layers_from_render_identity(render_identity: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(render_identity, Mapping):
+        return None
+    spec = render_identity.get("render_spec")
+    if not isinstance(spec, Mapping):
+        return None
+    material = spec.get("material")
+    if not isinstance(material, Mapping):
+        return None
+    packaging = str(Path(__file__).resolve().parent)
+    if packaging not in sys.path:
+        sys.path.insert(0, packaging)
+    from render_contract import resolved_material_layers
+
+    return resolved_material_layers(material)
+
+
+def _pbr_required(layers: Mapping[str, Any] | None) -> bool:
+    if not isinstance(layers, Mapping):
+        return False
+    export = layers.get("glb_export") if isinstance(layers.get("glb_export"), Mapping) else {}
+    still = layers.get("still") if isinstance(layers.get("still"), Mapping) else {}
+    return bool(
+        export.get("clearcoat")
+        or export.get("normal")
+        or still.get("coat")
+        or still.get("normal")
+    )
+
+
+def _texture_image_index(document: Mapping[str, Any], texture_info: object) -> int | None:
+    if not isinstance(texture_info, Mapping):
+        return None
+    texture = _indexed(document.get("textures"), texture_info.get("index"))
+    if texture is None:
+        return None
+    source = texture.get("source")
+    if isinstance(source, bool) or not isinstance(source, int):
+        return None
+    return source
+
+
+def _roughness_factor(material: Mapping[str, Any]) -> float | None:
+    pbr = material.get("pbrMetallicRoughness")
+    if not isinstance(pbr, Mapping):
+        return 1.0
+    value = pbr.get("roughnessFactor", 1.0)
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+        return None
+    return float(value)
+
+
+def _clearcoat_factors(material: Mapping[str, Any]) -> tuple[float, float] | None:
+    extensions = material.get("extensions")
+    if not isinstance(extensions, Mapping):
+        return None
+    coat = extensions.get(CLEARCOAT_EXTENSION)
+    if not isinstance(coat, Mapping):
+        return None
+    weight = coat.get("clearcoatFactor", 0.0)
+    roughness = coat.get("clearcoatRoughnessFactor", 0.0)
+    if (
+        isinstance(weight, bool)
+        or isinstance(roughness, bool)
+        or not isinstance(weight, (int, float))
+        or not isinstance(roughness, (int, float))
+        or not math.isfinite(float(weight))
+        or not math.isfinite(float(roughness))
+    ):
+        return None
+    return float(weight), float(roughness)
+
+
+def _factor_matches(actual: float | None, expected: float, *, tolerance: float = _PBR_FACTOR_TOLERANCE) -> bool:
+    return actual is not None and abs(actual - expected) <= tolerance
+
+
+def _finite_unit(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+        return None
+    number = float(value)
+    if number < 0.0 or number > 1.0:
+        return None
+    return number
+
+
+def _normal_scale(info: Mapping[str, Any]) -> float | None:
+    if "scale" not in info:
+        return 1.0
+    return _finite_unit(info.get("scale"))
+
+
+def _normal_texcoord(info: Mapping[str, Any]) -> int | None:
+    value = info.get("texCoord", 0)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _primitives_for_material(document: Mapping[str, Any], material_index: int) -> list[Mapping[str, Any]]:
+    meshes = document.get("meshes")
+    found: list[Mapping[str, Any]] = []
+    if not isinstance(meshes, list):
+        return found
+    for mesh in meshes:
+        if not isinstance(mesh, Mapping):
+            continue
+        primitives = mesh.get("primitives")
+        if not isinstance(primitives, list):
+            continue
+        for primitive in primitives:
+            if isinstance(primitive, Mapping) and primitive.get("material") == material_index:
+                found.append(primitive)
+    return found
+
+
+def _texcoord_bound(artifact: GlbArtifact, material_index: int, tex_coord: int) -> bool:
+    key = f"TEXCOORD_{tex_coord}"
+    primitives = _primitives_for_material(artifact.document, material_index)
+    if not primitives:
+        return False
+    for primitive in primitives:
+        attributes = primitive.get("attributes")
+        if not isinstance(attributes, Mapping) or key not in attributes:
+            return False
+        try:
+            uvs = _artifact_accessor(artifact, attributes[key], "VEC2")
+            positions = _artifact_accessor(artifact, attributes.get("POSITION"), "VEC3")
+        except (ValueError, TypeError, KeyError, IndexError, OverflowError, struct.error):
+            return False
+        if len(uvs) != len(positions):
+            return False
+    return True
+
+
+def compare_glb_pbr_capability(
+    artifact: GlbArtifact,
+    layers: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Inspect the exported glTF subset.  Node graphs are not evidence."""
+
+    if not isinstance(artifact, GlbArtifact):
+        return {"ok": False, "errors": [{"code": "glb_binary_contract_missing"}]}
+    still = layers.get("still") if isinstance(layers.get("still"), Mapping) else {}
+    declared = layers.get("glb_export") if isinstance(layers.get("glb_export"), Mapping) else {}
+    visual = layers.get("visual") if isinstance(layers.get("visual"), Mapping) else {}
+    document = artifact.document
+    materials = document.get("materials")
+    if not isinstance(materials, list):
+        return {"ok": False, "errors": [{"code": "materials_missing"}]}
+    used = document.get("extensionsUsed")
+    observed_extensions = [str(item) for item in used] if isinstance(used, list) else []
+    face_materials = [
+        material
+        for material in materials
+        if isinstance(material, Mapping)
+        and _normalized_name(material.get("name")) in {f"mat_{face}" for face in SEMANTIC_FACES}
+    ]
+    core_materials = [
+        material
+        for material in materials
+        if isinstance(material, Mapping)
+        and _normalized_name(material.get("name")) == "mat_paperboardedge"
+    ]
+    inspected = [*face_materials, *core_materials]
+    face_indexes = [
+        index
+        for index, material in enumerate(materials)
+        if isinstance(material, Mapping)
+        and _normalized_name(material.get("name")) in {f"mat_{face}" for face in SEMANTIC_FACES}
+    ]
+    core_indexes = [
+        index
+        for index, material in enumerate(materials)
+        if isinstance(material, Mapping)
+        and _normalized_name(material.get("name")) == "mat_paperboardedge"
+    ]
+    observed_clearcoat = bool(face_materials) and all(
+        factors is not None and factors[0] > 0 for factors in (_clearcoat_factors(material) for material in face_materials)
+    )
+    observed_normal = bool(face_materials) and all(
+        _texture_image_index(document, material.get("normalTexture")) is not None
+        for material in face_materials
+    )
+    observed_roughness = [_roughness_factor(material) for material in inspected]
+    errors: list[dict[str, Any]] = []
+    differences: list[dict[str, Any]] = []
+    expected_face = visual.get("face_roughness")
+    if declared.get("roughness") and isinstance(expected_face, (int, float)):
+        expected_core = visual.get("core_roughness", expected_face)
+        for material in face_materials:
+            pbr = material.get("pbrMetallicRoughness")
+            if isinstance(pbr, Mapping) and "metallicRoughnessTexture" in pbr:
+                errors.append(
+                    {
+                        "code": "glb_roughness_texture_override_unsupported",
+                        "material": material.get("name"),
+                    }
+                )
+            elif not _factor_matches(_roughness_factor(material), float(expected_face)):
+                errors.append(
+                    {
+                        "code": "glb_roughness_not_exported",
+                        "material": material.get("name"),
+                        "expected": float(expected_face),
+                        "observed": _roughness_factor(material),
+                    }
+                )
+        for material in core_materials:
+            pbr = material.get("pbrMetallicRoughness")
+            if isinstance(pbr, Mapping) and "metallicRoughnessTexture" in pbr:
+                errors.append(
+                    {
+                        "code": "glb_roughness_texture_override_unsupported",
+                        "material": material.get("name"),
+                    }
+                )
+            elif not _factor_matches(_roughness_factor(material), float(expected_core)):
+                errors.append(
+                    {
+                        "code": "glb_roughness_not_exported",
+                        "material": material.get("name"),
+                        "expected": float(expected_core),
+                        "observed": _roughness_factor(material),
+                    }
+                )
+    if declared.get("clearcoat"):
+        expected_weight = visual.get("coat_weight")
+        expected_roughness = visual.get("coat_roughness")
+        if CLEARCOAT_EXTENSION not in observed_extensions or not observed_clearcoat:
+            errors.append({"code": "glb_clearcoat_not_exported"})
+        elif isinstance(expected_weight, (int, float)) and isinstance(expected_roughness, (int, float)):
+            for material in face_materials:
+                coat = (material.get("extensions") or {}).get(CLEARCOAT_EXTENSION) if isinstance(material.get("extensions"), Mapping) else None
+                if isinstance(coat, Mapping) and any(
+                    key in coat for key in ("clearcoatTexture", "clearcoatRoughnessTexture", "clearcoatNormalTexture")
+                ):
+                    errors.append(
+                        {
+                            "code": "glb_clearcoat_texture_override_unsupported",
+                            "material": material.get("name"),
+                        }
+                    )
+                    continue
+                factors = _clearcoat_factors(material)
+                if (
+                    factors is None
+                    or not _factor_matches(factors[0], float(expected_weight))
+                    or not _factor_matches(factors[1], float(expected_roughness))
+                ):
+                    errors.append(
+                        {
+                            "code": "glb_clearcoat_not_exported",
+                            "material": material.get("name"),
+                            "observed": factors,
+                        }
+                    )
+        for material in core_materials:
+            factors = _clearcoat_factors(material)
+            if factors is not None and factors[0] > 0:
+                errors.append(
+                    {
+                        "code": "glb_core_clearcoat_not_allowed",
+                        "material": material.get("name"),
+                        "observed": factors,
+                    }
+                )
+    elif still.get("coat"):
+        differences.append(
+            {
+                "channel": "coat",
+                "still": True,
+                "glb": False,
+                "message": "静帧使用 Principled Coat，GLB 未导出 KHR_materials_clearcoat",
+            }
+        )
+    if declared.get("normal"):
+        expected_scale = visual.get("normal_strength")
+        if not observed_normal:
+            errors.append({"code": "glb_normal_not_exported"})
+        elif isinstance(visual.get("micro_normal_png"), (bytes, bytearray)):
+            expected = _decode_png_rgba(bytes(visual["micro_normal_png"]))
+            for material, material_index in zip(face_materials, face_indexes):
+                info = material.get("normalTexture")
+                if not isinstance(info, Mapping):
+                    errors.append({"code": "glb_normal_not_exported", "material": material.get("name")})
+                    continue
+                if info.get("extensions"):
+                    errors.append(
+                        {
+                            "code": "glb_normal_texture_override_unsupported",
+                            "material": material.get("name"),
+                        }
+                    )
+                    continue
+                scale = _normal_scale(info)
+                if scale is None or (
+                    isinstance(expected_scale, (int, float))
+                    and not _factor_matches(scale, float(expected_scale), tolerance=_PBR_SCALE_TOLERANCE)
+                ):
+                    errors.append(
+                        {
+                            "code": "glb_normal_scale_invalid",
+                            "material": material.get("name"),
+                            "expected": expected_scale,
+                            "observed": scale,
+                        }
+                    )
+                    continue
+                tex_coord = _normal_texcoord(info)
+                if tex_coord is None or not _texcoord_bound(artifact, material_index, tex_coord):
+                    errors.append(
+                        {
+                            "code": "glb_normal_texcoord_unbound",
+                            "material": material.get("name"),
+                            "tex_coord": tex_coord,
+                        }
+                    )
+                    continue
+                index = _texture_image_index(document, info)
+                image = _indexed(document.get("images"), index)
+                if image is None or image.get("mimeType") != "image/png":
+                    errors.append(
+                        {
+                            "code": "glb_normal_not_exported",
+                            "material": material.get("name"),
+                        }
+                    )
+                    continue
+                try:
+                    embedded = _decode_png_rgba(
+                        _buffer_view_bytes(artifact, image.get("bufferView"))
+                    )
+                except (ValueError, zlib.error) as error:
+                    errors.append(
+                        {
+                            "code": "glb_normal_not_exported",
+                            "material": material.get("name"),
+                            "detail": str(error),
+                        }
+                    )
+                    continue
+                if embedded["pixel_sha256"] != expected["pixel_sha256"]:
+                    errors.append(
+                        {
+                            "code": "glb_normal_pixels_mismatch",
+                            "material": material.get("name"),
+                        }
+                    )
+        else:
+            errors.append({"code": "glb_normal_not_exported"})
+    elif still.get("normal"):
+        differences.append(
+            {
+                "channel": "normal",
+                "still": True,
+                "glb": False,
+                "message": "静帧使用 Non-Color 微法线，GLB 未导出 normalTexture",
+            }
+        )
+    observed = {
+        "roughness": all(value is not None for value in observed_roughness),
+        "clearcoat": observed_clearcoat,
+        "normal": observed_normal,
+        "extensions_used": observed_extensions,
+    }
+    return {
+        "ok": not errors,
+        "errors": errors,
+        "differences": differences,
+        "still": {
+            "coat": bool(still.get("coat")),
+            "normal": bool(still.get("normal")),
+            "roughness": True,
+        },
+        "glb_declared": {
+            "roughness": bool(declared.get("roughness")),
+            "clearcoat": bool(declared.get("clearcoat")),
+            "normal": bool(declared.get("normal")),
+            "extensions": list(declared.get("extensions") or []),
+        },
+        "glb_observed": observed,
+    }
 
 
 def _point_bounds(points: Sequence[Sequence[float]]) -> tuple[tuple[float, float], ...]:
