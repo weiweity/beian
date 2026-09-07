@@ -366,8 +366,144 @@ export function releaseStudioGeneration(jobId:string,generation:string): void {
   }
 }
 
+export function studioStillCacheHas(url: string): boolean {
+  return stillLoads.has(url);
+}
+
 type StudioSourceUrls = { full: string; card?: string };
-export type StudioPreviewSources = { product: HTMLImageElement; ground: HTMLImageElement; set: HTMLImageElement | null };
+export type StudioLayerKey = "product" | "ground" | "set";
+type StudioLayerOrigin = "card" | "full" | "none";
+type StudioLayerFetch = "pending" | "ready" | "failed" | "absent";
+type StudioLayerFact = {
+  origin: StudioLayerOrigin;
+  fetch: StudioLayerFetch;
+  upgradeFailed?: boolean;
+};
+export type StudioPreviewFacts = Record<StudioLayerKey, StudioLayerFact>;
+export type StudioPreviewSources = {
+  product: HTMLImageElement;
+  ground: HTMLImageElement;
+  set: HTMLImageElement | null;
+  facts: StudioPreviewFacts;
+};
+
+const ABSENT_LAYER: StudioLayerFact = { origin: "none", fetch: "absent" };
+const PENDING_LAYER: StudioLayerFact = { origin: "none", fetch: "pending" };
+
+export function studioDrawnLayerKeys(
+  backdrop: BackdropPreset,
+  set: SizedSource | null,
+): { keys: StudioLayerKey[]; setFallback: boolean } {
+  const preset = parseBackdropPreset(backdrop);
+  if (preset !== "white_set") return { keys: ["product"], setFallback: false };
+  const size = set ? sourceSize(set) : { width: 0, height: 0 };
+  if (set && size.width && size.height) return { keys: ["product", "set"], setFallback: false };
+  return { keys: ["product", "ground"], setFallback: true };
+}
+
+export function studioPreviewSummary(
+  facts: StudioPreviewFacts,
+  backdrop: BackdropPreset,
+  set: SizedSource | null,
+): { source?: "card" | "full" | "mixed"; setFallback: boolean } {
+  const { keys, setFallback } = studioDrawnLayerKeys(backdrop, set);
+  const origins = keys.map((key) => facts[key].origin);
+  if (origins.some((origin) => origin === "none")) return { setFallback };
+  if (origins.every((origin) => origin === "full")) return { source: "full", setFallback };
+  if (origins.every((origin) => origin === "card")) return { source: "card", setFallback };
+  return { source: "mixed", setFallback };
+}
+
+export function studioDrawnUpgradeFailed(
+  facts: StudioPreviewFacts,
+  backdrop: BackdropPreset,
+  set: SizedSource | null,
+): boolean {
+  const { keys } = studioDrawnLayerKeys(backdrop, set);
+  return keys.some((key) => Boolean(facts[key].upgradeFailed));
+}
+
+export type StudioExportPlan =
+  | { action: "compose"; set: "full" | null }
+  | { action: "defer-set-full" };
+
+/** Freeze the visible backdrop decision at click time. Never silently swap a shown set for ground. */
+export function planStudioExport(
+  backdrop: BackdropPreset,
+  previewSet: SizedSource | null,
+  setFull: "pending" | "ready" | "failed" | "absent",
+): StudioExportPlan {
+  const usesSet = studioDrawnLayerKeys(backdrop, previewSet).keys.includes("set");
+  if (!usesSet) return { action: "compose", set: null };
+  if (setFull === "ready") return { action: "compose", set: "full" };
+  return { action: "defer-set-full" };
+}
+
+export async function peekSettled<T>(
+  promise: Promise<T>,
+): Promise<{ status: "fulfilled"; value: T } | { status: "rejected"; error: unknown } | { status: "pending" }> {
+  const slot: { current: { status: "fulfilled"; value: T } | { status: "rejected"; error: unknown } | { status: "pending" } } = {
+    current: { status: "pending" },
+  };
+  promise.then(
+    (value) => { slot.current = { status: "fulfilled", value }; },
+    (error) => { slot.current = { status: "rejected", error }; },
+  );
+  await Promise.resolve();
+  return slot.current;
+}
+
+export function applyStudioPreviewDataset(
+  canvas: HTMLCanvasElement,
+  facts: StudioPreviewFacts | null,
+  backdrop: BackdropPreset,
+  set: SizedSource | null,
+): void {
+  const ds = canvas.dataset;
+  delete ds.previewSource;
+  delete ds.previewProduct;
+  delete ds.previewGround;
+  delete ds.previewSet;
+  delete ds.previewProductFetch;
+  delete ds.previewGroundFetch;
+  delete ds.previewSetFetch;
+  delete ds.previewProductUpgrade;
+  delete ds.previewGroundUpgrade;
+  delete ds.previewSetUpgrade;
+  delete ds.previewSetFallback;
+  if (!facts) return;
+  ds.previewProduct = facts.product.origin;
+  ds.previewGround = facts.ground.origin;
+  ds.previewSet = facts.set.origin;
+  ds.previewProductFetch = facts.product.fetch;
+  ds.previewGroundFetch = facts.ground.fetch;
+  ds.previewSetFetch = facts.set.fetch;
+  if (facts.product.upgradeFailed) ds.previewProductUpgrade = "failed";
+  if (facts.ground.upgradeFailed) ds.previewGroundUpgrade = "failed";
+  if (facts.set.upgradeFailed) ds.previewSetUpgrade = "failed";
+  const summary = studioPreviewSummary(facts, backdrop, set);
+  if (summary.source) ds.previewSource = summary.source;
+  if (summary.setFallback) ds.previewSetFallback = "1";
+}
+
+function rf09PerfEnabled(): boolean {
+  return typeof window !== "undefined" && Boolean((window as Window & { __RF09_PERF__?: boolean }).__RF09_PERF__);
+}
+
+function rf09Mark(name: string): void {
+  if (!rf09PerfEnabled()) return;
+  if (typeof performance === "undefined" || typeof performance.mark !== "function") return;
+  if (performance.getEntriesByName(name, "mark").length >= 24) performance.clearMarks(name);
+  performance.mark(name);
+}
+
+function copyFacts(facts: StudioPreviewFacts): StudioPreviewFacts {
+  return {
+    product: { ...facts.product },
+    ground: { ...facts.ground },
+    set: { ...facts.set },
+  };
+}
 
 /** Decode at source resolution. Cards are local, full images reuse the existing download cache. */
 export function loadStudioPreview(
@@ -384,34 +520,100 @@ export function loadStudioPreview(
   },
 ): () => void {
   let cancelled = false;
-  async function initial(source: StudioSourceUrls): Promise<HTMLImageElement> {
-    if (source.card) {
-      try { return await loadCard(source.card); } catch { /* missing card: try full */ }
-    }
-    return loadFull(source.full);
+  let closed = false;
+  const images: { product?: HTMLImageElement; ground?: HTMLImageElement; set: HTMLImageElement | null } = { set: null };
+  const facts: StudioPreviewFacts = {
+    product: { ...PENDING_LAYER },
+    ground: { ...PENDING_LAYER },
+    set: urls.set ? { ...PENDING_LAYER } : { ...ABSENT_LAYER },
+  };
+
+  function emit(): void {
+    if (cancelled || closed || !images.product || !images.ground) return;
+    publish({
+      product: images.product,
+      ground: images.ground,
+      set: images.set,
+      facts: copyFacts(facts),
+    });
   }
-  void (async () => {
+
+  function failMandatory(): void {
+    if (cancelled || closed) return;
+    closed = true;
+    failed();
+  }
+
+  function startFull(url: string): Promise<HTMLImageElement> | undefined {
+    if (cancelled || closed) return;
+    return loadFull(url);
+  }
+
+  async function upgrade(source: StudioSourceUrls, key: StudioLayerKey): Promise<void> {
+    const pending = startFull(source.full);
+    if (!pending) return;
     try {
-      const [product, ground, set] = await Promise.all([
-        initial(urls.product), initial(urls.ground),
-        urls.set ? initial(urls.set).catch(() => null) : Promise.resolve(null),
-      ]);
-      if (cancelled) return;
-      let sources = { product, ground, set };
-      publish(sources);
-      await Promise.all((["product", "ground", "set"] as const).map(async (key) => {
-        const source = urls[key];
-        if (!source?.card) return;
-        try {
-          const full = await loadFull(source.full);
-          if (cancelled) return;
-          sources = { ...sources, [key]: full };
-          publish(sources);
-        } catch { /* retain this layer's usable card; other layers may still upgrade */ }
-      }));
-    } catch { if (!cancelled) failed(); }
-  })();
-  return () => { cancelled = true; };
+      const image = await pending;
+      if (cancelled || closed) return;
+      facts[key] = { origin: "full", fetch: "ready" };
+      if (key === "set") images.set = image;
+      else images[key] = image;
+      rf09Mark(`rf09-decode-${key}-full`);
+      emit();
+    } catch {
+      if (cancelled || closed) return;
+      facts[key] = { ...facts[key], upgradeFailed: true };
+      emit();
+    }
+  }
+
+  async function loadLayer(source: StudioSourceUrls | null, key: StudioLayerKey, optional: boolean): Promise<void> {
+    if (!source) {
+      facts[key] = { ...ABSENT_LAYER };
+      return;
+    }
+    if (source.card) {
+      try {
+        if (cancelled || closed) return;
+        const card = await loadCard(source.card);
+        if (cancelled || closed) return;
+        facts[key] = { origin: "card", fetch: "ready" };
+        if (key === "set") images.set = card;
+        else images[key] = card;
+        rf09Mark(`rf09-decode-${key}-card`);
+        emit();
+        await upgrade(source, key);
+        return;
+      } catch {
+        /* missing card: try full only if this preview is still alive */
+      }
+    }
+    if (cancelled || closed) return;
+    const pending = startFull(source.full);
+    if (!pending) return;
+    try {
+      const image = await pending;
+      if (cancelled || closed) return;
+      facts[key] = { origin: "full", fetch: "ready" };
+      if (key === "set") images.set = image;
+      else images[key] = image;
+      rf09Mark(`rf09-decode-${key}-full`);
+      emit();
+    } catch {
+      if (cancelled || closed) return;
+      facts[key] = { origin: "none", fetch: "failed" };
+      if (optional) emit();
+      else failMandatory();
+    }
+  }
+
+  void loadLayer(urls.product, "product", false);
+  void loadLayer(urls.ground, "ground", false);
+  void loadLayer(urls.set, "set", true);
+  return () => {
+    cancelled = true;
+    closed = true;
+  };
 }
 
 /** Observe the container, not just the viewport. DPR changes re-arm the resolution query. */
