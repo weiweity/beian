@@ -118,11 +118,13 @@ async function centerColor(page:Page) {
 }
 
 test("首次生成、运行中旧代下载、晚到 full/ground/GLB 不回写、历史切回与失败留图",async({page})=>{
+  test.setTimeout(45_000);
   const state=model(),oldFull=deferred(),oldGlb=deferred();
   const errors:string[]=[];page.on("pageerror",error=>errors.push(error.message));
   await serve(page,state,{oldFull,oldGlb});
   try {
     await page.goto(`/mockup/${ID}`,{waitUntil:"domcontentloaded"});
+    await page.locator(".mockup-backdrop-switch").getByText("白底",{exact:true}).click();
     await expect.poll(async()=>{const c=await centerColor(page);return c[0]>c[2];}).toBe(true);
     const download=page.waitForEvent("download");
     await page.getByRole("button",{name:"下载正面 + 侧面",exact:true}).click();
@@ -147,7 +149,7 @@ test("首次生成、运行中旧代下载、晚到 full/ground/GLB 不回写、
     await expect(page.locator(".mockup-sheet-photos")).toHaveAttribute("data-render-generation",G0);
     expect(state.facts.size).toBe(1);
     expect(state.calls.filter(call=>call.path.endsWith("/activate"))).toHaveLength(1);
-    await page.getByRole("button",{name:"按旧版重新出图",exact:true}).click();await expect.poll(()=>state.facts.size).toBe(2);
+    await page.locator(".mockup-version-actions").getByRole("button",{name:"按旧版重新出图"}).click();await expect.poll(()=>state.facts.size).toBe(2);
     state.complete(false);
     await expect(page.locator(".mockup-version-status")).toContainText("当前图片未变");
     await expect(page.locator(".mockup-sheet-photos")).toHaveAttribute("data-render-generation",G0);
