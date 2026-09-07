@@ -1,7 +1,7 @@
 # ADR-007：包装 3D 渲染真实感、清晰度与能力合同
 
 - 日期：2026-09-04
-- 状态：PARTIAL IMPLEMENTATION / L0 — `/plan-eng-review` 已完成，D1–D8 已锁定；RF-00 测量尺、RF-01 独立合同和 RF-02 流水线接线（含 RF-02.3）已完成 Code/L0；RF-03 本地产物验证、资源生命周期、临时 registry 与 Windows 托管代码已实现；RF-04 出图版本 API/UI 与 RF-05 显式纸盒壳几何已实现；RF-06 材质已合入 `main` `d2657f0` / `0.21.40.0`；RF-07 棚光/受控色彩对照已有 Code/普通 L0，本分支已记 `0.21.41.0`、尚未合入 `origin/main`，未进生产 registry；生产注册、原生 Windows、RF-08+、正式视觉批准、L1/L2/UAT 未完成
+- 状态：PARTIAL IMPLEMENTATION / L0 — `/plan-eng-review` 已完成，D1–D8 已锁定；RF-00 测量尺、RF-01 独立合同和 RF-02 流水线接线（含 RF-02.3）已完成 Code/L0；RF-03 本地产物验证、资源生命周期、临时 registry 与 Windows 托管代码已实现；RF-04 出图版本 API/UI 与 RF-05 显式纸盒壳几何已实现；RF-06 材质已合入 `main` `d2657f0` / `0.21.40.0`；RF-07 棚光/受控色彩对照已合入 `main` `88321a90` / `0.21.41.0`，未进生产 registry；RF-08 投影采样与切面预算已有诊断 profile 的 Code/普通 L0，未进生产 registry；生产注册、原生 Windows 发版烟测、RF-09+、正式视觉批准、L1/L2/UAT 未完成
 - 目标执行者：Grok / Codex 等编码代理，人工负责人负责选择、金标与发布闸门
 - 关联：`docs/adr-005-packaging-structure-v2.md`、`DESIGN.md`、`workers/packaging/README.md`、`docs/pouch-v1-acceptance.md`
 - 基线：`origin/main` `b39f147`，版本 `0.21.25.0`
@@ -9,7 +9,9 @@
 
 ## 1. 结论先行
 
-> 2026-09-07 RF-07：尺寸归一显式三灯棚与 Standard / Neutral / AgX 受控合成对照已迁入已发布 RF-06 `d2657f0` / `0.21.40.0`。候选、匿名图、失败闸门及本轮证据见 [RF-07 记录](designs/packaging-quality-rf07-closeout.md)。保留 Standard、正式 baseline 和生产注册的原有状态；下方 RF-06 等条目为各自历史切片。
+> 2026-09-07 RF-08：按实际相机与正反 shot 的 2×2 Jacobian 反推切面 ppm，诊断 profile `packshot-projection-sampling-v1`；超 maximum ppm / 32MP 失败并返回 required/allowed，不静默 clamp。未改生产 registry 或 `minimum-floor-v1` 默认。证据见 [RF-08 记录](designs/packaging-quality-rf08-closeout.md)。
+
+> 2026-09-07 RF-07：尺寸归一显式三灯棚与 Standard / Neutral / AgX 受控合成对照已合入 `main` `88321a90` / `0.21.41.0`。候选、匿名图、失败闸门及本轮证据见 [RF-07 记录](designs/packaging-quality-rf07-closeout.md)。保留 Standard、正式 baseline 和生产注册的原有状态；下方 RF-06 等条目为各自历史切片。
 
 > 2026-09-07 RF-06：在隔离工作区增加显式 substrate/ink/overall finish/unsupported spot 合同与诊断 registry；白卡/牛皮纸、none/哑膜/上光、sRGB 印刷与 Non-Color 微法线、GLB roughness/clearcoat/normal 以产物校验。未改已发布 profile hash、默认灯光、Standard 或生产启用。证据见 [RF-06 记录](designs/packaging-quality-rf06-closeout.md)。RF-07 与生产注册仍关闭。该候选随后以 `0.21.40.0` 合入 `main` `d2657f0`。
 
