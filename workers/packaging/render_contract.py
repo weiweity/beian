@@ -1,7 +1,8 @@
 """Strict, versioned render semantics for the existing packaging pipeline.
 
-This module is deliberately the only reader of ``render-profiles.v1.json``
-and of the RF-06 diagnostic material registry.  It resolves accepted
+This module is deliberately the only reader of ``render-profiles.v1.json``,
+the RF-06 diagnostic material registry, and the RF-07 diagnostic studio
+registry.  It resolves accepted
 structure facts into a canonical render spec without calling Blender or
 changing product output.  Later pipeline slices consume the spec; they
 must not recreate profile defaults independently.
@@ -147,6 +148,39 @@ DEFAULT_REGISTRY_PATH = (
 EXPERIMENTAL_MATERIAL_REGISTRY_PATH = (
     Path(__file__).resolve().parent / "profiles" / "experiments" / "rf06-materials.v1.json"
 )
+EXPERIMENTAL_STUDIO_REGISTRY_PATH = (
+    Path(__file__).resolve().parent / "profiles" / "experiments" / "rf07-studio-color.v1.json"
+)
+F_STUDIO_PROFILE = "normalized-three-area-f-v1"
+EXPLICIT_STUDIO_PROFILE = "normalized-three-area-explicit-v1"
+STUDIO_PROFILES = frozenset(
+    {
+        "legacy-fixed-three-area-v0",
+        "three-softbox-no-hdri-v1",
+        F_STUDIO_PROFILE,
+        EXPLICIT_STUDIO_PROFILE,
+    }
+)
+F_RIG_FIELDS = {
+    "rig_reference_mm": 180.0,
+    "fill_energy_multiplier": 0.35,
+    "key_elevation_delta_deg": -15.0,
+}
+EXPLICIT_STUDIO_KEYS = frozenset(
+    {
+        "reference_target_mm",
+        "camera_space_shots",
+        "world_hdri",
+        "world_color",
+        "lights",
+    }
+)
+STUDIO_LIGHT_ROLES = ("key", "fill", "rim")
+STUDIO_LIGHT_NAMES = {
+    "key": "Key softbox",
+    "fill": "Fill softbox",
+    "rim": "Rim softbox",
+}
 
 SEMANTIC_FACES = ("front", "right", "back", "left", "top", "bottom")
 RENDER_FAMILIES = ("rectangular_carton_v1", "pouch_thin_card_v1")
@@ -671,6 +705,63 @@ def _normalize_views(value: Any, label: str) -> list[str]:
     return list(VIEW_IDS)
 
 
+def _vec3(value: Any, label: str, *, lower: float | None = None, upper: float | None = None) -> list[float]:
+    items = _list(value, label)
+    if len(items) != 3:
+        _invalid(f"{label} 必须是长度为 3 的数组", field=label)
+    return [
+        _number(items[index], f"{label}[{index}]", lower=lower, upper=upper)
+        for index in range(3)
+    ]
+
+
+def _normalize_studio_light(value: Any, label: str, role: str) -> dict[str, Any]:
+    light = _mapping(value, label)
+    _known_keys(
+        light,
+        {
+            "name",
+            "location_mm",
+            "type",
+            "shape",
+            "size_mm",
+            "size_y_mm",
+            "energy_base",
+            "energy_ratio",
+        },
+        label,
+    )
+    shape = _text(
+        light.get("shape"),
+        f"{label}.shape",
+        allowed={"RECTANGLE", "SQUARE", "DISK", "ELLIPSE"},
+    )
+    payload = {
+        "name": _text(
+            light.get("name"),
+            f"{label}.name",
+            allowed={STUDIO_LIGHT_NAMES[role]},
+        ),
+        "location_mm": _vec3(light.get("location_mm"), f"{label}.location_mm"),
+        "type": _text(light.get("type"), f"{label}.type", allowed={"AREA"}),
+        "shape": shape,
+        "size_mm": _number(light.get("size_mm"), f"{label}.size_mm", lower=0.001, upper=10_000.0),
+        "energy_base": _number(
+            light.get("energy_base"), f"{label}.energy_base", lower=0.0, upper=10_000_000.0
+        ),
+        "energy_ratio": _number(
+            light.get("energy_ratio"), f"{label}.energy_ratio", lower=0.0, upper=10.0
+        ),
+    }
+    if shape in {"RECTANGLE", "ELLIPSE"}:
+        payload["size_y_mm"] = _number(
+            light.get("size_y_mm"), f"{label}.size_y_mm", lower=0.001, upper=10_000.0
+        )
+    elif "size_y_mm" in light:
+        _invalid("非矩形/椭圆灯不能声明 size_y_mm", field=f"{label}.size_y_mm")
+    return payload
+
+
 def _normalize_studio(value: Any, label: str) -> dict[str, Any]:
     studio = _mapping(value, label)
     _known_keys(
@@ -687,7 +778,10 @@ def _normalize_studio(value: Any, label: str) -> dict[str, Any]:
             "world_strength",
             "light_energy_scale",
             "exact_white_background",
-            "rig_reference_mm", "fill_energy_multiplier", "key_elevation_delta_deg",
+            "rig_reference_mm",
+            "fill_energy_multiplier",
+            "key_elevation_delta_deg",
+            *EXPLICIT_STUDIO_KEYS,
         },
         label,
     )
@@ -709,19 +803,52 @@ def _normalize_studio(value: Any, label: str) -> dict[str, Any]:
     else:
         camera_scale = None
     rig = {}
-    rig_fields = {"rig_reference_mm": 180.0, "fill_energy_multiplier": 0.35, "key_elevation_delta_deg": -15.0}
-    if studio.get("profile") == "normalized-three-area-f-v1":
-        for key, expected in rig_fields.items():
+    profile_id = _text(
+        studio.get("profile"),
+        f"{label}.profile",
+        allowed=set(STUDIO_PROFILES),
+    )
+    if profile_id in {F_STUDIO_PROFILE, EXPLICIT_STUDIO_PROFILE}:
+        for key, expected in F_RIG_FIELDS.items():
             rig[key] = _number(studio.get(key), f"{label}.{key}", lower=expected, upper=expected)
-    elif any(key in studio for key in rig_fields):
+    elif any(key in studio for key in F_RIG_FIELDS):
         _invalid("旧灯光不得携带 F 参数", field=label)
+    explicit = {}
+    if profile_id == EXPLICIT_STUDIO_PROFILE:
+        missing = sorted(key for key in EXPLICIT_STUDIO_KEYS if key not in studio)
+        if missing:
+            _invalid("显式棚光缺少合同字段", field=label, missing=missing)
+        reference_target = _vec3(studio.get("reference_target_mm"), f"{label}.reference_target_mm")
+        if reference_target != [0.0, 0.0, rig["rig_reference_mm"] / 2.0]:
+            _invalid("参考目标必须是参考尺寸中心", field=f"{label}.reference_target_mm")
+        if _boolean(studio.get("world_hdri"), f"{label}.world_hdri"):
+            _invalid("显式棚光禁止 HDRI", field=f"{label}.world_hdri")
+        if not _boolean(studio.get("camera_space_shots"), f"{label}.camera_space_shots"):
+            _invalid("正反 shot 必须保持相机空间灯位", field=f"{label}.camera_space_shots")
+        lights = _mapping(studio.get("lights"), f"{label}.lights")
+        if set(lights) != set(STUDIO_LIGHT_ROLES):
+            _invalid("显式棚光必须声明 key/fill/rim", field=f"{label}.lights")
+        normalized_lights = {
+            role: _normalize_studio_light(lights[role], f"{label}.lights.{role}", role)
+            for role in STUDIO_LIGHT_ROLES
+        }
+        if normalized_lights["fill"]["energy_ratio"] != rig["fill_energy_multiplier"]:
+            _invalid("fill 能量比必须等于 fill_energy_multiplier", field=f"{label}.lights.fill.energy_ratio")
+        if normalized_lights["key"]["energy_ratio"] != 1.0 or normalized_lights["rim"]["energy_ratio"] != 1.0:
+            _invalid("key/rim 能量比必须为 1", field=f"{label}.lights")
+        explicit = {
+            "reference_target_mm": reference_target,
+            "camera_space_shots": True,
+            "world_hdri": False,
+            "world_color": _vec3(studio.get("world_color"), f"{label}.world_color", lower=0.0, upper=1.0),
+            "lights": normalized_lights,
+        }
+    elif any(key in studio for key in EXPLICIT_STUDIO_KEYS):
+        _invalid("旧灯光不得携带 RF07 显式灯位", field=label)
     return {
         **rig,
-        "profile": _text(
-            studio.get("profile"),
-            f"{label}.profile",
-            allowed={"legacy-fixed-three-area-v0", "three-softbox-no-hdri-v1", "normalized-three-area-f-v1"},
-        ),
+        **explicit,
+        "profile": profile_id,
         "projection": _text(
             studio.get("projection"), f"{label}.projection", allowed={"ORTHOGRAPHIC"}
         ),
@@ -936,8 +1063,8 @@ def _normalize_profile(
         "sampling": _normalize_sampling(profile.get("sampling"), f"{label}.sampling"),
         "outputs": _normalize_outputs(profile.get("outputs"), f"{label}.outputs"),
     }
-    if payload["studio"]["profile"] == "normalized-three-area-f-v1" and payload["renderer"].get("shadow_pool_size_mb") != 1024:
-        _invalid("F 灯光必须显式声明 1024 MB 阴影池", field=f"{label}.renderer")
+    if payload["studio"]["profile"] in {F_STUDIO_PROFILE, EXPLICIT_STUDIO_PROFILE} and payload["renderer"].get("shadow_pool_size_mb") != 1024:
+        _invalid("尺寸归一棚光必须显式声明 1024 MB 阴影池", field=f"{label}.renderer")
     material_substrate = payload["material"]["substrate_profile"]
     for family, geometry in payload["geometry"].items():
         if geometry["substrate_profile"] != material_substrate:
@@ -1293,7 +1420,10 @@ def _spec_shots(value: Any, profile: Mapping[str, Any]) -> dict[str, Any]:
             "world_strength",
             "light_energy_scale",
             "exact_white_background",
-            "rig_reference_mm", "fill_energy_multiplier", "key_elevation_delta_deg",
+            "rig_reference_mm",
+            "fill_energy_multiplier",
+            "key_elevation_delta_deg",
+            *EXPLICIT_STUDIO_KEYS,
         },
         "spec.shots",
     )
@@ -1437,11 +1567,14 @@ def _registry_for_persisted_identity(registry_hash: str, current: Mapping[str, A
         "sha256:38ee501b794e9979a8ab06f2e0e1a476271ea9c7897c41eed3460d0f0acfc77b": "pre-f.v1.json",
     }
     if registry_hash not in histories:
-        diagnostic = EXPERIMENTAL_MATERIAL_REGISTRY_PATH
-        if diagnostic.is_file():
-            loaded = load_profile_registry(diagnostic)
-            if loaded["registry_sha256"] == registry_hash:
-                return loaded
+        for diagnostic in (
+            EXPERIMENTAL_MATERIAL_REGISTRY_PATH,
+            EXPERIMENTAL_STUDIO_REGISTRY_PATH,
+        ):
+            if diagnostic.is_file():
+                loaded = load_profile_registry(diagnostic)
+                if loaded["registry_sha256"] == registry_hash:
+                    return loaded
         _invalid("spec.registry_sha256 未在受信任历史中登记", field="spec.registry_sha256")
     historical = load_profile_registry(DEFAULT_REGISTRY_PATH.parent / "history" / histories[registry_hash])
     if historical["registry_sha256"] != registry_hash:
@@ -1714,7 +1847,7 @@ def _renderer_config_from_normalized(normalized: Mapping[str, Any]) -> dict[str,
     }
     if shots["camera_ortho_scale_mm"] is not None:
         result["camera_ortho_scale_mm"] = shots["camera_ortho_scale_mm"]
-    if shots["studio_profile"] == "normalized-three-area-f-v1":
+    if shots["studio_profile"] in {F_STUDIO_PROFILE, EXPLICIT_STUDIO_PROFILE}:
         result["studio_profile"] = shots["studio_profile"]
         for key in ("rig_reference_mm", "fill_energy_multiplier", "key_elevation_delta_deg"):
             result[key] = shots[key]
@@ -1753,6 +1886,12 @@ def load_experimental_material_registry() -> dict[str, Any]:
     return load_profile_registry(EXPERIMENTAL_MATERIAL_REGISTRY_PATH)
 
 
+def load_experimental_studio_registry() -> dict[str, Any]:
+    """Load the RF-07 diagnostic studio registry.  Not a production default."""
+
+    return load_profile_registry(EXPERIMENTAL_STUDIO_REGISTRY_PATH)
+
+
 def render_plan_for_experimental_material_job(
     structure_job: Mapping[str, Any],
     profile_id: str,
@@ -1766,6 +1905,82 @@ def render_plan_for_experimental_material_job(
         output_request,
         registry_path=EXPERIMENTAL_MATERIAL_REGISTRY_PATH,
     )
+
+
+def render_plan_for_experimental_studio_job(
+    structure_job: Mapping[str, Any],
+    profile_id: str,
+    output_request: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Explicit diagnostic entry for the RF-07 size-normalized studio candidate."""
+
+    return render_plan_for_new_job(
+        structure_job,
+        profile_id,
+        output_request,
+        registry_path=EXPERIMENTAL_STUDIO_REGISTRY_PATH,
+    )
+
+
+def scaled_explicit_studio_lights(
+    studio: Mapping[str, Any],
+    dimensions: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Scale the declared reference rig by bbox longest edge.  Size only."""
+
+    normalized = _normalize_studio(studio, "studio")
+    if normalized["profile"] != EXPLICIT_STUDIO_PROFILE:
+        _invalid("只有显式棚光才能按参考尺寸缩放", field="studio.profile")
+    width = _number(dimensions.get("width"), "dimensions_mm.width", lower=0.001, upper=MAX_DIMENSION_MM)
+    depth = _number(dimensions.get("depth"), "dimensions_mm.depth", lower=0.001, upper=MAX_DIMENSION_MM)
+    height = _number(dimensions.get("height"), "dimensions_mm.height", lower=0.001, upper=MAX_DIMENSION_MM)
+    scale = max(width, depth, height) / normalized["rig_reference_mm"]
+    target = (0.0, 0.0, height / 2.0)
+    reference = tuple(normalized["reference_target_mm"])
+    energy_scale = normalized["light_energy_scale"]
+    lights: dict[str, Any] = {}
+    for role in STUDIO_LIGHT_ROLES:
+        src = normalized["lights"][role]
+        loc = tuple(src["location_mm"])
+        scaled_loc = [
+            target[0] + scale * (loc[0] - reference[0]),
+            target[1] + scale * (loc[1] - reference[1]),
+            target[2] + scale * (loc[2] - reference[2]),
+        ]
+        size_y = None
+        if src["shape"] in {"RECTANGLE", "ELLIPSE"}:
+            size_y = src["size_y_mm"] * scale
+        lights[role] = {
+            "name": src["name"],
+            "location_mm": scaled_loc,
+            "shape": src["shape"],
+            "size_mm": src["size_mm"] * scale,
+            "size_y_mm": size_y,
+            "energy": src["energy_base"] * energy_scale * scale * scale,
+            "energy_ratio": src["energy_ratio"],
+        }
+    lights["fill"]["energy"] *= normalized["fill_energy_multiplier"]
+    key_loc = lights["key"]["location_mm"]
+    offset = (key_loc[0] - target[0], key_loc[1] - target[1], key_loc[2] - target[2])
+    distance = math.sqrt(sum(component * component for component in offset))
+    azimuth = math.atan2(offset[1], offset[0])
+    elevation = math.atan2(offset[2], math.hypot(offset[0], offset[1])) + math.radians(
+        normalized["key_elevation_delta_deg"]
+    )
+    lights["key"]["location_mm"] = [
+        target[0] + distance * math.cos(elevation) * math.cos(azimuth),
+        target[1] + distance * math.cos(elevation) * math.sin(azimuth),
+        target[2] + distance * math.sin(elevation),
+    ]
+    return {
+        "scale": scale,
+        "target_mm": list(target),
+        "camera_space_shots": True,
+        "world_hdri": False,
+        "world_strength": normalized["world_strength"],
+        "world_color": list(normalized["world_color"]),
+        "lights": lights,
+    }
 
 
 def _hash32(x: int, y: int, seed: int) -> int:

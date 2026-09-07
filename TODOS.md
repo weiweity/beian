@@ -14,7 +14,7 @@
 
 ## P1 — 包装 3D 渲染真实感与清晰度
 
-主计划：`docs/adr-007-packaging-render-fidelity.md`。RF-00 测量尺、RF-01 独立合同和 RF-02 流水线接线（含 RF-02.3 磁盘执行边界、私有执行快照/nonce、V1 诊断路径、legacy 必存键、同步回滚删除新建目标和成对 registry snapshot）已完成 Code/L0；非 V2 只是命令行诊断路径，不是网页产品通道。三者都未改变产品画质，也没有批准正式 baseline。RF-03 本地产物合同、资源生命周期与临时 registry 已实现，详见 [RF-03 收口记录](docs/designs/packaging-quality-rf03-runtime-closeout.md)。RF-04 出图版本 API/UI 与历史切换已实现，详见 [RF-04 交付记录](docs/designs/packaging-quality-rf04-closeout.md)。RF-05 显式纸盒壳几何与 family/GLB 合同已实现，详见 [RF-05 交付记录](docs/designs/packaging-quality-rf05-closeout.md)。RF-06 纸材/油墨/整体工艺在隔离工作区 `codex/rf06-materials` 已有 Code 与相关 L0/合成 GLB 导出证据，详见 [RF-06 交付记录](docs/designs/packaging-quality-rf06-closeout.md)；候选未写入生产 registry，未改默认灯光/Standard。Windows 原生、断电耐久性、生产注册、RF-07+ 视觉改造及真实画质验收继续保留为独立后续。下面只保留尚未闭环的工作。
+主计划：`docs/adr-007-packaging-render-fidelity.md`。RF-00 测量尺、RF-01 独立合同和 RF-02 流水线接线（含 RF-02.3 磁盘执行边界、私有执行快照/nonce、V1 诊断路径、legacy 必存键、同步回滚删除新建目标和成对 registry snapshot）已完成 Code/L0；非 V2 只是命令行诊断路径，不是网页产品通道。三者都未改变产品画质，也没有批准正式 baseline。RF-03 本地产物合同、资源生命周期与临时 registry 已实现，详见 [RF-03 收口记录](docs/designs/packaging-quality-rf03-runtime-closeout.md)。RF-04 出图版本 API/UI 与历史切换已实现，详见 [RF-04 交付记录](docs/designs/packaging-quality-rf04-closeout.md)。RF-05 显式纸盒壳几何与 family/GLB 合同已实现，详见 [RF-05 交付记录](docs/designs/packaging-quality-rf05-closeout.md)。RF-06 纸材/油墨/整体工艺已合入 `main` `d2657f0` / `0.21.40.0`，详见 [RF-06 交付记录](docs/designs/packaging-quality-rf06-closeout.md)；候选未写入生产 registry，未改默认灯光/Standard。RF-07 尺寸归一显式三灯棚与三变换合成对照已迁入该已发布 RF-06，详见 [RF-07 交付记录](docs/designs/packaging-quality-rf07-closeout.md)；Code/普通 L0 已验证，本分支已记 `0.21.41.0`，尚未合入 `origin/main`，人工选择未批准。Windows 原生、断电耐久性、生产注册、RF-08+ 及真实画质验收继续保留为独立后续。下面只保留尚未闭环的工作。
 
 - [ ] **批准渲染质量基线与门槛**
   RF-00 已能用 Git 内脱敏合成样片重复记录几何、白盒边界、纸材、字体频率、Alpha 光边、渲染耗时和 full/card/read-face 像素身份；正式 approved baseline 仍不存在。必须由人工审阅现状报告后显式批准，后续参数变化才可用同一身份闭包比较；私有真稿仍只在杭州记录哈希、评分和结论。
@@ -26,7 +26,7 @@
   隔离工作区已有显式白卡/牛皮纸、process ink、none/哑膜/上光、微法线与 GLB 子集校验；生产默认仍是白卡且无新字段。深色纸、金属、珠光、透明窗和局部 UV 仍不支持。已完成本机合成四材质 × 正反两视角完整静帧与实际 GLB 校验；生产注册、Windows/L1、真实稿 L2 与正式 baseline 仍未完成。详见 [RF-06 记录](docs/designs/packaging-quality-rf06-closeout.md)。
 
 - [ ] **棚光、白盒边界与色彩管理**
-  继续无 HDRI 的可复现三灯棚；灯位、软箱尺寸、相机与世界强度按成盒尺寸归一。用合成白盒验证产品/背景亮度分离、边缘连续和接触影。`Standard`、`Khronos PBR Neutral`、`AgX` 先 A/B，再由金标冻结，不凭模型偏好直接替换。
+  已有尺寸归一显式三灯棚诊断候选和 Standard / Khronos PBR Neutral / AgX 受控对照；未批准 P0 阈值或私有真稿盲评前保持 Standard，不改生产默认或正式 baseline。详见 [RF-07 记录](docs/designs/packaging-quality-rf07-closeout.md)。白盒分离、边缘连续、接触影、Windows Blender、真实稿金标和生产注册仍待完成。
 
 - [ ] **端到端字体清晰度修复**
   预览容器尺寸同步、卡图→全图原位升级、失败保留卡图、同单重渲缓存切代及高光保护进入共用合成器与旧单。历史合成证据见 `docs/designs/packaging-quality-rfe02-browser-findings.md` 和 `docs/designs/packaging-quality-highlight-transfer.md`；不将原大工作树的测试数字当成本批独立运行结果。这些预览改动不代表端到端字体清晰度或真实稿验收完成。
