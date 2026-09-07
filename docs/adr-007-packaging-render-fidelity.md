@@ -1,7 +1,7 @@
 # ADR-007：包装 3D 渲染真实感、清晰度与能力合同
 
 - 日期：2026-09-04
-- 状态：PARTIAL IMPLEMENTATION / L0 — `/plan-eng-review` 已完成，D1–D8 已锁定；RF-00 测量尺、RF-01 独立合同和 RF-02 流水线接线（含 RF-02.3）已完成 Code/L0；RF-03 本地产物验证、资源生命周期、临时 registry 与 Windows 托管代码已实现；RF-04 出图版本 API/UI 与 RF-05 显式纸盒壳几何已实现；RF-06 材质已合入 `main` `d2657f0` / `0.21.40.0`；RF-07 棚光/受控色彩对照已合入 `main` `88321a90` / `0.21.41.0`，未进生产 registry；RF-08 投影采样与切面预算已有诊断 profile 的 Code/普通 L0，未进生产 registry；生产注册、原生 Windows 发版烟测、RF-09+、正式视觉批准、L1/L2/UAT 未完成
+- 状态：PARTIAL IMPLEMENTATION / L0 — `/plan-eng-review` 已完成，D1–D8 已锁定；RF-00 测量尺、RF-01 独立合同和 RF-02 流水线接线（含 RF-02.3）已完成 Code/L0；RF-03 本地产物验证、资源生命周期、临时 registry 与 Windows 托管代码已实现；RF-04 出图版本 API/UI 与 RF-05 显式纸盒壳几何已实现；RF-06 材质已合入 `main` `d2657f0` / `0.21.40.0`；RF-07 棚光/受控色彩对照已合入 `main` `88321a90` / `0.21.41.0`，未进生产 registry；RF-08 投影采样与切面预算已有诊断 profile 的 Code/普通 L0，未进生产 registry；生产注册、原生 Windows 发版烟测、RF-09 生产发布与 RF-10+、正式视觉批准、L1/L2/UAT 未完成
 - 目标执行者：Grok / Codex 等编码代理，人工负责人负责选择、金标与发布闸门
 - 关联：`docs/adr-005-packaging-structure-v2.md`、`DESIGN.md`、`workers/packaging/README.md`、`docs/pouch-v1-acceptance.md`
 - 基线：`origin/main` `b39f147`，版本 `0.21.25.0`
@@ -126,7 +126,7 @@ Blender render_job.py
 | `render_face_assets` | 矢量转 RGBA 后做一次 BICUBIC 仿射 | 必要的几何映射已经发生一次有损采样，后续必须受预算约束 |
 | `write_review_card` | full 再 LANCZOS 缩到最长边 1440 | 卡图适合首屏，不适合当最终清晰源 |
 | `MockupPage.previewSource` | card/full 又按 canvas 尺寸 `createImageBitmap`，未指定 `resizeQuality` | 浏览器默认是 low；卡图发生第二次派生缩放 |
-| `GroundedShot` | full 只预取到缓存，没有替换 `previewRef` | 网络空闲后页面仍停留在卡图；“原图”按钮之外不会自动变清 |
+| `GroundedShot` | **历史基线（RF-09 前）：** full 只预取到缓存，没有替换 `previewRef`。当前实现已原位替换 canvas 源，见 §12.4 | 旧症状：网络空闲后页面仍停留在卡图；“原图”按钮之外不会自动变清 |
 
 ## 5. 根因模型
 
@@ -571,13 +571,15 @@ idle
 - full 完成后必须替换 `previewRef` 并重绘，而不是只放进 `stillLoads` 缓存。
 - 组件卸载/尺寸变化时关闭旧 `ImageBitmap`、撤销 blob URL，防止内存泄漏。
 - ResizeObserver 或已有尺寸触发必须防止旧请求覆盖新尺寸；用 generation token，不新增全局状态库。
-- 开发态可在 DOM `data-preview-source="card|full"` 暴露非敏感来源状态，便于 E2E；生产 UI 不增加按钮或技术文案。
-- 原图灯箱直接使用 full，不从当前 canvas 截图。
+- DOM 始终带非敏感来源状态，便于 E2E：`data-preview-source="card|mixed|full"` 只汇总本次成功 compose 实际画到的层；逐层 `data-preview-product|ground|set` 为 `card|full|none`，`data-preview-*-fetch` 为 `pending|ready|failed|absent`。`absent` 只表示未声明可选资产。生产 UI 不增加按钮或技术文案，不写 URL。
+- 当前实现用 `HTMLImageElement.decode()` 作为 CanvasImageSource，不引入 `createImageBitmap`。full 失败保留卡图，HUD 提示「高清图暂时未加载，重新打开此单可重试」。
+- 原图灯箱保留打开时的可用图层，product/ground full 就绪后先替换，set full 独立升级；set 失败保留已显示的 set card，不改成 ground 背景。灯箱不从当前 canvas 截图。
 
 ### 12.5 下载与验字
 
-- 下载继续加载 full product/ground/set，在 full 尺寸 canvas 合成；输出尺寸写进质量报告。
-- 调灯后的下载与预览使用同一合成函数和参数，不能出现“页面清楚、下载模糊”或相反。
+- 下载继续加载同代 full 产品及所需背景源，在 full 尺寸 canvas 合成；输出尺寸写进质量报告。
+- 调灯后的下载与预览使用同一合成函数和参数；点击时冻结代际、背景选择和两组灯光。灯箱打开时按灯箱 sources 判断背景，显式 `set:null` 不被隐藏主预览后到的 set 覆盖。
+- 点击时显示 set 而 set full 未就绪或失败，提示重试，不把 set card 放大导出或悄悄换 ground；点击时显示 ground fallback 则保持该选择，不等未使用的 set。切代/卸载不取消已启动的同代下载。
 - 3D 静帧必须尽量保留品牌字，但法规小字、成分、条码仍只由 `assets/panel_*.png` 的 `read_*` 区核对。
 - 不能把 3D OCR 分数拿去改变审核结论；它只评估渲染链路是否损失了已知标定文本。
 
@@ -1035,10 +1037,11 @@ ground/set 仍是 optional：失败可以让主 job `done`，但 quality report 
 
 ### 17.3 内存与浏览器
 
-- card 与 full 切换后立即释放不再使用的 ImageBitmap；避免同时常驻 product/ground/set 的 card 与 full 六张大图。
-- full 可按 product→当前 backdrop 所需 pass 的优先级加载；未选 backdrop 不必同时解码全部 full set。
+- 当前预览源是 `HTMLImageElement`，不是 ImageBitmap；不要为了 `.close()` 引入 bitmap。`releaseStudioGeneration` 只删除该代 `stillLoads` 条目。取消预览不得再发起新的 fallback/upgrade 请求，但已启动的同代下载继续持有自己的 Promise/Image。
+- full 可按 product→当前 backdrop 所需 pass 的优先级加载；未选 backdrop 的导出不必等待未使用的 set。预览仍可预载 set，以便切换白桌白墙。
 - ResizeObserver 触发去抖/代次取消，避免连续创建大 bitmap。
 - 下载才创建 full-size export canvas，结束后释放引用和 object URL。
+- 不能把「最终可能 GC」当成清理证明。
 
 ### 17.4 性能验收表
 
@@ -1053,8 +1056,8 @@ P0 先测现状，后续每片在相同 fixture、Blender 版本、线程和机�
 | 单 generation 总耗时 | 待测 | 不编造固定 ETA；展示真实 stage，P0 后冻结告警阈值 | Hono job stage |
 | 单 generation 总字节 | 待测 | 写 manifest；生成前按峰值乘安全系数做磁盘准入 | `generation.json` |
 | history API p95 | 不存在 | 页大小固定，耗时与当前页线性，不随 ready 目录全盘扫描 | Server test/日志 |
-| card 可见时间 | 待测 | 不因 full 自动升级退化现有首屏 | E2E trace |
-| full 替换时间 | 当前未替换 | 网络完成后一个绘制帧内切换，无闪白 | E2E trace |
+| card 可见时间 | 待测 | 不因 full 自动升级退化现有首屏；可选 set pending 不得挡住 product/ground | E2E / 本地代表尺寸记录 |
+| full 替换时间 | 当前未替换 | **细化：** 网络完成后仍需 decode，单列记录；解码就绪后下一可用绘制机会安排替换，不额外拖延、不闪白。不能把 DOM/rAF 时间戳说成屏幕合成的精确时刻 | E2E / 本地代表尺寸记录 |
 | 连续切代/resize JS heap | 待测 | 稳态回落；不得按操作次数单调增长 | Browser 手工/trace |
 | Windows L1 smoke | 不存在 | 初始 90 秒硬上限仅为候选，P0/P4 同机冻结 | release log |
 
@@ -1291,7 +1294,7 @@ P1b generation     P2 carton core       P3b UI preview shell
 | RF-06 | P2 / L | RF-01, RF-05 | substrate/ink/overall finish、微法线、可导出子集 | 无 mask 不伪造 spot finish；Non-Color/sRGB 正确；静帧与 GLB 能力差异有报告与文案 |
 | RF-07 | P2 / L | RF-00, RF-05, RF-06 | 尺寸归一三灯棚、受控 view-transform A/B | 几何/纹理/灯/曝光固定；匿名输出；按预登记规则冻结新 profile，否则保留 Standard |
 | RF-08 | P3 / L | RF-02, RF-05 | per-face projection/Jacobian、`artwork.py` 像素预算 | 两 shot 最大需求；一次 affine；required/allowed 可诊断；32MP 超限 fail 而不是静默降采样 |
-| RF-09 | P3 / L | RF-03 API 冻结 | `MockupPage.tsx` / `mockupStudio.ts` card→full、释放与 E2E | full 自动原位替换；失败回退、resize/切代竞态、unmount 释放、原图/full 下载都有测试 |
+| RF-09 | P3 / L | RF-03 API 冻结 | `MockupPage.tsx` / `mockupStudio.ts` card→full、释放与 E2E | 本地实现、针对性合成验证与独立复核已完成；失败回退、resize/切代竞态、卸载后下载、原图/full 下载有合成测试。有限尺寸对照与隔离页 browse 已交付，真实 Claude unavailable；heap/帧预算、杭州 L1、真稿 L2、UAT、生产发布未验 |
 | RF-10 | P4 / XL | RF-05–RF-09 | quality eval、阈值/identity、contact sheet | runtime/fixture/human 三层分开；baseline mismatch 失败；更新基线必须显式；输出不含真稿 |
 | RF-11 | P4 / L | RF-03, RF-05, RF-10 | 独立 Windows Blender smoke wrapper、复用 `renderGenerations.ts` 的 tsx 入口、`release.ps1`、合同测试 | 每次可信 main 在 fence 内跑；只用 `RUNNER_TEMP`；缺失/超时/hash/GLB 失败保持 drain 并走 recovery；PowerShell 不复制 generation 校验 |
 | RF-12 | P4 / M | RF-00–RF-11 | 全量 L0/type/quality/E2E、回滚演练、文档/CHANGELOG | Mac/GitHub 证据完整；旧单/g0/current 回滚路径证明；没有把未跑 L1/L2 写成完成 |
@@ -1443,9 +1446,10 @@ merge、ship 或 deploy，除非用户在当次任务明确授权。不要 git a
   - Files: `render_contract.py`、`structure_v2/artwork.py`、`pipeline.py`、`test_packaging_structure_artwork.py`
   - Verify: 两 shot 最大 Jacobian、一次 affine、ppm 报告、32MP 边界及 required/allowed 错误测试全绿。
 - [ ] **T10（P1，human: ~2d / Grok: ~4h）— UI clarity — 让 card 原位升级 full 并释放资源**
-  - Surfaced by: Test/Performance — 当前 full 只预取不替换，且 resize/切代存在旧 decode 与内存风险。
-  - Files: `MockupPage.tsx`、`mockupStudio.ts`、`mockupStudio.test.ts`、`e2e/mockup-generations.spec.ts`
-  - Verify: 成功/双失败/单失败/resize/切代/unmount 路径全测；原图与下载只用 full。
+  - Surfaced by: Test/Performance — **历史基线（RF-09 前）：** full 只预取不替换，且 resize/切代存在旧 decode 与内存风险。
+  - Files: `MockupPage.tsx`、`mockupStudio.ts`、`mockupStudioPreview.test.ts`、`e2e/mockup-render-versions.spec.ts`、`e2e/mockup-preview-upgrade.spec.ts`
+  - Verify: 成功/双失败/单失败/resize/切代/unmount 路径全测；下载只用 full，灯箱可先保留可用图层再升级 full。
+  - Evidence: 本分支已完成完整本地 L0/类型/质量门、27 项合成 E2E 与独立代码复核；灯箱显式空 set 的下载冻结缺陷已由红绿回归闭环。性能与实机验收剩余项以 [TODOS.md](../TODOS.md) 为准，不代表 L1/L2/UAT 或生产发布。
 - [ ] **T11（P1，human: ~3d / Grok: ~6h）— quality — 实现三层质量门与 baseline identity**
   - Surfaced by: Architecture D7 — 确定性完整性、合成回归和人工审美不能混成一个总分。
   - Files: `render_quality_eval.py`、脱敏 fixtures、`test_packaging_render_quality.py`

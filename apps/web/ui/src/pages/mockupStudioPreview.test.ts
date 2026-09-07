@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { loadStudioPreview, loadStillImage, observeStudioFrame, studioAssetHref, type StudioPreviewSources } from "./mockupStudio.js";
+import {
+  loadStudioPreview, loadStillImage, observeStudioFrame, peekSettled, planStudioExport,
+  releaseStudioGeneration, studioAssetHref,
+  studioDrawnUpgradeFailed, studioPreviewSummary, studioStillCacheHas,
+  type StudioPreviewSources,
+} from "./mockupStudio.js";
 
 const image = (src: string) => ({ src, naturalWidth: 3000, naturalHeight: 3600 }) as HTMLImageElement;
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
@@ -55,7 +60,12 @@ test("preview publishes cards first, then upgrades each full source without resi
   const cancel = loadStudioPreview(urls, (frame) => frames.push(frame), assert.fail,
     (url) => new Promise((resolve) => pending.set(url, resolve)), async (url) => image(url));
   await tick();
-  assert.deepEqual([frames[0].product.src, frames[0].ground.src, frames[0].set?.src], ["pc", "gc", "sc"]);
+  assert.ok(frames[0], "product and ground cards must paint without waiting for set");
+  assert.deepEqual([frames[0].product.src, frames[0].ground.src], ["pc", "gc"]);
+  assert.equal(frames[0].set, null);
+  assert.equal(frames[0].facts.set.fetch, "pending");
+  const withSet = frames.find((frame) => frame.set?.src === "sc");
+  assert.ok(withSet);
   pending.get("p")!(image("p"));
   pending.get("s")!(image("s"));
   await tick();
@@ -101,8 +111,12 @@ test("failed full upgrades retain usable cards without reporting a broken previe
   loadStudioPreview(urls, (frame) => frames.push(frame), assert.fail,
     async () => { throw new Error("full unavailable"); }, async (url) => image(url));
   await tick();
-  assert.equal(frames.length, 1);
-  assert.equal(frames[0].product.src, "pc");
+  await tick();
+  const last = frames.at(-1)!;
+  assert.equal(last.product.src, "pc");
+  assert.equal(last.facts.product.upgradeFailed, true);
+  assert.equal(last.facts.ground.upgradeFailed, true);
+  assert.equal(studioDrawnUpgradeFailed(last.facts, "white", last.set), true);
 });
 
 test("missing cards fall back to full; optional set failure does not hide product", async () => {
@@ -142,7 +156,9 @@ test("cancellation after card publication prevents old full images replacing a n
   const cancel = loadStudioPreview(urls, (frame) => frames.push(frame), assert.fail,
     () => waiting, async (url) => image(url));
   await tick(); cancel(); finish(image("old-full")); await tick();
-  assert.equal(frames.length, 1);
+  assert.ok(frames.length >= 1);
+  assert.ok(frames.every((frame) => frame.product.src === "pc"));
+  assert.ok(frames.every((frame) => frame.product.src !== "old-full"));
 });
 
 test("frame observer coalesces resize, handles DPR and zero sizes, and removes listeners", () => {
@@ -215,4 +231,204 @@ test("frame observation still measures window resizes without ResizeObserver and
       else Reflect.deleteProperty(globalThis, key);
     }
   }
+});
+
+test("pending optional set does not block first paint or product/ground full upgrades", async () => {
+  const pending = new Map<string, { resolve: (value: HTMLImageElement) => void; reject: (error: Error) => void }>();
+  const wait = (url: string) => new Promise<HTMLImageElement>((resolve, reject) => pending.set(url, { resolve, reject }));
+  const frames: StudioPreviewSources[] = [];
+  const cancel = loadStudioPreview(urls, (frame) => frames.push(frame), assert.fail, wait, wait);
+  pending.get("pc")!.resolve(image("pc"));
+  pending.get("gc")!.resolve(image("gc"));
+  await tick();
+  assert.equal(frames.length, 1);
+  assert.deepEqual([frames[0].product.src, frames[0].ground.src, frames[0].set], ["pc", "gc", null]);
+  pending.get("p")!.resolve(image("p"));
+  pending.get("g")!.resolve(image("g"));
+  await tick();
+  assert.equal(frames.at(-1)?.product.src, "p");
+  assert.equal(frames.at(-1)?.ground.src, "g");
+  assert.equal(frames.at(-1)?.set, null);
+  pending.get("sc")!.resolve(image("sc"));
+  await tick();
+  assert.equal(frames.at(-1)?.set?.src, "sc");
+  pending.get("s")!.resolve(image("s"));
+  await tick();
+  assert.equal(frames.at(-1)?.set?.src, "s");
+  cancel();
+});
+
+test("set arriving first still waits for product and ground before publish", async () => {
+  const pending = new Map<string, (value: HTMLImageElement) => void>();
+  const wait = (url: string) => new Promise<HTMLImageElement>((resolve) => pending.set(url, resolve));
+  const frames: StudioPreviewSources[] = [];
+  loadStudioPreview(urls, (frame) => frames.push(frame), assert.fail, wait, wait);
+  pending.get("sc")!(image("sc"));
+  await tick();
+  pending.get("s")!(image("s"));
+  await tick();
+  assert.equal(frames.length, 0);
+  pending.get("pc")!(image("pc"));
+  pending.get("gc")!(image("gc"));
+  await tick();
+  assert.ok(frames.some((frame) => frame.set?.src === "s"));
+});
+
+test("late set after cancel does not publish or start a new full", async () => {
+  const pending = new Map<string, { resolve: (value: HTMLImageElement) => void; reject: (error: Error) => void }>();
+  const wait = (url: string) => new Promise<HTMLImageElement>((resolve, reject) => pending.set(url, { resolve, reject }));
+  let fulls = 0;
+  const frames: StudioPreviewSources[] = [];
+  const cancel = loadStudioPreview(urls, (frame) => frames.push(frame), assert.fail,
+    async (url) => { fulls++; return wait(url); }, wait);
+  pending.get("pc")!.resolve(image("pc"));
+  pending.get("gc")!.resolve(image("gc"));
+  await tick();
+  cancel();
+  pending.get("sc")!.resolve(image("sc"));
+  await tick();
+  assert.ok(frames.every((frame) => frame.set == null));
+  assert.equal(fulls, 2, "only product and ground full upgrades may start before cancel");
+});
+
+test("cancel then late card failure does not start full or refill stillLoads", async () => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, "Image");
+  const cards: Array<{ reject: (error: Error) => void }> = [];
+  class FakeImage {
+    src = "";
+    crossOrigin = "";
+    async decode() { return new Promise<void>((_resolve, reject) => cards.push({ reject })); }
+  }
+  Object.defineProperty(globalThis, "Image", { configurable: true, value: FakeImage });
+  try {
+    const job = "cancel-refill";
+    const generation = "gen-old";
+    const source = (key: string) => ({
+      full: studioAssetHref(job, key, generation),
+      card: studioAssetHref(job, `${key}_card`, generation),
+    });
+    let fulls = 0;
+    const loadFull = async (url: string) => {
+      fulls++;
+      return loadStillImage(url);
+    };
+    const cancel = loadStudioPreview(
+      { product: source("white_a"), ground: source("white_a_ground"), set: source("white_a_set") },
+      () => assert.fail("must not publish after cancel"),
+      () => assert.fail("must not fail after cancel"),
+      loadFull,
+    );
+    cancel();
+    releaseStudioGeneration(job, generation);
+    for (const card of cards) card.reject(new Error("late card"));
+    await tick();
+    await tick();
+    assert.equal(fulls, 0);
+    assert.equal(studioStillCacheHas(source("white_a").full), false);
+    assert.equal(studioStillCacheHas(source("white_a_ground").full), false);
+  } finally {
+    if (original) Object.defineProperty(globalThis, "Image", original);
+    else Reflect.deleteProperty(globalThis, "Image");
+  }
+});
+
+test("mandatory failure closes the preview so a late sibling does not start full", async () => {
+  const pending = new Map<string, { resolve: (value: HTMLImageElement) => void; reject: (error: Error) => void }>();
+  const wait = (url: string) => new Promise<HTMLImageElement>((resolve, reject) => pending.set(url, { resolve, reject }));
+  let fulls = 0;
+  let failed = 0;
+  loadStudioPreview(urls, () => assert.fail("incomplete composition"), () => failed++,
+    async (url) => { fulls++; return wait(url); }, wait);
+  pending.get("pc")!.reject(new Error("415"));
+  await tick();
+  pending.get("p")!.reject(new Error("missing product"));
+  await tick();
+  assert.equal(failed, 1);
+  const fullsAfterProduct = fulls;
+  pending.get("gc")!.reject(new Error("415"));
+  await tick();
+  assert.equal(fulls, fullsAfterProduct, "ground must not start full after the preview already failed");
+});
+
+test("failed full is requested again on a new preview of the same identity", async () => {
+  let fulls = 0;
+  const loadFull = async (url: string) => {
+    fulls++;
+    throw new Error(`full ${url}`);
+  };
+  const loadCard = async (url: string) => image(url);
+  loadStudioPreview(urls, () => undefined, assert.fail, loadFull, loadCard);
+  await tick();
+  await tick();
+  const first = fulls;
+  assert.ok(first >= 3);
+  loadStudioPreview(urls, () => undefined, assert.fail, loadFull, loadCard);
+  await tick();
+  await tick();
+  assert.ok(fulls > first);
+});
+
+test("peekSettled reports fulfilled, rejected, and still-pending without swallowing the original promise", async () => {
+  const pending = peekSettled(new Promise<string>(() => undefined));
+  assert.equal((await pending).status, "pending");
+  const ok = peekSettled(Promise.resolve("full"));
+  assert.deepEqual(await ok, { status: "fulfilled", value: "full" });
+  const boom = Promise.reject(new Error("404"));
+  const result = await peekSettled(boom);
+  assert.equal(result.status, "rejected");
+  await assert.rejects(boom);
+});
+
+test("peekSettled attaches a handler before a later rejection so it is not unhandled", async () => {
+  const stray: unknown[] = [];
+  const onUnhandled = (error: unknown) => { stray.push(error); };
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    let rejectLater!: (error: Error) => void;
+    const delayed = new Promise<string>((_, reject) => { rejectLater = reject; });
+    assert.equal((await peekSettled(delayed)).status, "pending");
+    rejectLater(new Error("late-fail"));
+    await tick();
+    await tick();
+    assert.equal(stray.length, 0);
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+  }
+});
+
+test("export plan keeps a shown set until full is ready and allows true fallback", () => {
+  const setCard = image("sc");
+  assert.deepEqual(planStudioExport("white", setCard, "pending"), { action: "compose", set: null });
+  assert.deepEqual(planStudioExport("white_set", null, "pending"), { action: "compose", set: null });
+  assert.deepEqual(planStudioExport("white_set", setCard, "pending"), { action: "defer-set-full" });
+  assert.deepEqual(planStudioExport("white_set", setCard, "failed"), { action: "defer-set-full" });
+  assert.deepEqual(planStudioExport("white_set", image("s"), "ready"), { action: "compose", set: "full" });
+});
+
+test("drawn-layer summary ignores unused set and records white_set fallback", () => {
+  const cards = {
+    product: { origin: "full" as const, fetch: "ready" as const },
+    ground: { origin: "card" as const, fetch: "ready" as const },
+    set: { origin: "card" as const, fetch: "ready" as const },
+  };
+  assert.deepEqual(studioPreviewSummary(cards, "white", image("s")), { source: "full", setFallback: false });
+  assert.deepEqual(studioPreviewSummary(cards, "white_set", image("s")), { source: "mixed", setFallback: false });
+  const noSet = { ...cards, set: { origin: "none" as const, fetch: "failed" as const } };
+  assert.deepEqual(studioPreviewSummary(noSet, "white_set", null), { source: "mixed", setFallback: true });
+  const allFull = {
+    product: { origin: "full" as const, fetch: "ready" as const },
+    ground: { origin: "full" as const, fetch: "ready" as const },
+    set: { origin: "none" as const, fetch: "pending" as const },
+  };
+  assert.deepEqual(studioPreviewSummary(allFull, "white_set", null), { source: "full", setFallback: true });
+  assert.equal(studioDrawnUpgradeFailed({
+    product: { origin: "card", fetch: "ready", upgradeFailed: true },
+    ground: { origin: "full", fetch: "ready" },
+    set: { origin: "none", fetch: "failed", upgradeFailed: true },
+  }, "white", null), true);
+  assert.equal(studioDrawnUpgradeFailed({
+    product: { origin: "full", fetch: "ready" },
+    ground: { origin: "full", fetch: "ready" },
+    set: { origin: "none", fetch: "failed", upgradeFailed: true },
+  }, "white", null), false);
 });

@@ -16,7 +16,7 @@ import { RenderVersions } from "./RenderVersions";
 import { structureIssueCopy, structureStatusLabel } from "./mockupStructure";
 import { liveJobLine, mockupBoardProgress, shouldShowWaitCard } from "./waitCard";
 import { stemFromFilename } from "./stemName";
-import { HUD_MS, downloadHudLine, missingPptHud } from "./mockupHud";
+import { HUD_MS, FULL_UPGRADE_NOTICE, allowFullUpgradeNotice, downloadHudLine, missingPptHud, type HudNoticeSource } from "./mockupHud";
 import { panBy, resetZoom, zoomAt, zoomCss, type ZoomState } from "./canvasZoom";
 import { listedReadFaces, READ_FACE_LABEL, readFaceKey } from "./mockupReadFaces";
 import {
@@ -27,10 +27,15 @@ import {
   blobFromStudioStill,
   canvasFilterSupported,
   clampStudioLight,
+  applyStudioPreviewDataset,
   composeStudioStill,
   loadStudioPreview,
   observeStudioFrame,
+  peekSettled,
+  planStudioExport,
   studioAssetHref,
+  studioDrawnLayerKeys,
+  studioDrawnUpgradeFailed,
   glbExposure,
   jobHasGround,
   jobHasReviewCard,
@@ -43,6 +48,7 @@ import {
   reviewCardKey,
   studioBackdrop,
   writeBackdropPreset,
+  type StudioPreviewSources,
   type BackdropPreset,
   STUDIO_LIGHT_DEFAULT,
   STUDIO_LIGHT_MAX,
@@ -771,6 +777,7 @@ export function MockupJobPage({
   const glbBox = useRef<HTMLDivElement>(null);
   const hudTimer = useRef<number | null>(null);
   const announced = useRef("");
+  const fullUpgradeHud = useRef("");
   const lastGlbFs = useRef(false);
   const seededJobId = useRef(jobId);
   const waiting = Boolean(job) && shouldShowWaitCard(job);
@@ -781,6 +788,7 @@ export function MockupJobPage({
   const alive=useRef(true);
   useEffect(()=>{alive.current=true;return()=>{alive.current=false;};},[]);
   useEffect(()=>()=>releaseStudioGeneration(jobId,generation),[jobId,generation]);
+  useEffect(()=>{fullUpgradeHud.current="";},[generation]);
 
   function refreshSource() {
     if (sourceErrorGeneration.current === generation) return;
@@ -790,7 +798,11 @@ export function MockupJobPage({
     }).catch(()=>{if(alive.current && visibleGeneration.current === generation)notice("版本图片暂时读不到，未改动当前版本");});
   }
 
-  function notice(text: string) {
+  function notice(text: string, source: HudNoticeSource = "auto") {
+    if (text === FULL_UPGRADE_NOTICE) {
+      if (!allowFullUpgradeNotice(fullUpgradeHud.current, generation, source)) return;
+      fullUpgradeHud.current = generation;
+    }
     setHud(text);
     if (hudTimer.current != null) window.clearTimeout(hudTimer.current);
     hudTimer.current = window.setTimeout(() => setHud(""), HUD_MS);
@@ -1154,6 +1166,7 @@ export function MockupJobPage({
             onBackgroundLight={setBackgroundLight}
             onDownload={() => notice(downloadHudLine("成片"))}
             onError={() => notice("导出失败")}
+            onNotice={notice}
           />
         ) : whiteA ? (
           <WhiteShot
@@ -1201,6 +1214,7 @@ export function MockupJobPage({
             onBackgroundLight={setBackgroundLight}
             onDownload={() => notice(downloadHudLine("成片"))}
             onError={() => notice("导出失败")}
+            onNotice={notice}
           />
         ) : whiteB ? (
           <WhiteShot
@@ -1585,6 +1599,7 @@ function GroundedShot({
   onBackgroundLight,
   onDownload,
   onError,
+  onNotice,
   lazy,
 }: {
   generation: string;
@@ -1603,6 +1618,7 @@ function GroundedShot({
   onBackgroundLight: (value: number) => void;
   onDownload: () => void;
   onError: () => void;
+  onNotice: (text: string, source?: HudNoticeSource) => void;
   lazy?: boolean;
 }) {
   const [bad, setBad] = useState(false);
@@ -1612,8 +1628,10 @@ function GroundedShot({
   const [visible, setVisible] = useState(!lazy);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const frameRef = useRef<HTMLDivElement>(null);
-  const previewRef = useRef<{ product: PreviewSource; ground: PreviewSource; set: PreviewSource | null } | null>(null);
+  const previewRef = useRef<StudioPreviewSources | null>(null);
+  const lightboxSourcesRef = useRef<{ product: PreviewSource; ground: PreviewSource; set: PreviewSource | null } | null>(null);
   const exporting = useRef(false);
+  const noticedUpgrade = useRef("");
   const sourceIdentity = `${jobId}:${generation}:${fileKey}:${groundKey}:${(files || []).map((file) => file.key).sort().join(",")}`;
 
   useEffect(() => {
@@ -1621,9 +1639,11 @@ function GroundedShot({
     setOriginalOpen(false);
     setReady(0);
     previewRef.current = null;
+    noticedUpgrade.current = "";
     if (canvasRef.current) {
       canvasRef.current.width = 0;
       canvasRef.current.height = 0;
+      applyStudioPreviewDataset(canvasRef.current, null, backdrop, null);
     }
   }, [sourceIdentity]);
 
@@ -1674,7 +1694,7 @@ function GroundedShot({
     canvas.width = frameSize[0];
     canvas.height = frameSize[1];
     const ctx = canvas.getContext("2d");
-    if (!ctx) { setBad(true); return; }
+    if (!ctx) { setBad(true); applyStudioPreviewDataset(canvas, null, backdrop, null); return; }
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = "high";
     try {
@@ -1685,7 +1705,17 @@ function GroundedShot({
       set: sources.set,
       filterSupported: canvasFilterSupported(ctx),
     });
-    } catch { ctx.clearRect(0, 0, canvas.width, canvas.height); setBad(true); }
+    applyStudioPreviewDataset(canvas, sources.facts, backdrop, sources.set);
+    if (typeof window !== "undefined" && (window as Window & { __RF09_PERF__?: boolean }).__RF09_PERF__
+      && typeof performance !== "undefined" && typeof performance.mark === "function") {
+      if (performance.getEntriesByName("rf09-composed", "mark").length >= 24) performance.clearMarks("rf09-composed");
+      performance.mark("rf09-composed");
+    }
+    if (studioDrawnUpgradeFailed(sources.facts, backdrop, sources.set) && noticedUpgrade.current !== sourceIdentity) {
+      noticedUpgrade.current = sourceIdentity;
+      onNotice(FULL_UPGRADE_NOTICE);
+    }
+    } catch { ctx.clearRect(0, 0, canvas.width, canvas.height); applyStudioPreviewDataset(canvas, null, backdrop, null); setBad(true); }
   }, [visible, bad, ready, frameSize, productLight, backgroundLight, backdrop]);
 
   useEffect(() => {
@@ -1701,15 +1731,49 @@ function GroundedShot({
     if (!ready || exporting.current) return;
     exporting.current = true;
     try {
+      const frozenGeneration = generation;
+      const frozenBackdrop = backdrop;
+      const frozenProductLight = productLight;
+      const frozenBackgroundLight = backgroundLight;
+      const frozenPreview = previewRef.current;
+      const frozenSources = (originalOpen ? lightboxSourcesRef.current : null) ?? frozenPreview;
+      const frozenSet = frozenSources?.set ?? null;
       const setKey = stillSetKey(fileKey);
-      const [product, ground, set] = await Promise.all([
-        loadStillImage(fileHref(jobId, fileKey, false, generation)),
-        loadStillImage(fileHref(jobId, groundKey, false, generation)),
-        jobHasSet(files, fileKey)
-          ? loadStillImage(fileHref(jobId, setKey, false, generation)).catch(() => null)
-          : Promise.resolve(null),
-      ]);
-      const blob = await blobFromStudioStill(product, ground, { productLight, backgroundLight, backdrop, set });
+      const needGround = frozenBackdrop === "white_set";
+      const productP = loadStillImage(fileHref(jobId, fileKey, false, frozenGeneration));
+      const groundP = needGround
+        ? loadStillImage(fileHref(jobId, groundKey, false, frozenGeneration))
+        : Promise.resolve(null);
+      const required = Promise.all([productP, groundP]);
+      required.catch(() => undefined);
+      let product: HTMLImageElement;
+      let ground: HTMLImageElement | null;
+      let setImage: HTMLImageElement | null = null;
+      if (studioDrawnLayerKeys(frozenBackdrop, frozenSet).keys.includes("set")) {
+        const setP = loadStillImage(fileHref(jobId, setKey, false, frozenGeneration));
+        setP.catch(() => undefined);
+        const peeked = await peekSettled(setP);
+        const setFull = peeked.status === "fulfilled" ? "ready" : peeked.status === "rejected" ? "failed" : "pending";
+        const decided = planStudioExport(frozenBackdrop, frozenSet, setFull);
+        if (decided.action === "defer-set-full") {
+          onNotice(FULL_UPGRADE_NOTICE, "action");
+          return;
+        }
+        const pair = await required;
+        product = pair[0];
+        ground = pair[1];
+        setImage = peeked.status === "fulfilled" ? peeked.value : null;
+      } else {
+        const pair = await required;
+        product = pair[0];
+        ground = pair[1];
+      }
+      const blob = await blobFromStudioStill(product, ground, {
+        productLight: frozenProductLight,
+        backgroundLight: frozenBackgroundLight,
+        backdrop: frozenBackdrop,
+        set: setImage,
+      });
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
@@ -1783,7 +1847,8 @@ function GroundedShot({
                     productLight={productLight}
                     backgroundLight={backgroundLight}
                     backdrop={backdrop}
-                    placeholder={previewRef.current}
+                    sourcesOut={lightboxSourcesRef}
+                    placeholder={previewRef.current ? { product: previewRef.current.product, ground: previewRef.current.ground, set: previewRef.current.set } : null}
                   />
                 </div>
                 <StudioLightSliders
@@ -1820,6 +1885,7 @@ function GroundedLightboxStill({
   backgroundLight,
   backdrop,
   placeholder,
+  sourcesOut,
 }: {
   generation: string;
   jobId: string;
@@ -1831,6 +1897,7 @@ function GroundedLightboxStill({
   backgroundLight: number;
   backdrop: BackdropPreset;
   placeholder?: { product: PreviewSource; ground: PreviewSource; set: PreviewSource | null } | null;
+  sourcesOut?: { current: { product: PreviewSource; ground: PreviewSource; set: PreviewSource | null } | null };
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const sourcesRef = useRef<{ product: PreviewSource; ground: PreviewSource; set: PreviewSource | null } | null>(
@@ -1838,22 +1905,37 @@ function GroundedLightboxStill({
   );
   const [loaded, setLoaded] = useState(placeholder ? 1 : 0);
   const [paintError, setPaintError] = useState(false);
+  function publishSources(next: { product: PreviewSource; ground: PreviewSource; set: PreviewSource | null }) {
+    sourcesRef.current = next;
+    if (sourcesOut) sourcesOut.current = next;
+  }
   useEffect(() => {
-    if (placeholder && !sourcesRef.current) sourcesRef.current = placeholder;
+    if (sourcesRef.current) publishSources(sourcesRef.current);
+    else if (placeholder) publishSources(placeholder);
     let cancelled = false;
     void (async () => {
       try {
         const setKey = stillSetKey(fileKey);
-        const [product, ground, set] = await Promise.all([
-          loadStillImage(fileHref(jobId, fileKey, false, generation)),
-          loadStillImage(fileHref(jobId, groundKey, false, generation)),
-          jobHasSet(files, fileKey)
-            ? loadStillImage(fileHref(jobId, setKey, false, generation)).catch(() => null)
-            : Promise.resolve(null),
-        ]);
+        const productP = loadStillImage(fileHref(jobId, fileKey, false, generation));
+        const groundP = loadStillImage(fileHref(jobId, groundKey, false, generation));
+        const setP = jobHasSet(files, fileKey)
+          ? loadStillImage(fileHref(jobId, setKey, false, generation))
+          : Promise.resolve(null);
+        const required = Promise.all([productP, groundP]);
+        required.catch(() => undefined);
+        setP.catch(() => undefined);
+        const [product, ground] = await required;
         if (cancelled) return;
-        sourcesRef.current = { product, ground, set };
+        publishSources({ product, ground, set: sourcesRef.current?.set ?? placeholder?.set ?? null });
         setLoaded((n) => n + 1);
+        try {
+          const set = await setP;
+          if (cancelled) return;
+          publishSources({ product, ground, set });
+          setLoaded((n) => n + 1);
+        } catch {
+          /* keep the shown set card; do not swap in ground-only */
+        }
       } catch {
         /* lightbox keeps the card placeholder or STUDIO_GROUND_FILL stage */
       }
