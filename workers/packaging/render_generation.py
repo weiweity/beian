@@ -4,7 +4,9 @@
 Trusted job root and candidate directory enter; RF-02 validation, exclusive
 prepare, ``run_blender_job``, and on-disk evidence stay inside this module.
 It does not seal ready generations, switch current, open HTTP, or rewrite the
-renderer.  Production quality remains unwired.
+renderer.  RF-10 wires three-layer quality: runtime hard from artifact/resource
+gates, fixture regression not-run on real jobs, human_acceptance pending.
+production_ready stays false.
 """
 
 from __future__ import annotations
@@ -34,6 +36,7 @@ if str(ROOT) not in sys.path:
 
 import pipeline as packaging_pipeline  # noqa: E402
 from glb_verify import _decode_png_rgba, load_glb_artifact, compare_glb_artifact_contract, PAPER_ALBEDO_LINEAR  # noqa: E402
+from quality_layers import build_runtime_quality_report  # noqa: E402
 from render_contract import (  # noqa: E402
     OPTIONAL_RENDERER_OUTPUT_KEYS,
     RenderContractError,
@@ -85,14 +88,53 @@ READY_MANIFEST_NAME = "generation.json"
 _SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
 REQUIRED_STILL_KEYS = ("front_right", "back_left", "glb")
 REQUIRED_CARD_KEYS = ("front_right_card", "back_left_card")
-QUALITY_UNWIRED = {
-    "schema": "packaging-render-quality/1",
-    "status": "unwired",
-    "wired": False,
-    "runtime_gate": "pending",
-    "production_ready": False,
-    "note": "RF-03C1 未接线真实质量门；不能当作 runtime quality pass 或 production-ready",
-}
+
+
+def _quality_sampling(sampling: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(sampling, Mapping):
+        return None
+    faces_in = sampling.get("faces")
+    faces: dict[str, Any] = {}
+    if isinstance(faces_in, Mapping):
+        for face, row in faces_in.items():
+            if not isinstance(row, Mapping):
+                continue
+            faces[str(face)] = {
+                "source_ppm": row.get("source_pixels_per_mm"),
+                "target_ppm": row.get("target_pixels_per_mm"),
+                "projected_min_ppm": row.get("projected_min_ppm"),
+                "projected_max_ppm": row.get("projected_max_ppm"),
+                "source_size_px": row.get("source_size_px"),
+                "required_size_px": row.get("required_size_px"),
+            }
+    resample = sampling.get("upstream_resample_count")
+    return {
+        "schema": sampling.get("schema"),
+        "strategy": sampling.get("strategy"),
+        "source_stage": sampling.get("source_stage"),
+        "faces": faces,
+        "resample_count": resample if resample is not None else {
+            "status": "unavailable",
+            "reason": "resample_count_not_on_this_action",
+        },
+    }
+
+
+def _quality_payload(
+    action: str,
+    *,
+    runtime_gate: str,
+    sampling: Mapping[str, Any] | None = None,
+    reasons: list[str] | None = None,
+) -> dict[str, Any]:
+    if action not in ACTIONS:
+        action = "render-candidate"
+    return build_runtime_quality_report(
+        action=action,
+        runtime_gate=runtime_gate,
+        sampling=_quality_sampling(sampling),
+        reasons=reasons,
+    )
 
 
 class RenderGenerationError(RuntimeError):
@@ -115,7 +157,7 @@ class RenderGenerationError(RuntimeError):
             "schema": RESULT_SCHEMA,
             "code": self.code,
             "error": str(self)[:80],
-            "quality": dict(QUALITY_UNWIRED),
+            "quality": _quality_payload("render-candidate", runtime_gate="fail", reasons=[self.cause or self.code]),
         }
         if self.cause:
             payload["cause"] = self.cause[:240]
@@ -1188,7 +1230,7 @@ def _result_base(
         "execution": {"status": status, "nonce": None},
         "outputs": {},
         "optional_warnings": [],
-        "quality": dict(QUALITY_UNWIRED),
+        "quality": _quality_payload(action, runtime_gate="not-run"),
     }
 
 
@@ -1252,6 +1294,7 @@ def _run_request(request: Mapping[str, Any]) -> dict[str, Any]:
         status="validated",
     )
     result["source_sampling"] = sampling
+    result["quality"] = _quality_payload(action, runtime_gate="not-run", sampling=sampling)
     if action == "validate":
         return result
 
@@ -1342,7 +1385,8 @@ def _run_request(request: Mapping[str, Any]) -> dict[str, Any]:
     evidence, warnings = collect_output_evidence(rendered)
     check_output_byte_budget(rendered, result["resource_admission"]["candidate_output_ceiling_bytes"])
     # Inspect actual geometry/UV/material bytes, not the worker's dimensions or
-    # success boolean. This subgate alone does not authorize runtime quality.
+    # success boolean. RF-10 runtime hard (artifact/resource) — not visual
+    # acceptance or production_ready.
     glb_path = Path(evidence["glb"]["path"])
     report = compare_glb_artifact_contract(
         load_glb_artifact(glb_path, max_bytes=MAX_FILE_BYTES), rendered["assets"],
@@ -1368,6 +1412,12 @@ def _run_request(request: Mapping[str, Any]) -> dict[str, Any]:
         "blender_log": str(log_path) if log_path.is_file() else None,
         "elapsed_s": rendered.get("blender_process_elapsed_s"),
     }
+    result["quality"] = _quality_payload(
+        "render-candidate",
+        runtime_gate="pass",
+        sampling=sampling,
+        reasons=["glb_contract", "full_card_contract", "source_sampling"],
+    )
     return result
 
 

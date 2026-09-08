@@ -297,6 +297,12 @@ def test_cli_request_budget_before_json_or_source_reads(tmp_path: Path, use_stdi
     result = json.loads(run.stdout.splitlines()[-1])
     assert result["cause"] == "request_budget"
     assert result["ok"] is False
+    quality = result["quality"]
+    assert quality["status"] == "layered"
+    assert quality["runtime_gate"] == "fail"
+    assert quality["fixture_regression"] == "not-run"
+    assert quality["human_acceptance"] == "pending"
+    assert quality["production_ready"] is False
 
 
 @pytest.mark.skipif(sys.platform not in ("darwin", "linux"), reason="C2 bridge requires POSIX group evidence; Windows containment is not implemented")
@@ -848,11 +854,13 @@ def test_validate_legal_spec_distinguishes_source_bytes_from_plan_identity(tmp_p
     assert result["candidate_identity"] != source_sha
     assert result["candidate_plan_identity"] == result["source_identity"]["plan_identity"]
     assert result["source_identity"]["render_profile_id"] == "compat-legacy-v0"
-    assert result["quality"]["status"] == "unwired"
-    assert result["quality"]["wired"] is False
-    assert result["quality"]["runtime_gate"] == "pending"
+    assert result["quality"]["status"] == "layered"
+    assert result["quality"]["wired"] is True
+    assert result["quality"]["runtime_gate"] == "not-run"
+    assert result["quality"]["fixture_regression"] == "not-run"
+    assert result["quality"]["human_acceptance"] == "pending"
     assert result["quality"]["production_ready"] is False
-    assert "pass" not in result["quality"]["note"].lower() or "不能" in result["quality"]["note"]
+    assert result["quality"]["machine_metrics"]["runtime_integrity"] == "not-run"
     assert job["render_spec"]["schema"] == "packaging-render-spec/1"
 
 
@@ -1643,7 +1651,11 @@ def test_truncated_optional_png_with_magic_is_not_good_output(
     assert "front_right_ground" in warning_keys
     assert "front_right_ground" not in result["outputs"]
     assert result["outputs"]["glb"]["bytes"] > 12
-    assert result["quality"]["status"] == "unwired"
+    assert result["quality"]["status"] == "layered"
+    assert result["quality"]["wired"] is True
+    assert result["quality"]["runtime_gate"] == "pass"
+    assert result["quality"]["fixture_regression"] == "not-run"
+    assert result["quality"]["human_acceptance"] == "pending"
     assert result["quality"]["production_ready"] is False
 
 

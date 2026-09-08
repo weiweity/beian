@@ -9,8 +9,9 @@
  * 隐藏 .render-generations、staging、manifest、index、cursor key。
  * 无服务启动副作用。
  *
- * 质量验证器是强制回调：无验证器或验证失败不得 ready。本切片不接线深度
- * 质量评测，不得把 quality_status 写成 pass。
+ * 质量验证器是强制回调：无验证器或验证失败不得 ready。RF-10 三层结果中
+ * runtime hard 失败不得 ready；fixture baseline_mismatch 不阻止真实任务 current。
+ * 不得把 quality_status 写成 pass，不得把机器结果写成 human_acceptance。
  *
  * 目录 rename 的原子可见性不是断电耐久性证明；未跑 Windows/断电不得声称完成。
  */
@@ -167,6 +168,13 @@ export type QualityVerifyInput = {
   faces: Record<RenderFace, string>;
 };
 
+type QualityVerifyLayers = {
+  runtime_hard: "pass" | "fail" | "not-run";
+  fixture_regression_hard: "pass" | "fail" | "not-run" | "baseline_mismatch" | "baseline_absent";
+  human_acceptance: "pending" | "accepted" | "rejected";
+  production_ready: false;
+};
+
 export type QualityVerifyResult = {
   generation_id: string;
   contract_sha256: string;
@@ -175,6 +183,8 @@ export type QualityVerifyResult = {
   quality_status: RenderGenerationQualityStatus;
   verifier: string;
   note: string;
+  /** Process-local RF-10 layers. Not persisted in generation.json. */
+  layers?: QualityVerifyLayers;
 };
 
 export type QualityVerifier = (input: QualityVerifyInput) => QualityVerifyResult;
@@ -1782,6 +1792,18 @@ export function openRenderGenerationStore(opts: RenderGenerationStoreOptions): R
       }
       if (verified.quality_status === "failed") {
         throw invalid("质量验证失败，不能 ready", "quality_failed", RENDER_GENERATION_UNWIRED_NOTE);
+      }
+      const layers = verified.layers;
+      if (layers) {
+        if (layers.production_ready !== false) {
+          throw invalid("不能宣称 production_ready", "production_ready", "机器结果不得写成生产通过");
+        }
+        if (layers.human_acceptance !== "pending") {
+          throw invalid("机器结果不能写成人工通过", "human_acceptance", "human_acceptance 保持独立 pending");
+        }
+        if (layers.runtime_hard === "fail") {
+          throw invalid("质量验证失败，不能 ready", "quality_failed", "runtime hard gate 阻止 current 切换");
+        }
       }
       const manifest: Manifest = {
         schema: RENDER_GENERATION_SCHEMA,

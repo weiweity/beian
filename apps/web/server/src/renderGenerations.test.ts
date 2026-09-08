@@ -435,6 +435,75 @@ describe("renderGenerations", () => {
     }
   });
 
+  it("runtime hard fail keeps current unpublished; baseline mismatch does not", () => {
+    const runtimeFail = seedJob();
+    const failStore = openStore(runtimeFail, {
+      qualityVerifier: (input) => ({
+        ...unwiredVerifier(input),
+        quality_status: "runtime_verified",
+        layers: {
+          runtime_hard: "fail",
+          fixture_regression_hard: "not-run",
+          human_acceptance: "pending",
+          production_ready: false,
+        },
+      }),
+    });
+    expectCode(() => importG0(failStore), "render_generation_invalid", runtimeFail.root);
+    assert.equal(existsSync(join(runtimeFail.root, RENDER_GENERATION_DIR, G0_LEGACY_ORIGINAL_ID)), false);
+
+    const mismatch = seedJob();
+    const mismatchStore = openStore(mismatch, {
+      qualityVerifier: (input) => ({
+        ...unwiredVerifier(input),
+        quality_status: "runtime_verified",
+        layers: {
+          runtime_hard: "pass",
+          fixture_regression_hard: "baseline_mismatch",
+          human_acceptance: "pending",
+          production_ready: false,
+        },
+      }),
+    });
+    const sealed = importG0(mismatchStore);
+    assert.equal(sealed.report.quality_status, "runtime_verified");
+    assert.equal(existsSync(join(mismatch.root, RENDER_GENERATION_DIR, G0_LEGACY_ORIGINAL_ID)), true);
+  });
+
+  it("rejects machine-written human_acceptance and production_ready before publishing", () => {
+    const human = seedJob();
+    const humanStore = openStore(human, {
+      qualityVerifier: (input) => ({
+        ...unwiredVerifier(input),
+        quality_status: "runtime_verified",
+        layers: {
+          runtime_hard: "pass",
+          fixture_regression_hard: "not-run",
+          human_acceptance: "accepted",
+          production_ready: false,
+        },
+      }),
+    });
+    expectCode(() => importG0(humanStore), "render_generation_invalid", human.root);
+    assert.equal(existsSync(join(human.root, RENDER_GENERATION_DIR, G0_LEGACY_ORIGINAL_ID)), false);
+
+    const prod = seedJob();
+    const prodStore = openStore(prod, {
+      qualityVerifier: (input) => ({
+        ...unwiredVerifier(input),
+        quality_status: "runtime_verified",
+        layers: {
+          runtime_hard: "pass",
+          fixture_regression_hard: "not-run",
+          human_acceptance: "pending",
+          production_ready: true as unknown as false,
+        },
+      }),
+    });
+    expectCode(() => importG0(prodStore), "render_generation_invalid", prod.root);
+    assert.equal(existsSync(join(prod.root, RENDER_GENERATION_DIR, G0_LEGACY_ORIGINAL_ID)), false);
+  });
+
   it("rejects an empty verifier before publishing ready or index and allows a corrected retry", () => {
     const job = seedJob();
     let verifier = "";

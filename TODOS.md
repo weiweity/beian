@@ -14,7 +14,7 @@
 
 ## P1 — 包装 3D 渲染真实感与清晰度
 
-主计划：`docs/adr-007-packaging-render-fidelity.md`。RF-00 测量尺、RF-01 独立合同和 RF-02 流水线接线（含 RF-02.3 磁盘执行边界、私有执行快照/nonce、V1 诊断路径、legacy 必存键、同步回滚删除新建目标和成对 registry snapshot）已完成 Code/L0；非 V2 只是命令行诊断路径，不是网页产品通道。三者都未改变产品画质，也没有批准正式 baseline。RF-03 本地产物合同、资源生命周期与临时 registry 已实现，详见 [RF-03 收口记录](docs/designs/packaging-quality-rf03-runtime-closeout.md)。RF-04 出图版本 API/UI 与历史切换已实现，详见 [RF-04 交付记录](docs/designs/packaging-quality-rf04-closeout.md)。RF-05 显式纸盒壳几何与 family/GLB 合同已实现，详见 [RF-05 交付记录](docs/designs/packaging-quality-rf05-closeout.md)。RF-06 纸材/油墨/整体工艺已合入 `main` `d2657f0` / `0.21.40.0`，详见 [RF-06 交付记录](docs/designs/packaging-quality-rf06-closeout.md)；候选未写入生产 registry，未改默认灯光/Standard。RF-07 尺寸归一显式三灯棚与三变换合成对照已合入 `main` `88321a90` / `0.21.41.0`，详见 [RF-07 交付记录](docs/designs/packaging-quality-rf07-closeout.md)；人工选择未批准。RF-08 投影 Jacobian 切面预算已在诊断 profile 落地，详见 [RF-08 交付记录](docs/designs/packaging-quality-rf08-closeout.md)；未改生产 registry 或默认采样。RF-09 浏览器分层升级与下载冻结已完成本地实现、合成验证和独立复核，剩余性能及实机验收见下方「端到端字体清晰度修复」。Windows 原生发版烟测、断电耐久性、生产注册、RF-10+ 及真实画质验收继续保留为独立后续。下面只保留尚未闭环的工作。
+主计划：`docs/adr-007-packaging-render-fidelity.md`。RF-00 测量尺、RF-01 独立合同和 RF-02 流水线接线（含 RF-02.3 磁盘执行边界、私有执行快照/nonce、V1 诊断路径、legacy 必存键、同步回滚删除新建目标和成对 registry snapshot）已完成 Code/L0；非 V2 只是命令行诊断路径，不是网页产品通道。三者都未改变产品画质，也没有批准正式 baseline。RF-03 本地产物合同、资源生命周期与临时 registry 已实现，详见 [RF-03 收口记录](docs/designs/packaging-quality-rf03-runtime-closeout.md)。RF-04 出图版本 API/UI 与历史切换已实现，详见 [RF-04 交付记录](docs/designs/packaging-quality-rf04-closeout.md)。RF-05 显式纸盒壳几何与 family/GLB 合同已实现，详见 [RF-05 交付记录](docs/designs/packaging-quality-rf05-closeout.md)。RF-06 纸材/油墨/整体工艺已合入 `main` `d2657f0` / `0.21.40.0`，详见 [RF-06 交付记录](docs/designs/packaging-quality-rf06-closeout.md)；候选未写入生产 registry，未改默认灯光/Standard。RF-07 尺寸归一显式三灯棚与三变换合成对照已合入 `main` `88321a90` / `0.21.41.0`，详见 [RF-07 交付记录](docs/designs/packaging-quality-rf07-closeout.md)；人工选择未批准。RF-08 投影 Jacobian 切面预算已在诊断 profile 落地，详见 [RF-08 交付记录](docs/designs/packaging-quality-rf08-closeout.md)；未改生产 registry 或默认采样。RF-09 浏览器分层升级与下载冻结已完成本地实现、合成验证和独立复核，剩余性能及实机验收见下方「端到端字体清晰度修复」。RF-10 三层质量结果已接到 evaluator / generation worker（Code/普通 L0）；RF-11 本地 Blender 合同冒烟 wrapper 已接线到 `release.ps1`，杭州 90 秒冻结与可信 main 冒烟未做。Windows 原生发版烟测、断电耐久性、生产注册、正式 baseline 及真实画质验收继续保留为独立后续。下面只保留尚未闭环的工作。
 
 - [ ] **批准渲染质量基线与门槛**
   RF-00 已能用 Git 内脱敏合成样片重复记录几何、白盒边界、纸材、字体频率、Alpha 光边、渲染耗时和 full/card/read-face 像素身份；正式 approved baseline 仍不存在。必须由人工审阅现状报告后显式批准，后续参数变化才可用同一身份闭包比较；私有真稿仍只在杭州记录哈希、评分和结论。
@@ -31,10 +31,11 @@
 - [ ] **端到端字体清晰度修复**
   预览容器尺寸同步、卡图→全图原位升级、失败保留卡图、同单重渲缓存切代及高光保护进入共用合成器与旧单。历史合成证据见 `docs/designs/packaging-quality-rfe02-browser-findings.md` 和 `docs/designs/packaging-quality-highlight-transfer.md`；不将原大工作树的测试数字当成本批独立运行结果。这些预览改动不代表端到端字体清晰度或真实稿验收完成。
   F 已追加为显式可选的版本化 profile，包含阴影资源预算、零退出码阴影溢出拒绝及受信任历史 registry 回放；默认未切换。合同与历史证据见 `docs/designs/packaging-quality-f-contract.md`；不代表 RF-03+、字体清晰度或生产验收完成。
-  PDF→切面的投影反推与 32MP 预算已在诊断 profile `packshot-projection-sampling-v1` 落地（见 RF-08 记录）；生产默认仍是 `minimum-floor-v1`。浏览器 card→full 原位升级（RF-09）的本地实现、针对性合成验证与独立复核已完成；下载与预览共用合成器。B5 已交付同 fixture 的有限前后对照，B7 已完成隔离页 browse 检查，真实 Claude 路由不可用的覆盖限制保留。仍缺：每次采样写入产品质量报告的生产接线、heap/帧预算和真实环境性能验证、杭州 L1、真稿 L2、UAT。3D 仍用于看形，`read_*` 印刷面仍是验字事实源。不把本项写成渲染质量验收完成。
+  PDF→切面的投影反推与 32MP 预算已在诊断 profile `packshot-projection-sampling-v1` 落地（见 RF-08 记录）；生产默认仍是 `minimum-floor-v1`。浏览器 card→full 原位升级（RF-09）的本地实现、针对性合成验证与独立复核已完成；下载与预览共用合成器。B5 已交付同 fixture 的有限前后对照，B7 已完成隔离页 browse 检查，真实 Claude 路由不可用的覆盖限制保留。RF-10 已把三层质量字段写入 generation/eval JSON；Q05 本机合成 Playwright 记录了 heap 与 rAF 间隔，不能当真实环境预算。仍缺：heap/帧预算和真实环境性能验证、杭州 L1、真稿 L2、UAT。3D 仍用于看形，`read_*` 印刷面仍是验字事实源。不把本项写成渲染质量验收完成。
 
 - [ ] **质量门与回归矩阵**
   L0 验证合同、像素预算、缓存、旧单兼容和浏览器升级；有 Blender 的显式质量命令验证合成样片；L1 记录 Blender 版本/合同 hash；L2/UAT 用白盒、深色盒、细长盒、矮宽盒、膜袋正负样本做人工 A/B。任何机器分数都不能替代人核“真实感”。
+  2026-09-08 本工作树阶段（`codex/rf10-quality-gates`）：RF-10 三层质量结果已接到 evaluator CLI / JSON 与 generation worker（runtime hard / fixture regression hard / `human_acceptance` 独立 pending）。Q05 本机合成 Playwright 测量已记录（heap 量化、非上屏时刻）。RF-11 本地 smoke wrapper 与发布合同测试已落地，杭州 90 秒冻结 / Windows 原生 / 可信 main 冒烟未做。未勾本项整体：正式 baseline 未批准，L1/L2/UAT、生产 registry 与人工验收未做。
 
 ## P1 — 已有代码仍欠生产/业务验收
 
