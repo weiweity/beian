@@ -52,6 +52,8 @@ def test_smoke_missing_blender_is_not_green(tmp_path: Path, monkeypatch: pytest.
 def test_smoke_fake_blender_writes_only_runner_temp(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ):
+    official = PACKAGING / "fixtures" / "render-quality" / "baselines" / "rf00-current.json"
+    before = official.read_bytes() if official.exists() else None
     smoke = smoke_module()
     eval_mod = eval_module()
     blender = tmp_path / "blender"
@@ -73,8 +75,7 @@ def test_smoke_fake_blender_writes_only_runner_temp(
     out = Path(payload["output_dir"])
     assert out.resolve().is_relative_to(runner.resolve())
     assert (out / "rf00-report.json").is_file()
-    official = PACKAGING / "fixtures" / "render-quality" / "baselines" / "rf00-current.json"
-    assert not official.exists()
+    assert (official.read_bytes() if official.exists() else None) == before
 
 
 def test_smoke_does_not_open_product_data(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

@@ -476,6 +476,8 @@ def test_blender_missing_is_not_fake_green(tmp_path: Path):
 
 
 def test_cli_missing_blender_exits_nonzero(tmp_path: Path):
+    official = PACKAGING / "fixtures" / "render-quality" / "baselines" / "rf00-current.json"
+    before = official.read_bytes() if official.exists() else None
     missing = tmp_path / "missing-blender"
     proc = subprocess.run(
         [
@@ -494,7 +496,7 @@ def test_cli_missing_blender_exits_nonzero(tmp_path: Path):
     combined = proc.stdout + proc.stderr
     assert "blender_executable_missing" in combined
     assert "Traceback" not in proc.stderr
-    assert not (PACKAGING / "fixtures" / "render-quality" / "baselines" / "rf00-current.json").exists()
+    assert (official.read_bytes() if official.exists() else None) == before
 
 
 def test_cli_rejects_manifest_flag_and_dangerous_paths(tmp_path: Path):
@@ -635,6 +637,8 @@ def test_missing_metrics_are_unavailable_not_zero(tmp_path: Path):
 def test_render_profile_sha256_changes_when_registry_sampling_changes(
     tmp_path: Path,
 ):
+    official = PACKAGING / "fixtures" / "render-quality" / "baselines" / "rf00-current.json"
+    before = official.read_bytes() if official.exists() else None
     eval_mod = eval_module()
     contract = eval_mod._load_render_contract()
     original = eval_mod.render_profile_sha256()
@@ -673,7 +677,7 @@ def test_render_profile_sha256_changes_when_registry_sampling_changes(
         mutated_template["render_spec"]["sampling"]["minimum_face_pixels_per_mm"]
         != baseline["render_spec"]["sampling"]["minimum_face_pixels_per_mm"]
     )
-    assert not (PACKAGING / "fixtures" / "render-quality" / "baselines" / "rf00-current.json").exists()
+    assert (official.read_bytes() if official.exists() else None) == before
 
 
 def test_eval_does_not_read_backend_data_or_real_jobs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
