@@ -36,7 +36,7 @@ RF-10–RF-13 的原始依赖见 [ADR-007 §20.7](docs/adr-007-packaging-render-
 
 - [ ] **Q01 — 批准渲染质量基线与门槛**
 
-  状态：2026-09-08 已用本机 Blender 5.2.0 LTS 完成固定合成现状采集（6个矩形盒+1个明确不支持圆柱，runtime pass；identity 运行后复核通过）。报告/接触表归档在仓库外 beian-evidence/2026-09-08-next-stage/quality-candidate；正式 baseline 仍 absent、human pending、production_ready=false，未执行更新基线。该报告不是RF-06–08候选验收，耗时不作独占资源阈值；Q01.3仍待人工批准。
+  状态：2026-09-08 已用本机 Blender 5.2.0 LTS 完成固定合成现状采集（6个矩形盒+1个明确不支持圆柱，runtime pass；identity 运行后复核通过）。报告/接触表归档在仓库外 beian-evidence/2026-09-08-next-stage/quality-candidate；0.23.0.0 已经用户批准冻结仅限 Mac 合成现状回归的[正式基线](workers/packaging/fixtures/render-quality/baselines/README.md)。修正 PNG 元数据误报后按新评测器身份重采六个矩形夹具，60张图片像素与旧采集一致；普通评测只读与像素漂移拒绝已验证。human pending、production_ready=false；不是 RF-06–08 候选或 Windows/真实稿验收，耗时不作独占资源阈值。Q01 的 Mac 现状回归锚已落实，其余质量/人工验收仍开放。
 
   1. 固定评测输入：列出脱敏 fixture、profile/registry/contract、Blender 版本、分辨率及同机资源条件，检查旧证据是否仍适用。
   2. 生成可审阅的现状报告、contact sheet 和阈值候选，分开确定性错误、合成回归与人工视觉观察；不同身份只做标明差异的实验对照，不冒充同基线回归。
@@ -85,8 +85,8 @@ RF-10–RF-13 的原始依赖见 [ADR-007 §20.7](docs/adr-007-packaging-render-
   | 步骤 | 执行内容 / 单独交付物 | 依赖与完成标准 |
   |---|---|---|
   | Q06.1 · RF-10 盘查（已交付） | evaluator/runtime verifier/schema 复用已随 RF-10 落地 | `0490e46` / `0.21.44.0`；后续只核验缺口，不另建平行工具 |
-  | Q06.2 · RF-10 身份与三层门（Code/L0 已交付） | runtime hard / fixture regression hard / warning+human 独立字段，generation/eval 同源接线 | `0490e46`；真实任务 fixture 为 `not-run`，human 独立 pending，production_ready=false；正式 baseline 未批准 |
-  | Q06.3 · RF-10 工具与报告（Code/L0 已交付） | CLI、JSON metrics、contact sheet、identity diff 与显式 baseline 更新 | `0490e46`；命令见 TESTING 与 worker README；普通运行不更新 baseline，Q01 仍需人工批准 |
+  | Q06.2 · RF-10 身份与三层门（Code/L0 已交付） | runtime hard / fixture regression hard / warning+human 独立字段，generation/eval 同源接线 | `0490e46`；真实任务 fixture 为 `not-run`，human 独立 pending，production_ready=false；Mac 合成现状 baseline 已批准；Windows/真实稿未验收 |
+  | Q06.3 · RF-10 工具与报告（Code/L0 已交付） | CLI、JSON metrics、contact sheet、identity diff 与显式 baseline 更新 | `0490e46`；命令见 TESTING 与 worker README；普通运行不更新 baseline；Q01 已获批 Mac 合成现状范围，其他范围仍需批准 |
   | Q06.4 · RF-03 平台欠项（用户暂缓） | Windows 原生 Job Object/进程树验证：原子归属、父先退/后代、取消、内存限制、Resume 前 supervisor 崩溃及重启恢复 | 已有模型测试不等于原生；2026-09-08 用户暂缓隔离 Windows 验证，未执行生产故障注入。该前置证据补齐后再评估主 Node 桥创建能力 |
   | Q06.5 · RF-11（Code/L0、杭州实跑已交付） | 独立 wrapper 接可信 main transaction fence，只写 RUNNER_TEMP，复用 generation/GLB/hash 门 | `3fcfea75` / `0.21.46.0`，[run 34191398011](https://github.com/weiweity/beian/actions/runs/34191398011) 真跑约 62s，TimeoutMs=90000，Job Object 成功路径通过；缺已解析 Blender 时会跳过，跳过不算通过；超时杀树分支未走到 |
   | Q06.6 · 生产接线候选 | 分片补受控 runtime adapter 注册/主桥创建、候选 profile 与 upgrade 接线，核对能力矩阵、权限/幂等/CAS、质量门与失败回退 | 先盘查 RF-03/04 现状；不是解开一个开关；默认关闭，验证仍用隔离合成数据；注册范围、默认选择、历史重放分别列出，实施不等于生产启用 |
