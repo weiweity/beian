@@ -1665,6 +1665,10 @@ def fixture_metric_fingerprints(fixtures: Sequence[Mapping[str, Any]]) -> dict[s
             if not isinstance(node, dict):
                 continue
             for metric in ("pixel_sha256", "sha256", "white_separation", "alpha_border"):
+                # PNG metadata varies between runs; its file hash remains audit
+                # evidence, while decoded pixels define the regression identity.
+                if metric == "sha256" and metric_measured(node.get("pixel_sha256")):
+                    continue
                 value = _measured_leaf_value(node.get(metric))
                 if value is not None:
                     row[f"{name}.{metric}"] = value
