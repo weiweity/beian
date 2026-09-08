@@ -1399,11 +1399,12 @@ try {
     throw "Illustrator Session 1 冒烟失败 exit=$LASTEXITCODE"
   }
 
-  # RF-11 candidate: Blender contract smoke after Illustrator identity smoke.
-  # 90s is not a Hangzhou-frozen budget. Failure keeps the existing drain/fence
-  # and falls through the same recovery throw path. PowerShell does not copy
+  # RF-11: Blender contract smoke after Illustrator identity smoke.
+  # Hangzhou freeze: 0.21.45.0 hangzhou-release 34186013159 measured ~63s, so
+  # TimeoutMs is 90000. Failure keeps the existing drain/fence and falls
+  # through the same recovery throw path. PowerShell does not copy
   # generation/GLB checks. Skip (do not roll back) when Hangzhou has no
-  # resolved Blender executable; the candidate gate is not yet frozen.
+  # resolved Blender executable; skip is not 质量门杭州实跑.
   $blenderSmoke = Join-Path $Root "scripts\windows\blender-contract-smoke.ps1"
   if (-not (Test-Path -LiteralPath $blenderSmoke -PathType Leaf)) {
     throw "目标版本缺少 Blender 合同冒烟脚本"
@@ -1424,10 +1425,10 @@ try {
     }
   }
   if (-not $blenderExe -or -not (Test-Path -LiteralPath $blenderExe -PathType Leaf)) {
-    Write-Host "Blender 合同冒烟跳过：未解析到 BLENDER_EXECUTABLE（候选门，未在杭州冻结）"
+    Write-Host "Blender 合同冒烟跳过：未解析到 BLENDER_EXECUTABLE（跳过不算质量门杭州实跑）"
   } else {
     $env:WB_BLENDER = $blenderExe
-    & $smokePowerShell -NoProfile -ExecutionPolicy Bypass -File $blenderSmoke -Python $releasePython -TimeoutMs 720000
+    & $smokePowerShell -NoProfile -ExecutionPolicy Bypass -File $blenderSmoke -Python $releasePython -TimeoutMs 90000
     if ($LASTEXITCODE -ne 0) {
       throw "Blender 合同冒烟失败 exit=$LASTEXITCODE"
     }

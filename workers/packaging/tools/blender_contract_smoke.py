@@ -176,7 +176,7 @@ def main(argv: list[str] | None = None) -> int:
         "ok": runtime == "pass" and generation_cause is None,
         "schema": "beian-blender-contract-smoke/1",
         "timeout_budget_s": 90,
-        "timeout_budget_status": "candidate_not_hangzhou_frozen",
+        "timeout_budget_status": "hangzhou_frozen_90s",
         "output_dir": report.get("output_dir"),
         "report": str(Path(report["output_dir"]) / "rf00-report.json") if report.get("output_dir") else None,
         "quality_layers": {

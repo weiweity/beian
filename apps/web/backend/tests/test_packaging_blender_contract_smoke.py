@@ -69,7 +69,7 @@ def test_smoke_fake_blender_writes_only_runner_temp(
     assert payload["quality_layers"]["runtime_hard"] == "pass"
     assert payload["quality_layers"]["human_acceptance"] == "pending"
     assert payload["quality_layers"]["production_ready"] is False
-    assert payload["timeout_budget_status"] == "candidate_not_hangzhou_frozen"
+    assert payload["timeout_budget_status"] == "hangzhou_frozen_90s"
     out = Path(payload["output_dir"])
     assert out.resolve().is_relative_to(runner.resolve())
     assert (out / "rf00-report.json").is_file()
