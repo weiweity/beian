@@ -196,7 +196,7 @@ RF-10–RF-13 的原始依赖见 [ADR-007 §20.7](docs/adr-007-packaging-render-
 
 - [ ] **F01 — 退役核对原型清理（独立 PR）**
 
-  状态：未完成；候选含 `reviewSplit.ts`、旧 OCR/图像模块及可能被仓库外使用的 Illustrator smoke fixture。
+  状态：0.22.1.0 已清理退役 `reviewSplit.ts` 及其自测（静态引用、行为、入口和生产边界已审计），现行 `reviewDock` / `canvasZoom` 保留。F01 整项仍未完成：旧 OCR/图像模块和可能被仓库外使用的 Illustrator smoke fixture 证据不足，继续保留；复杂度基线未变。
 
   1. 按 [ADR-006](docs/adr-006-continuous-complexity-governance.md) 获取静态引用、行为测试、运行入口、生产边界四类证据；动态/仓库外入口未确认就保留。
   2. 给出精确文件清单、影响与回滚方式，在批准范围内逐批删除并同步缩小质量基线，不混入 3D/Windows 发版功能。
