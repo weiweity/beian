@@ -10,7 +10,7 @@
 
 ## 重试、补图与进度
 
-打样中和打样失败可重试，用机上已有稿再排，不必重传；先确认旧 worker 已退出；仍运行时遵守 [结构与宿主合同](packaging-structure.md) 的 Illustrator 禁杀阶段，无法安全退出就 409。已出图缺印刷面走 `POST /api/mockups/:id/print-faces`（V2 `render_face_assets`，不跑 pipeline/Blender，status 仍 done）；不要对 done 打 retry。下载提示走 `mockupHud.ts`（不挡点击）；GLB 全屏走 `mockupFullscreen.ts`。等待圆盘是 `WaitLoader`（对照中 / 对红中 / 打样中，不要英文 Generating）。结构导出阶段 WaitCard / `liveJobLine` 只写「打开稿件 / 盘点图层 / 保存印刷 PDF」等中文阶段，没有 `job_eta_s` 就不要编造 120 秒或 4 分钟。
+打样中和打样失败可重试，用机上已有稿再排，不必重传；先确认旧 worker 已退出；仍运行时遵守 [结构与宿主合同](packaging-structure.md) 的 Illustrator 禁杀阶段，无法安全退出就 409。已出图缺印刷面走 `POST /api/mockups/:id/print-faces`（V2 `render_face_assets`，不跑 pipeline/Blender，status 仍 done；持久入队立即返回 202，页面轮询补面子状态，失败可重试，刷新或离页不取消作业）；不要对 done 打 retry。下载提示走 `mockupHud.ts`（不挡点击）；GLB 全屏走 `mockupFullscreen.ts`。等待圆盘是 `WaitLoader`（对照中 / 对红中 / 打样中，不要英文 Generating）。结构导出阶段 WaitCard / `liveJobLine` 只写「打开稿件 / 盘点图层 / 保存印刷 PDF」等中文阶段，没有 `job_eta_s` 就不要编造 120 秒或 4 分钟。
 
 ## 资产与路由
 

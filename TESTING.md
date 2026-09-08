@@ -85,3 +85,9 @@ npm run verify -- full
 回执包含起止时间、命令与工作目录、Node/Python 版本、Git HEAD、代码/测试/配置/锁文件内容指纹、独立文档指纹、是否在执行期间变化。运行时数据、真实稿目录与 `.env*` 不读取；不复制环境变量或密钥。调用时固定合成测试的 `PYTEST_ADDOPTS=--durations=20`，不继承真实稿 opt-in。
 
 回执只证明记录的本地运行，**不是自动缓存命中或发布豁免**。代码指纹变化时该次验证失败；普通文档变化单列，需人工检查是否影响该命令。已安装依赖、系统状态、忽略的构建产物或外部工具变化仍须核对；不要只凭哈希复用。最终 PR HEAD CI、发版 L1、质量门杭州实跑、真实 L2/UAT 保留各自证据。临时日志可能被系统清理，交付时保留必要摘要和对应 CI 链接。
+
+### 补印刷面回归（R01）
+
+局部后端回归：`node_modules/.bin/tsx --test apps/web/server/src/jobs-print-faces.test.ts apps/web/server/src/mockup-http.test.ts apps/web/server/src/jobs-generations.test.ts apps/web/server/src/workers.test.ts`。这些测试使用独立临时数据与合成 worker，覆盖202确认、同单幂等、跨单排队、drain、恢复围栏、旧图保留及进程记账失败；不调用 Blender/Illustrator/OCR。
+
+先完成 UI build 后，可运行 `PLAYWRIGHT_ARTIFACT_ONLY=1 npm run test:e2e -w beian-ui -- e2e/mockup-board.spec.ts --grep '印刷面|补面'`。此模式从现有 dist 读取构建产物并拦截全部页面/API请求，不另起监听端口，适合5173已被用户进程占用时验证；构建过期时必须先重建。通过只证明合成浏览器行为，不替代 Hono/杭州真实任务。

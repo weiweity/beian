@@ -125,6 +125,8 @@ Codex 完成异步桥和回归，未调用 Grok。关闭的是 **C2.1**，不是
 
 ## 授权与本轮范围（2026-09-05）
 
+以下路径、分支和授权仅描述当时的施工现场，不要求恢复旧工作树，也不构成当前执行授权。后续独立交付与保留边界见 [RF-03 收口记录](packaging-quality-rf03-runtime-closeout.md)。
+
 用户要求下一步由 Codex 实施，不再调用 Grok。沿用 `/Users/hutou/Desktop/beian-3d-rfe02-lighting-evidence` 的 `codex/3d-rfe02-lighting-evidence`，保留全部已有未提交改动，不创建重复工作树，不提交/推送/PR/合并/部署。
 
 本轮是 **C2.1：异步命令桥与进程内验证凭证**，不是 C2 全部完成。C1 的 Python 底座已验收；B 的 `verifyRenderPlan` 仍为同步钩子、候选目录仍由 jobs 预建、质量验证仍未接线。不能把异步函数强转成同步验证器，也不能让 Python 复用一个已经存在的候选目录。故此切片暂不修改或注册 jobs 生产适配器。

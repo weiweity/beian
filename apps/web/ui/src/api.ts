@@ -815,6 +815,7 @@ export type MockupJob = {
   owner?: string;
   files: { key: string; name: string }[];
   can_repair_print_faces?: boolean;
+  print_faces_repair?: { status: "queued" | "running" | "succeeded" | "failed"; error?: string };
   can_relight_studio?: boolean;
   current_render_generation_id?: string;
   render_mutation?: RenderMutation;

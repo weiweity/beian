@@ -93,11 +93,13 @@ RF-11：`scripts/windows/blender-contract-smoke.ps1` 在 Illustrator Session 1 �
 
 ## 升到本版之前
 
-看板没有「对照中」再 pull / 重启。对照跑着时不要直接切版本。
+升级只走可信 `main` push 的 `hangzhou-release` 事务，不手工 pull、重建或重启 8787。发版被在途作业挡住时等待作业结束；在获得重跑授权后，仅重跑同一可信 push run。状态查询不授权生产操作。
 
-## 上线后手工冒烟
+## 隔离环境恢复验收（须单独授权）
 
-1. 对照跑着时重启 Node：孤儿 Python 被杀掉，作业重新入队或变成「对照中断」。
+以下故障注入只用于已授权的隔离环境，不在生产真实作业中执行。常规上线验证由发布事务及只读 health 完成。
+
+1. 合成对照跑着时重启 Node：孤儿 Python 被杀掉，作业重新入队或变成「对照中断」。
 2. 已有任务 JSON 可以被替换（Windows 上目标文件已存在时 replace 成功）。
 3. 超时之后，任务管理器里没有第二条 python / blender。
 4. 打开首页，侧栏狐狸标和导航图标应显示。`http://127.0.0.1:8787/brand/logo-mark.png` 应是 PNG，不是 404（v0.12.0.1 修了 Windows 把 `/brand` 目录多拼一层；图在 `apps/web/ui/public/brand`，不要另拷一份）。

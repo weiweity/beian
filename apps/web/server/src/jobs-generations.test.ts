@@ -643,9 +643,10 @@ describe("RF-03B generation queue", () => {
     saveMockup({ ...readMockupFromDisk(id)!, structure_artwork_path: artwork, structure_resolution_path: resolved });
     let release!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; });
-    setJobsTestHooks(generationHooks({ runPrintFaceRepair: async () => {
+    setJobsTestHooks(generationHooks({ runPrintFaceRepair: async opts => {
       await gate;
-      writeFileSync(join(seeded.dir, "assets", "panel_front.png"), syntheticPng(1,2,3));
+      mkdirSync(opts.assets, { recursive: true });
+      for (const face of ["front", "back", "left", "right"]) writeFileSync(join(opts.assets, `panel_${face}.png`), syntheticPng(1,2,3));
       return { code: 0, stdout: "", stderr: "", timedOut: false };
     }}));
     const repair = repairMockupPrintFaces(id, viewer);
@@ -654,7 +655,7 @@ describe("RF-03B generation queue", () => {
         clientRequestId: "req-printface-busy", mode: "legacy_relight",
         sourceGenerationId: source, expectedCurrentGenerationId: source }), "render_generation_busy");
       assert.equal(readMockupFromDisk(id)?.render_mutation, undefined);
-    } finally { release(); await repair; }
+    } finally { release(); await repair; await waitUntil(() => loadMockup(id)?.print_faces_request?.status === "succeeded", "print face repair"); }
   });
 
   it("refuses enqueue when trusted adapters are missing and leaves no fake queued mutation", () => {

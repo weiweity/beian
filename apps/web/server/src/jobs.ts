@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { closeSync, copyFileSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { DATA_DIR, PACKAGING, PYTHON } from "./config.js";
 import { compareBookkeeping } from "./billing.js";
@@ -22,6 +22,7 @@ import {
   mockupStoreSnapshot,
   prepareStructureConfirmation,
   printFaceRepairSource,
+  printFaceRepairActive,
   publicRenderMutation,
   readMockupFromDisk,
   requiredPrintFacesReady,
@@ -131,8 +132,6 @@ type Slot = "ocr" | "blender" | "illustrator";
 
 const live: Record<Slot, string | null> = { ocr: null, blender: null, illustrator: null };
 const activeMockupRetries = new Set<string>();
-const printFaceRepairJobs = new Set<string>();
-let printFaceRepairBusy: string | null = null;
 const relightStudioJobs = new Set<string>();
 
 /** 服务端验证适配器入参。生产未接线；不得把 JSON.parse 当 RF-02 已验证。 */
@@ -273,8 +272,6 @@ export function resetJobsTestHooks(): void {
   live.ocr = null;
   live.blender = null;
   live.illustrator = null;
-  printFaceRepairJobs.clear();
-  printFaceRepairBusy = null;
   relightStudioJobs.clear();
   generationCommitLocks.clear();
   resetMockupCache();
@@ -305,8 +302,10 @@ export function queueSnapshot(): {
   const rest = mocks.filter((j) => !needsIllustrator(j));
   const bQueued =
     rest.filter((j) => j.job_status === "queued").length +
-    mocks.filter((j) => j.status === "done" && j.render_mutation?.status === "queued").length;
-  const bRunning = rest.filter((j) => j.job_status === "running" && j.job_stage !== "illustrator").length;
+    mocks.filter((j) => j.status === "done" && j.render_mutation?.status === "queued").length +
+    mocks.filter((j) => j.print_faces_request?.status === "queued").length;
+  const bRunning = rest.filter((j) => j.job_status === "running" && j.job_stage !== "illustrator").length +
+    mocks.filter((j) => j.print_faces_request?.status === "running").length;
   return {
     // Disk state is durable; live slots close the short window before a worker
     // PID/status update is persisted and keep corrupted active records fail-closed.
@@ -407,55 +406,164 @@ function persistPrintFaceFiles(job: MockupJob): MockupJob {
   return job;
 }
 
+function assertPrintFacePath(job: MockupJob, path: string, allowMissing = false): void {
+  const root = mockupJobDir(job.id);
+  const rel = relative(root, path);
+  if (!rel || rel.startsWith("..") || isAbsolute(rel)) throw new Error("切面路径超出打样目录。");
+  let current = root;
+  for (const part of ["", ...rel.split(/[\\/]/)]) {
+    current = join(current, part);
+    try {
+      if (lstatSync(current).isSymbolicLink()) throw new Error("切面路径不能使用符号链接。");
+    } catch (error) {
+      if (allowMissing && current === path && (error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
+  }
+}
+
+/** Hash the accepted source in bounded chunks; a queued repair cannot silently switch artwork. */
+function printFaceSourceHash(job: MockupJob): string {
+  const source = printFaceRepairSource(job);
+  if (!source) throw new Error("这单没有可用底稿，无法补生成。请重新打样。");
+  const hash = createHash("sha256");
+  const buffer = Buffer.alloc(64 * 1024);
+  for (const path of [source.artwork, source.resolved]) {
+    assertPrintFacePath(job, path);
+    const fd = openSync(path, "r");
+    try {
+      hash.update(path).update("\0");
+      let count: number;
+      while ((count = readSync(fd, buffer, 0, buffer.length, null)) > 0) hash.update(buffer.subarray(0, count));
+      hash.update("\0");
+    } finally { closeSync(fd); }
+  }
+  return hash.digest("hex");
+}
+
 export async function repairMockupPrintFaces(id: string, viewer: Viewer): Promise<MockupJob> {
   const job = readMockupFromDisk(id);
   if (!job) throw Object.assign(new Error("没有这单打样"), { status: 404 });
   if (isGenerationManagedMockup(job)) throw generationManagedReject("print-faces");
+  if (printFaceRepairActive(job)) return job;
   if (job.render_mutation?.status === "queued" || job.render_mutation?.status === "running"
     || job.render_generation_request?.worker_pid !== undefined || structureConfirmationActive(id)) {
     throw Object.assign(new Error("这单渲染版本或结构尚未结束，暂时不能补切面。"), { status: 409, code: "render_generation_busy" });
   }
-  // Team-shared read already; create may repair any job. Viewer is rejected at HTTP.
   if (live.blender === id || job.status === "queued" || job.status === "running") {
     throw Object.assign(new Error("出图还在跑，现在不能补切面。"), { status: 409 });
   }
-  if (job.status !== "done") {
-    throw Object.assign(new Error("只有已出图的纸盒才能补印刷面。"), { status: 409 });
+  if (job.status !== "done") throw Object.assign(new Error("只有已出图的纸盒才能补印刷面。"), { status: 409 });
+  if (requiredPrintFacesReady(id) && !job.print_faces_request) return persistPrintFaceFiles(job);
+  if (requiredPrintFacesReady(id) && job.print_faces_request?.status === "succeeded") return job;
+  if (!printFaceRepairSource(job)) throw Object.assign(new Error("这单没有可用底稿，无法补生成。请重新打样。"), { status: 409 });
+  job.print_faces_request = { id: randomBytes(16).toString("hex"), status: "queued", created_at: nowIso(),
+    actor_id: viewer.id, source_sha256: printFaceSourceHash(job) };
+  saveMockup(job);
+  // The durable acknowledgement precedes scheduling and survives a lost HTTP response.
+  queueMicrotask(() => { try { tryStart(); } catch { /* queued fact remains for boot recovery */ } });
+  return job;
+}
+
+function finishPrintFaceRepair(id: string, requestId: string, error?: string): void {
+  const job = readMockupFromDisk(id);
+  const request = job?.print_faces_request;
+  if (!job || !request || request.id !== requestId || request.status !== "running") return;
+  request.status = error ? "failed" : "succeeded";
+  request.finished_at = nowIso();
+  request.error = error;
+  delete request.worker_pid;
+  if (!error) {
+    job.print_faces_repaired_by = request.actor_id;
+    job.print_faces_repaired_at = request.finished_at;
+    persistPrintFaceFiles(job);
+  } else saveMockup(job);
+}
+
+function publishPrintFaceRepair(job: MockupJob, assets: string): void {
+  const faces = ["front", "back", "left", "right", "top", "bottom"];
+  const required = faces.slice(0, 4);
+  const files = faces.filter(face => existsSync(join(assets, `panel_${face}.png`)));
+  if (required.some(face => !files.includes(face))) throw new Error("切面失败，请稍后再试。");
+  for (const face of files) {
+    const path = join(assets, `panel_${face}.png`);
+    assertPrintFacePath(job, path);
+    const header = Buffer.alloc(8);
+    const fd = openSync(path, "r");
+    try { readSync(fd, header, 0, 8, 0); } finally { closeSync(fd); }
+    if (!header.equals(Buffer.from("89504e470d0a1a0a", "hex"))) {
+      throw new Error("切面失败，请稍后再试。");
+    }
   }
-  if (printFaceRepairJobs.has(id)) {
-    throw Object.assign(new Error("正在切，不要重复点。"), { status: 409 });
-  }
-  if (printFaceRepairBusy) {
-    throw Object.assign(new Error("前面还有切面在跑，请稍后再试。"), { status: 429 });
-  }
-  if (requiredPrintFacesReady(id)) {
-    return persistPrintFaceFiles(job);
-  }
-  const source = printFaceRepairSource(job);
-  if (!source) {
-    throw Object.assign(new Error("这单没有可用底稿，无法补生成。请重新打样。"), { status: 409 });
-  }
-  printFaceRepairJobs.add(id);
-  printFaceRepairBusy = id;
+  const destination = join(mockupJobDir(job.id), "assets");
+  assertPrintFacePath(job, destination, true);
+  mkdirSync(destination, { recursive: true });
+  // Each rename is atomic. Interrupted publication is rerendered from the same frozen source.
+  for (const face of files) renameSync(join(assets, `panel_${face}.png`), join(destination, `panel_${face}.png`));
+}
+
+function claimPrintFaceRepair(job: MockupJob): void {
+  const request = job.print_faces_request!;
+  request.status = "running";
+  request.started_at = nowIso();
+  saveMockup(job);
+  live.blender = job.id;
+  void executePrintFaceRepair(job, request.id).finally(() => {
+    const fresh = readMockupFromDisk(job.id);
+    // A missing/corrupt record cannot prove publication or worker exit. Keep the slot fenced.
+    if (fresh?.print_faces_request?.id === request.id && fresh.print_faces_request.status !== "running") {
+      if (live.blender === job.id) live.blender = null;
+      tryStart();
+    }
+  }).catch(error => console.warn(`jobs ${job.id}: problem=print_faces cause=${error instanceof Error ? error.message : "unknown"} fix=保留持久状态等待恢复`));
+}
+
+async function executePrintFaceRepair(job: MockupJob, requestId: string): Promise<void> {
+  const root = join(mockupJobDir(job.id), `.print-faces-${requestId}`);
+  const assets = join(root, "assets");
   try {
+    if (printFaceSourceHash(job) !== job.print_faces_request!.source_sha256) throw new Error("底稿已变化，请重新补印刷面。");
+    const source = printFaceRepairSource(job)!;
+    mkdirSync(root, { recursive: false });
+    // Orphan workers can only write their attempt directory, never the public assets.
+    copyFileSync(source.artwork, join(root, "artwork.pdf"));
+    copyFileSync(source.resolved, join(root, "resolved.json"));
     const run = hooks.runPrintFaceRepair || runPrintFaceRepair;
-    const result = await run(source);
-    if (result.timedOut) {
-      throw Object.assign(new Error("切面超时，请稍后再试。"), { status: 409 });
-    }
-    if (result.code !== 0 || !requiredPrintFacesReady(id)) {
-      throw Object.assign(new Error("切面失败，请稍后再试。"), { status: 409 });
-    }
-    const fresh = readMockupFromDisk(id);
-    if (!fresh) throw Object.assign(new Error("没有这单打样"), { status: 404 });
-    fresh.status = "done";
-    fresh.job_status = "succeeded";
-    fresh.print_faces_repaired_by = viewer.id;
-    fresh.print_faces_repaired_at = nowIso();
-    return persistPrintFaceFiles(fresh);
-  } finally {
-    printFaceRepairJobs.delete(id);
-    if (printFaceRepairBusy === id) printFaceRepairBusy = null;
+    const result = await run({ jobDir: source.jobDir, artwork: join(root, "artwork.pdf"), resolved: join(root, "resolved.json"), assets,
+      executionId: requestId, onSpawn: pid => {
+        const fresh = readMockupFromDisk(job.id);
+        if (!fresh || fresh.print_faces_request?.id !== requestId) throw new Error("补面请求已变化");
+        fresh.print_faces_request.worker_pid = pid;
+        saveMockup(fresh);
+      } });
+    if (result.timedOut) throw new Error("切面超时，请稍后再试。");
+    if (result.code !== 0) throw new Error("切面失败，请稍后再试。");
+    const fresh = readMockupFromDisk(job.id);
+    if (!fresh || fresh.print_faces_request?.id !== requestId || fresh.print_faces_request.status !== "running") return;
+    if (isGenerationManagedMockup(fresh) || structureConfirmationActive(job.id)
+      || printFaceSourceHash(fresh) !== fresh.print_faces_request.source_sha256) throw new Error("底稿或版本已变化，请重新补印刷面。");
+    publishPrintFaceRepair(fresh, assets);
+    finishPrintFaceRepair(job.id, requestId);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "";
+    const publicReasons = ["切面超时，请稍后再试。", "底稿已变化，请重新补印刷面。", "底稿或版本已变化，请重新补印刷面。",
+      "这单没有可用底稿，无法补生成。请重新打样。", "切面路径超出打样目录。", "切面路径不能使用符号链接。"];
+    finishPrintFaceRepair(job.id, requestId, publicReasons.includes(reason) ? reason : "切面失败，请稍后再试。");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+}
+
+function recoverPrintFaceRepairsOnBoot(): void {
+  for (const job of loadAllMockups()) {
+    const request = job.print_faces_request;
+    if (request?.status !== "running") continue;
+    if (!request.worker_pid) continue; // Spawn/persist gap: no PID is not proof that the worker exited.
+    if (!clearPersistedWorker(request.worker_pid, { kind: "print_faces", id: job.id, executionId: request.id })) continue;
+    // New identity fences callbacks and staging left by the interrupted attempt.
+    request.id = randomBytes(16).toString("hex");
+    request.status = "queued";
+    delete request.worker_pid;
+    delete request.started_at;
+    saveMockup(job);
   }
 }
 
@@ -971,7 +1079,7 @@ function commitActivatedGeneration(next: MockupJob, fromId: string, actorId: str
 
 function legacyGenerationReadBusy(job: MockupJob): boolean {
   return job.status !== "done" || job.job_pid !== undefined || job.job_status === "running"
-    || job.job_status === "queued" || relightStudioJobs.has(job.id) || printFaceRepairJobs.has(job.id)
+    || job.job_status === "queued" || relightStudioJobs.has(job.id) || printFaceRepairActive(job)
     || structureConfirmationActive(job.id);
 }
 
@@ -1949,6 +2057,7 @@ export function reclaimOnBoot(): void {
   live.illustrator = null;
   for (const task of loadTasksForRecovery()) reclaimTask(task);
   for (const job of loadAllMockups()) reclaimMockup(job);
+  recoverPrintFaceRepairsOnBoot();
   recoverRenderGenerationsOnBoot();
   for (const task of loadAllTasks()) {
     if (task.notify_job_id && !task.notify_sent && (task.job_status === "succeeded" || task.job_status === "failed")) {
@@ -2004,6 +2113,10 @@ export function tryStart(): void {
     const next = oldestAiQueued();
     if (next) claimAi(next);
   }
+  if (!live.blender) {
+    const interrupted = loadAllMockups().find(job => job.print_faces_request?.status === "running");
+    if (interrupted) live.blender = interrupted.id;
+  }
   if (!live.blender) occupyUnconfirmedGenerationBlenderFence();
   if (!live.blender) {
     for (;;) {
@@ -2014,7 +2127,8 @@ export function tryStart(): void {
         if (claimGenerationMutation(next.job) || live.blender) break;
         continue;
       }
-      claimMockup(next.job);
+      if (next.kind === "print_faces") claimPrintFaceRepair(next.job);
+      else claimMockup(next.job);
       break;
     }
   }
@@ -2068,7 +2182,7 @@ function oldestMockupQueued(): MockupJob | undefined {
     .sort((a, b) => a.created_at.localeCompare(b.created_at))[0];
 }
 
-type BlenderWaiter = { kind: "pipeline" | "generation"; job: MockupJob; at: string };
+type BlenderWaiter = { kind: "pipeline" | "generation" | "print_faces"; job: MockupJob; at: string };
 
 function oldestBlenderWaiter(): BlenderWaiter | undefined {
   const waiters: BlenderWaiter[] = [];
@@ -2083,6 +2197,11 @@ function oldestBlenderWaiter(): BlenderWaiter | undefined {
           at: job.render_generation_request?.created_at || job.created_at,
         });
       }
+    }
+  }
+  for (const job of loadAllMockups()) {
+    if (job.status === "done" && job.print_faces_request?.status === "queued") {
+      waiters.push({ kind: "print_faces", job, at: job.print_faces_request.created_at });
     }
   }
   waiters.sort((a, b) => a.at.localeCompare(b.at) || a.job.id.localeCompare(b.job.id));
