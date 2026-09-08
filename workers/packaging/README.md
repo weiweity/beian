@@ -48,9 +48,9 @@ CLI 没有 `--fixtures` / `--manifest`：夹具固定为仓库内 `workers/packa
       --output-dir /tmp/beian-render-quality-rf10-run-1 \
       --blender /absolute/path/to/blender
 
-`--output-dir` 必须是仓库、产品数据目录和 `WB_DATA_DIR` 之外、父目录已经存在的全新专用目录；工具不会复用已有目录。未找到 Blender 会明确失败（runtime hard = fail），不会伪造绿灯或降级到另一条 3D 流水线。仓库目前没有正式批准基线时，fixture regression 为 `baseline_absent`，`official_machine_green` 为 false。
+`--output-dir` 必须是仓库、产品数据目录和 `WB_DATA_DIR` 之外、父目录已经存在的全新专用目录；工具不会复用已有目录。未找到 Blender 会明确失败（runtime hard = fail），不会伪造绿灯或降级到另一条 3D 流水线。若正式批准基线缺失，fixture regression 为 `baseline_absent`，`official_machine_green` 为 false；已有基线但身份不同则为 `baseline_mismatch`。
 
-输出只写入该目录，包括 `rf00-report.json`（含 `quality_layers` / `render_quality` / `human_acceptance`）、`contact-sheet.png`、每个夹具的渲染与测量产物。stdout JSON 含三层状态。批准基线不在普通采集时写入。只有人工评审确认本次报告完整且成功后，才能显式增加 `--update-baseline`。CLI 只允许把批准基线写到 `workers/packaging/fixtures/render-quality/baselines/`，并会同时校验输入、评估器、质量分层、渲染作业、流水线、相机、模板、渲染配置、清单、依赖版本和嵌套指标身份。当前仓库没有正式批准基线。
+输出只写入该目录，包括 `rf00-report.json`（含 `quality_layers` / `render_quality` / `human_acceptance`）、`contact-sheet.png`、每个夹具的渲染与测量产物。stdout JSON 含三层状态。批准基线不在普通采集时写入。只有人工评审确认本次报告完整且成功后，才能显式增加 `--update-baseline`。CLI 只允许把批准基线写到 `workers/packaging/fixtures/render-quality/baselines/`，并会同时校验输入、评估器、质量分层、渲染作业、流水线、相机、模板、渲染配置、清单、依赖版本和嵌套指标身份。`0.23.0.0` 候选已冻结 [Mac 合成现状基线](fixtures/render-quality/baselines/README.md)，适用于当前 legacy 默认身份的六个矩形夹具，圆柱仍明确不支持。PNG 以解码后的 `pixel_sha256` 精确比较，文件 SHA 仅保留为归档证据；GLB 文件 SHA 与结构化度量仍精确比较，缺失指标仍拒绝。该批准不覆盖 Windows、真实稿、人工画质或资源预算，不改变生产默认。
 
 合同测试不需要 Blender：
 
