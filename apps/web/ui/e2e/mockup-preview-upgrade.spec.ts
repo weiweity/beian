@@ -699,3 +699,91 @@ test("代表尺寸 PNG：记录 card 可见、full decode 与绘制", async ({ b
   expect(samples.length).toBe(6);
   expect(samples.every((row) => row.hasSetFullMark)).toBe(true);
 });
+
+test("Q05 切代/resize/离页：记录 heap 与 rAF 间隔，不把 rAF 当成屏幕合成时刻", async ({ page, browserName }, testInfo) => {
+  test.setTimeout(120_000);
+  const pngs = new Map<string, Buffer>([
+    ["product:card", pngFill(400, 480, [0, 0, 0, 0], { x: 80, y: 96, w: 240, h: 288, color: [200, 0, 0, 255] })],
+    ["product:full", pngFill(800, 960, [0, 0, 0, 0], { x: 160, y: 192, w: 480, h: 576, color: [0, 20, 230, 255] })],
+    ["ground:card", pngFill(400, 480, [0, 160, 0, 255])],
+    ["ground:full", pngFill(800, 960, [200, 200, 0, 255])],
+    ["set:card", pngFill(400, 480, [200, 0, 200, 255])],
+    ["set:full", pngFill(800, 960, [0, 200, 200, 255])],
+  ]);
+  await page.addInitScript(() => { (window as Window & { __RF09_PERF__?: boolean }).__RF09_PERF__ = true; });
+  const heap = async () => page.evaluate(() => {
+    const memory = (performance as Performance & { memory?: { usedJSHeapSize: number; totalJSHeapSize: number } }).memory;
+    return memory ? { used: memory.usedJSHeapSize, total: memory.totalJSHeapSize, method: "performance.memory" }
+      : { used: null, total: null, method: "unavailable_not_performance.memory" };
+  });
+  const stages: Array<Record<string, unknown>> = [];
+  await serve(page, { pngs });
+  const t0 = Date.now();
+  await page.goto(`/mockup/${ID}`, { waitUntil: "domcontentloaded" });
+  await page.locator(".mockup-backdrop-switch").getByText("白桌白墙", { exact: true }).click();
+  const shot = canvas(page);
+  await expect(shot).toHaveAttribute("data-preview-product", /card|full/);
+  const tCard = Date.now() - t0;
+  await expect(shot).toHaveAttribute("data-preview-product", "full");
+  await expect.poll(async () => isBlue(await sample(page, 0.5, 0.5))).toBe(true);
+  const tFullPx = Date.now() - t0;
+  stages.push({ phase: "full-visible", tCardMs: tCard, tFullPxMs: tFullPx, heap: await heap(),
+    note: "t* 是 DOM 属性/canvas 采样时刻，不是屏幕合成精确时刻" });
+
+  const frameDts: number[] = [];
+  await page.evaluate(async () => {
+    (window as Window & { __q05Frames?: number[] }).__q05Frames = [];
+    await new Promise<void>((resolve) => {
+      let last = 0;
+      let n = 0;
+      const tick = (now: number) => {
+        const bag = (window as Window & { __q05Frames?: number[] }).__q05Frames!;
+        if (last) bag.push(now - last);
+        last = now;
+        n += 1;
+        if (n < 45) requestAnimationFrame(tick);
+        else resolve();
+      };
+      requestAnimationFrame(tick);
+    });
+  });
+  await page.setViewportSize({ width: 1100, height: 800 });
+  await page.waitForTimeout(80);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  frameDts.push(...await page.evaluate(() => (window as Window & { __q05Frames?: number[] }).__q05Frames || []));
+  stages.push({ phase: "resize", heap: await heap(), rafDtMs: frameDts.slice(0, 24),
+    canvas: await shot.evaluate((node: HTMLCanvasElement) => ({ width: node.width, height: node.height })),
+    note: "rAF 间隔是脚本调度，不是 GPU 上屏时刻" });
+
+  for (let i = 0; i < 4; i++) {
+    await page.goto(`/mockup/${ID}`, { waitUntil: "domcontentloaded" });
+    await page.locator(".mockup-backdrop-switch").getByText("白桌白墙", { exact: true }).click();
+    await expect(canvas(page)).toHaveAttribute("data-preview-product", /card|full/);
+    stages.push({ phase: `reload-${i + 1}`, heap: await heap() });
+  }
+  await page.goto("about:blank");
+  await page.waitForTimeout(200);
+  stages.push({ phase: "left-page", heap: await heap(),
+    note: "离页后 JS heap 不一定立即回收；不能据此宣称泄漏或已释放 GPU 纹理" });
+
+  const payload = {
+    recorded_at: new Date().toISOString(),
+    browser: browserName,
+    userAgent: await page.evaluate(() => navigator.userAgent),
+    viewport: { width: 1440, height: 900 },
+    fixture: "synthetic-png-800x960-alpha-product",
+    machine: { platform: process.platform, arch: process.arch },
+    method: "Playwright Chromium + API 全拦截；无登录生产页、无真实 API、不占用 :5173 产品 dev（PLAYWRIGHT_ARTIFACT_ONLY）",
+    disclaimer: "本机合成性能不代表杭州或真实用户。DOM/rAF 不是屏幕实际合成时刻。",
+    stages,
+  };
+  const out = testInfo.outputPath("q05-heap-raf.json");
+  writeFileSync(out, JSON.stringify(payload, null, 2));
+  testInfo.attach("q05-heap-raf", { path: out });
+  if (MEASURE_DIR) {
+    mkdirSync(MEASURE_DIR, { recursive: true });
+    writeFileSync(join(MEASURE_DIR, "q05-heap-raf.json"), JSON.stringify(payload, null, 2));
+  }
+  expect(stages.some((row) => row.phase === "full-visible")).toBe(true);
+  expect(stages.some((row) => row.phase === "left-page")).toBe(true);
+});

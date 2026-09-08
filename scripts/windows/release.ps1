@@ -1399,6 +1399,19 @@ try {
     throw "Illustrator Session 1 冒烟失败 exit=$LASTEXITCODE"
   }
 
+  # RF-11 candidate: Blender contract smoke after Illustrator identity smoke.
+  # 90s is not a Hangzhou-frozen budget. Failure keeps the existing drain/fence
+  # and falls through the same recovery throw path. PowerShell does not copy
+  # generation/GLB checks.
+  $blenderSmoke = Join-Path $Root "scripts\windows\blender-contract-smoke.ps1"
+  if (-not (Test-Path -LiteralPath $blenderSmoke -PathType Leaf)) {
+    throw "目标版本缺少 Blender 合同冒烟脚本"
+  }
+  & $smokePowerShell -NoProfile -ExecutionPolicy Bypass -File $blenderSmoke
+  if ($LASTEXITCODE -ne 0) {
+    throw "Blender 合同冒烟失败 exit=$LASTEXITCODE"
+  }
+
   $logo = Invoke-WebRequest -Uri "http://127.0.0.1:8787/brand/logo-mark.png" -TimeoutSec 10 -UseBasicParsing
   if ($logo.StatusCode -ne 200) { throw "logo HTTP $($logo.StatusCode)" }
   $png = $null

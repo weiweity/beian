@@ -703,9 +703,10 @@ Git 内夹具不得使用真实品牌稿，至少包含：
 ```bash
 apps/web/backend/.venv/bin/python workers/packaging/tools/render_quality_eval.py \
   --blender /Applications/Blender.app/Contents/MacOS/Blender \
-  --fixtures workers/packaging/fixtures/render-quality \
-  --output /tmp/beian-render-quality
+  --output-dir /tmp/beian-render-quality-rf10-run-1
 ```
+
+夹具固定读取 `workers/packaging/fixtures/render-quality/`，CLI 不接受 `--fixtures`。报告含 `quality_layers`（runtime hard / fixture regression hard / `human_acceptance`）；缺 Blender、缺正式 baseline 或身份不符都不是绿灯。
 
 要求：
 
@@ -1328,8 +1329,7 @@ npm run quality
 # 有受支持 Blender 时显式执行，不并入默认 npm test
 apps/web/backend/.venv/bin/python workers/packaging/tools/render_quality_eval.py \
   --blender /Applications/Blender.app/Contents/MacOS/Blender \
-  --fixtures workers/packaging/fixtures/render-quality \
-  --output /tmp/beian-render-quality
+  --output-dir /tmp/beian-render-quality-rf10-run-1
 ```
 
 Grok 不能在杭州生产机跑默认单测，也不能以 Mac Blender 套件替代可信 `main` 的 Windows L1。质量工具的真实最终 CLI 由 RF-10 固化；若与上面草案不同，需同步本 ADR、README 与测试。

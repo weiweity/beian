@@ -35,6 +35,7 @@
 
 - [ ] **质量门与回归矩阵**
   L0 验证合同、像素预算、缓存、旧单兼容和浏览器升级；有 Blender 的显式质量命令验证合成样片；L1 记录 Blender 版本/合同 hash；L2/UAT 用白盒、深色盒、细长盒、矮宽盒、膜袋正负样本做人工 A/B。任何机器分数都不能替代人核“真实感”。
+  2026-09-08 本工作树阶段（`codex/rf10-quality-gates`）：RF-10 三层质量结果已接到 evaluator CLI / JSON 与 generation worker（runtime hard / fixture regression hard / `human_acceptance` 独立 pending）。Q05 本机合成 Playwright 测量已记录（heap 量化、非上屏时刻）。RF-11 本地 smoke wrapper 与发布合同测试已落地，杭州 90 秒冻结 / Windows 原生 / 可信 main 冒烟未做。未勾本项整体：正式 baseline 未批准，L1/L2/UAT、生产 registry 与人工验收未做。
 
 ## P1 — 已有代码仍欠生产/业务验收
 

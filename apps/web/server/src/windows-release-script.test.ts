@@ -848,6 +848,54 @@ describe("windows release.ps1 contract", () => {
     assert.doesNotMatch(smoke, /Start-Process/);
     assert.doesNotMatch(smoke, /run_export\.vbs/);
     assert.match(smoke, /WINDOWS_ILLUSTRATOR_JSX_SMOKE ok/);
+
+    const blenderSmokePath = join(repoRoot, "scripts/windows/blender-contract-smoke.ps1");
+    const blenderSmokeBytes = readFileSync(blenderSmokePath);
+    assert.equal(blenderSmokeBytes[0], 0xef);
+    assert.equal(blenderSmokeBytes[1], 0xbb);
+    assert.equal(blenderSmokeBytes[2], 0xbf);
+    const blenderSmoke = blenderSmokeBytes.toString("utf8").replace(/^\uFEFF/, "");
+    assert.match(script, /blender-contract-smoke\.ps1/);
+    assert.match(script, /Blender 合同冒烟失败/);
+    const blenderSmokeIdx = script.indexOf("blender-contract-smoke.ps1");
+    assert.ok(blenderSmokeIdx > illustratorSmokeIdx && commitIdx > blenderSmokeIdx);
+    assert.match(blenderSmoke, /RUNNER_TEMP/);
+    assert.match(blenderSmoke, /blender_contract_smoke\.py/);
+    assert.match(blenderSmoke, /TimeoutMs = 90000/);
+    assert.match(blenderSmoke, /candidate 90s budget, not Hangzhou-frozen/);
+    assert.match(blenderSmoke, /WaitForExit\(\$TimeoutMs\)/);
+    assert.match(blenderSmoke, /timed out and could not be killed/);
+    assert.match(blenderSmoke, /WINDOWS_BLENDER_CONTRACT_SMOKE ok/);
+    assert.doesNotMatch(blenderSmoke, /compare_glb_artifact_contract/);
+    assert.doesNotMatch(blenderSmoke, /generation\.json/);
+    assert.doesNotMatch(blenderSmoke, /sealGeneration/);
+    assert.doesNotMatch(blenderSmoke, /WB_DATA_DIR\\tasks/);
+    assert.match(script, /Illustrator Session 1 冒烟失败/);
+  });
+
+  it("keeps drain and armed recovery when Blender contract smoke fails or times out", () => {
+    const blenderSmoke = readFileSync(join(repoRoot, "scripts/windows/blender-contract-smoke.ps1"), "utf8").replace(/^\uFEFF/, "");
+    const drainFenceIdx = indexOf(/Write-StartupDrainFence \$releaseLeaseId/);
+    const illustratorIdx = script.indexOf("illustrator-jsx-smoke.ps1");
+    const blenderIdx = script.indexOf("blender-contract-smoke.ps1");
+    const blenderFailIdx = script.indexOf('throw "Blender 合同冒烟失败');
+    const commitIdx = script.indexOf("Commit-ReleaseRecovery $mergedHeadSha $ver");
+    const openDrainIdx = script.indexOf("Open-TargetReleaseDrain $targetDrain $ver");
+    const recoverIdx = script.indexOf('Invoke-ArmedRecovery "升版失败"');
+    assert.ok(drainFenceIdx >= 0 && illustratorIdx > drainFenceIdx);
+    assert.ok(blenderIdx > illustratorIdx);
+    assert.ok(blenderFailIdx > blenderIdx);
+    assert.ok(commitIdx > blenderFailIdx);
+    assert.ok(openDrainIdx > commitIdx);
+    assert.ok(recoverIdx > blenderFailIdx);
+    assert.match(script, /catch \{\s*Invoke-ArmedRecovery "升版失败"/);
+    assert.match(blenderSmoke, /Blender contract smoke timed out \(candidate 90s budget, not Hangzhou-frozen\)/);
+    assert.match(blenderSmoke, /WaitForExit\(\$TimeoutMs\)/);
+    assert.doesNotMatch(blenderSmoke, /compare_glb_artifact_contract/);
+    assert.doesNotMatch(blenderSmoke, /load_glb_artifact/);
+    assert.doesNotMatch(blenderSmoke, /sealGeneration/);
+    assert.match(script, /Illustrator Session 1 冒烟失败/);
+    assert.match(script, /illustrator-jsx-smoke\.ps1/);
   });
 
   it("keeps VERSION, npm version, and the Hono health constant aligned", () => {

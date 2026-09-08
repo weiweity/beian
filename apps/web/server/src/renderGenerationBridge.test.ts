@@ -38,7 +38,7 @@ process.stdin.on('end', () => {
     candidate_plan_identity:id, candidate_identity:hash('candidate'), candidate_dir:req.candidate_dir || null,
     studio_adjustment:req.studio_adjustment || null,
     execution:{status:'validated', nonce:null}, outputs:{}, optional_warnings:[],
-    quality:{status:'unwired', wired:false, runtime_gate:'pending', production_ready:false}};
+    quality:{status:'layered', wired:true, runtime_gate:'not-run', fixture_regression:'not-run', visual_observations:'not-run', human_acceptance:'pending', production_ready:false}};
   if (behavior === 'hang') {setInterval(()=>{}, 1000); return;}
   if (behavior === 'delayed-stop') {
     process.on('SIGTERM', () => setTimeout(() => process.exit(0), 120));
@@ -82,6 +82,8 @@ process.stdin.on('end', () => {
       result.outputs[key]={path:filename,sha256:hash(bytes),bytes:bytes.length};
     }
     result.execution={status:'rendered',nonce:'0123456789abcdef0123456789abcdef'};
+    result.quality.runtime_gate='pass';
+    result.quality.machine_metrics={runtime_integrity:'pass',fixture_regression:'not-run',visual_observations:'not-run'};
     result.artifact_checks={glb:'passed',full_card:'passed',source_sampling:'passed'}; // Transport double, not real artifact QA.
     process.stderr.write('STAGE prepare\nSTAGE blender\n');
   }
@@ -454,7 +456,7 @@ describe("RF-03C2.1 async render bridge", { skip: !renderGenerationProcessSuppor
     assert.equal(existsSync(f.candidate), false);
     const result = await f.bridge.render(receipt, f.candidate, process.execPath, { onStage: stage => stages.push(stage) });
     assert.equal(Object.keys(result.outputs).length, 5);
-    assert.deepEqual(result.quality, { status: "unwired", production_ready: false });
+    assert.deepEqual(result.quality, { status: "layered", production_ready: false, runtime_gate: "pass", human_acceptance: "pending" });
     assert.deepEqual(stages, ["validate", "validate", "prepare", "blender"]);
     assert.deepEqual(readFileSync(join(f.jobRoot, "resolved_job.json")), f.raw);
     assert.equal(existsSync(join(f.candidate, "generation.json")), false);
