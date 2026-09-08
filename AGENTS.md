@@ -74,7 +74,7 @@
 - 缺陷根因调查或修复 → /investigate，按上文区分诊断与实施
 - 发 PR → /ship（只在 Mac 开发机。杭州生产机禁止 /ship 产品功能。）没听到用户说 `/ship` 或「开始 ship」不要出 PR。用户说「先不进入 ship」就只改代码。
 - 合 main → /land-and-deploy（只合 GitHub。不重启杭州、不改 DNS。）
-- 杭州上线 → 合 `main` 后等 `hangzhou-release` 变绿，再等约 20 秒，公网 health 的 version 等于刚合进去的 VERSION。按 [发布合同](docs/contracts/release.md) 报告发布证据；仅当对应 merge SHA 的发布链、杭州来源及公网 health/version 均验证通过时，才可表述“该版本已上线”；同时单列 L2 与业务开放状态，不等同于人工验收完成。不要给杭州贴 pull / rebuild / 重启 8787 或本地执行 `release.ps1` 的升级提示词。runner 灰掉先恢复同一 runner；在途作业挡住发版就等作业结束，然后只重跑刚才那条可信 `main` push run。
+- 杭州上线 → 合 `main` 后等 `hangzhou-release` 变绿，再等约 20 秒，公网 health 的 version 等于刚合进去的 VERSION。按 [发布合同](docs/contracts/release.md) 报告发布证据；仅当对应 merge SHA 的发布链、杭州来源及公网 health/version 均验证通过时，才可表述“该版本已上线”。这句话只覆盖发版 L1（进程、VERSION、Illustrator Session 1）。质量门杭州实跑（Blender 合同冒烟真跑、超时冻结、Job Object）、L2、UAT 只写在 [TODOS.md](TODOS.md)，不要用已上线去勾它们。不要给杭州贴 pull / rebuild / 重启 8787 或本地执行 `release.ps1` 的升级提示词。runner 灰掉先恢复同一 runner；在途作业挡住发版就等作业结束，然后只重跑刚才那条可信 `main` push run。
 - 用户贴的 `www.jianghua.site` / 开工板截图是杭州当前 VERSION，不是你工作区未合的分支。没 land 绿之前不要拿公网画面证明「已经改好了」。
 - 配置发布 → /setup-deploy
 - 写 issue → /spec

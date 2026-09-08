@@ -18,12 +18,13 @@
   - 服务端：`npm run test -w beian-server`（`node:test`，`apps/web/server/src/*.test.ts`）
   - 界面：`npm run test -w beian-ui`（`node:test`，`src/**/*.test.ts` 自动发现；纯函数，不引入 RTL）
   - 对照 worker：`cd apps/web/backend && .venv/bin/python -m pytest -q`（CLI 契约 + 对照/打样单测。没有 FastAPI 测试）
-- L1 冒烟（杭州 `hangzhou-release`）：`release.ps1` 在 transaction fence 内查 health.ok、version==VERSION、8787 listener、logo PNG，并通过生产 Session 1 Agent 验证管道 → VBS → 唯一 JSX 的身份链。不跑 `npm test`，也不替代真实稿 L2。RF-11 本地 Blender 合同冒烟 wrapper 已接线（`scripts/windows/blender-contract-smoke.ps1` → `workers/packaging/tools/blender_contract_smoke.py`，输出仅 `RUNNER_TEMP`）。wrapper 默认 90 秒只是候选预算；发版脚本当前传入 `TimeoutMs 720000`，两者都未在杭州冻结。未解析到 Blender 可执行文件时跳过、不回滚。不能用 Mac 合成代替可信 main L1。RF-10 三层质量分类与冒烟合同测试随默认 worker/server L0（`test_packaging_render_quality_layers.py`、`test_packaging_blender_contract_smoke.py`、`windows-release-script.test.ts`），不启动 Blender。
+- 发版 L1（杭州 `hangzhou-release`）：`release.ps1` 在 transaction fence 内查 health.ok、version==VERSION、8787 listener、logo PNG，并通过生产 Session 1 Agent 验证管道 → VBS → 唯一 JSX 的身份链。不跑 `npm test`，也不替代真实稿 L2。这是 AGENTS「该版本已上线」的证据层。
+- 质量门杭州实跑（候选，未冻结）：RF-11 `blender-contract-smoke.ps1` → `blender_contract_smoke.py`，输出仅 `RUNNER_TEMP`。wrapper 默认 90 秒；发版当前传入 `TimeoutMs 720000`。未解析到 Blender 时跳过、不回滚；跳过不算质量门杭州实跑完成。不能用 Mac 合成代替。RF-10 三层分类与冒烟合同测试随默认 worker/server L0（`test_packaging_render_quality_layers.py`、`test_packaging_blender_contract_smoke.py`、`windows-release-script.test.ts`），不启动 Blender。词义见 [TODOS.md](TODOS.md) 状态口径。
 - L2 金标（人核定后）：`apps/web/backend/scripts/run_eval.py`。未核定的 `data/gold` 不进默认 `npm test`
 - 类型：`npm run typecheck -w beian-server` 与 `npm run build -w beian-ui`
-- 浏览器交互（Mac）：`npm run test:e2e`（Vite + 合成 API，只验证页面行为，不替代真实 Hono / Windows L1）
+- 浏览器交互（Mac）：`npm run test:e2e`（Vite + 合成 API，只验证页面行为，不替代真实 Hono / 发版 L1）
 - 复杂度门禁（Mac / GitHub-hosted PR）：`npm run quality`；基线只读、只能经评审缩小，新增发现、过期条目或相对 base 扩张都失败。本地自动解析 `origin/HEAD`（再回退 `origin/main` / `main`），找不到目标分支就失败关闭；CI 使用 PR base 精确 SHA。同文件同名诊断按重数比较，行号移动不改变身份，但新增第二处不能被折叠。`npm run quality:deep` 只生成手工清理报告，不自动删除。`npm run test:quality` 还要求 `.agents/skills` 实际目录、审核清单与 `skills-lock.json` 完全一致；项目 skill 不自动授予 shell。`antd` 是仓库 vendored 源，只能经 `scripts/quality/antd-readonly.mjs` 调固定 6.6.1；禁止用上游 restore/update 覆盖本地 hardening，恢复走受信任 Git 提交并重验哈希。
-- `.github/workflows/quality.yml` 的 Linux Node 22 质量 job 与 `windows-2022` PowerShell 5.1 合同 job 都使用 GitHub-hosted runner；禁止使用杭州/self-hosted runner。Windows job 实跑 `.NET File.Replace` 无备份原子替换，并验证 Illustrator Agent 计划任务的隐藏窗口、持久/临时触发器和 `Quiesce` 顺序；它不注册或控制生产任务，不调用 `release.ps1`，也不替代杭州 L1。Knip 只锁在 `tools/quality`，Vulture 只放 `requirements-quality.txt`，两者不得进入杭州生产依赖图。
+- `.github/workflows/quality.yml` 的 Linux Node 22 质量 job 与 `windows-2022` PowerShell 5.1 合同 job 都使用 GitHub-hosted runner；禁止使用杭州/self-hosted runner。Windows job 实跑 `.NET File.Replace` 无备份原子替换，并验证 Illustrator Agent 计划任务的隐藏窗口、持久/临时触发器和 `Quiesce` 顺序；它不注册或控制生产任务，不调用 `release.ps1`，也不替代发版 L1。Knip 只锁在 `tools/quality`，Vulture 只放 `requirements-quality.txt`，两者不得进入杭州生产依赖图。
 - 新增或修改产品逻辑要有相应行为测试（含失败路径）；纯文档、格式和不改行为的调整不机械新增测试。不要把密钥写进测试。
 
 ## 执行顺序与环境边界
