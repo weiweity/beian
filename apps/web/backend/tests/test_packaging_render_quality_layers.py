@@ -347,7 +347,7 @@ def test_explicit_temp_baseline_update_does_not_touch_official_path(
 ):
     eval_mod = eval_module()
     official = PACKAGING / "fixtures" / "render-quality" / "baselines" / "rf00-current.json"
-    assert not official.exists()
+    before = official.read_bytes() if official.exists() else None
     blender = tmp_path / "blender"
     _install_successful_fake_pipeline(eval_mod, monkeypatch, blender)
     report = eval_mod.run_eval(
@@ -359,7 +359,7 @@ def test_explicit_temp_baseline_update_does_not_touch_official_path(
     )
     assert report["baseline"]["updated"] is True
     assert (tmp_path / "temp-approved.json").is_file()
-    assert not official.exists()
+    assert (official.read_bytes() if official.exists() else None) == before
     assert report["human_acceptance"] == "pending"
 
 
@@ -495,3 +495,37 @@ def test_runtime_quality_report_rejects_invalid_gate():
     assert noted["note"] == "custom-runtime-fail"
     assert noted["human_acceptance"] == "pending"
     assert noted["production_ready"] is False
+
+
+def test_png_metadata_is_not_a_visual_regression_but_pixels_and_glb_are(tmp_path):
+    from PIL import Image, PngImagePlugin
+
+    ev = eval_module()
+    first, second = tmp_path / "first.png", tmp_path / "second.png"
+    with Image.new("RGBA", (16, 16), (20, 40, 60, 255)) as image:
+        image.save(first)
+        metadata = PngImagePlugin.PngInfo()
+        metadata.add_text("run_id", "different-run")
+        image.save(second, pnginfo=metadata)
+    before = ev.collect_image_metrics(first, contour_metrics=False)
+    after = ev.collect_image_metrics(second, contour_metrics=False)
+    assert before["sha256"] != after["sha256"]
+    assert before["pixel_sha256"] == after["pixel_sha256"]
+
+    def fingerprints(image_metrics, glb="a" * 64):
+        return ev.fixture_metric_fingerprints([{
+            "fixture_id": "same-fixture", "family_status": "supported", "rendered": True,
+            "outputs": {"front_right": image_metrics, "glb": {"sha256": ev.measured(glb, None, "test")}},
+        }])
+
+    baseline = fingerprints(before)
+    assert ev.compare_fixture_metric_fingerprints(fingerprints(after), baseline) == (True, "ok")
+    with Image.open(second) as image:
+        image.putpixel((0, 0), (21, 40, 60, 255))
+        image.save(second)
+    changed = ev.collect_image_metrics(second, contour_metrics=False)
+    assert ev.compare_fixture_metric_fingerprints(fingerprints(changed), baseline)[0] is False
+    assert ev.compare_fixture_metric_fingerprints(fingerprints(after, "b" * 64), baseline)[0] is False
+    missing = copy.deepcopy(after)
+    missing.pop("pixel_sha256")
+    assert ev.compare_fixture_metric_fingerprints(fingerprints(missing), baseline)[0] is False

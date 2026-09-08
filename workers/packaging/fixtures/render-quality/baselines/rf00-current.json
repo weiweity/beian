@@ -1,0 +1,3018 @@
+{
+  "schema": "beian-render-quality-baseline/1",
+  "phase": "RF-00",
+  "artifacts_in_git": false,
+  "evidence_report_sha256": "517a919f2a0c2d0c38aff307ac78e4e1f75d780e97065bfa090cf408357edb1b",
+  "input_sha256": "ef670e0ed36cb8a0f9f8506c5fc679508085c19a0691478b56086cd554f64dd3",
+  "identity": {
+    "evaluator_sha256": "1c7d214723e56e87664bb4796a7f8e6ef99e2f9b2be2ffaf1e11333f9d59cb1e",
+    "render_job_sha256": "7ee318bd1d7077fb0b093fb1c2e38cac4dc8435cb465cc9dcc5152e5f37ae7ef",
+    "pipeline_sha256": "3f104d28bdd4ad8f8656a4efc7c1ad5ed307907938b59463d7f52105e2382671",
+    "camera_frame_sha256": "af82783307c14b9dcb1ee96b424f34d9e0ee6508d34161c580e777c473776441",
+    "template_sha256": "76a66b0f2f6c1a488304c6d05dc6cfc7eaebe8d6183a9ec1a24e407a241f8632",
+    "render_profile_sha256": "5cabb44e2bc04028624146c5f96ef2bae07a37737b80eead0989540d79d92f00",
+    "manifest_sha256": "1e5b4fe4a624f1ab18fd878fe13c8f899d9f9361efb0fa8940e36472c4a11400",
+    "input_sha256": "ef670e0ed36cb8a0f9f8506c5fc679508085c19a0691478b56086cd554f64dd3"
+  },
+  "dependency_versions": {
+    "python": "3.14.4",
+    "pillow": "12.3.0",
+    "pymupdf": "1.28.2",
+    "blender": "Blender 5.2.0 LTS"
+  },
+  "python_version": {
+    "status": "measured",
+    "value": "3.14.4",
+    "method": "platform.python_version"
+  },
+  "blender": {
+    "available": true,
+    "status": "measured",
+    "path": "/Applications/Blender.app/Contents/MacOS/Blender",
+    "version": {
+      "status": "measured",
+      "value": "Blender 5.2.0 LTS",
+      "method": "blender --version first line"
+    }
+  },
+  "current_render": {
+    "resolution": {
+      "status": "measured",
+      "value": [
+        3000,
+        3600
+      ],
+      "method": "current carton template render.resolution_*",
+      "unit": "px"
+    },
+    "samples": {
+      "status": "measured",
+      "value": 64,
+      "method": "scene.eevee.taa_render_samples",
+      "unit": "1"
+    },
+    "engine": {
+      "status": "measured",
+      "value": "BLENDER_EEVEE",
+      "method": "factory-startup apply_eevee_engine equivalent"
+    },
+    "view_transform": {
+      "status": "measured",
+      "value": "Standard",
+      "method": "render_job view_transform default"
+    },
+    "png_compression": {
+      "status": "measured",
+      "value": 35,
+      "method": "render_job image_settings.compression",
+      "unit": "1"
+    },
+    "color_depth": {
+      "status": "measured",
+      "value": "8",
+      "method": "render_job image_settings.color_depth",
+      "unit": "bit"
+    },
+    "product_template_raster_width_px": {
+      "status": "measured",
+      "value": 10000,
+      "method": "current carton template raster_width_px",
+      "unit": "px"
+    },
+    "look_shape_keys": [
+      "front_right",
+      "back_left",
+      "front_right_ground",
+      "back_left_ground",
+      "front_right_set",
+      "back_left_set",
+      "glb"
+    ],
+    "read_type_keys": [
+      "read_front",
+      "read_right",
+      "read_back",
+      "read_left",
+      "read_top",
+      "read_bottom"
+    ]
+  },
+  "fixtures": [
+    {
+      "fixture_id": "rf00-white-carton",
+      "packaging_family": "rectangular_carton_v1",
+      "family_status": "measured",
+      "role": "white_separation",
+      "input_sha256": "bf62ae72380d85bf48a00839833e9dfa51173041b52f58669c434a5f126334b8",
+      "artwork_sha256": "86831289b60992e03417d4610d8ec9ca616827201241070d129d2daeb35dcefd",
+      "artwork_script_sha256": "c15f134d41944efcc662748b16d2bfd662b9493e30ca8027104832711b51e39d",
+      "render_profile_sha256": "3edd3b268227965b67ffa9f74c85afeeb9eabc2ca4616bf00c46b0e21f959f6e",
+      "rendered": true,
+      "outputs": {
+        "front_right": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              3000,
+              3600
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 4404856,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "4f46a9135e8456db908cd0d8918df316661174d71b108f9c616dbbf49742564b",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "3750a33d3c36d9b04b7b7236875764cf2dabe9a5c409511c80aec44f3aba93ac",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "measured",
+            "value": {
+              "contour_count": 14844,
+              "interior_edge_count": 7420,
+              "fringe_count": 7424,
+              "transparent_touch_count": 0
+            },
+            "method": "product alpha contour and fringe; not the canvas outer frame",
+            "unit": "1"
+          },
+          "white_separation": {
+            "status": "measured",
+            "value": {
+              "edge_mean_luma": 211.6078,
+              "delta_vs_white": 43.3922,
+              "delta_vs_silver": 16.681,
+              "edge_pixel_count": 7420
+            },
+            "method": "product contour interior luma vs compositor white/silver; no fill-mean fallback",
+            "unit": "8bit_luma"
+          }
+        },
+        "back_left": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              3000,
+              3600
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 4404926,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "e62275c06583f18923852aae81343d71bd7f4b485bed34fe732d4e4090eb2fa6",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "ebda3cb728bd895afd7fb84679ea0ae0cdef398a5290194274e1193e97dd1d2c",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "measured",
+            "value": {
+              "contour_count": 14844,
+              "interior_edge_count": 7420,
+              "fringe_count": 7424,
+              "transparent_touch_count": 0
+            },
+            "method": "product alpha contour and fringe; not the canvas outer frame",
+            "unit": "1"
+          },
+          "white_separation": {
+            "status": "measured",
+            "value": {
+              "edge_mean_luma": 211.6313,
+              "delta_vs_white": 43.3687,
+              "delta_vs_silver": 16.6575,
+              "edge_pixel_count": 7420
+            },
+            "method": "product contour interior luma vs compositor white/silver; no fill-mean fallback",
+            "unit": "8bit_luma"
+          }
+        },
+        "front_right_card": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              1200,
+              1440
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 244987,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "8c60827844fd21961c005a0438050c7d1c9ba4697ff86474e6202d3feeb116f1",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "04f08f2dd011bc940de99a2c7dd35aabb53227d1823223eb46908bc87589f863",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "measured",
+            "value": {
+              "contour_count": 5932,
+              "interior_edge_count": 2964,
+              "fringe_count": 2968,
+              "transparent_touch_count": 0
+            },
+            "method": "product alpha contour and fringe; not the canvas outer frame",
+            "unit": "1"
+          },
+          "white_separation": {
+            "status": "measured",
+            "value": {
+              "edge_mean_luma": 213.7697,
+              "delta_vs_white": 41.2303,
+              "delta_vs_silver": 14.5191,
+              "edge_pixel_count": 2964
+            },
+            "method": "product contour interior luma vs compositor white/silver; no fill-mean fallback",
+            "unit": "8bit_luma"
+          }
+        },
+        "back_left_card": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              1200,
+              1440
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 245008,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "cea84a496469204edd2f86b11fcf63de542480809509069bdd8de576e17b451d",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "b84ff1d97e5750e9d36bc07dbe35cbef672261290ffd11981afd9f0e323a50d4",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "measured",
+            "value": {
+              "contour_count": 5932,
+              "interior_edge_count": 2964,
+              "fringe_count": 2968,
+              "transparent_touch_count": 0
+            },
+            "method": "product alpha contour and fringe; not the canvas outer frame",
+            "unit": "1"
+          },
+          "white_separation": {
+            "status": "measured",
+            "value": {
+              "edge_mean_luma": 213.7742,
+              "delta_vs_white": 41.2258,
+              "delta_vs_silver": 14.5146,
+              "edge_pixel_count": 2964
+            },
+            "method": "product contour interior luma vs compositor white/silver; no fill-mean fallback",
+            "unit": "8bit_luma"
+          }
+        },
+        "glb": {
+          "byte_size": {
+            "status": "measured",
+            "value": 520636,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "3af6264bd4cdcc501cfcf7e21ef956ae91b6d53d4c0ecaaa5e5c995f1bdf4b85",
+            "method": "SHA-256 of file bytes"
+          }
+        },
+        "read_front": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              2500,
+              9342
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 112515,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "d77895db73126b1283d310bbca409ce274f5679eb84a90ba29106f1e421e1be5",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "b654392b847fcd2ecdde33e0d51bd39ef3b07c46ae2b25bd5dfb6fd0fe8fb7ae",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "1",
+            "method": "read panel skips contour scan"
+          },
+          "white_separation": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "8bit_luma",
+            "method": "read panel skips contour scan"
+          }
+        },
+        "read_right": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              2500,
+              9342
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 112503,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "4ebc9adbda71531aabd5fa0188d7b78bc8b8bf15255ba4091b0c883d4c6d57fb",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "cbe51ffb6cff1253b173279a416b3cb88e05b724882bd0338475578c9da6825f",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "1",
+            "method": "read panel skips contour scan"
+          },
+          "white_separation": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "8bit_luma",
+            "method": "read panel skips contour scan"
+          }
+        },
+        "read_back": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              2500,
+              9342
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 112503,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "4ebc9adbda71531aabd5fa0188d7b78bc8b8bf15255ba4091b0c883d4c6d57fb",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "cbe51ffb6cff1253b173279a416b3cb88e05b724882bd0338475578c9da6825f",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "1",
+            "method": "read panel skips contour scan"
+          },
+          "white_separation": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "8bit_luma",
+            "method": "read panel skips contour scan"
+          }
+        },
+        "read_left": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              2500,
+              9342
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 112503,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "4ebc9adbda71531aabd5fa0188d7b78bc8b8bf15255ba4091b0c883d4c6d57fb",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "cbe51ffb6cff1253b173279a416b3cb88e05b724882bd0338475578c9da6825f",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "1",
+            "method": "read panel skips contour scan"
+          },
+          "white_separation": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "8bit_luma",
+            "method": "read panel skips contour scan"
+          }
+        },
+        "read_top": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              2500,
+              2500
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 30362,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "0c50c0d615871db283310ca615ec870fbe72b07ea80077cdf371f4f08369eae7",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "847c13c9d37c1ac8ae1a98894d3798e3386dba3f1af8799b8ca18a6687a96dcb",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "1",
+            "method": "read panel skips contour scan"
+          },
+          "white_separation": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "8bit_luma",
+            "method": "read panel skips contour scan"
+          }
+        },
+        "read_bottom": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              2500,
+              2500
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 30227,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "a07e27f4a39576308f858b77c687cd2f2a494e111f4c9b6f8fd940599a41bafb",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "ec93622fc28dd6808dcb7dfc93b5f140d840f667c47c890c901f56dabaa4f76c",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "1",
+            "method": "read panel skips contour scan"
+          },
+          "white_separation": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "8bit_luma",
+            "method": "read panel skips contour scan"
+          }
+        },
+        "type_fidelity": {
+          "read_front": {
+            "status": "unavailable",
+            "reason": "no_type_roi",
+            "unit": "1",
+            "method": "type ROI exists only on type_frequency fixtures"
+          },
+          "read_back": {
+            "status": "unavailable",
+            "reason": "no_type_roi",
+            "unit": "1",
+            "method": "type ROI exists only on type_frequency fixtures"
+          },
+          "full": {
+            "status": "unavailable",
+            "reason": "no_type_roi",
+            "unit": "1",
+            "method": "type ROI exists only on type_frequency fixtures"
+          },
+          "card": {
+            "status": "unavailable",
+            "reason": "no_type_roi",
+            "unit": "1",
+            "method": "type ROI exists only on type_frequency fixtures"
+          }
+        }
+      }
+    },
+    {
+      "fixture_id": "rf00-dark-carton",
+      "packaging_family": "rectangular_carton_v1",
+      "family_status": "measured",
+      "role": "dark_levels",
+      "input_sha256": "e0f4938e23540f4fc3803119376dd647372a33ca403336261085c0640b58bfe7",
+      "artwork_sha256": "07fcdcc849f30cca3272ea176762b64c978ab2a5ec918e2c937ba2429cb8d2f8",
+      "artwork_script_sha256": "56fa25d4f09b27793fc830f3477c5b52bd4d389edadc904fbb907d98b4f76274",
+      "render_profile_sha256": "3edd3b268227965b67ffa9f74c85afeeb9eabc2ca4616bf00c46b0e21f959f6e",
+      "rendered": true,
+      "outputs": {
+        "front_right": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              3000,
+              3600
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 4357868,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "ac5564f14c6c0486086995ac8406bf995c6c4aed115dde3beea5cac41b020a11",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "ef2cb89b6641644ef4c77fa9b4c121fb24229a786c197ca82b417285de61b6f5",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "measured",
+            "value": {
+              "contour_count": 14844,
+              "interior_edge_count": 7420,
+              "fringe_count": 7424,
+              "transparent_touch_count": 0
+            },
+            "method": "product alpha contour and fringe; not the canvas outer frame",
+            "unit": "1"
+          },
+          "white_separation": {
+            "status": "measured",
+            "value": {
+              "edge_mean_luma": 37.5835,
+              "delta_vs_white": 217.4165,
+              "delta_vs_silver": 190.7053,
+              "edge_pixel_count": 7420
+            },
+            "method": "product contour interior luma vs compositor white/silver; no fill-mean fallback",
+            "unit": "8bit_luma"
+          }
+        },
+        "back_left": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              3000,
+              3600
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 4357868,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "a9549405f3463550cc1e4feb1f211dad8280f3105c7e2fd40f5dbdc06665cbad",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "ef2cb89b6641644ef4c77fa9b4c121fb24229a786c197ca82b417285de61b6f5",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "measured",
+            "value": {
+              "contour_count": 14844,
+              "interior_edge_count": 7420,
+              "fringe_count": 7424,
+              "transparent_touch_count": 0
+            },
+            "method": "product alpha contour and fringe; not the canvas outer frame",
+            "unit": "1"
+          },
+          "white_separation": {
+            "status": "measured",
+            "value": {
+              "edge_mean_luma": 37.5835,
+              "delta_vs_white": 217.4165,
+              "delta_vs_silver": 190.7053,
+              "edge_pixel_count": 7420
+            },
+            "method": "product contour interior luma vs compositor white/silver; no fill-mean fallback",
+            "unit": "8bit_luma"
+          }
+        },
+        "front_right_card": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              1200,
+              1440
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 238608,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "701797721e1de5bd3e30b44a249824cad8c0303726ce78f57e5fdc03766e1a81",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "c2c790e0476409d2e3081cdec8e39018f0b0f4ac447baf48e0c6e0f64a6bd179",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "measured",
+            "value": {
+              "contour_count": 5932,
+              "interior_edge_count": 2964,
+              "fringe_count": 2968,
+              "transparent_touch_count": 0
+            },
+            "method": "product alpha contour and fringe; not the canvas outer frame",
+            "unit": "1"
+          },
+          "white_separation": {
+            "status": "measured",
+            "value": {
+              "edge_mean_luma": 38.2697,
+              "delta_vs_white": 216.7303,
+              "delta_vs_silver": 190.0191,
+              "edge_pixel_count": 2964
+            },
+            "method": "product contour interior luma vs compositor white/silver; no fill-mean fallback",
+            "unit": "8bit_luma"
+          }
+        },
+        "back_left_card": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              1200,
+              1440
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 238608,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "701797721e1de5bd3e30b44a249824cad8c0303726ce78f57e5fdc03766e1a81",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "c2c790e0476409d2e3081cdec8e39018f0b0f4ac447baf48e0c6e0f64a6bd179",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "measured",
+            "value": {
+              "contour_count": 5932,
+              "interior_edge_count": 2964,
+              "fringe_count": 2968,
+              "transparent_touch_count": 0
+            },
+            "method": "product alpha contour and fringe; not the canvas outer frame",
+            "unit": "1"
+          },
+          "white_separation": {
+            "status": "measured",
+            "value": {
+              "edge_mean_luma": 38.2697,
+              "delta_vs_white": 216.7303,
+              "delta_vs_silver": 190.0191,
+              "edge_pixel_count": 2964
+            },
+            "method": "product contour interior luma vs compositor white/silver; no fill-mean fallback",
+            "unit": "8bit_luma"
+          }
+        },
+        "glb": {
+          "byte_size": {
+            "status": "measured",
+            "value": 520616,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "f057d42317b60a757bceabd08f28cd562241a8f93cb6b9f81d778e015855d1d1",
+            "method": "SHA-256 of file bytes"
+          }
+        },
+        "read_front": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              2500,
+              9342
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 112516,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "87dca1b47a5f53e1c9b0d77a0765f731486dea6257b9fb56347cb62bfbca1252",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "5abcbd6275d5cc3ff69e7cca94ae06e908fe9d0f362fdac852470a4cdbc27e11",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "1",
+            "method": "read panel skips contour scan"
+          },
+          "white_separation": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "8bit_luma",
+            "method": "read panel skips contour scan"
+          }
+        },
+        "read_right": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              2500,
+              9342
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 112500,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "b2db02e22dec78343e236b8859bc072453ae070ec2b2bc5a75dfc9b18f7cb777",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "ae12423aee60693db69e529c7301952fbeb587958410a220cd46c0ab2f30ed74",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "1",
+            "method": "read panel skips contour scan"
+          },
+          "white_separation": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "8bit_luma",
+            "method": "read panel skips contour scan"
+          }
+        },
+        "read_back": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              2500,
+              9342
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 112500,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "b2db02e22dec78343e236b8859bc072453ae070ec2b2bc5a75dfc9b18f7cb777",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "ae12423aee60693db69e529c7301952fbeb587958410a220cd46c0ab2f30ed74",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "1",
+            "method": "read panel skips contour scan"
+          },
+          "white_separation": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "8bit_luma",
+            "method": "read panel skips contour scan"
+          }
+        },
+        "read_left": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              2500,
+              9342
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 112500,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "b2db02e22dec78343e236b8859bc072453ae070ec2b2bc5a75dfc9b18f7cb777",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "ae12423aee60693db69e529c7301952fbeb587958410a220cd46c0ab2f30ed74",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "1",
+            "method": "read panel skips contour scan"
+          },
+          "white_separation": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "8bit_luma",
+            "method": "read panel skips contour scan"
+          }
+        },
+        "read_top": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              2500,
+              2500
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 30354,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "cfac285d7f980879e484dd40f6e258f25c92a4bff588d031e1edc101432dd8c5",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "daa7cee15346ec64f57b6f69139c77df6b59dc6ed2689b05804ecb22ac64b5f1",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "1",
+            "method": "read panel skips contour scan"
+          },
+          "white_separation": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "8bit_luma",
+            "method": "read panel skips contour scan"
+          }
+        },
+        "read_bottom": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              2500,
+              2500
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 30228,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "1194f39bc96243ff9ac71fd02c3f940feb322d7d660c017c64ca53949aa033eb",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "3c72c7e3c782475526230e189835d7348a8b8105212c2762cc215d930842d847",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "1",
+            "method": "read panel skips contour scan"
+          },
+          "white_separation": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "8bit_luma",
+            "method": "read panel skips contour scan"
+          }
+        },
+        "type_fidelity": {
+          "read_front": {
+            "status": "unavailable",
+            "reason": "no_type_roi",
+            "unit": "1",
+            "method": "type ROI exists only on type_frequency fixtures"
+          },
+          "read_back": {
+            "status": "unavailable",
+            "reason": "no_type_roi",
+            "unit": "1",
+            "method": "type ROI exists only on type_frequency fixtures"
+          },
+          "full": {
+            "status": "unavailable",
+            "reason": "no_type_roi",
+            "unit": "1",
+            "method": "type ROI exists only on type_frequency fixtures"
+          },
+          "card": {
+            "status": "unavailable",
+            "reason": "no_type_roi",
+            "unit": "1",
+            "method": "type ROI exists only on type_frequency fixtures"
+          }
+        }
+      }
+    },
+    {
+      "fixture_id": "rf00-tall-carton",
+      "packaging_family": "rectangular_carton_v1",
+      "family_status": "measured",
+      "role": "tall_box",
+      "input_sha256": "a8f3b82930ba5aec3d5ff830514d9cdfdd884c2afe633f498bb163d48cf503ca",
+      "artwork_sha256": "9d514e62ce188c4cbfb62eef47fc646e36788a09c0b1061c727c2bf561b4f34a",
+      "artwork_script_sha256": "f2b8e5b31288a1c97acb4884576768ce7e5dd56868253b472064dd38f9dd0ad7",
+      "render_profile_sha256": "3edd3b268227965b67ffa9f74c85afeeb9eabc2ca4616bf00c46b0e21f959f6e",
+      "rendered": true,
+      "outputs": {
+        "front_right": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              3000,
+              3600
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 4457195,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "a81349ffa6c775b1ccc795216e4568c03518c26713be386c174cf1e3b3132403",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "67cbfc9cb0b1dec6c8ad565150f62cb2e9f737eb7cffb4801715640bc3dfdeff",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "measured",
+            "value": {
+              "contour_count": 14324,
+              "interior_edge_count": 7160,
+              "fringe_count": 7164,
+              "transparent_touch_count": 0
+            },
+            "method": "product alpha contour and fringe; not the canvas outer frame",
+            "unit": "1"
+          },
+          "white_separation": {
+            "status": "measured",
+            "value": {
+              "edge_mean_luma": 181.1926,
+              "delta_vs_white": 73.8074,
+              "delta_vs_silver": 47.0962,
+              "edge_pixel_count": 7160
+            },
+            "method": "product contour interior luma vs compositor white/silver; no fill-mean fallback",
+            "unit": "8bit_luma"
+          }
+        },
+        "back_left": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              3000,
+              3600
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 4458176,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "adf4bb81e81a1d51e4b95841badbbd07fc47a2c7f25e874d975981301c8ed18d",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "e7d212e25964079a947fc6595f459b87bf070f34b6e072c7010be4b4189bb17a",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "measured",
+            "value": {
+              "contour_count": 14324,
+              "interior_edge_count": 7160,
+              "fringe_count": 7164,
+              "transparent_touch_count": 0
+            },
+            "method": "product alpha contour and fringe; not the canvas outer frame",
+            "unit": "1"
+          },
+          "white_separation": {
+            "status": "measured",
+            "value": {
+              "edge_mean_luma": 181.1982,
+              "delta_vs_white": 73.8018,
+              "delta_vs_silver": 47.0906,
+              "edge_pixel_count": 7160
+            },
+            "method": "product contour interior luma vs compositor white/silver; no fill-mean fallback",
+            "unit": "8bit_luma"
+          }
+        },
+        "front_right_card": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              1200,
+              1440
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 242589,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "ccc4bfc38e1dcdacdeba0dd8eb129aa4cd8671b1c86a88763dd9f2c58de03897",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "7a815f091b16ff97d154ba62c9fb7a8a4cf963444a0b3b9432d63c5199879fba",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "measured",
+            "value": {
+              "contour_count": 5728,
+              "interior_edge_count": 2862,
+              "fringe_count": 2866,
+              "transparent_touch_count": 0
+            },
+            "method": "product alpha contour and fringe; not the canvas outer frame",
+            "unit": "1"
+          },
+          "white_separation": {
+            "status": "measured",
+            "value": {
+              "edge_mean_luma": 188.9557,
+              "delta_vs_white": 66.0443,
+              "delta_vs_silver": 39.3331,
+              "edge_pixel_count": 2862
+            },
+            "method": "product contour interior luma vs compositor white/silver; no fill-mean fallback",
+            "unit": "8bit_luma"
+          }
+        },
+        "back_left_card": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              1200,
+              1440
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 242921,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "e6090879f381449dbc542ad308c56b9549ee24589184c9fad7f02146d6c72dd3",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "36d3aa9177acec3660080687ef268762bab3b0b49b9808bb2e3bf4a8f8d3d5c7",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "measured",
+            "value": {
+              "contour_count": 5728,
+              "interior_edge_count": 2862,
+              "fringe_count": 2866,
+              "transparent_touch_count": 0
+            },
+            "method": "product alpha contour and fringe; not the canvas outer frame",
+            "unit": "1"
+          },
+          "white_separation": {
+            "status": "measured",
+            "value": {
+              "edge_mean_luma": 188.9462,
+              "delta_vs_white": 66.0538,
+              "delta_vs_silver": 39.3426,
+              "edge_pixel_count": 2862
+            },
+            "method": "product contour interior luma vs compositor white/silver; no fill-mean fallback",
+            "unit": "8bit_luma"
+          }
+        },
+        "glb": {
+          "byte_size": {
+            "status": "measured",
+            "value": 612408,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "da36d77165b80bb5d73c3a8f8fc58eaa44a2da7caf36ea4a5b57d6903a9234ed",
+            "method": "SHA-256 of file bytes"
+          }
+        },
+        "read_front": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              2500,
+              11250
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 135475,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "ffd1c484479f3ef1ac8bc04d84f5410139aa47ec4594e0b8cf14b768c200e29b",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "ef9fb13f12e9d5430fec3689a83e1740c28e2b2e8748256252753a1708a461ef",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "1",
+            "method": "read panel skips contour scan"
+          },
+          "white_separation": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "8bit_luma",
+            "method": "read panel skips contour scan"
+          }
+        },
+        "read_right": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              2500,
+              11250
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 135463,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "dccedb19c2fa366a4876c56d8c5338e55439b53ecaed681a47674b7f907abc8b",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "a6ac7633a5407dc7ab53fdb9abe4946ed60c0bc0c425bd112dd7ce2c58cebfbc",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "1",
+            "method": "read panel skips contour scan"
+          },
+          "white_separation": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "8bit_luma",
+            "method": "read panel skips contour scan"
+          }
+        },
+        "read_back": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              2500,
+              11250
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 135463,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "dccedb19c2fa366a4876c56d8c5338e55439b53ecaed681a47674b7f907abc8b",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "a6ac7633a5407dc7ab53fdb9abe4946ed60c0bc0c425bd112dd7ce2c58cebfbc",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "1",
+            "method": "read panel skips contour scan"
+          },
+          "white_separation": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "8bit_luma",
+            "method": "read panel skips contour scan"
+          }
+        },
+        "read_left": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              2500,
+              11250
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 135463,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "dccedb19c2fa366a4876c56d8c5338e55439b53ecaed681a47674b7f907abc8b",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "a6ac7633a5407dc7ab53fdb9abe4946ed60c0bc0c425bd112dd7ce2c58cebfbc",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "1",
+            "method": "read panel skips contour scan"
+          },
+          "white_separation": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "8bit_luma",
+            "method": "read panel skips contour scan"
+          }
+        },
+        "read_top": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              2500,
+              2500
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 30234,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "9008bbc44c457a158430bf476cc73b85e4cad41c50979632c4529c1835bf2913",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "8f733b472ee0354cf538a85a32647611fc1fa60ce9fff66d4de58bd37a602520",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "1",
+            "method": "read panel skips contour scan"
+          },
+          "white_separation": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "8bit_luma",
+            "method": "read panel skips contour scan"
+          }
+        },
+        "read_bottom": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              2500,
+              2500
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 30360,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "a8f8b8e023d67cfa4c499cddfd3fba5186c476decafa2b156905a0612691f99e",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "76f183bcd9baf7dda43adcdff464946f376e8459ffd200055b0dca85a97d604c",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "1",
+            "method": "read panel skips contour scan"
+          },
+          "white_separation": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "8bit_luma",
+            "method": "read panel skips contour scan"
+          }
+        },
+        "type_fidelity": {
+          "read_front": {
+            "status": "unavailable",
+            "reason": "no_type_roi",
+            "unit": "1",
+            "method": "type ROI exists only on type_frequency fixtures"
+          },
+          "read_back": {
+            "status": "unavailable",
+            "reason": "no_type_roi",
+            "unit": "1",
+            "method": "type ROI exists only on type_frequency fixtures"
+          },
+          "full": {
+            "status": "unavailable",
+            "reason": "no_type_roi",
+            "unit": "1",
+            "method": "type ROI exists only on type_frequency fixtures"
+          },
+          "card": {
+            "status": "unavailable",
+            "reason": "no_type_roi",
+            "unit": "1",
+            "method": "type ROI exists only on type_frequency fixtures"
+          }
+        }
+      }
+    },
+    {
+      "fixture_id": "rf00-wide-carton",
+      "packaging_family": "rectangular_carton_v1",
+      "family_status": "measured",
+      "role": "wide_box",
+      "input_sha256": "84d2c55d3ad9f64659fb91f55cbfce10601a6c35adf0d7cf6d070535f7d5ce6f",
+      "artwork_sha256": "3980599c9edd2fcd7814aabf0bea3da1b8fb958bda03c11dab5a4a4fd4f19e55",
+      "artwork_script_sha256": "616d1dbb19b2051d6116d23c4252b1cc386cb5f10289576442700ade6af98ac7",
+      "render_profile_sha256": "3edd3b268227965b67ffa9f74c85afeeb9eabc2ca4616bf00c46b0e21f959f6e",
+      "rendered": true,
+      "outputs": {
+        "front_right": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              3000,
+              3600
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 2858295,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "12ff3f586a6c1e5a9081bc3cd4f90c132d9002cac45e00ef38fb38b1e68cc3c8",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "e9dac1d64b2ad4ad9d7a99ec8350bdf8c48ffb402bbe3d34bbd0e7adfddb0b13",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "measured",
+            "value": {
+              "contour_count": 8944,
+              "interior_edge_count": 4470,
+              "fringe_count": 4474,
+              "transparent_touch_count": 0
+            },
+            "method": "product alpha contour and fringe; not the canvas outer frame",
+            "unit": "1"
+          },
+          "white_separation": {
+            "status": "measured",
+            "value": {
+              "edge_mean_luma": 176.3694,
+              "delta_vs_white": 78.6306,
+              "delta_vs_silver": 51.9194,
+              "edge_pixel_count": 4470
+            },
+            "method": "product contour interior luma vs compositor white/silver; no fill-mean fallback",
+            "unit": "8bit_luma"
+          }
+        },
+        "back_left": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              3000,
+              3600
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 2857598,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "45576383bb3c0ccc42538c36d9b351a67bccbd8fc383c5316872ce1accbec52e",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "0e51c0f3447e0c9834bc32ed50dd044ff5ab5eb59147e901c92b60d12519b27a",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "measured",
+            "value": {
+              "contour_count": 8944,
+              "interior_edge_count": 4470,
+              "fringe_count": 4474,
+              "transparent_touch_count": 0
+            },
+            "method": "product alpha contour and fringe; not the canvas outer frame",
+            "unit": "1"
+          },
+          "white_separation": {
+            "status": "measured",
+            "value": {
+              "edge_mean_luma": 176.4327,
+              "delta_vs_white": 78.5673,
+              "delta_vs_silver": 51.8561,
+              "edge_pixel_count": 4470
+            },
+            "method": "product contour interior luma vs compositor white/silver; no fill-mean fallback",
+            "unit": "8bit_luma"
+          }
+        },
+        "front_right_card": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              1200,
+              1440
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 133310,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "7e78d9a399b0f537a8170b0b4817c4ca5c5df4750123e697f09445f782fcc595",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "2c23b6d8ae0bd301341bc9f45e628a036b967cff6df18f283f6c322571542147",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "measured",
+            "value": {
+              "contour_count": 3576,
+              "interior_edge_count": 1786,
+              "fringe_count": 1790,
+              "transparent_touch_count": 0
+            },
+            "method": "product alpha contour and fringe; not the canvas outer frame",
+            "unit": "1"
+          },
+          "white_separation": {
+            "status": "measured",
+            "value": {
+              "edge_mean_luma": 183.6718,
+              "delta_vs_white": 71.3282,
+              "delta_vs_silver": 44.617,
+              "edge_pixel_count": 1786
+            },
+            "method": "product contour interior luma vs compositor white/silver; no fill-mean fallback",
+            "unit": "8bit_luma"
+          }
+        },
+        "back_left_card": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              1200,
+              1440
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 133446,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "83666b6eae7db1f5b53d593b9a3edb76b9a030319a61b9d9aea01bd3fe0bff8d",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "7f5934befd00cdbab9fe5e492a27a4851691ec70b1b3923ad54833e8002efdc6",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "measured",
+            "value": {
+              "contour_count": 3576,
+              "interior_edge_count": 1786,
+              "fringe_count": 1790,
+              "transparent_touch_count": 0
+            },
+            "method": "product alpha contour and fringe; not the canvas outer frame",
+            "unit": "1"
+          },
+          "white_separation": {
+            "status": "measured",
+            "value": {
+              "edge_mean_luma": 183.6862,
+              "delta_vs_white": 71.3138,
+              "delta_vs_silver": 44.6026,
+              "edge_pixel_count": 1786
+            },
+            "method": "product contour interior luma vs compositor white/silver; no fill-mean fallback",
+            "unit": "8bit_luma"
+          }
+        },
+        "glb": {
+          "byte_size": {
+            "status": "measured",
+            "value": 110332,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "a5eb1100a0b339496c58206657f2549f8f90f07aff46e69f916099a680b9ebfc",
+            "method": "SHA-256 of file bytes"
+          }
+        },
+        "read_front": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              3333,
+              1000
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 15554,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "d844de661439bae8f67e329af5a34056bd01d8874ade00c9382cec0cedae3502",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "6572b0fc0e0d8dd35a4606da599c1e9565e78b01c21c02a3c56c7e409259b525",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "1",
+            "method": "read panel skips contour scan"
+          },
+          "white_separation": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "8bit_luma",
+            "method": "read panel skips contour scan"
+          }
+        },
+        "read_right": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              1667,
+              1000
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 8913,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "68637fc5d55fb6b27b51b010a20a7400f23e2993bae3c141cf43bd996eabde4b",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "0e82f2dd8861c1c2b97f1afb90010996cf7b37f0c9e9ef37e4c898bfa7189e67",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "1",
+            "method": "read panel skips contour scan"
+          },
+          "white_separation": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "8bit_luma",
+            "method": "read panel skips contour scan"
+          }
+        },
+        "read_back": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              3333,
+              1000
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 15563,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "0236fdd1292898cdec88184527f6be31db6608c34388a9d2445faeaa444427a8",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "65512555ddb4be8db66bd969de57a957c709b6c53b61c4d39e62929346b95fb9",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "1",
+            "method": "read panel skips contour scan"
+          },
+          "white_separation": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "8bit_luma",
+            "method": "read panel skips contour scan"
+          }
+        },
+        "read_left": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              1667,
+              1000
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 8913,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "edccdbca79dab636d45f2b851eda817392d85736f94107af66178370c425b139",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "4ae316fb2461db0beea9cd54d5d918b5bfac43ea979c181efd3d2f01b3dfc939",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "1",
+            "method": "read panel skips contour scan"
+          },
+          "white_separation": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "8bit_luma",
+            "method": "read panel skips contour scan"
+          }
+        },
+        "read_top": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              3333,
+              1667
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 25749,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "7bcf9013359881ae57aa56150b85a17e4c70cf62c79baa67488c4793c2b00182",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "c3567e8ecf21597866faf8d6beb58cad1f4a2b37513332e6cafd0c994f5b8724",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "1",
+            "method": "read panel skips contour scan"
+          },
+          "white_separation": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "8bit_luma",
+            "method": "read panel skips contour scan"
+          }
+        },
+        "read_bottom": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              3333,
+              1667
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 25718,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "746b98c39d25a0334663b4b8bde92aedf3406ccf8a4c9706b130b9559ed10f9f",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "cd58592ae7c75dea0117d35fa941bc69df1aafe1be2a583fc8eda7459ac71804",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "1",
+            "method": "read panel skips contour scan"
+          },
+          "white_separation": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "8bit_luma",
+            "method": "read panel skips contour scan"
+          }
+        },
+        "type_fidelity": {
+          "read_front": {
+            "status": "unavailable",
+            "reason": "no_type_roi",
+            "unit": "1",
+            "method": "type ROI exists only on type_frequency fixtures"
+          },
+          "read_back": {
+            "status": "unavailable",
+            "reason": "no_type_roi",
+            "unit": "1",
+            "method": "type ROI exists only on type_frequency fixtures"
+          },
+          "full": {
+            "status": "unavailable",
+            "reason": "no_type_roi",
+            "unit": "1",
+            "method": "type ROI exists only on type_frequency fixtures"
+          },
+          "card": {
+            "status": "unavailable",
+            "reason": "no_type_roi",
+            "unit": "1",
+            "method": "type ROI exists only on type_frequency fixtures"
+          }
+        }
+      }
+    },
+    {
+      "fixture_id": "rf00-type-frequency",
+      "packaging_family": "rectangular_carton_v1",
+      "family_status": "measured",
+      "role": "type_frequency",
+      "input_sha256": "ff5d7a398e8854dd9253f294ef12425ba2f2976d4c0d8d30e6e12c818438380e",
+      "artwork_sha256": "bb26ad15bee8fc3aefb9aed31359ee2933771085e2d1f4aa8f38398cb754c9f0",
+      "artwork_script_sha256": "cf4fd7bd48f86ee4a2813939b4a8fba901011f6132caad8bb66a82b38141369a",
+      "render_profile_sha256": "3edd3b268227965b67ffa9f74c85afeeb9eabc2ca4616bf00c46b0e21f959f6e",
+      "rendered": true,
+      "outputs": {
+        "front_right": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              3000,
+              3600
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 3138708,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "e3695a1f318afff03bcbdf1271f92cf987f4825e0a45ace1046df882ffdf7ce5",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "0832fa438ce954a32f4c6fd814dbaabaa3fd06dfc59404142e7a682fb1ba055e",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "measured",
+            "value": {
+              "contour_count": 8880,
+              "interior_edge_count": 4438,
+              "fringe_count": 4442,
+              "transparent_touch_count": 0
+            },
+            "method": "product alpha contour and fringe; not the canvas outer frame",
+            "unit": "1"
+          },
+          "white_separation": {
+            "status": "measured",
+            "value": {
+              "edge_mean_luma": 202.2077,
+              "delta_vs_white": 52.7923,
+              "delta_vs_silver": 26.0811,
+              "edge_pixel_count": 4438
+            },
+            "method": "product contour interior luma vs compositor white/silver; no fill-mean fallback",
+            "unit": "8bit_luma"
+          }
+        },
+        "back_left": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              3000,
+              3600
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 3138306,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "b73f621e6aaaf39d90b9380ec98839830010ba7a14c699e6321e5a7502ec1f1d",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "7469ef6492b3021b1413850d6169494324c67b7b85a71b2d5b3be6e2ca84f0e4",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "measured",
+            "value": {
+              "contour_count": 8880,
+              "interior_edge_count": 4438,
+              "fringe_count": 4442,
+              "transparent_touch_count": 0
+            },
+            "method": "product alpha contour and fringe; not the canvas outer frame",
+            "unit": "1"
+          },
+          "white_separation": {
+            "status": "measured",
+            "value": {
+              "edge_mean_luma": 202.0373,
+              "delta_vs_white": 52.9627,
+              "delta_vs_silver": 26.2515,
+              "edge_pixel_count": 4438
+            },
+            "method": "product contour interior luma vs compositor white/silver; no fill-mean fallback",
+            "unit": "8bit_luma"
+          }
+        },
+        "front_right_card": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              1200,
+              1440
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 147734,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "b3427b0bf077e8e2dba815cc797883f4d354a0dccc62d532a961da038357f3c7",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "9f25a338b8c1ef920c5b2083e858e62ebfbe8d52202e6320061f55d81e8ebbdf",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "measured",
+            "value": {
+              "contour_count": 3548,
+              "interior_edge_count": 1772,
+              "fringe_count": 1776,
+              "transparent_touch_count": 0
+            },
+            "method": "product alpha contour and fringe; not the canvas outer frame",
+            "unit": "1"
+          },
+          "white_separation": {
+            "status": "measured",
+            "value": {
+              "edge_mean_luma": 209.5927,
+              "delta_vs_white": 45.4073,
+              "delta_vs_silver": 18.6961,
+              "edge_pixel_count": 1772
+            },
+            "method": "product contour interior luma vs compositor white/silver; no fill-mean fallback",
+            "unit": "8bit_luma"
+          }
+        },
+        "back_left_card": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              1200,
+              1440
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 147744,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "4a7efc6ed4d26a9cf2647c8b61610ff6ced0a48385e534ec2119f286007b6e88",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "db8d54fd0f01a91a5076053a75c53824c77d2de63b20cd2509607386c7818f6e",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "measured",
+            "value": {
+              "contour_count": 3548,
+              "interior_edge_count": 1772,
+              "fringe_count": 1776,
+              "transparent_touch_count": 0
+            },
+            "method": "product alpha contour and fringe; not the canvas outer frame",
+            "unit": "1"
+          },
+          "white_separation": {
+            "status": "measured",
+            "value": {
+              "edge_mean_luma": 209.5399,
+              "delta_vs_white": 45.4601,
+              "delta_vs_silver": 18.7489,
+              "edge_pixel_count": 1772
+            },
+            "method": "product contour interior luma vs compositor white/silver; no fill-mean fallback",
+            "unit": "8bit_luma"
+          }
+        },
+        "glb": {
+          "byte_size": {
+            "status": "measured",
+            "value": 424196,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "3df69fab605a9a77fd62d37d79ca6b594ea6b82cc56462e3f80e5725ca68e537",
+            "method": "SHA-256 of file bytes"
+          }
+        },
+        "read_front": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              2778,
+              4444
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 129450,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "2d42824ca9e7592850470b1671a00fd8a0deb0b14efc62e849d0be58a867daae",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "92f6ce3cdcf1f5b892449cb9e5cd1812d5e5161e68a1561ef4ed2a509d108bba",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "1",
+            "method": "read panel skips contour scan"
+          },
+          "white_separation": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "8bit_luma",
+            "method": "read panel skips contour scan"
+          }
+        },
+        "read_right": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              2222,
+              4444
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 48746,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "af9d91b43863597ab31a40af415a0364285a5de800b7fd635a451c1c1c42edc3",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "b5727a6d4f45554d39db64c23953c62c73c797d12b420d057c9454bd2e7b8df7",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "1",
+            "method": "read panel skips contour scan"
+          },
+          "white_separation": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "8bit_luma",
+            "method": "read panel skips contour scan"
+          }
+        },
+        "read_back": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              2778,
+              4444
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 129385,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "34063fd27350f7ca933e7896f5f9d085b84b10eb3a9ee6012aed006ff05b0e05",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "3ffdeead833570a79c89db76ba91381f483023626fbb86dc9166d2e83ed8bd57",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "1",
+            "method": "read panel skips contour scan"
+          },
+          "white_separation": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "8bit_luma",
+            "method": "read panel skips contour scan"
+          }
+        },
+        "read_left": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              2222,
+              4444
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 48747,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "3a0b2e2d11b0b9b70b7c724d4b49c906cf507524e71dc394f5c8c291eaed1f31",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "c4a8d577ecf87afad4123bd31a344b5391c344f1f8d65e08c61151ce60d2d777",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "1",
+            "method": "read panel skips contour scan"
+          },
+          "white_separation": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "8bit_luma",
+            "method": "read panel skips contour scan"
+          }
+        },
+        "read_top": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              2778,
+              2222
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 28978,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "7fe985a8f20c20f51dcc90baafb9b297ce9b47a49953882566dc0f841b42b697",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "c28d8550fb1573fb492f22f7fd6415d3176d4696c2ae9ef8409d9b6051851699",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "1",
+            "method": "read panel skips contour scan"
+          },
+          "white_separation": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "8bit_luma",
+            "method": "read panel skips contour scan"
+          }
+        },
+        "read_bottom": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              2778,
+              2222
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 28944,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "cfe119af81769b71ab4a3b18c3228abaa674e4d0ac0d3ee0374e14ab9246f601",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "bd82954f30a32afb9d936e63b1292f2afce8d7095bd29a3ef153efa4747eb16f",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "1",
+            "method": "read panel skips contour scan"
+          },
+          "white_separation": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "8bit_luma",
+            "method": "read panel skips contour scan"
+          }
+        },
+        "type_fidelity": {
+          "read_front": {
+            "status": "measured",
+            "value": {
+              "text": {
+                "status": "measured",
+                "value": 1410.1036,
+                "method": "FIND_EDGES variance in text ROI on read_front at native face px/mm",
+                "unit": "1"
+              },
+              "barcode": {
+                "status": "measured",
+                "value": 1693.433,
+                "method": "FIND_EDGES variance in barcode ROI on read_front at native face px/mm",
+                "unit": "1"
+              }
+            },
+            "method": "known face-mm ROI on panel PNG; not a 3/4 still"
+          },
+          "read_back": {
+            "status": "unavailable",
+            "reason": "read_back_roi_not_required",
+            "unit": "1",
+            "method": "front ROI is the RF-00 type probe"
+          },
+          "full": {
+            "status": "unavailable",
+            "reason": "type_roi_not_projected_through_oblique_still",
+            "unit": "1",
+            "method": "RF-00 does not invert ORTHO stills back to face millimetres"
+          },
+          "card": {
+            "status": "unavailable",
+            "reason": "type_roi_not_projected_through_oblique_still",
+            "unit": "1",
+            "method": "RF-00 does not invert ORTHO stills back to face millimetres"
+          }
+        }
+      }
+    },
+    {
+      "fixture_id": "rf00-alpha-edge",
+      "packaging_family": "rectangular_carton_v1",
+      "family_status": "measured",
+      "role": "alpha_edge",
+      "input_sha256": "725217eea68a30bb2ddaf898dce134ac8f1d160f8b550d1cecaa19d7a19a5df8",
+      "artwork_sha256": "068a2013418c7fbba064ec0423bee9e3247886eaae5ccc920639e617d6cb8db1",
+      "artwork_script_sha256": "4db256395529df5bc7ae450ad1c98b2e22938e26c8e52a0a88b58abd2fb9b59b",
+      "render_profile_sha256": "3edd3b268227965b67ffa9f74c85afeeb9eabc2ca4616bf00c46b0e21f959f6e",
+      "rendered": true,
+      "outputs": {
+        "front_right": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              3000,
+              3600
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 3118016,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "9918f260293f918bf459c76cfe9947c578568947022d180374b66b9281acf496",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "0ea36365e87dd06614564dcefecbda4e94713c0efbbb6136ebf2d3ef30d4caa9",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "measured",
+            "value": {
+              "contour_count": 8824,
+              "interior_edge_count": 4410,
+              "fringe_count": 4414,
+              "transparent_touch_count": 0
+            },
+            "method": "product alpha contour and fringe; not the canvas outer frame",
+            "unit": "1"
+          },
+          "white_separation": {
+            "status": "measured",
+            "value": {
+              "edge_mean_luma": 206.0952,
+              "delta_vs_white": 48.9048,
+              "delta_vs_silver": 22.1936,
+              "edge_pixel_count": 4410
+            },
+            "method": "product contour interior luma vs compositor white/silver; no fill-mean fallback",
+            "unit": "8bit_luma"
+          }
+        },
+        "back_left": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              3000,
+              3600
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 3055455,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "e1aa686e101e9f13c7cd06f33866d49854ee57403977fa9bc9b26d828fe4f97e",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "688f6ebb1e3e613e9c1a3fdae6722a4dd29e89e97d09ed94e3dfedafd80924cc",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "measured",
+            "value": {
+              "contour_count": 8824,
+              "interior_edge_count": 4410,
+              "fringe_count": 4414,
+              "transparent_touch_count": 0
+            },
+            "method": "product alpha contour and fringe; not the canvas outer frame",
+            "unit": "1"
+          },
+          "white_separation": {
+            "status": "measured",
+            "value": {
+              "edge_mean_luma": 206.0959,
+              "delta_vs_white": 48.9041,
+              "delta_vs_silver": 22.1929,
+              "edge_pixel_count": 4410
+            },
+            "method": "product contour interior luma vs compositor white/silver; no fill-mean fallback",
+            "unit": "8bit_luma"
+          }
+        },
+        "front_right_card": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              1200,
+              1440
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 134634,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "d1bafd002cf19a94632839270069d5e70476f5530534f4ffddfef0f1a9167b0d",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "96b463a66e7450abf054f120c4289eeeb27dc6efa51b1bf21941c26b99053a5d",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "measured",
+            "value": {
+              "contour_count": 3536,
+              "interior_edge_count": 1768,
+              "fringe_count": 1768,
+              "transparent_touch_count": 0
+            },
+            "method": "product alpha contour and fringe; not the canvas outer frame",
+            "unit": "1"
+          },
+          "white_separation": {
+            "status": "measured",
+            "value": {
+              "edge_mean_luma": 219.9331,
+              "delta_vs_white": 35.0669,
+              "delta_vs_silver": 8.3557,
+              "edge_pixel_count": 1768
+            },
+            "method": "product contour interior luma vs compositor white/silver; no fill-mean fallback",
+            "unit": "8bit_luma"
+          }
+        },
+        "back_left_card": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              1200,
+              1440
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 122735,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "5d59ae1c83d041b9b042b36b334cd02065ec5388772583f04c567715a34d9518",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "a4be0644638d11bdddef788e2562d38bef8e4ad8bcad2b232e632561dbf6557b",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "measured",
+            "value": {
+              "contour_count": 3536,
+              "interior_edge_count": 1768,
+              "fringe_count": 1768,
+              "transparent_touch_count": 0
+            },
+            "method": "product alpha contour and fringe; not the canvas outer frame",
+            "unit": "1"
+          },
+          "white_separation": {
+            "status": "measured",
+            "value": {
+              "edge_mean_luma": 219.9322,
+              "delta_vs_white": 35.0678,
+              "delta_vs_silver": 8.3566,
+              "edge_pixel_count": 1768
+            },
+            "method": "product contour interior luma vs compositor white/silver; no fill-mean fallback",
+            "unit": "8bit_luma"
+          }
+        },
+        "glb": {
+          "byte_size": {
+            "status": "measured",
+            "value": 237232,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "d3920ef88a74d432e22a8fcb2192f8ff33f5248d78ca67c0bf85f86db2e593a4",
+            "method": "SHA-256 of file bytes"
+          }
+        },
+        "read_front": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              2778,
+              4444
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 54425,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "3d552794498ad8372ad7b3e5a9b4a381ed4f512d4f094a967da9c6658041d4f0",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "ece24884e68839cf8462aa0970b60cc0e6bbd68123c7f105cb96cc019a6d38ea",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "1",
+            "method": "read panel skips contour scan"
+          },
+          "white_separation": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "8bit_luma",
+            "method": "read panel skips contour scan"
+          }
+        },
+        "read_right": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              2222,
+              4444
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 38408,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "d876515194f5985351e2891a0fb6feefcb4a6f57c5fee88c4fecd9736a171ee0",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "f103a0e75aef4a26205e01c569e981bc95b15f5c1d1ce88499e6537c5c9232f9",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "1",
+            "method": "read panel skips contour scan"
+          },
+          "white_separation": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "8bit_luma",
+            "method": "read panel skips contour scan"
+          }
+        },
+        "read_back": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              2778,
+              4444
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 47997,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "11405c570e0b8fa41eb636a2cfd81acd7e9b561d4fc35691723ed75d75e2550c",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "11f63079c84e327ccdb2833bea0371bfbfe5252a42bb9f15a9983d24b0dd8260",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "1",
+            "method": "read panel skips contour scan"
+          },
+          "white_separation": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "8bit_luma",
+            "method": "read panel skips contour scan"
+          }
+        },
+        "read_left": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              2222,
+              4444
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 38408,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "d876515194f5985351e2891a0fb6feefcb4a6f57c5fee88c4fecd9736a171ee0",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "f103a0e75aef4a26205e01c569e981bc95b15f5c1d1ce88499e6537c5c9232f9",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "1",
+            "method": "read panel skips contour scan"
+          },
+          "white_separation": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "8bit_luma",
+            "method": "read panel skips contour scan"
+          }
+        },
+        "read_top": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              2778,
+              2222
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 24032,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "b0fe21eb031fcfa1ff72e8de4cbcf7645c4a19fbeda7e4585899b5683e4b1aa1",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "a2435ad93a42f2e8925caaafb245f8671312dbdea7c964a3bef4756d47a278e6",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "1",
+            "method": "read panel skips contour scan"
+          },
+          "white_separation": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "8bit_luma",
+            "method": "read panel skips contour scan"
+          }
+        },
+        "read_bottom": {
+          "pixel_size": {
+            "status": "measured",
+            "value": [
+              2778,
+              2222
+            ],
+            "method": "PIL Image.size",
+            "unit": "px"
+          },
+          "byte_size": {
+            "status": "measured",
+            "value": 24032,
+            "method": "Path.stat().st_size",
+            "unit": "byte"
+          },
+          "sha256": {
+            "status": "measured",
+            "value": "b0fe21eb031fcfa1ff72e8de4cbcf7645c4a19fbeda7e4585899b5683e4b1aa1",
+            "method": "SHA-256 of file bytes including PNG ancillary chunks"
+          },
+          "pixel_sha256": {
+            "status": "measured",
+            "value": "a2435ad93a42f2e8925caaafb245f8671312dbdea7c964a3bef4756d47a278e6",
+            "method": "SHA-256 of PIL mode+size+raw pixels; ignores PNG tEXt/eXIf"
+          },
+          "alpha_border": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "1",
+            "method": "read panel skips contour scan"
+          },
+          "white_separation": {
+            "status": "unavailable",
+            "reason": "not_applicable_read_panel",
+            "unit": "8bit_luma",
+            "method": "read panel skips contour scan"
+          }
+        },
+        "type_fidelity": {
+          "read_front": {
+            "status": "unavailable",
+            "reason": "no_type_roi",
+            "unit": "1",
+            "method": "type ROI exists only on type_frequency fixtures"
+          },
+          "read_back": {
+            "status": "unavailable",
+            "reason": "no_type_roi",
+            "unit": "1",
+            "method": "type ROI exists only on type_frequency fixtures"
+          },
+          "full": {
+            "status": "unavailable",
+            "reason": "no_type_roi",
+            "unit": "1",
+            "method": "type ROI exists only on type_frequency fixtures"
+          },
+          "card": {
+            "status": "unavailable",
+            "reason": "no_type_roi",
+            "unit": "1",
+            "method": "type ROI exists only on type_frequency fixtures"
+          }
+        }
+      }
+    },
+    {
+      "fixture_id": "rf00-cylinder-unsupported",
+      "packaging_family": "cylinder_v1",
+      "family_status": "unsupported",
+      "role": "negative_family",
+      "input_sha256": "e5174d5db3b3da5cec937fed541a4f31c49fef2a5542efc9dd7756222f7cd21a",
+      "artwork_sha256": null,
+      "artwork_script_sha256": null,
+      "render_profile_sha256": null,
+      "rendered": false,
+      "outputs": null
+    }
+  ]
+}
