@@ -15,7 +15,7 @@
 
 ## P1 — 包装 3D 渲染真实感与清晰度
 
-主计划：`docs/adr-007-packaging-render-fidelity.md`。RF-00 测量尺、RF-01 独立合同和 RF-02 流水线接线（含 RF-02.3 磁盘执行边界、私有执行快照/nonce、V1 诊断路径、legacy 必存键、同步回滚删除新建目标和成对 registry snapshot）已完成 Code/L0；非 V2 只是命令行诊断路径，不是网页产品通道。三者都未改变产品画质，也没有批准正式 baseline。RF-03 本地产物合同、资源生命周期与临时 registry 已实现，详见 [RF-03 收口记录](docs/designs/packaging-quality-rf03-runtime-closeout.md)。RF-04 出图版本 API/UI 与历史切换已实现，详见 [RF-04 交付记录](docs/designs/packaging-quality-rf04-closeout.md)。RF-05 显式纸盒壳几何与 family/GLB 合同已实现，详见 [RF-05 交付记录](docs/designs/packaging-quality-rf05-closeout.md)。RF-06 纸材/油墨/整体工艺已合入 `main` `d2657f0` / `0.21.40.0`，详见 [RF-06 交付记录](docs/designs/packaging-quality-rf06-closeout.md)；候选未写入生产 registry，未改默认灯光/Standard。RF-07 尺寸归一显式三灯棚与三变换合成对照已合入 `main` `88321a90` / `0.21.41.0`，详见 [RF-07 交付记录](docs/designs/packaging-quality-rf07-closeout.md)；人工选择未批准。RF-08 投影 Jacobian 切面预算已在诊断 profile 落地，详见 [RF-08 交付记录](docs/designs/packaging-quality-rf08-closeout.md)；未改生产 registry 或默认采样。RF-09 浏览器分层升级与下载冻结已完成本地实现、合成验证和独立复核，剩余性能及实机验收见下方「端到端字体清晰度修复」。RF-10 三层质量结果与 RF-11 Blender 合同冒烟 wrapper 已合 `main` `0490e46` / `0.21.44.0`（Code/普通 L0）；该 VERSION 的发版 L1 已过。当次杭州发版因未解析到 Blender 跳过冒烟，90 秒未冻结。质量门杭州实跑、正式 baseline、生产注册及真实画质验收见下列未完成项。下面只保留尚未闭环的工作。
+主计划：`docs/adr-007-packaging-render-fidelity.md`。RF-00 测量尺、RF-01 独立合同和 RF-02 流水线接线（含 RF-02.3 磁盘执行边界、私有执行快照/nonce、V1 诊断路径、legacy 必存键、同步回滚删除新建目标和成对 registry snapshot）已完成 Code/L0；非 V2 只是命令行诊断路径，不是网页产品通道。三者都未改变产品画质，也没有批准正式 baseline。RF-03 本地产物合同、资源生命周期与临时 registry 已实现，详见 [RF-03 收口记录](docs/designs/packaging-quality-rf03-runtime-closeout.md)。RF-04 出图版本 API/UI 与历史切换已实现，详见 [RF-04 交付记录](docs/designs/packaging-quality-rf04-closeout.md)。RF-05 显式纸盒壳几何与 family/GLB 合同已实现，详见 [RF-05 交付记录](docs/designs/packaging-quality-rf05-closeout.md)。RF-06 纸材/油墨/整体工艺已合入 `main` `d2657f0` / `0.21.40.0`，详见 [RF-06 交付记录](docs/designs/packaging-quality-rf06-closeout.md)；候选未写入生产 registry，未改默认灯光/Standard。RF-07 尺寸归一显式三灯棚与三变换合成对照已合入 `main` `88321a90` / `0.21.41.0`，详见 [RF-07 交付记录](docs/designs/packaging-quality-rf07-closeout.md)；人工选择未批准。RF-08 投影 Jacobian 切面预算已在诊断 profile 落地，详见 [RF-08 交付记录](docs/designs/packaging-quality-rf08-closeout.md)；未改生产 registry 或默认采样。RF-09 浏览器分层升级与下载冻结已完成本地实现、合成验证和独立复核，剩余性能及实机验收见下方「端到端字体清晰度修复」。RF-10 三层质量结果与 RF-11 Blender 合同冒烟 wrapper 已合 `main` `0490e46` / `0.21.44.0`（Code/普通 L0）；`0.21.45.0`（`bf1a7d1`）发版 L1 已过，且当次杭州真跑 Blender 5.2 合同冒烟约 63s（不再跳过）。`0.21.46.0` 冻结 90 秒并用 Job Object 杀树；质量门杭州实跑须下次可信 main 发版证明。正式 baseline、生产注册及真实画质验收见下列未完成项。下面只保留尚未闭环的工作。
 
 - [ ] **批准渲染质量基线与门槛**
   RF-00 已能用 Git 内脱敏合成样片重复记录几何、白盒边界、纸材、字体频率、Alpha 光边、渲染耗时和 full/card/read-face 像素身份；正式 approved baseline 仍不存在。必须由人工审阅现状报告后显式批准，后续参数变化才可用同一身份闭包比较；私有真稿仍只在杭州记录哈希、评分和结论。
@@ -36,7 +36,7 @@
 
 - [ ] **质量门与回归矩阵**
   L0 验证合同、像素预算、缓存、旧单兼容和浏览器升级；有 Blender 的显式质量命令验证合成样片；质量门杭州实跑须记录 Blender 版本/合同 hash；L2/UAT 用白盒、深色盒、细长盒、矮宽盒、膜袋正负样本做人工 A/B。任何机器分数都不能替代人核“真实感”。
-  `0.21.44.0`（`0490e46`）已把 RF-10 三层字段和 RF-11 wrapper 合进生产，发版 L1 已过。当次杭州因未解析到 Blender 跳过冒烟。仍缺：给杭州配上可解析的 Blender、可信 main 真跑冒烟、90 秒同机冻结、Windows 原生 Job Object、正式 baseline、生产 registry、L2/UAT。不把发版 L1 或跳过冒烟写成质量门完成。
+  `0.21.45.0`（`bf1a7d1`）杭州发版已真跑 Blender 5.2 合同冒烟（约 63s）。`0.21.46.0` 把发版 `TimeoutMs` 冻结为 90000，并把冒烟进程树改为 Job Object（`PROC_THREAD_ATTRIBUTE_JOB_LIST` + `CREATE_SUSPENDED`，`KILL_ON_JOB_CLOSE`）。仍缺：下次可信 main 发版证明 Job Object 真跑、正式 baseline、生产 registry、L2/UAT。不把发版 L1 或跳过冒烟写成质量门完成。
 
 ## P1 — 已有代码仍欠生产/业务验收
 
