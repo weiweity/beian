@@ -1301,8 +1301,8 @@ P1b generation     P2 carton core       P3b UI preview shell
 | RF-09 | P3 / L | RF-03 API 冻结 | `MockupPage.tsx` / `mockupStudio.ts` card→full、释放与 E2E | 本地实现、针对性合成验证与独立复核已完成；失败回退、resize/切代竞态、卸载后下载、原图/full 下载有合成测试。有限尺寸对照与隔离页 browse 已交付，真实 Claude unavailable。Q05 本机合成 Playwright 记录 heap 与 rAF 间隔，不能当真实环境预算。真稿 L2、UAT、字体清晰度验收见 TODOS；发版 L1 不等于本项完成 |
 | RF-10 | P4 / XL | RF-05–RF-09 | `quality_layers.py`、quality eval CLI、generation worker / Hono 分层字段、合同测试 | 已合 `0.21.44.0` Code/普通 L0：runtime/fixture/human 三层分开；`baseline_mismatch` 只失败夹具门；`--update-baseline` 必须显式；真实任务 fixture 为 `not-run`；`human_acceptance` 独立 pending，`production_ready` 保持 false。正式 baseline、质量门杭州实跑、L2/UAT 见 TODOS |
 | RF-11 | P4 / L | RF-03, RF-05, RF-10 | `blender-contract-smoke.ps1` + `blender_contract_smoke.py`、`release.ps1`、合同测试 | 已合 `0.21.44.0` Code/普通 L0：PowerShell 只编排 timeout/`RUNNER_TEMP`，复用 quality eval 与 generation GLB/hash 门。缺已解析 Blender 时跳过不回滚；`0.21.44.0` 当次杭州走了跳过。wrapper 默认 90 秒为候选；发版传入 720000 ms，均未冻结。质量门杭州实跑与 Job Object 见 TODOS |
-| RF-12 | P4 / M | RF-00–RF-11 | 全量 L0/type/quality/E2E、回滚演练、文档/CHANGELOG | Mac/GitHub 证据完整；旧单/g0/current 回滚路径证明；没有把未跑 L1/L2 写成完成 |
-| RF-13 | L2/UAT / 人工 | RF-12 landed + L1 green | 杭州私有真实稿与刘籽烨流程 | 旧/新盲评、合同 hash、操作者与结论齐全；真实 carton 才能宣称通过；证据不进 Git |
+| RF-12 | P4 / M | RF-00–RF-11 | 全量 L0/type/quality/E2E、回滚演练、文档/CHANGELOG | Mac/GitHub 证据完整；旧单/g0/current 回滚路径证明；没有把未跑发版 L1、质量门杭州实跑或 L2 写成完成 |
+| RF-13 | L2/UAT / 人工 | RF-12 landed + 质量门杭州实跑 | 杭州私有真实稿与刘籽烨流程 | 旧/新盲评、合同 hash、操作者与结论齐全；真实 carton 才能宣称通过；证据不进 Git。发版 L1 已过不等于本项 |
 
 估算只表示相对大小：M 为一个聚焦切片，L 为跨 2–4 个深模块，XL 必须再拆成“失败测试/最小实现/集成证据”三个内部 checkpoint；不是工期承诺。每个任务必须先展示红测，再展示绿测；不能用新增 snapshot 覆盖旧失败。
 
@@ -1453,11 +1453,11 @@ merge、ship 或 deploy，除非用户在当次任务明确授权。不要 git a
   - Files: `MockupPage.tsx`、`mockupStudio.ts`、`mockupStudioPreview.test.ts`、`e2e/mockup-render-versions.spec.ts`、`e2e/mockup-preview-upgrade.spec.ts`
   - Verify: 成功/双失败/单失败/resize/切代/unmount 路径全测；下载只用 full，灯箱可先保留可用图层再升级 full。
   - Evidence: Code/普通 L0 与合成 E2E 已合入。性能、真稿 L2、UAT 剩余项只写在 [TODOS.md](../TODOS.md)「端到端字体清晰度修复」，不在此项重复开放。
-- [x] **T11（P1，human: ~3d / Grok: ~6h）— quality — 实现三层质量门与 baseline identity**
+- [x] **T11（P1，human: ~3d / Grok: ~6h）— quality — 实现三层质量门与 baseline identity（Code/普通 L0）**
   - Surfaced by: Architecture D7 — 确定性完整性、合成回归和人工审美不能混成一个总分。
   - Files: `quality_layers.py`、`render_quality_eval.py`、脱敏 fixtures、`test_packaging_render_quality.py`、`test_packaging_render_quality_layers.py`
   - Verify: Code/普通 L0 已合 `0.21.44.0`：分字段记录 runtime hard、fixture hard、human warning；mismatch 失败夹具门；baseline 只能显式更新。正式 approved baseline、质量门杭州实跑、L2/UAT 仍开放，见 TODOS「质量门与回归矩阵」。
-- [x] **T12（P1，human: ~2d / Grok: ~4h）— release — 接入 Windows Blender 发布冒烟**
+- [x] **T12（P1，human: ~2d / Grok: ~4h）— release — 接入 Windows Blender 发布冒烟（Code/普通 L0 接线）**
   - Surfaced by: Architecture D4 — 可信 main 发布必须证明本机 Blender 合同链可运行且不碰客户数据。
   - Files: `scripts/windows/release.ps1`、`blender-contract-smoke.ps1`、`workers/packaging/tools/blender_contract_smoke.py`、`windows-release-script.test.ts`、`test_packaging_blender_contract_smoke.py`
   - Verify: Code/普通 L0 已合 `0.21.44.0`：smoke 在 drain 内、只写 `RUNNER_TEMP`，复用 quality eval 与 generation GLB/hash 门。缺已解析 Blender 时跳过不回滚。`0.21.44.0` 当次杭州走了跳过。90 秒冻结与真跑冒烟见 TODOS「质量门与回归矩阵」。
@@ -1468,7 +1468,7 @@ merge、ship 或 deploy，除非用户在当次任务明确授权。不要 git a
 - [ ] **T14（P3，human: ~1d + 人工评审 / Grok: ~2h support）— acceptance — 执行 L1/L2/UAT**
   - Surfaced by: Scope D1 — 代码与合成绿灯不能闭合杭州生产和业务验收。
   - Files: Git 外私有证据；只在 `TODOS.md` / `CHANGELOG.md` 写脱敏状态。
-  - Verify: trusted-main L1、真实 carton 旧/新盲评、合同 hash、评审人和刘籽烨完整流程；真稿/输出不进 Git。
+  - Verify: 发版 L1、质量门杭州实跑、真实 carton 旧/新盲评、合同 hash、评审人和刘籽烨完整流程；真稿/输出不进 Git。发版 L1 已过不等于本项。
 
 ## 23. NOT in scope
 
