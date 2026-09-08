@@ -13,7 +13,7 @@
 
 审稿台的「膜袋」按钮走 `pack_profile`（`膜袋|袋装` → 单片条码）。**打样不读 `pack_surface`。** 两套词表不要混：审稿把「袋装」当袋，打样故意不把「袋装」当袋。
 
-V2 在花盒 `box_net` 不能成立后才尝试 `pouch-net-proposal/1`；确认品名面后生成 `resolved-packaging-job/3`，正反面使用真实 artwork，其余四面是纸面，占位深度固定 3 mm。`pipeline.py` 已把 `packaging_family=pouch` 传入 `resolved_job.json`，但当前 Blender `render_job.py` 尚未按 family 分派几何，仍统一调用 `add_box`。因此它是诚实的“薄卡/薄盒预览”，不是有封边、热封口、插底、侧褶或充气体积的袋体。
+V2 在花盒 `box_net` 不能成立后才尝试 `pouch-net-proposal/1`；确认品名面后生成 `resolved-packaging-job/3`，正反面使用真实 artwork，其余四面是纸面，占位深度固定 3 mm。`pipeline.py` 已把 `packaging_family=pouch` 传入 `resolved_job.json`，当前 Blender `render_job.py` 已通过 `build_model` 按 family 显式分派：花盒走 `rectangular_carton_v1`，膜袋走 `pouch_thin_card_v1`，未知 family 明确失败。膜袋分支仍在校验 3 mm 与 `thin_card` 后调用 `add_box`。因此它是诚实的“薄卡/薄盒预览”，不是有封边、热封口、插底、侧褶或充气体积的袋体。
 
 ## 分流闸门
 
