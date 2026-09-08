@@ -223,7 +223,7 @@ process.stdin.on('end',()=>{
   source_identity:{resolved_job_sha256:req.expected_source_sha256,plan_identity:plan,render_contract_hash:hash('contract'),render_profile_id:'synthetic-only',assets:req.expected_asset_sha256},
   candidate_plan_identity:plan,candidate_identity:hash('candidate'),candidate_dir:req.candidate_dir||null,
   studio_adjustment:req.studio_adjustment||null,execution:{status:'validated',nonce:null},outputs:{},optional_warnings:[],
-  quality:{status:'unwired',wired:false,runtime_gate:'pending',production_ready:false}};
+  quality:{status:'layered',wired:true,runtime_gate:'not-run',fixture_regression:'not-run',visual_observations:'not-run',human_acceptance:'pending',production_ready:false}};
  if(req.action==='render-candidate'){
   fs.mkdirSync(req.candidate_dir);
   for(const key of ['front_right','back_left','front_right_card','back_left_card','glb']){
@@ -232,6 +232,7 @@ process.stdin.on('end',()=>{
    result.outputs[key]={path:file,sha256:hash(bytes),bytes:bytes.length};
   }
   result.execution={status:'rendered',nonce:'0123456789abcdef0123456789abcdef'};
+  result.quality.runtime_gate='pass';
   result.artifact_checks={glb:'passed',full_card:'passed',source_sampling:'passed'};
  }
  process.stderr.write('STAGE validate\n');console.log(JSON.stringify(result));

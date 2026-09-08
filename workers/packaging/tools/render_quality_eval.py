@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""RF-00 current-render measurement for packaging stills.
+"""RF-00/RF-10 current-render measurement for packaging stills.
 
 This tool observes the existing workers/packaging pipeline. It does not change
 lights, materials, colour management, samples, resolution, compression, output
-keys, or GLB contracts.
+keys, or GLB contracts. RF-10 adds three independent quality layers
+(runtime hard, fixture regression hard, warning/human) to the JSON report.
+Machine pass never writes human_acceptance or production_ready.
 
 Entry-point comparison:
 - A (chosen): this CLI, same shape as audit_corpus.py. Isolated output dir,
@@ -69,6 +71,7 @@ DIELINE_PATH = PACKAGING_ROOT / "dieline.py"
 WHITE_BACKGROUND_PATH = PACKAGING_ROOT / "white_background.py"
 STRUCTURE_V2_PATHS = tuple(sorted((PACKAGING_ROOT / "structure_v2").glob("*.py")))
 ARTWORK_PATH = PACKAGING_ROOT / "structure_v2" / "artwork.py"
+QUALITY_LAYERS_PATH = PACKAGING_ROOT / "quality_layers.py"
 CURRENT_TEMPLATE_PATH = PACKAGING_ROOT / "templates" / "flower_box_47_5x47_5x177_5.json"
 SYNTHETIC_FIXTURE_ROOT = PACKAGING_ROOT / "fixtures" / "render-quality"
 DEFAULT_MANIFEST_PATH = SYNTHETIC_FIXTURE_ROOT / "manifest.json"
@@ -124,6 +127,14 @@ if _ARTWORK_SPEC is None or _ARTWORK_SPEC.loader is None:
     raise RuntimeError(f"unable to load artwork contract: {ARTWORK_PATH}")
 _ARTWORK_MODULE = importlib.util.module_from_spec(_ARTWORK_SPEC)
 _ARTWORK_SPEC.loader.exec_module(_ARTWORK_MODULE)
+_QL_SPEC = importlib.util.spec_from_file_location("packaging_quality_layers_rf10", QUALITY_LAYERS_PATH)
+if _QL_SPEC is None or _QL_SPEC.loader is None:
+    raise RuntimeError(f"unable to load quality layers: {QUALITY_LAYERS_PATH}")
+_QL_MODULE = importlib.util.module_from_spec(_QL_SPEC)
+_QL_SPEC.loader.exec_module(_QL_MODULE)
+classify_quality_layers = _QL_MODULE.classify_quality_layers
+compare_fixture_metric_fingerprints = _QL_MODULE.compare_fixture_metric_fingerprints
+render_quality_document = _QL_MODULE.render_quality_document
 MIN_FACE_PIXELS_PER_MM = float(_ARTWORK_MODULE.MIN_FACE_TEXTURE_PIXELS_PER_MM)
 MAX_RASTER_PIXELS = int(_ARTWORK_MODULE.MAX_ARTWORK_RASTER_PIXELS)
 SILVER_BG = (228, 228, 232)
@@ -858,7 +869,7 @@ def render_profile_sha256(*, registry_path: Path | str | None = None) -> str:
 
 def collect_source_identity() -> dict[str, Any]:
     return {
-        "evaluator_sha256": sha256_file(Path(__file__).resolve()),
+        "evaluator_sha256": source_bundle_sha256((Path(__file__).resolve(), QUALITY_LAYERS_PATH)),
         "render_job_sha256": source_bundle_sha256((RENDER_JOB_PATH, GLB_VERIFY_PATH)),
         "pipeline_sha256": source_bundle_sha256(
             (
@@ -1623,6 +1634,283 @@ def required_metrics_complete(item: Mapping[str, Any]) -> tuple[bool, str]:
     return True, "ok"
 
 
+FACE_SAMPLING_AXES = {
+    "front": ("width", "height"),
+    "back": ("width", "height"),
+    "right": ("depth", "height"),
+    "left": ("depth", "height"),
+    "top": ("width", "depth"),
+    "bottom": ("width", "depth"),
+}
+
+
+def _measured_leaf_value(payload: Any) -> Any:
+    if not metric_measured(payload):
+        return None
+    return payload["value"]
+
+
+def fixture_metric_fingerprints(fixtures: Sequence[Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
+    fingerprints: dict[str, dict[str, Any]] = {}
+    for item in fixtures:
+        fixture_id = item.get("fixture_id")
+        if not isinstance(fixture_id, str):
+            continue
+        if item.get("family_status") == "unsupported":
+            fingerprints[fixture_id] = {"family_status": "unsupported"}
+            continue
+        outputs = item.get("outputs") or {}
+        row: dict[str, Any] = {"family_status": item.get("family_status"), "rendered": item.get("rendered")}
+        for name, node in outputs.items():
+            if not isinstance(node, dict):
+                continue
+            for metric in ("pixel_sha256", "sha256", "white_separation", "alpha_border"):
+                value = _measured_leaf_value(node.get(metric))
+                if value is not None:
+                    row[f"{name}.{metric}"] = value
+            if name == "type_fidelity":
+                read_front = node.get("read_front") if isinstance(node, dict) else None
+                leaves = read_front.get("value") if metric_measured(read_front) else None
+                if isinstance(leaves, dict):
+                    for leaf in ("text", "barcode"):
+                        value = _measured_leaf_value(leaves.get(leaf))
+                        if value is not None:
+                            row[f"type_fidelity.read_front.{leaf}"] = value
+        fingerprints[fixture_id] = row
+    return fingerprints
+
+
+def visual_observations_from_records(records: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    notes: list[dict[str, Any]] = []
+    for item in records:
+        if item.get("family_status") == "unsupported" or item.get("rendered") is not True:
+            continue
+        outputs = item.get("outputs") or {}
+        fixture_id = str(item.get("fixture_id") or "")
+        for key in ("front_right", "back_left"):
+            node = outputs.get(key) or {}
+            if metric_measured(node.get("white_separation")):
+                notes.append(
+                    {
+                        "code": "white_separation_recorded",
+                        "fixture_id": fixture_id,
+                        "output": key,
+                        "blocking": False,
+                        "message": "白盒分离已记录，不是真实任务视觉不合格",
+                    }
+                )
+            if metric_measured(node.get("alpha_border")):
+                notes.append(
+                    {
+                        "code": "alpha_border_recorded",
+                        "fixture_id": fixture_id,
+                        "output": key,
+                        "blocking": False,
+                        "message": "Alpha 边缘已记录，不能代替人工纸感验收",
+                    }
+                )
+        fidelity = outputs.get("type_fidelity") or item.get("type_fidelity") or {}
+        if metric_measured((fidelity.get("read_front") or {})):
+            notes.append(
+                {
+                    "code": "type_fidelity_roi_recorded",
+                    "fixture_id": fixture_id,
+                    "blocking": False,
+                    "message": "已知 ROI 字体频率已记录；不是外部 OCR，也不是人工读字通过",
+                }
+            )
+    return notes
+
+
+def declared_sampling_facts() -> dict[str, Any]:
+    template = current_template_render()
+    spec = template.get("render_spec")
+    if not isinstance(spec, dict):
+        return unavailable("render_spec_unavailable", method="current_template_render render_spec")
+    sampling = spec.get("sampling")
+    if not isinstance(sampling, dict):
+        return unavailable("sampling_unavailable", method="render_spec.sampling")
+    projection = spec.get("projection") if isinstance(spec.get("projection"), dict) else {}
+    faces_proj = projection.get("faces") if isinstance(projection.get("faces"), dict) else {}
+    per_face = sampling.get("per_face_target_pixels_per_mm")
+    face_rows: dict[str, Any] = {}
+    if isinstance(per_face, dict):
+        for face in ALL_FACES:
+            target = per_face.get(face)
+            proj = faces_proj.get(face) if isinstance(faces_proj.get(face), dict) else {}
+            projected_min = proj.get("projected_min_ppm")
+            projected_max = proj.get("projected_max_ppm")
+            face_rows[face] = {
+                "target_ppm": (
+                    measured(float(target), "px/mm", "render_spec.sampling.per_face_target_pixels_per_mm")
+                    if _finite_number(target)
+                    else unavailable("target_ppm_unavailable", unit="px/mm", method="render_spec.sampling")
+                ),
+                "source_ppm": unavailable(
+                    "source_pdf_intrinsic_dpi_not_reconstructed",
+                    unit="px/mm",
+                    method="eval does not invent PDF DPI; measured from read_* after render when available",
+                ),
+                "projected_min_ppm": (
+                    measured(float(projected_min), "px/mm", "render_spec.projection.faces.projected_min_ppm")
+                    if _finite_number(projected_min)
+                    else unavailable(
+                        "projected_ppm_not_in_current_profile",
+                        unit="px/mm",
+                        method="render_spec.projection.faces",
+                    )
+                ),
+                "projected_max_ppm": (
+                    measured(float(projected_max), "px/mm", "render_spec.projection.faces.projected_max_ppm")
+                    if _finite_number(projected_max)
+                    else unavailable(
+                        "projected_ppm_not_in_current_profile",
+                        unit="px/mm",
+                        method="render_spec.projection.faces",
+                    )
+                ),
+                "resample_count": unavailable(
+                    "job_face_sampling_resample_count_not_on_eval_outputs",
+                    unit="1",
+                    method="pipeline face_sampling.faces.resample_count",
+                ),
+            }
+    identity = spec.get("identity") if isinstance(spec.get("identity"), dict) else {}
+    return {
+        "status": "declared",
+        "method": "current_template_render render_spec.sampling",
+        "strategy": sampling.get("strategy"),
+        "minimum_face_pixels_per_mm": sampling.get("minimum_face_pixels_per_mm"),
+        "maximum_face_pixels": sampling.get("maximum_face_pixels"),
+        "render_contract_hash": identity.get("render_contract_hash") or spec.get("registry_sha256"),
+        "faces": face_rows,
+    }
+
+
+def measured_face_sampling(record: Mapping[str, Any], declared: Mapping[str, Any]) -> dict[str, Any]:
+    dims = record.get("dimensions_mm") if isinstance(record.get("dimensions_mm"), Mapping) else {}
+    outputs = record.get("outputs") if isinstance(record.get("outputs"), Mapping) else {}
+    declared_faces = declared.get("faces") if isinstance(declared.get("faces"), Mapping) else {}
+    faces: dict[str, Any] = {}
+    for face, (horizontal, vertical) in FACE_SAMPLING_AXES.items():
+        declared_face = declared_faces.get(face) if isinstance(declared_faces.get(face), Mapping) else {}
+        row = dict(declared_face)
+        panel = outputs.get(f"read_{face}") if isinstance(outputs.get(f"read_{face}"), Mapping) else {}
+        size = panel.get("pixel_size")
+        width_mm = dims.get(horizontal)
+        height_mm = dims.get(vertical)
+        if metric_measured(size) and _finite_number(width_mm) and _finite_number(height_mm) and float(width_mm) > 0 and float(height_mm) > 0:
+            width_px, height_px = size["value"]
+            row["source_ppm"] = measured(
+                [float(width_px) / float(width_mm), float(height_px) / float(height_mm)],
+                "px/mm",
+                "read_* panel pixel_size / structure dimensions_mm",
+            )
+        faces[face] = row
+    return {
+        "status": "measured" if any(
+            isinstance(row, dict) and metric_measured(row.get("source_ppm")) for row in faces.values()
+        ) else declared.get("status") or "declared",
+        "method": "read_* pixels / mm plus declared render_spec.sampling",
+        "strategy": declared.get("strategy"),
+        "minimum_face_pixels_per_mm": declared.get("minimum_face_pixels_per_mm"),
+        "maximum_face_pixels": declared.get("maximum_face_pixels"),
+        "render_contract_hash": declared.get("render_contract_hash"),
+        "faces": faces,
+        "resample_count": unavailable(
+            "job_face_sampling_resample_count_not_on_eval_outputs",
+            unit="1",
+            method="pipeline face_sampling.faces.resample_count",
+        ),
+    }
+
+
+def inspect_approved_baseline(
+    path: Path,
+    report: Mapping[str, Any],
+) -> tuple[bool, str | None, str | None, bool | None, str | None]:
+    """Return present, baseline_status, baseline_reason, metrics_ok, metrics_reason."""
+    if not path.is_file():
+        return False, None, "approved_baseline_absent", None, None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return True, "invalid", "approved_baseline_invalid", None, None
+    if not isinstance(payload, dict) or payload.get("schema") != BASELINE_SCHEMA:
+        return True, "invalid", "approved_baseline_schema_mismatch", None, None
+    compatible, mismatch = identity_compatible(payload, report)
+    if not compatible:
+        return True, "identity_mismatch", mismatch, None, None
+    current_fp = fixture_metric_fingerprints(report.get("fixtures") or [])
+    baseline_fp = fixture_metric_fingerprints(payload.get("fixtures") or [])
+    metrics_ok, metrics_reason = compare_fixture_metric_fingerprints(current_fp, baseline_fp)
+    return True, "ok", None, metrics_ok, metrics_reason
+
+
+def attach_quality_layers(
+    report: dict[str, Any],
+    *,
+    render_requested: bool,
+    blender_ready: bool,
+    blender_failure_reason: str | None,
+    measured_ok: bool,
+    metric_failure: str | None,
+    approved_path: Path,
+) -> dict[str, Any]:
+    declared = declared_sampling_facts()
+    sampling_rows = []
+    for item in report.get("fixtures") or []:
+        if item.get("rendered") is True:
+            sampling_rows.append(measured_face_sampling(item, declared))
+    sampling = sampling_rows[0] if sampling_rows else declared
+    present, baseline_status, baseline_reason, metrics_ok, metrics_reason = inspect_approved_baseline(
+        approved_path, report
+    )
+    layers = classify_quality_layers(
+        render_requested=render_requested,
+        blender_ready=blender_ready,
+        blender_failure_reason=blender_failure_reason,
+        identity_verified=report.get("identity_verified_after_run") is True,
+        identity_reason=None if report.get("identity_verified_after_run") is True else "identity_changed_during_run",
+        runtime_complete=measured_ok,
+        runtime_reason=report.get("failure_reason") or metric_failure,
+        baseline_present=present,
+        baseline_status=baseline_status,
+        baseline_reason=baseline_reason,
+        fixture_metrics_ok=metrics_ok,
+        fixture_metrics_reason=metrics_reason,
+        observations=visual_observations_from_records(report.get("fixtures") or []),
+        sampling=sampling,
+        human_acceptance="pending",
+    )
+    current_render = report.get("current_render") if isinstance(report.get("current_render"), dict) else {}
+    blender = report.get("blender") if isinstance(report.get("blender"), dict) else {}
+    identity = report.get("identity") if isinstance(report.get("identity"), dict) else {}
+    passes = {
+        "product": "pass" if measured_ok else ("not-run" if not render_requested else "fail"),
+        "ground": "not-run",
+        "white_set": "not-run",
+    }
+    for item in report.get("fixtures") or []:
+        outputs = item.get("outputs") or {}
+        if isinstance(outputs.get("front_right_ground"), dict) or isinstance(outputs.get("back_left_ground"), dict):
+            passes["ground"] = "observed"
+        if isinstance(outputs.get("front_right_set"), dict) or isinstance(outputs.get("back_left_set"), dict):
+            passes["white_set"] = "observed"
+    report["quality_layers"] = layers
+    report["human_acceptance"] = layers["human_acceptance"]
+    report["render_quality"] = render_quality_document(
+        layers,
+        render_contract_hash=sampling.get("render_contract_hash") or identity.get("render_profile_sha256"),
+        engine=current_render.get("engine") or blender.get("engine"),
+        blender_version=blender.get("version"),
+        master_resolution_px=current_render.get("resolution"),
+        face_sampling=sampling,
+        passes=passes,
+    )
+    return report
+
+
 def fixture_matrix_complete(fixtures: Any) -> tuple[bool, str]:
     if not isinstance(fixtures, list) or not fixtures:
         return False, "report_incomplete"
@@ -2325,6 +2613,15 @@ def run_eval(
     }
     if not identity_unchanged:
         report["identity_after"] = identity_after
+    attach_quality_layers(
+        report,
+        render_requested=render_blender,
+        blender_ready=blender_ready,
+        blender_failure_reason=blender_failure_reason,
+        measured_ok=measured_ok,
+        metric_failure=metric_failure,
+        approved_path=approved_path,
+    )
     report_path = output_dir / "rf00-report.json"
     if update_baseline:
         report["baseline"] = {
@@ -2402,6 +2699,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         return 1
+    layers = report.get("quality_layers") if isinstance(report.get("quality_layers"), dict) else {}
     print(
         json.dumps(
             {
@@ -2410,6 +2708,14 @@ def main(argv: list[str] | None = None) -> int:
                 "report": str(Path(args.output_dir) / "rf00-report.json"),
                 "failure_reason": report.get("failure_reason"),
                 "baseline": report.get("baseline"),
+                "quality_layers": {
+                    "runtime_hard": (layers.get("runtime_hard") or {}).get("status"),
+                    "fixture_regression_hard": (layers.get("fixture_regression_hard") or {}).get("status"),
+                    "human_acceptance": layers.get("human_acceptance"),
+                    "production_ready": False,
+                    "official_machine_green": layers.get("official_machine_green"),
+                },
+                "contact_sheet": report.get("contact_sheet"),
             },
             ensure_ascii=False,
         )

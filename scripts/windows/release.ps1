@@ -1399,6 +1399,40 @@ try {
     throw "Illustrator Session 1 冒烟失败 exit=$LASTEXITCODE"
   }
 
+  # RF-11 candidate: Blender contract smoke after Illustrator identity smoke.
+  # 90s is not a Hangzhou-frozen budget. Failure keeps the existing drain/fence
+  # and falls through the same recovery throw path. PowerShell does not copy
+  # generation/GLB checks. Skip (do not roll back) when Hangzhou has no
+  # resolved Blender executable; the candidate gate is not yet frozen.
+  $blenderSmoke = Join-Path $Root "scripts\windows\blender-contract-smoke.ps1"
+  if (-not (Test-Path -LiteralPath $blenderSmoke -PathType Leaf)) {
+    throw "目标版本缺少 Blender 合同冒烟脚本"
+  }
+  $blenderExe = [string]$env:WB_BLENDER
+  if (-not $blenderExe) { $blenderExe = [string]$env:BLENDER_EXECUTABLE }
+  if (-not $blenderExe) {
+    $blenderDataDir = $env:WB_DATA_DIR
+    if (-not $blenderDataDir) { $blenderDataDir = "C:\supply\data" }
+    $blenderSettings = Join-Path $blenderDataDir "settings.json"
+    if (Test-Path -LiteralPath $blenderSettings -PathType Leaf) {
+      try {
+        $blenderSettingsObj = Get-Content -LiteralPath $blenderSettings -Raw -Encoding UTF8 | ConvertFrom-Json
+        $blenderExe = [string]$blenderSettingsObj.BLENDER_EXECUTABLE
+      } catch {
+        $blenderExe = ""
+      }
+    }
+  }
+  if (-not $blenderExe -or -not (Test-Path -LiteralPath $blenderExe -PathType Leaf)) {
+    Write-Host "Blender 合同冒烟跳过：未解析到 BLENDER_EXECUTABLE（候选门，未在杭州冻结）"
+  } else {
+    $env:WB_BLENDER = $blenderExe
+    & $smokePowerShell -NoProfile -ExecutionPolicy Bypass -File $blenderSmoke -Python $releasePython -TimeoutMs 720000
+    if ($LASTEXITCODE -ne 0) {
+      throw "Blender 合同冒烟失败 exit=$LASTEXITCODE"
+    }
+  }
+
   $logo = Invoke-WebRequest -Uri "http://127.0.0.1:8787/brand/logo-mark.png" -TimeoutSec 10 -UseBasicParsing
   if ($logo.StatusCode -ne 200) { throw "logo HTTP $($logo.StatusCode)" }
   $png = $null

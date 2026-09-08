@@ -18,7 +18,7 @@
   - 服务端：`npm run test -w beian-server`（`node:test`，`apps/web/server/src/*.test.ts`）
   - 界面：`npm run test -w beian-ui`（`node:test`，`src/**/*.test.ts` 自动发现；纯函数，不引入 RTL）
   - 对照 worker：`cd apps/web/backend && .venv/bin/python -m pytest -q`（CLI 契约 + 对照/打样单测。没有 FastAPI 测试）
-- L1 冒烟（杭州 `hangzhou-release`）：`release.ps1` 在 transaction fence 内查 health.ok、version==VERSION、8787 listener、logo PNG，并通过生产 Session 1 Agent 验证管道 → VBS → 唯一 JSX 的身份链。不跑 `npm test`，也不替代真实稿 L2
+- L1 冒烟（杭州 `hangzhou-release`）：`release.ps1` 在 transaction fence 内查 health.ok、version==VERSION、8787 listener、logo PNG，并通过生产 Session 1 Agent 验证管道 → VBS → 唯一 JSX 的身份链。不跑 `npm test`，也不替代真实稿 L2。RF-11 本地 Blender 合同冒烟 wrapper 已接线（`scripts/windows/blender-contract-smoke.ps1` → `workers/packaging/tools/blender_contract_smoke.py`，输出仅 `RUNNER_TEMP`）。wrapper 默认 90 秒只是候选预算；发版脚本当前传入 `TimeoutMs 720000`，两者都未在杭州冻结。未解析到 Blender 可执行文件时跳过、不回滚。不能用 Mac 合成代替可信 main L1。RF-10 三层质量分类与冒烟合同测试随默认 worker/server L0（`test_packaging_render_quality_layers.py`、`test_packaging_blender_contract_smoke.py`、`windows-release-script.test.ts`），不启动 Blender。
 - L2 金标（人核定后）：`apps/web/backend/scripts/run_eval.py`。未核定的 `data/gold` 不进默认 `npm test`
 - 类型：`npm run typecheck -w beian-server` 与 `npm run build -w beian-ui`
 - 浏览器交互（Mac）：`npm run test:e2e`（Vite + 合成 API，只验证页面行为，不替代真实 Hono / Windows L1）

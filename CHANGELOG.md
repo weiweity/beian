@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.21.44.0] - 2026-09-08
+
+### Added
+- 打样质量报告分三层记录：运行时产物完整性、固定夹具回归、视觉观察与独立人工验收；机器通过不会写成人工通过或生产就绪。
+- 增加独立 Blender 合同冒烟：只写 `RUNNER_TEMP`，复用现有 generation/GLB/hash 校验；失败保持 drain 并走既有恢复。90 秒仅为候选预算，未在杭州冻结。
+
+### Changed
+- 质量 CLI 输出三层结果、身份和采样事实；缺 Blender 或缺正式 baseline 不再假绿。普通运行仍不更新正式 baseline。
+
+### Fixed
+- 杭州发版里的 Blender 合同冒烟改用 PowerShell 5.1 可用的环境变量接口，并传入已解析的 Python；机器上还没配置 Blender 时跳过，避免把整个发版回滚。
+
 ## [0.21.43.0] - 2026-09-07
 
 ### Fixed

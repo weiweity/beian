@@ -38,7 +38,7 @@ process.stdin.on('end', () => {
     candidate_plan_identity:id, candidate_identity:hash('candidate'), candidate_dir:req.candidate_dir || null,
     studio_adjustment:req.studio_adjustment || null,
     execution:{status:'validated', nonce:null}, outputs:{}, optional_warnings:[],
-    quality:{status:'unwired', wired:false, runtime_gate:'pending', production_ready:false}};
+    quality:{status:'layered', wired:true, runtime_gate:'not-run', fixture_regression:'not-run', visual_observations:'not-run', human_acceptance:'pending', production_ready:false}};
   if (behavior === 'hang') {setInterval(()=>{}, 1000); return;}
   if (behavior === 'delayed-stop') {
     process.on('SIGTERM', () => setTimeout(() => process.exit(0), 120));
@@ -82,6 +82,8 @@ process.stdin.on('end', () => {
       result.outputs[key]={path:filename,sha256:hash(bytes),bytes:bytes.length};
     }
     result.execution={status:'rendered',nonce:'0123456789abcdef0123456789abcdef'};
+    result.quality.runtime_gate='pass';
+    result.quality.machine_metrics={runtime_integrity:'pass',fixture_regression:'not-run',visual_observations:'not-run'};
     result.artifact_checks={glb:'passed',full_card:'passed',source_sampling:'passed'}; // Transport double, not real artifact QA.
     process.stderr.write('STAGE prepare\nSTAGE blender\n');
   }
@@ -89,6 +91,10 @@ process.stdin.on('end', () => {
   if (behavior === 'asset-mismatch') result.source_identity.assets.front=hash('wrong');
   if (behavior === 'plan-mismatch') result.candidate_plan_identity=hash('wrong');
   if (behavior === 'quality-pass') result.quality.production_ready=true;
+  if (behavior === 'quality-runtime-fail') result.quality.runtime_gate='fail';
+  if (behavior === 'quality-runtime-not-run') result.quality.runtime_gate='not-run';
+  if (behavior === 'quality-human-accepted') result.quality.human_acceptance='accepted';
+  if (behavior === 'quality-fixture-pass') result.quality.fixture_regression='pass';
   if (behavior === 'lighting-mismatch') result.studio_adjustment={product_light:4,background_light:4};
   if (behavior === 'source-changed') fs.appendFileSync(path.join(req.job_root,'resolved_job.json'), ' ');
   if (behavior === 'asset-changed') fs.appendFileSync(JSON.parse(fs.readFileSync(path.join(req.job_root,'resolved_job.json'))).assets.front, '!');
@@ -454,7 +460,7 @@ describe("RF-03C2.1 async render bridge", { skip: !renderGenerationProcessSuppor
     assert.equal(existsSync(f.candidate), false);
     const result = await f.bridge.render(receipt, f.candidate, process.execPath, { onStage: stage => stages.push(stage) });
     assert.equal(Object.keys(result.outputs).length, 5);
-    assert.deepEqual(result.quality, { status: "unwired", production_ready: false });
+    assert.deepEqual(result.quality, { status: "layered", production_ready: false, runtime_gate: "pass", human_acceptance: "pending" });
     assert.deepEqual(stages, ["validate", "validate", "prepare", "blender"]);
     assert.deepEqual(readFileSync(join(f.jobRoot, "resolved_job.json")), f.raw);
     assert.equal(existsSync(join(f.candidate, "generation.json")), false);
@@ -469,7 +475,8 @@ describe("RF-03C2.1 async render bridge", { skip: !renderGenerationProcessSuppor
     assert.equal(existsSync(f.candidate), false);
   });
 
-  for (const behavior of ["source-mismatch", "asset-mismatch", "plan-mismatch", "quality-pass", "lighting-mismatch",
+  for (const behavior of ["source-mismatch", "asset-mismatch", "plan-mismatch", "quality-pass", "quality-human-accepted",
+    "quality-fixture-pass", "lighting-mismatch",
     "source-changed", "asset-changed", "bad-json", "nonzero", "stdout-budget", "stderr-budget"]) {
     it(`rejects validation ${behavior}`, async () => {
       const f = fixture();
@@ -480,7 +487,8 @@ describe("RF-03C2.1 async render bridge", { skip: !renderGenerationProcessSuppor
   }
 
   for (const behavior of ["output-hash", "output-size", "output-path", "output-symlink", "missing-output",
-    "missing-nonce", "execution-identity", "candidate-path", "source-changed", "asset-changed", "quality-pass"]) {
+    "missing-nonce", "execution-identity", "candidate-path", "source-changed", "asset-changed", "quality-pass",
+    "quality-runtime-fail", "quality-runtime-not-run"]) {
     it(`rejects candidate ${behavior} without marking ready`, async () => {
       const f = fixture();
       const receipt = await f.bridge.verify(f.input);

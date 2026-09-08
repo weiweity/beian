@@ -82,7 +82,12 @@ export type RenderBridgeCandidate = {
   executionNonce: string;
   outputs: Record<string, OutputEvidence>;
   optionalWarnings: Array<{ key: string; cause: string }>;
-  quality: { status: "unwired"; production_ready: false };
+  quality: {
+    status: "layered";
+    production_ready: false;
+    runtime_gate: "pass" | "fail" | "not-run";
+    human_acceptance: "pending";
+  };
 };
 
 function invalid(cause: string): never {
@@ -171,10 +176,16 @@ async function fileIdentity(root: string, file: string, limit = FILE_LIMIT, chec
   }
 }
 
-function qualityUnwired(result: Json): void {
+function qualityLayersContract(result: Json): void {
   const q = object(result.quality);
-  if (q.status !== "unwired" || q.wired !== false || q.production_ready !== false || q.runtime_gate !== "pending") {
+  if (q.production_ready !== false) invalid("unexpected_quality_claim");
+  if (q.human_acceptance !== undefined && q.human_acceptance !== "pending") invalid("unexpected_human_acceptance");
+  if (q.status !== "layered" || q.wired !== true) invalid("unexpected_quality_claim");
+  if (q.runtime_gate !== "pass" && q.runtime_gate !== "fail" && q.runtime_gate !== "not-run") {
     invalid("unexpected_quality_claim");
+  }
+  if (q.fixture_regression !== undefined && q.fixture_regression !== "not-run") {
+    invalid("unexpected_fixture_regression_on_real_job");
   }
 }
 
@@ -304,7 +315,7 @@ function command(options: Required<RenderBridgeOptions>, request: Json, observer
           throw new RenderBridgeError("render_generation_failed", "worker_exit");
         }
         if (result.ok !== true || result.schema !== "packaging-render-generation-result/1") invalid("worker_protocol");
-        qualityUnwired(result);
+        qualityLayersContract(result);
         accept(result);
       } catch (error) {
         reject(error instanceof RenderBridgeError ? error : new RenderBridgeError("render_generation_invalid", "worker_json"));
@@ -490,8 +501,10 @@ export function createRenderGenerationBridge(config: RenderBridgeOptions) {
         });
         await fresh(binding.request, check);
         check();
+        const workerQuality = object(result.quality);
+        if (workerQuality.runtime_gate !== "pass") invalid("unexpected_quality_claim");
         const candidateResult: RenderBridgeCandidate = { receipt, candidateDir, executionNonce: execution.nonce, outputs, optionalWarnings,
-          quality: { status: "unwired", production_ready: false } };
+          quality: { status: "layered", production_ready: false, runtime_gate: "pass", human_acceptance: "pending" } };
         // Capture copies, never trust caller-mutable candidate rows as proof.
         const files = Object.entries(outputs).filter(([key]) => RENDER_GENERATION_OUTPUT_KEYS[key])
           .map(([key, row]) => ({ key: RENDER_GENERATION_OUTPUT_KEYS[key], sha256: row.sha256.slice(7), bytes: row.bytes }))
@@ -516,7 +529,13 @@ export function createRenderGenerationBridge(config: RenderBridgeOptions) {
             content_fingerprint: input.content_fingerprint, verifier_status: accepted ? "accepted" : "rejected",
             quality_status: accepted ? (runtime ? "runtime_verified" : "unwired") : "failed",
             verifier: runtime ? "rf03-runtime-artifacts/1" : "rf03-artifact-subgates/1",
-            note: accepted ? (runtime ? "本轮合同、六面、实际 GLB/full/card、源 PNG 网格及封存字节一致；资源生命周期受限；不代表视觉基线、PDF 固有清晰度或实机验收" : "GLB/full/card/源采样子门与封存字节一致；完整 runtime 质量门尚未接线") : "封存字节与本轮候选凭证不符" };
+            layers: {
+              runtime_hard: accepted && runtime ? "pass" : accepted ? "not-run" : "fail",
+              fixture_regression_hard: "not-run",
+              human_acceptance: "pending",
+              production_ready: false,
+            },
+            note: accepted ? (runtime ? "本轮合同、六面、实际 GLB/full/card、源 PNG 网格及封存字节一致；资源生命周期受限；夹具回归未跑；human_acceptance 独立 pending；不代表视觉基线、PDF 固有清晰度或实机验收" : "GLB/full/card/源采样子门与封存字节一致；fixture regression 未在真实任务运行；human_acceptance 独立 pending") : "封存字节与本轮候选凭证不符" };
         };
         partialSealProofs.set(candidateResult, makeProof(false));
         if (isRenderLifecycle(runtimeLifecycle)) runtimeSealProofs.set(candidateResult, makeProof(true));

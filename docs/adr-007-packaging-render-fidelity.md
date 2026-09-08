@@ -1,13 +1,15 @@
 # ADR-007：包装 3D 渲染真实感、清晰度与能力合同
 
 - 日期：2026-09-04
-- 状态：PARTIAL IMPLEMENTATION / L0 — `/plan-eng-review` 已完成，D1–D8 已锁定；RF-00 测量尺、RF-01 独立合同和 RF-02 流水线接线（含 RF-02.3）已完成 Code/L0；RF-03 本地产物验证、资源生命周期、临时 registry 与 Windows 托管代码已实现；RF-04 出图版本 API/UI 与 RF-05 显式纸盒壳几何已实现；RF-06 材质已合入 `main` `d2657f0` / `0.21.40.0`；RF-07 棚光/受控色彩对照已合入 `main` `88321a90` / `0.21.41.0`，未进生产 registry；RF-08 投影采样与切面预算已有诊断 profile 的 Code/普通 L0，未进生产 registry；生产注册、原生 Windows 发版烟测、RF-09 生产发布与 RF-10+、正式视觉批准、L1/L2/UAT 未完成
+- 状态：PARTIAL IMPLEMENTATION / L0 — `/plan-eng-review` 已完成，D1–D8 已锁定；RF-00 测量尺、RF-01 独立合同和 RF-02 流水线接线（含 RF-02.3）已完成 Code/L0；RF-03 本地产物验证、资源生命周期、临时 registry 与 Windows 托管代码已实现；RF-04 出图版本 API/UI 与 RF-05 显式纸盒壳几何已实现；RF-06 材质已合入 `main` `d2657f0` / `0.21.40.0`；RF-07 棚光/受控色彩对照已合入 `main` `88321a90` / `0.21.41.0`，未进生产 registry；RF-08 投影采样与切面预算已有诊断 profile 的 Code/普通 L0，未进生产 registry；RF-09 浏览器分层升级已完成本地实现与合成验证，生产发布未验；RF-10 三层质量门已接到 evaluator CLI / generation worker（Code/普通 L0），正式 approved baseline 仍不存在；RF-11 本地 Blender 合同冒烟 wrapper 已接线，90 秒预算未在杭州冻结；生产注册、原生 Windows 发版烟测、正式视觉批准、L1/L2/UAT 未完成
 - 目标执行者：Grok / Codex 等编码代理，人工负责人负责选择、金标与发布闸门
 - 关联：`docs/adr-005-packaging-structure-v2.md`、`DESIGN.md`、`workers/packaging/README.md`、`docs/pouch-v1-acceptance.md`
 - 基线：`origin/main` `b39f147`，版本 `0.21.25.0`
-- 实现快照：RF-00 / RF-01 / RF-02 已交 Code/L0（RF-02.3 收口磁盘执行边界与私有执行快照/nonce）。新任务消费 persistable render plan 并写入四项顶层 identity / fingerprint token / resolved job / result；Blender 启动前校验磁盘 payload 与派生 flat render。所有非 cache Blender 任务从当前内存 job 生成私有执行快照并注入本轮 nonce；非 V2 只是命令行诊断路径，不是网页产品通道。只有已知 pre-RF02 V2 作业可合成 `compat-legacy-v0`，且历史最小 render 键必须完整匹配。同步异常全量回滚（含删除本轮新建 optional 输出）；进程崩溃/断电级原子 current 仍是 RF-03。正式 approved baseline 未创建。RF-06 材质、RF-07 显式棚光/三变换对照与 RF-08 投影采样只在诊断 registry/候选 profile 中生效，未批准前保持 Standard 与 `minimum-floor-v1` 默认，不得称生产画质已改善
+- 实现快照：RF-00 / RF-01 / RF-02 已交 Code/L0（RF-02.3 收口磁盘执行边界与私有执行快照/nonce）。新任务消费 persistable render plan 并写入四项顶层 identity / fingerprint token / resolved job / result；Blender 启动前校验磁盘 payload 与派生 flat render。所有非 cache Blender 任务从当前内存 job 生成私有执行快照并注入本轮 nonce；非 V2 只是命令行诊断路径，不是网页产品通道。只有已知 pre-RF02 V2 作业可合成 `compat-legacy-v0`，且历史最小 render 键必须完整匹配。同步异常全量回滚（含删除本轮新建 optional 输出）；进程崩溃/断电级原子 current 仍是 RF-03。正式 approved baseline 未创建。RF-06 材质、RF-07 显式棚光/三变换对照与 RF-08 投影采样只在诊断 registry/候选 profile 中生效，未批准前保持 Standard 与 `minimum-floor-v1` 默认，不得称生产画质已改善。RF-10 把 runtime / fixture regression / `human_acceptance` 分成独立字段；真实任务上 fixture 为 `not-run`，机器通过不会写成人工通过或 `production_ready`。RF-11 smoke 只写 `RUNNER_TEMP`，未解析到 Blender 时跳过不回滚。
 
 ## 1. 结论先行
+
+> 2026-09-08 RF-10 / RF-11：质量报告分三层记录（runtime hard / fixture regression hard / warning-human）。`quality_layers.py` 是纯函数；evaluator CLI 与 generation worker 写入同一分层，缺 Blender 或缺正式 baseline 不是绿灯。真实任务不跑夹具回归。`human_acceptance` 保持独立 pending，`production_ready` 保持 false。RF-11 用 `scripts/windows/blender-contract-smoke.ps1` 调用 `workers/packaging/tools/blender_contract_smoke.py`：只写 `RUNNER_TEMP`，复用 quality eval 与 generation GLB/hash 门，PowerShell 不复制校验。wrapper 默认 90 秒为候选预算；`release.ps1` 当前传入 `TimeoutMs 720000`，均未在杭州冻结。缺已解析 Blender 时跳过、不回滚。未改生产 registry、Standard 或正式 baseline。未完成项见 [TODOS.md](../TODOS.md)。
 
 > 2026-09-07 RF-08：按实际相机与正反 shot 的 2×2 Jacobian 反推切面 ppm，诊断 profile `packshot-projection-sampling-v1`；超 maximum ppm / 32MP 失败并返回 required/allowed，不静默 clamp。未改生产 registry 或 `minimum-floor-v1` 默认。证据见 [RF-08 记录](designs/packaging-quality-rf08-closeout.md)。
 
@@ -616,12 +618,13 @@ idle
       "fixture_regression": "not-run",
       "visual_observations": "warn"
     },
-    "human_acceptance": "pending"
+    "human_acceptance": "pending",
+    "production_ready": false
   }
 }
 ```
 
-机器指标与 `human_acceptance` 必须分字段。任何代理不得把 `machine_metrics=pass` 翻译成“籽烨已验收”。
+机器指标与 `human_acceptance` 必须分字段。`production_ready` 由分层分类器固定为 false，机器通过不得改写。任何代理不得把 `machine_metrics=pass` 翻译成“籽烨已验收”。
 
 ### 13.2 合成质量夹具
 
@@ -703,9 +706,10 @@ Git 内夹具不得使用真实品牌稿，至少包含：
 ```bash
 apps/web/backend/.venv/bin/python workers/packaging/tools/render_quality_eval.py \
   --blender /Applications/Blender.app/Contents/MacOS/Blender \
-  --fixtures workers/packaging/fixtures/render-quality \
-  --output /tmp/beian-render-quality
+  --output-dir /tmp/beian-render-quality-rf10-run-1
 ```
+
+夹具固定读取 `workers/packaging/fixtures/render-quality/`，CLI 不接受 `--fixtures`。报告含 `quality_layers`（runtime hard / fixture regression hard / `human_acceptance`）；缺 Blender、缺正式 baseline 或身份不符都不是绿灯。
 
 要求：
 
@@ -835,14 +839,14 @@ quality/release
 | Python L0 | 扩 `test_packaging_structure_artwork.py` | 两个 shot 的 Jacobian、每面最大 projected ppm、一次 affine、source/target ppm、32MP 超限返回所需值与上限、不落低分辨率半成品 |
 | Python L0 | 扩 `test_packaging_pipeline_v2.py` | spec 进入 fingerprint/resolved/result；profile 或 registry hash 变化导致 cache miss；旧 profile 保持旧行为 |
 | Python 源码合同 | 扩 `test_packaging_structure_artwork.py` 或新 `test_packaging_render_dispatch.py` | `render_job.py` 不再无条件 `add_box`；未知 family 必须抛稳定错误；pouch 仍标 `thin_card` |
-| Blender 显式套件 | 新增 `apps/web/backend/tests/test_packaging_render_quality.py` 与 `workers/packaging/tools/render_quality_eval.py` | PNG/Alpha/尺寸/卡图、边缘、线宽、白盒分离、输出 hash、baseline mismatch、显式 baseline update；无 Blender 时给可诊断 skip/fail |
+| Blender 显式套件 | `apps/web/backend/tests/test_packaging_render_quality.py`、`test_packaging_render_quality_layers.py` 与 `workers/packaging/tools/render_quality_eval.py` | PNG/Alpha/尺寸/卡图、边缘、线宽、白盒分离、输出 hash、三层结果、baseline mismatch、显式 baseline update；无 Blender 时给可诊断 skip/fail |
 | GLB | 扩 `test_packaging_glb_verify.py` | 新 carton core/surface/倒角不破坏外尺寸；六面来源、UV、方向、镜像继续 hard fail；不支持材质扩展不伪装已导出 |
 | Server L0 | 新增 `apps/web/server/src/renderGenerations.test.ts` | g0 导入、staging/ready、atomic pointer、append-only index、orphan recovery、ready 永不自动删除、磁盘 guard、游标分页、路径穿越拒绝 |
 | Server L0 | 扩 `jobs.test.ts` | generation mutation 与全局 Blender 槽互斥；失败 current 不变；双击不重复建代；release drain 能看见在途 Blender |
 | Server HTTP | 扩 `mockup-http.test.ts` / `mockup-files.test.ts` | 权限隔离、旧详情兼容、history/activate/relight/upgrade、stale 409、invalid 422、当前 full 下载、不暴露磁盘路径 |
 | UI 纯函数 | 扩 `mockupStudio.test.ts`，必要时新增 `mockupPreviewSource.test.ts` | card/full 状态转移、generation token、resize 竞态、失败降级、资源释放、full 下载和同参数合成 |
 | Browser E2E | 新增 `apps/web/ui/e2e/mockup-generations.spec.ts` | 用户从旧代升级、生成期间仍看旧代、完成后切换、历史切回、两 tab stale、刷新保持、card→full、背景/调灯不新建作业 |
-| Windows 合同 | 扩 `windows-release-script.test.ts` + 新 smoke 脚本自测 | smoke 在 drain 内、只写 `RUNNER_TEMP`、90 秒候选超时、失败不打开 drain、调用既有 recovery、finally 清理 |
+| Windows 合同 | 扩 `windows-release-script.test.ts` + `test_packaging_blender_contract_smoke.py` + `blender-contract-smoke.ps1` | smoke 在 drain 内、只写 `RUNNER_TEMP`、90 秒候选超时（发版当前传入 720000 ms）、失败不打开 drain、调用既有 recovery、缺 Blender 跳过不回滚 |
 | 私有 L2/UAT | Git 外证据表 | 白/深/细长/矮宽 carton；膜袋正负能力标签；旧/新盲评、合同 hash、参数、评审人、结论、拒绝理由 |
 
 ## 15. 兼容、输出代际与回滚
@@ -1294,9 +1298,9 @@ P1b generation     P2 carton core       P3b UI preview shell
 | RF-06 | P2 / L | RF-01, RF-05 | substrate/ink/overall finish、微法线、可导出子集 | 无 mask 不伪造 spot finish；Non-Color/sRGB 正确；静帧与 GLB 能力差异有报告与文案 |
 | RF-07 | P2 / L | RF-00, RF-05, RF-06 | 尺寸归一三灯棚、受控 view-transform A/B | 几何/纹理/灯/曝光固定；匿名输出；按预登记规则冻结新 profile，否则保留 Standard |
 | RF-08 | P3 / L | RF-02, RF-05 | per-face projection/Jacobian、`artwork.py` 像素预算 | 两 shot 最大需求；一次 affine；required/allowed 可诊断；32MP 超限 fail 而不是静默降采样 |
-| RF-09 | P3 / L | RF-03 API 冻结 | `MockupPage.tsx` / `mockupStudio.ts` card→full、释放与 E2E | 本地实现、针对性合成验证与独立复核已完成；失败回退、resize/切代竞态、卸载后下载、原图/full 下载有合成测试。有限尺寸对照与隔离页 browse 已交付，真实 Claude unavailable；heap/帧预算、杭州 L1、真稿 L2、UAT、生产发布未验 |
-| RF-10 | P4 / XL | RF-05–RF-09 | quality eval、阈值/identity、contact sheet | runtime/fixture/human 三层分开；baseline mismatch 失败；更新基线必须显式；输出不含真稿 |
-| RF-11 | P4 / L | RF-03, RF-05, RF-10 | 独立 Windows Blender smoke wrapper、复用 `renderGenerations.ts` 的 tsx 入口、`release.ps1`、合同测试 | 每次可信 main 在 fence 内跑；只用 `RUNNER_TEMP`；缺失/超时/hash/GLB 失败保持 drain 并走 recovery；PowerShell 不复制 generation 校验 |
+| RF-09 | P3 / L | RF-03 API 冻结 | `MockupPage.tsx` / `mockupStudio.ts` card→full、释放与 E2E | 本地实现、针对性合成验证与独立复核已完成；失败回退、resize/切代竞态、卸载后下载、原图/full 下载有合成测试。有限尺寸对照与隔离页 browse 已交付，真实 Claude unavailable。Q05 本机合成 Playwright 记录 heap 与 rAF 间隔，不能当真实环境预算。杭州 L1、真稿 L2、UAT、生产发布未验 |
+| RF-10 | P4 / XL | RF-05–RF-09 | `quality_layers.py`、quality eval CLI、generation worker / Hono 分层字段、合同测试 | Code/普通 L0：runtime/fixture/human 三层分开；`baseline_mismatch` 只失败夹具门；`--update-baseline` 必须显式；真实任务 fixture 为 `not-run`；`human_acceptance` 独立 pending，`production_ready` 保持 false。正式 baseline、L1/L2/UAT 未完成 |
+| RF-11 | P4 / L | RF-03, RF-05, RF-10 | `blender-contract-smoke.ps1` + `blender_contract_smoke.py`、`release.ps1`、合同测试 | Code/普通 L0：PowerShell 只编排 timeout/`RUNNER_TEMP`，复用 quality eval 与 generation GLB/hash 门，不复制 tsx 入口。缺已解析 Blender 时跳过不回滚。wrapper 默认 90 秒为候选预算；发版脚本当前传入 720000 ms，均未在杭州冻结。可信 main 冒烟、原生 Job Object、L1 未完成 |
 | RF-12 | P4 / M | RF-00–RF-11 | 全量 L0/type/quality/E2E、回滚演练、文档/CHANGELOG | Mac/GitHub 证据完整；旧单/g0/current 回滚路径证明；没有把未跑 L1/L2 写成完成 |
 | RF-13 | L2/UAT / 人工 | RF-12 landed + L1 green | 杭州私有真实稿与刘籽烨流程 | 旧/新盲评、合同 hash、操作者与结论齐全；真实 carton 才能宣称通过；证据不进 Git |
 
@@ -1328,11 +1332,10 @@ npm run quality
 # 有受支持 Blender 时显式执行，不并入默认 npm test
 apps/web/backend/.venv/bin/python workers/packaging/tools/render_quality_eval.py \
   --blender /Applications/Blender.app/Contents/MacOS/Blender \
-  --fixtures workers/packaging/fixtures/render-quality \
-  --output /tmp/beian-render-quality
+  --output-dir /tmp/beian-render-quality-rf10-run-1
 ```
 
-Grok 不能在杭州生产机跑默认单测，也不能以 Mac Blender 套件替代可信 `main` 的 Windows L1。质量工具的真实最终 CLI 由 RF-10 固化；若与上面草案不同，需同步本 ADR、README 与测试。
+Grok 不能在杭州生产机跑默认单测，也不能以 Mac Blender 套件替代可信 `main` 的 Windows L1。质量 CLI 已由 RF-10 固化为 `--output-dir` + 可选 `--blender`，夹具固定读取仓库内 `workers/packaging/fixtures/render-quality/`，不接受 `--fixtures`。
 
 ## 21. 预计影响文件与复杂度
 
@@ -1452,12 +1455,12 @@ merge、ship 或 deploy，除非用户在当次任务明确授权。不要 git a
   - Evidence: 本分支已完成完整本地 L0/类型/质量门、27 项合成 E2E 与独立代码复核；灯箱显式空 set 的下载冻结缺陷已由红绿回归闭环。性能与实机验收剩余项以 [TODOS.md](../TODOS.md) 为准，不代表 L1/L2/UAT 或生产发布。
 - [ ] **T11（P1，human: ~3d / Grok: ~6h）— quality — 实现三层质量门与 baseline identity**
   - Surfaced by: Architecture D7 — 确定性完整性、合成回归和人工审美不能混成一个总分。
-  - Files: `render_quality_eval.py`、脱敏 fixtures、`test_packaging_render_quality.py`
-  - Verify: runtime hard、fixture hard、human warning 分字段；mismatch fail；baseline 只能显式更新；contact sheet 可追溯。
+  - Files: `quality_layers.py`、`render_quality_eval.py`、脱敏 fixtures、`test_packaging_render_quality.py`、`test_packaging_render_quality_layers.py`
+  - Verify: Code/普通 L0 已分字段记录 runtime hard、fixture hard、human warning；mismatch 失败夹具门；baseline 只能显式更新。正式 approved baseline、L1/L2/UAT 未完成，故本项不勾。
 - [ ] **T12（P1，human: ~2d / Grok: ~4h）— release — 接入 Windows Blender 发布冒烟**
   - Surfaced by: Architecture D4 — 可信 main 发布必须证明本机 Blender 合同链可运行且不碰客户数据。
-  - Files: `scripts/windows/release.ps1`、新 PowerShell wrapper + tsx smoke 入口、`renderGenerations.ts`、`windows-release-script.test.ts`、`hangzhou-release.yml`
-  - Verify: fence 内、`RUNNER_TEMP`、成功清理；tsx 入口复用生产 generation validator；缺失/超时/hash/GLB 失败保持 drain 并调用既有 recovery。
+  - Files: `scripts/windows/release.ps1`、`blender-contract-smoke.ps1`、`workers/packaging/tools/blender_contract_smoke.py`、`windows-release-script.test.ts`、`test_packaging_blender_contract_smoke.py`
+  - Verify: Code/普通 L0 已把 smoke 放在 drain 内、只写 `RUNNER_TEMP`，复用 quality eval 与 generation GLB/hash 门，不复制 tsx 入口。缺已解析 Blender 时跳过不回滚；超时/合同失败走既有 recovery。90 秒预算未在杭州冻结，故本项不勾。
 - [ ] **T13（P2，human: ~1.5d / Grok: ~3h）— regression — 跑全量门并演练回滚**
   - Surfaced by: Test Review — 47 个计划节点需要转成真实证据，不能以主路径 smoke 代替。
   - Files: Python/server/UI/E2E tests、`README.md`、`CHANGELOG.md`
