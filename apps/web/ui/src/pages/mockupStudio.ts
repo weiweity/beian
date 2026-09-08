@@ -24,7 +24,7 @@ export function stillsFilter(light: number): string {
 }
 
 export function glbExposure(light: number): string {
-  return String(Math.round(0.9 * clampStudioLight(light) * 100) / 100);
+  return String(Math.round(1.1 * clampStudioLight(light) * 100) / 100);
 }
 
 export function parseBackdropPreset(value: unknown): BackdropPreset {
@@ -78,6 +78,15 @@ export function studioBackdrop(light: number, preset: BackdropPreset = "white"):
     return `rgb(${litChannel(228, light)}, ${litChannel(228, light)}, ${litChannel(232, light)})`;
   }
   return `rgb(${litChannel(238, light)}, ${litChannel(238, light)}, ${litChannel(238, light)})`;
+}
+
+/** Viewer-only backdrop: the downloaded GLB still contains the box alone. */
+export function glbBackdrop(light: number, preset: BackdropPreset): string {
+  if (preset !== "white_set") return studioBackdrop(light, preset);
+  const horizon = WHITE_SET_HORIZON * 100;
+  const wall = whiteSetWallFill(light);
+  const table = studioBackdrop(light, preset);
+  return `linear-gradient(to bottom, transparent ${horizon}%, rgba(40, 24, 56, 0.12) ${horizon}%, rgba(40, 24, 56, 0.12) ${horizon + 0.4}%, transparent ${horizon + 0.4}%), linear-gradient(to bottom, ${wall} ${horizon}%, ${table} ${horizon}%)`;
 }
 
 function paintStudioSet(

@@ -37,6 +37,7 @@ import {
   studioDrawnLayerKeys,
   studioDrawnUpgradeFailed,
   glbExposure,
+  glbBackdrop,
   jobHasGround,
   jobHasReviewCard,
   jobHasSet,
@@ -1538,7 +1539,7 @@ function GlbShot({
   glbFs: boolean;
   onNotice: (text: string) => void;
 }) {
-  const fill = studioBackdrop(backgroundLight, backdrop);
+  const fill = glbBackdrop(backgroundLight, backdrop);
   return (
     <figure className="mockup-sheet-photo">
       <div
@@ -1550,6 +1551,8 @@ function GlbShot({
           src={fileHref(jobId, "glb",false,generation)}
           onError={onSourceError}
           camera-controls
+          camera-orbit="0deg 75deg 155%"
+          max-camera-orbit="auto auto 155%"
           environment-image="neutral"
           exposure={glbExposure(productLight)}
           shadow-intensity="1"
@@ -1557,8 +1560,8 @@ function GlbShot({
           tone-mapping="commerce"
           interaction-prompt="none"
           style={{
-            background: fill,
-            ["--poster-color" as string]: fill,
+            background: "transparent",
+            ["--poster-color" as string]: "transparent",
           }}
         />
         <button

@@ -317,3 +317,59 @@ test("旧代图片报错仅刷新一次，新代已显示后迟到的旧详情�
     expect(state.calls.filter(call=>call.method === "POST")).toHaveLength(0);expect(state.unknown).toEqual([]);
   } finally {oldDetail.release();}
 });
+
+test("GLB 白桌白墙透过查看器显示，切背景及全屏保留模型资产", async ({ page }) => {
+  const state = model();
+  await serve(page, state);
+  await page.goto(`/mockup/${ID}`);
+  const viewer = page.locator("model-viewer");
+  const frame = page.locator(".mockup-sheet-glb");
+  await expect(viewer).toHaveAttribute("exposure", "1.1");
+  await expect(viewer).toHaveAttribute("camera-orbit", "0deg 75deg 155%");
+  await expect.poll(() => viewer.evaluate((el) => Boolean((el as HTMLElement & { loaded?: boolean }).loaded))).toBe(true);
+  // Assert the actual camera, not just an attribute that may be clamped.
+  const radii = await viewer.evaluate(async el => {
+    const camera = el as HTMLElement & { updateComplete: Promise<unknown>; jumpCameraToGoal(): void; getCameraOrbit(): { radius: number } };
+    camera.jumpCameraToGoal();
+    const initial = camera.getCameraOrbit().radius;
+    camera.setAttribute("camera-orbit", "0deg 75deg 105%");
+    await camera.updateComplete;
+    camera.jumpCameraToGoal();
+    const near = camera.getCameraOrbit().radius;
+    camera.setAttribute("camera-orbit", "0deg 75deg 155%");
+    await camera.updateComplete;
+    camera.jumpCameraToGoal();
+    return { initial, near };
+  });
+  expect(radii.initial / radii.near).toBeCloseTo(155 / 105, 2);
+  await expect(frame).toHaveCSS("background-image", /linear-gradient/);
+  await expect(viewer).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  // Read composited screenshot pixels: host CSS alone cannot prove WebGL transparency.
+  const pixels = await page.evaluate(async bytes => {
+    const bitmap = await createImageBitmap(new Blob([new Uint8Array(bytes)], { type: "image/png" }));
+    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+    const ctx = canvas.getContext("2d")!;
+    ctx.drawImage(bitmap, 0, 0);
+    const wall = [...ctx.getImageData(12, Math.round(bitmap.height * 0.3), 1, 1).data];
+    const table = [...ctx.getImageData(12, Math.round(bitmap.height * 0.8), 1, 1).data];
+    bitmap.close();
+    return { wall, table };
+  }, [...await frame.screenshot()]);
+  expect(pixels.wall).toEqual([238, 238, 236, 255]);
+  expect(pixels.table).toEqual([228, 228, 232, 255]);
+  const source = await viewer.getAttribute("src");
+  const download = await page.getByRole("link", { name: "下载 GLB", exact: true }).getAttribute("href");
+  await page.locator(".mockup-backdrop-switch").getByText("银底", { exact: true }).click();
+  await expect(frame).toHaveCSS("background-image", "none");
+  await expect(frame).toHaveCSS("background-color", "rgb(196, 201, 208)");
+  await page.locator(".mockup-backdrop-switch").getByText("白桌白墙", { exact: true }).click();
+  await frame.getByRole("button", { name: "全屏截图", exact: true }).click();
+  await expect.poll(() => frame.evaluate(el => document.fullscreenElement === el)).toBe(true);
+  await expect(frame).toHaveCSS("background-image", /linear-gradient/);
+  await expect(viewer).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  await page.evaluate(() => document.exitFullscreen());
+  await expect(viewer).toHaveAttribute("src", source!);
+  await expect(page.getByRole("link", { name: "下载 GLB", exact: true })).toHaveAttribute("href", download!);
+  expect(state.calls.filter(call => call.method !== "GET")).toEqual([]);
+  expect(state.unknown).toEqual([]);
+});
