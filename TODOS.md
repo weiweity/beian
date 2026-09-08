@@ -36,7 +36,7 @@
 
 - [ ] **质量门与回归矩阵**
   L0 验证合同、像素预算、缓存、旧单兼容和浏览器升级；有 Blender 的显式质量命令验证合成样片；质量门杭州实跑须记录 Blender 版本/合同 hash；L2/UAT 用白盒、深色盒、细长盒、矮宽盒、膜袋正负样本做人工 A/B。任何机器分数都不能替代人核“真实感”。
-  `0.21.45.0`（`bf1a7d1`）杭州发版已真跑 Blender 5.2 合同冒烟（约 63s）。本切片把发版 `TimeoutMs` 冻结为 90000，并把冒烟进程树改为 Job Object（`KILL_ON_JOB_CLOSE`，无 taskkill）。仍缺：下次可信 main 发版证明 Job Object 真跑、正式 baseline、生产 registry、L2/UAT。不把发版 L1 或跳过冒烟写成质量门完成。
+  `0.21.45.0`（`bf1a7d1`）杭州发版已真跑 Blender 5.2 合同冒烟（约 63s）。本切片把发版 `TimeoutMs` 冻结为 90000，并把冒烟进程树改为 Job Object（`PROC_THREAD_ATTRIBUTE_JOB_LIST` + `CREATE_SUSPENDED`，`KILL_ON_JOB_CLOSE`）。仍缺：下次可信 main 发版证明 Job Object 真跑、正式 baseline、生产 registry、L2/UAT。不把发版 L1 或跳过冒烟写成质量门完成。
 
 ## P1 — 已有代码仍欠生产/业务验收
 

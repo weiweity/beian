@@ -9,7 +9,7 @@
 
 ## 1. 结论先行
 
-> 2026-09-08 RF-11 冻结：`0.21.45.0` hangzhou-release `34186013159` 真跑 Blender 5.2 合同冒烟约 63s。发版 `TimeoutMs` 冻结为 90000；wrapper 用 Job Object（`KILL_ON_JOB_CLOSE`），不用 `taskkill`。质量门杭州实跑仍须下次可信 main 发版证明 Job Object 真跑。未改生产 registry、Standard 或正式 baseline。其余未完成项见 [TODOS.md](../TODOS.md)。
+> 2026-09-08 RF-11 冻结：`0.21.45.0` hangzhou-release `34186013159` 真跑 Blender 5.2 合同冒烟约 63s。发版 `TimeoutMs` 冻结为 90000；wrapper 用 Job Object（`PROC_THREAD_ATTRIBUTE_JOB_LIST` + `CREATE_SUSPENDED`，`KILL_ON_JOB_CLOSE`）。质量门杭州实跑仍须下次可信 main 发版证明 Job Object 真跑。未改生产 registry、Standard 或正式 baseline。其余未完成项见 [TODOS.md](../TODOS.md)。
 
 > 2026-09-08 RF-10 / RF-11：已合 `0490e46` / `0.21.44.0`。质量报告分三层记录（runtime hard / fixture regression hard / warning-human）。`quality_layers.py` 是纯函数；evaluator CLI 与 generation worker 写入同一分层，缺 Blender 或缺正式 baseline 不是绿灯。真实任务不跑夹具回归。`human_acceptance` 保持独立 pending，`production_ready` 保持 false。RF-11 用 `scripts/windows/blender-contract-smoke.ps1` 调用 `workers/packaging/tools/blender_contract_smoke.py`：只写 `RUNNER_TEMP`，复用 quality eval 与 generation GLB/hash 门，PowerShell 不复制校验。该 VERSION 发版 L1 已过；当次杭州因未解析到 Blender 跳过冒烟。wrapper 当时默认 90 秒为候选；`release.ps1` 当时传入 `TimeoutMs 720000`。未改生产 registry、Standard 或正式 baseline。
 
@@ -733,7 +733,7 @@ apps/web/backend/.venv/bin/python workers/packaging/tools/render_quality_eval.py
 
 冒烟使用仓库内脱敏 fixture 与专用低分辨率 smoke profile，输出只写 `RUNNER_TEMP`，不得调用产品上传/队列、不得读取 `WB_DATA_DIR` 的客户任务。它仍要经过 render spec、`rectangular_carton_v1` dispatcher、六面绑定、产品/ground/set、GLB verifier 与 generation staging/ready；`finally` 清理临时目录。
 
-初始硬超时设为 90 秒候选值，必须在 P0/P4 用杭州同机实测后冻结。超时、Blender 缺失、版本不符、contract/hash/GLB/generation 任一 hard gate 失败，都保持 drain 并走现有 release recovery。该 smoke 只证明 Windows 运行链可用，不证明真实感、字体清晰度或真实稿 L2/UAT。
+硬超时已按杭州同机实测冻结：run 34186013159 墙钟约 63s，`release.ps1` 传入 `-TimeoutMs 90000`，JSON `timeout_budget_status=hangzhou_frozen_90s`。超时、Blender 缺失、版本不符、contract/hash/GLB/generation 任一 hard gate 失败，都保持 drain 并走现有 release recovery。该 smoke 只证明 Windows 运行链可用，不证明真实感、字体清晰度或真实稿 L2/UAT。质量门杭州实跑（Job Object 杀树在杭州再证）仍未勾。
 
 ### 14.4 L2 / UAT
 
@@ -848,7 +848,7 @@ quality/release
 | Server HTTP | 扩 `mockup-http.test.ts` / `mockup-files.test.ts` | 权限隔离、旧详情兼容、history/activate/relight/upgrade、stale 409、invalid 422、当前 full 下载、不暴露磁盘路径 |
 | UI 纯函数 | 扩 `mockupStudio.test.ts`，必要时新增 `mockupPreviewSource.test.ts` | card/full 状态转移、generation token、resize 竞态、失败降级、资源释放、full 下载和同参数合成 |
 | Browser E2E | 新增 `apps/web/ui/e2e/mockup-generations.spec.ts` | 用户从旧代升级、生成期间仍看旧代、完成后切换、历史切回、两 tab stale、刷新保持、card→full、背景/调灯不新建作业 |
-| Windows 合同 | 扩 `windows-release-script.test.ts` + `test_packaging_blender_contract_smoke.py` + `blender-contract-smoke.ps1` | smoke 在 drain 内、只写 `RUNNER_TEMP`、90 秒候选超时（发版当前传入 720000 ms）、失败不打开 drain、调用既有 recovery、缺 Blender 跳过不回滚 |
+| Windows 合同 | 扩 `windows-release-script.test.ts` + `test_packaging_blender_contract_smoke.py` + `blender-contract-smoke.ps1` | smoke 在 drain 内、只写 `RUNNER_TEMP`、杭州冻结超时 `-TimeoutMs 90000`、失败不打开 drain、调用既有 recovery、缺 Blender 跳过不回滚 |
 | 私有 L2/UAT | Git 外证据表 | 白/深/细长/矮宽 carton；膜袋正负能力标签；旧/新盲评、合同 hash、参数、评审人、结论、拒绝理由 |
 
 ## 15. 兼容、输出代际与回滚

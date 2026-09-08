@@ -65,7 +65,7 @@ CLI 没有 `--fixtures` / `--manifest`：夹具固定为仓库内 `workers/packa
     apps/web/backend/.venv/bin/python workers/packaging/tools/blender_contract_smoke.py \
       --blender /absolute/path/to/blender
 
-Windows 入口是 `scripts/windows/blender-contract-smoke.ps1`。发版 `TimeoutMs` 冻结为 90000（`0.21.45.0` 杭州真跑约 63s）。wrapper 用 Job Object 杀树。缺 `RUNNER_TEMP` / 已解析 Blender 时：独立脚本失败关闭，发版路径跳过且不回滚。stdout JSON 含 `quality_layers` 与 `timeout_budget_status=hangzhou_frozen_90s`，`human_acceptance` 保持 pending，`production_ready` 保持 false。
+Windows 入口是 `scripts/windows/blender-contract-smoke.ps1`。发版 `TimeoutMs` 冻结为 90000（`0.21.45.0` 杭州真跑约 63s）。wrapper 用 Job Object 杀树（`PROC_THREAD_ATTRIBUTE_JOB_LIST` + `CREATE_SUSPENDED`）。缺 `RUNNER_TEMP` / 已解析 Blender 时：独立脚本失败关闭，发版路径跳过且不回滚。stdout JSON 含 `quality_layers` 与 `timeout_budget_status=hangzhou_frozen_90s`，`human_acceptance` 保持 pending，`production_ready` 保持 false。
 
 ## RF-07 诊断棚光与色彩对照
 
