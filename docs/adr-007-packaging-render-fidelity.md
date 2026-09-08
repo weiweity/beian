@@ -1,10 +1,10 @@
 # ADR-007：包装 3D 渲染真实感、清晰度与能力合同
 
 - 日期：2026-09-04
-- 状态：PARTIAL IMPLEMENTATION — `/plan-eng-review` 已完成，D1–D8 已锁定；RF-00～RF-08 见既有切片（诊断 registry 未进生产默认）；RF-09 浏览器分层升级已完成本地实现与合成验证；RF-10/RF-11 已合 `main` `0490e46` / `0.21.44.0`（Code/普通 L0）。`0.21.46.0`（`3fcfea75`）发版 L1 已过，杭州真跑冒烟约 62s，质量门杭州实跑（冒烟真跑、90s 冻结、Job Object 成功路径）已满足。正式 approved baseline、生产注册、L2/UAT 见 [TODOS.md](../TODOS.md)，不要用发版 L1 勾它们
+- 状态：PARTIAL IMPLEMENTATION — `/plan-eng-review` 已完成，D1–D8 已锁定；RF-00～RF-08 见既有切片（诊断 registry 未进生产默认）；RF-09 浏览器分层升级已随 `d5763aca` / `0.21.43.0` 合入主线，证据见 [RF-09 记录](designs/packaging-quality-rf09-closeout.md)；RF-10/RF-11 已合 `main` `0490e46` / `0.21.44.0`（Code/普通 L0）。`0.21.46.0`（`3fcfea75`）发版 L1 已过，杭州真跑冒烟约 62s，质量门杭州实跑（冒烟真跑、90s 冻结、Job Object 成功路径）已满足。正式 approved baseline、生产注册、L2/UAT 见 [TODOS.md](../TODOS.md)，不要用发版 L1 勾它们
 - 目标执行者：Grok / Codex 等编码代理，人工负责人负责选择、金标与发布闸门
 - 关联：`docs/adr-005-packaging-structure-v2.md`、`DESIGN.md`、`workers/packaging/README.md`、`docs/pouch-v1-acceptance.md`
-- 基线：`origin/main` `b39f147`，版本 `0.21.25.0`
+- 原始设计基线（历史）：`b39f147`，版本 `0.21.25.0`；不是当前主线 HEAD
 - 实现快照：RF-00 / RF-01 / RF-02 已交 Code/L0（RF-02.3 收口磁盘执行边界与私有执行快照/nonce）。新任务消费 persistable render plan 并写入四项顶层 identity / fingerprint token / resolved job / result；Blender 启动前校验磁盘 payload 与派生 flat render。所有非 cache Blender 任务从当前内存 job 生成私有执行快照并注入本轮 nonce；非 V2 只是命令行诊断路径，不是网页产品通道。只有已知 pre-RF02 V2 作业可合成 `compat-legacy-v0`，且历史最小 render 键必须完整匹配。同步异常全量回滚（含删除本轮新建 optional 输出）；进程崩溃/断电级原子 current 仍是 RF-03。正式 approved baseline 未创建。RF-06 材质、RF-07 显式棚光/三变换对照与 RF-08 投影采样只在诊断 registry/候选 profile 中生效，未批准前保持 Standard 与 `minimum-floor-v1` 默认，不得称生产画质已改善。RF-10 把 runtime / fixture regression / `human_acceptance` 分成独立字段；真实任务上 fixture 为 `not-run`，机器通过不会写成人工通过或 `production_ready`。RF-11 smoke 只写 `RUNNER_TEMP`，未解析到 Blender 时跳过不回滚。`0.21.46.0` 发版 L1 已过且杭州真跑冒烟约 62s，质量门杭州实跑已满足；不等于正式 baseline、L2 或 UAT 已完成。
 
 ## 1. 结论先行
@@ -661,7 +661,7 @@ Git 内夹具不得使用真实品牌稿，至少包含：
 - 固定白盒在白/银/白桌白墙夹具上的最小轮廓分离达到 Phase 0 冻结阈值。
 - fixture、registry、profile、contract、Blender 与 baseline 身份一致，否则结果是 `baseline_mismatch`，不能假 pass。
 
-这层运行在显式 Blender 质量套件；杭州 L1 使用其小型 smoke 子集。它可以阻止相应代码/发布门，但不能把某个真实客户任务判成业务不合格。
+这层运行在显式 Blender 质量套件；RF-11 使用其小型 smoke 子集。它可以阻止相应代码/发布门，但不能把某个真实客户任务判成业务不合格。
 
 #### C. warning / human only
 
@@ -723,9 +723,9 @@ apps/web/backend/.venv/bin/python workers/packaging/tools/render_quality_eval.py
 - 基线缩小/阈值放宽需要评审；不能因为新实现失败就自动接受新图。
 - 输出目录默认 Git 外；Git 只放脱敏输入和经评审的小型基线/阈值。
 
-### 14.3 L1：杭州发版环境
+### 14.3 RF-11 Blender 合同冒烟（已交付，验收范围如下）
 
-第一版不把整套像素回归塞进每次 `release.ps1`，但每次可信 `main` 发布都必须在 transaction fence 内阻塞执行小型 Blender 合同冒烟。L1 至少：
+现有发布身份冒烟以 [TESTING.md](../TESTING.md) 和 [发布合同](contracts/release.md) 为准，验证版本、进程与 Illustrator Session 1 身份链。RF-11 wrapper 与发布接线已落地；`0.21.46.0` 的杭州真跑证据见本节下方。当前实现不把整套像素回归塞进每次 `release.ps1`：已解析到 Blender 时，在可信 `main` 的 transaction fence 内阻塞执行小型合同冒烟；未解析到时跳过且不计质量门通过。验证内容包括：
 
 - 确认 Blender 可执行文件、版本和 EEVEE Next 能力；
 - 跑一个很小的脱敏 render-contract smoke，验证 spec→Blender→PNG/GLB→quality report；
@@ -735,7 +735,7 @@ apps/web/backend/.venv/bin/python workers/packaging/tools/render_quality_eval.py
 
 冒烟使用仓库内脱敏 fixture 与专用低分辨率 smoke profile，输出只写 `RUNNER_TEMP`，不得调用产品上传/队列、不得读取 `WB_DATA_DIR` 的客户任务。它仍要经过 render spec、`rectangular_carton_v1` dispatcher、六面绑定、产品/ground/set、GLB verifier 与 generation staging/ready；`finally` 清理临时目录。
 
-硬超时已按杭州同机实测冻结：`0.21.45.0` run 34186013159 墙钟约 63s；`0.21.46.0` run 34191398011 墙钟约 62s 且 `WINDOWS_BLENDER_CONTRACT_SMOKE ok`。`release.ps1` 传入 `-TimeoutMs 90000`，JSON `timeout_budget_status=hangzhou_frozen_90s`。超时、Blender 缺失、版本不符、contract/hash/GLB/generation 任一 hard gate 失败，都保持 drain 并走现有 release recovery。该 smoke 只证明 Windows 运行链可用，不证明真实感、字体清晰度或真实稿 L2/UAT。
+硬超时已按杭州同机实测冻结：`0.21.45.0` run 34186013159 墙钟约 63s；`0.21.46.0` run 34191398011 墙钟约 62s 且 `WINDOWS_BLENDER_CONTRACT_SMOKE ok`。`release.ps1` 传入 `-TimeoutMs 90000`，JSON `timeout_budget_status=hangzhou_frozen_90s`。已启动的 smoke 超时、版本不符、contract/hash/GLB/generation 任一 hard gate 失败，都保持 drain 并走现有 release recovery。该 smoke 只证明 Windows 运行链可用，不证明真实感、字体清晰度或真实稿 L2/UAT。
 
 ### 14.4 L2 / UAT
 
@@ -849,7 +849,7 @@ quality/release
 | Server L0 | 扩 `jobs.test.ts` | generation mutation 与全局 Blender 槽互斥；失败 current 不变；双击不重复建代；release drain 能看见在途 Blender |
 | Server HTTP | 扩 `mockup-http.test.ts` / `mockup-files.test.ts` | 权限隔离、旧详情兼容、history/activate/relight/upgrade、stale 409、invalid 422、当前 full 下载、不暴露磁盘路径 |
 | UI 纯函数 | 扩 `mockupStudio.test.ts`，必要时新增 `mockupPreviewSource.test.ts` | card/full 状态转移、generation token、resize 竞态、失败降级、资源释放、full 下载和同参数合成 |
-| Browser E2E | 新增 `apps/web/ui/e2e/mockup-generations.spec.ts` | 用户从旧代升级、生成期间仍看旧代、完成后切换、历史切回、两 tab stale、刷新保持、card→full、背景/调灯不新建作业 |
+| Browser E2E | 原规划名 `mockup-generations.spec.ts`；实际落点为 `apps/web/ui/e2e/mockup-render-versions.spec.ts` 与 `apps/web/ui/e2e/mockup-preview-upgrade.spec.ts` | 用户从旧代升级、生成期间仍看旧代、完成后切换、历史切回、两 tab stale、刷新保持、card→full、背景/调灯不新建作业 |
 | Windows 合同 | 扩 `windows-release-script.test.ts` + `test_packaging_blender_contract_smoke.py` + `blender-contract-smoke.ps1` | smoke 在 drain 内、只写 `RUNNER_TEMP`、杭州冻结超时 `-TimeoutMs 90000`、失败不打开 drain、调用既有 recovery、缺 Blender 跳过不回滚 |
 | 私有 L2/UAT | Git 外证据表 | 白/深/细长/矮宽 carton；膜袋正负能力标签；旧/新盲评、合同 hash、参数、评审人、结论、拒绝理由 |
 
@@ -1065,9 +1065,9 @@ P0 先测现状，后续每片在相同 fixture、Blender 版本、线程和机�
 | 单 generation 总字节 | 待测 | 写 manifest；生成前按峰值乘安全系数做磁盘准入 | `generation.json` |
 | history API p95 | 不存在 | 页大小固定，耗时与当前页线性，不随 ready 目录全盘扫描 | Server test/日志 |
 | card 可见时间 | 待测 | 不因 full 自动升级退化现有首屏；可选 set pending 不得挡住 product/ground | E2E / 本地代表尺寸记录 |
-| full 替换时间 | 当前未替换 | **细化：** 网络完成后仍需 decode，单列记录；解码就绪后下一可用绘制机会安排替换，不额外拖延、不闪白。不能把 DOM/rAF 时间戳说成屏幕合成的精确时刻 | E2E / 本地代表尺寸记录 |
+| full 替换时间 | RF-09 前历史基线：未替换；当前已实现 | **细化：** 网络完成后仍需 decode，单列记录；解码就绪后下一可用绘制机会安排替换，不额外拖延、不闪白。不能把 DOM/rAF 时间戳说成屏幕合成的精确时刻 | E2E / 本地代表尺寸记录 |
 | 连续切代/resize JS heap | 待测 | 稳态回落；不得按操作次数单调增长 | Browser 手工/trace |
-| Windows L1 smoke | 不存在 | 初始 90 秒硬上限仅为候选，P0/P4 同机冻结 | release log |
+| RF-11 Blender 合同冒烟 | `0.21.46.0` 杭州真跑约 62s，Job Object 成功路径通过 | 同机已冻结 90 秒；超时杀树分支另取原生证据 | run 34191398011；TESTING |
 
 如果视觉改进必须靠显著增加 samples 才过，先检查倒角、法线、灯面积、色彩变换和重复缩放；不能把计算量当真实感的替代品。永久保留所有 ready 代是已批准的产品选择，它把容量风险显式转成“生成前准入 + 人工整单删除”，所以磁盘水位、预计新代字节与拒绝原因必须可观测。
 
@@ -1411,7 +1411,7 @@ merge、ship 或 deploy，除非用户在当次任务明确授权。不要 git a
 
 ## Implementation Tasks
 
-以下任务由本次工程评审问题直接合成；编号与 JSONL 评审产物一致。复选框只能在对应 Verify 实际执行并保留证据后勾选。
+以下为原工程评审任务及阶段证据，编号与 JSONL 评审产物一致，保留历史切片，不作为第二份当前待办。当前未完成项只看 [TODOS.md](../TODOS.md)，后续交付看各 closeout；不因版本发布自动勾选涉及真实验收的 Verify。
 
 - [x] **T1（P1，human: ~6h / Grok: ~45min）— baseline — 建立可复现的现状渲染基线**
   - Surfaced by: Test Review — 视觉改变缺少固定脱敏基线和完整身份链。
@@ -1422,7 +1422,7 @@ merge、ship 或 deploy，除非用户在当次任务明确授权。不要 git a
   - Surfaced by: Architecture D6 — 散落默认值无法复现、校验或安全失效缓存。
   - Files: `workers/packaging/render_contract.py`、`workers/packaging/profiles/render-profiles.v1.json`、`apps/web/backend/tests/test_packaging_render_contract.py`
   - Verify: registry/schema/能力矩阵/数值/canonical hash 的成功与失败测试全绿，compat profile 与现状零视觉差异。
-  - Evidence: 31 项聚焦合同测试全绿；registry 重排/前插均拒绝，compat bridge 与当前模板参数逐项相等；模块尚未接入产品流水线。
+  - Evidence: 31 项聚焦合同测试全绿；registry 重排/前插均拒绝，compat bridge 与当前模板参数逐项相等；该 RF-01 阶段尚未接入产品流水线；后续接线已由下方 RF-02/T3 完成。
 - [x] **T3（P1，human: ~1d / Grok: ~2h）— pipeline — 接入 resolved job、fingerprint 与结果**
   - Surfaced by: Architecture — Blender 必须只消费 resolved spec，不能继续从模板和常量猜。
   - Files: `workers/packaging/pipeline.py`、`workers/packaging/render_contract.py`、`apps/web/backend/tests/test_packaging_pipeline_v2.py`

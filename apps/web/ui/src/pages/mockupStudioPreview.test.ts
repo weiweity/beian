@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  blobFromLitStill, blobFromStudioStill,
   loadStudioPreview, loadStillImage, observeStudioFrame, peekSettled, planStudioExport,
-  releaseStudioGeneration, studioAssetHref,
-  studioDrawnUpgradeFailed, studioPreviewSummary, studioStillCacheHas,
+  prepareStudioCanvas, releaseCanvasBacking, releaseStudioGeneration, setCanvasBacking, studioAssetHref,
+  studioDrawnUpgradeFailed, studioPreviewSummary, studioStillCacheHas, studioStillCacheSize,
   type StudioPreviewSources,
 } from "./mockupStudio.js";
 
@@ -393,6 +394,188 @@ test("peekSettled attaches a handler before a later rejection so it is not unhan
     assert.equal(stray.length, 0);
   } finally {
     process.off("unhandledRejection", onUnhandled);
+  }
+});
+
+test("setCanvasBacking skips identical sizes; releaseCanvasBacking zeros the backing store", () => {
+  const writes: string[] = [];
+  const box = { w: 10, h: 20 };
+  const canvas = {} as HTMLCanvasElement;
+  Object.defineProperty(canvas, "width", {
+    get: () => box.w,
+    set: (value: number) => { writes.push(`w:${value}`); box.w = value; },
+  });
+  Object.defineProperty(canvas, "height", {
+    get: () => box.h,
+    set: (value: number) => { writes.push(`h:${value}`); box.h = value; },
+  });
+  assert.equal(setCanvasBacking(canvas, 10, 20), false);
+  assert.deepEqual(writes, []);
+  assert.equal(setCanvasBacking(canvas, 10.4, 19.6), false);
+  assert.deepEqual(writes, []);
+  assert.equal(setCanvasBacking(canvas, 30, 20), true);
+  assert.deepEqual(writes, ["w:30", "h:20"]);
+  assert.equal(setCanvasBacking(canvas, 30, 40), true);
+  assert.deepEqual(writes, ["w:30", "h:20", "w:30", "h:40"]);
+  releaseCanvasBacking(canvas);
+  assert.equal(canvas.width, 0);
+  assert.equal(canvas.height, 0);
+});
+
+test("prepareStudioCanvas clears same-size redraws and releases when context is missing", () => {
+  const writes: string[] = [];
+  const box = { w: 10, h: 20 };
+  const ops: string[] = [];
+  const canvas = {
+    getContext(kind: string) {
+      assert.equal(kind, "2d");
+      return {
+        setTransform(...args: number[]) { ops.push(`setTransform:${args.join(",")}`); },
+        clearRect(...args: number[]) { ops.push(`clearRect:${args.join(",")}`); },
+        get globalAlpha() { return 0.5; },
+        set globalAlpha(value: number) { ops.push(`alpha:${value}`); },
+        get globalCompositeOperation() { return "multiply"; },
+        set globalCompositeOperation(value: string) { ops.push(`op:${value}`); },
+        get filter() { return "brightness(1.2)"; },
+        set filter(value: string) { ops.push(`filter:${value}`); },
+      };
+    },
+  } as unknown as HTMLCanvasElement;
+  Object.defineProperty(canvas, "width", {
+    get: () => box.w,
+    set: (value: number) => { writes.push(`w:${value}`); box.w = value; },
+  });
+  Object.defineProperty(canvas, "height", {
+    get: () => box.h,
+    set: (value: number) => { writes.push(`h:${value}`); box.h = value; },
+  });
+  assert.ok(prepareStudioCanvas(canvas, 10, 20));
+  assert.deepEqual(writes, []);
+  assert.ok(ops.some((op) => op.startsWith("clearRect:0,0,10,20")));
+  assert.ok(ops.includes("filter:none"));
+  const empty = { width: 8, height: 8, getContext() { return null; } } as unknown as HTMLCanvasElement;
+  assert.equal(prepareStudioCanvas(empty, 8, 8), null);
+  assert.equal(empty.width, 0);
+  assert.equal(empty.height, 0);
+});
+
+test("blobFromStudioStill and blobFromLitStill zero the export canvas after toBlob", async () => {
+  const atEncode: Array<{ width: number; height: number }> = [];
+  const created: Array<{ width: number; height: number }> = [];
+  const originalDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
+  const fake = {
+    createElement(tag: string) {
+      assert.equal(tag, "canvas");
+      const canvas = {
+        width: 0,
+        height: 0,
+        dataset: {} as Record<string, string>,
+        getContext() {
+          return {
+            canvas,
+            filter: undefined,
+            save() {},
+            restore() {},
+            fillRect() {},
+            drawImage() {},
+            getImageData() { return { data: new Uint8ClampedArray(4) }; },
+          };
+        },
+        toBlob(cb: (blob: Blob | null) => void) {
+          atEncode.push({ width: canvas.width, height: canvas.height });
+          queueMicrotask(() => cb(new Blob(["png"])));
+        },
+      };
+      created.push(canvas);
+      return canvas;
+    },
+  };
+  Object.defineProperty(globalThis, "document", { configurable: true, value: fake });
+  try {
+    const product = { naturalWidth: 32, naturalHeight: 24 };
+    await blobFromStudioStill(product, null, { productLight: 1, backgroundLight: 1, backdrop: "white" });
+    await blobFromLitStill(product, { productLight: 1, backgroundLight: 1, backdrop: "white" });
+    assert.deepEqual(atEncode, [{ width: 32, height: 24 }, { width: 32, height: 24 }]);
+    assert.equal(created.length, 2);
+    assert.ok(created.every((canvas) => canvas.width === 0 && canvas.height === 0));
+  } finally {
+    if (originalDocument) Object.defineProperty(globalThis, "document", originalDocument);
+    else Reflect.deleteProperty(globalThis, "document");
+  }
+});
+
+test("blobFromStudioStill releases backing when toBlob throws synchronously", async () => {
+  const created: Array<{ width: number; height: number }> = [];
+  const originalDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
+  Object.defineProperty(globalThis, "document", {
+    configurable: true,
+    value: {
+      createElement(tag: string) {
+        assert.equal(tag, "canvas");
+        const canvas = {
+          width: 0,
+          height: 0,
+          dataset: {} as Record<string, string>,
+          getContext() {
+            return {
+              canvas,
+              filter: undefined,
+              save() {},
+              restore() {},
+              fillRect() {},
+              drawImage() {},
+            };
+          },
+          toBlob() { throw new Error("SecurityError"); },
+        };
+        created.push(canvas);
+        return canvas;
+      },
+    },
+  });
+  try {
+    await assert.rejects(
+      blobFromStudioStill({ naturalWidth: 16, naturalHeight: 12 }, null, { productLight: 1, backgroundLight: 1, backdrop: "white" }),
+      /SecurityError/,
+    );
+    assert.equal(created.length, 1);
+    assert.equal(created[0].width, 0);
+    assert.equal(created[0].height, 0);
+  } finally {
+    if (originalDocument) Object.defineProperty(globalThis, "document", originalDocument);
+    else Reflect.deleteProperty(globalThis, "document");
+  }
+});
+
+test("same-asset generation load evicts the previous stillLoads entry; release drops the rest", async () => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, "Image");
+  class FakeImage {
+    src = "";
+    crossOrigin = "";
+    async decode() {}
+  }
+  Object.defineProperty(globalThis, "Image", { configurable: true, value: FakeImage });
+  try {
+    const g1 = "g1-q05-cache-" + "a".repeat(8);
+    const g2 = "g2-q05-cache-" + "b".repeat(8);
+    const job = "q05-cache-job";
+    const before = studioStillCacheSize();
+    await loadStillImage(studioAssetHref(job, "white_a", g1));
+    await loadStillImage(studioAssetHref(job, "white_a_ground", g1));
+    assert.equal(studioStillCacheSize(), before + 2);
+    await loadStillImage(studioAssetHref(job, "white_a", g2));
+    assert.equal(studioStillCacheHas(studioAssetHref(job, "white_a", g1)), false, "same path must not retain every generation");
+    assert.equal(studioStillCacheHas(studioAssetHref(job, "white_a_ground", g1)), true);
+    assert.equal(studioStillCacheHas(studioAssetHref(job, "white_a", g2)), true);
+    await loadStillImage(studioAssetHref(job, "white_a_ground", g2));
+    assert.equal(studioStillCacheHas(studioAssetHref(job, "white_a_ground", g1)), false);
+    releaseStudioGeneration(job, g2);
+    assert.equal(studioStillCacheHas(studioAssetHref(job, "white_a", g2)), false);
+    assert.equal(studioStillCacheHas(studioAssetHref(job, "white_a_ground", g2)), false);
+    assert.equal(studioStillCacheSize(), before);
+  } finally {
+    if (original) Object.defineProperty(globalThis, "Image", original);
+    else Reflect.deleteProperty(globalThis, "Image");
   }
 });
 

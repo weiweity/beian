@@ -11,19 +11,19 @@
 - 没有批准的 P0 阈值与私有真实稿盲评：`awaiting_human_approval`、`winner=null`，保持 Standard。色差、暗阶和斜面细线缺少校准 ROI，报告 unavailable，不用整图均值冒充测量。
 - 已发布 RF-06 的 GLB 法线 UV accessor 存在性 / VEC2 / 数量 / 有限值校验、required extension 门和 13 项 ship 覆盖测试保持。RF-07 显式棚光计划仍走该产物门，无效 UV 不得放行。
 
-## 迁入范围
+## 实现阶段的迁入范围（发布前历史）
 
-相对旧 RF-06 已验证基线的 11 项增量迁入当前 `main`：
+实现阶段基于当时已发布的 RF-06 主线迁入 11 项增量：
 
 - 新文件：诊断 registry、实验声明、对照驱动/Blender 包装、RF-07 测试与本记录。
-- 共享文件语义合并：`render_contract.py`、`render_job.py`、TODOS、ADR-007、文档索引与 packaging README。当前 main 上两份共享产品源码与旧 RF-06 基线字节相同，因此采用已验证 RF-07 增量，而不是用旧 RF-07 工作区覆盖 RF-06 发布修复。
-- 迁入时保留不覆盖：已发布 `glb_verify.py`、`test_rf06_ship_coverage.py`、RF-06 收口文档、生产 registry。随后 `/ship` 写入 VERSION `0.21.41.0`、CHANGELOG 与 package 锁文件，仍未合入 `origin/main`。
+- 共享文件语义合并：`render_contract.py`、`render_job.py`、TODOS、ADR-007、文档索引与 packaging README。迁入时 main 上两份共享产品源码与旧 RF-06 基线字节相同，因此采用已验证 RF-07 增量，而不是用旧 RF-07 工作区覆盖 RF-06 发布修复。
+- 迁入时保留不覆盖：已发布 `glb_verify.py`、`test_rf06_ship_coverage.py`、RF-06 收口文档、生产 registry。后续 `/ship` 写入 VERSION `0.21.41.0`、CHANGELOG 与 package 锁文件；当时的未合并阶段随后由 PR #93 完成，不能作为当前状态。
 
 本轮另增 `apps/web/backend/tests/test_rf07_rf06_compat.py`，覆盖 RF-07 studio 计划与已落地 UV/required-extension 门的组合。矩阵报告中的 `glb_verify_sha256` 为落地值 `564e51b401b35f962f4919a9c2ce908d6be414395fb9233f4e0b51725cf254c2`，不是旧 RF-06 快照。
 
-## 验证
+## 实现阶段验证（不含后续 ship）
 
-证据相对 `/Users/hutou/Documents/Codex/audits/beian-rf07-integration-20260907/`。下列为本工作区本轮实测，不用旧 RF-07 快照冒充。
+证据相对 `/Users/hutou/Documents/Codex/audits/beian-rf07-integration-20260907/`。下列为迁入工作区在实现阶段的实测，不用旧 RF-07 快照冒充。工作树清理不改变已归档的历史证据。
 
 | 验证 | 实际结果 | 证据 |
 |---|---|---|
@@ -34,8 +34,12 @@
 
 矩阵 complete 表示受控对照成立，不代表候选获胜或纸感、色彩达标。决策为 `awaiting_human_approval`。未写 RF-00 正式 baseline，未改生产行为。
 
-本轮无 UI 行为改动，对照 CLI 不经网页；未跑完整 L0 `npm test`、typecheck 或 E2E。验证之后只更新本文证据表，未再改产品/测试源码，故不重跑渲染。
+该实现阶段无 UI 行为改动，对照 CLI 不经网页；当时未跑完整 L0 `npm test`、typecheck 或 E2E。这句话不描述后续 ship 门禁。验证之后只更新本文证据表，未再改产品/测试源码，故不重跑渲染。
+
+## 后续 ship 与合并
+
+[PR #93](https://github.com/weiweity/beian/pull/93) 于 2026-09-07T05:41:52Z squash 合并，merge SHA 为 `88321a90a8ab61803c66b28e04b25f46e64cb29d`。最终候选的 [quality 工作流](https://github.com/weiweity/beian/actions/runs/34086634287) 中 `quality` 与 `windows-powershell-contract` 均成功；这是后续门禁证据，不回写上表的实现阶段测试计数。
 
 ## Git 与剩余门槛
 
-RF-06 已发布：`d2657f0` / `0.21.40.0`。RF-07 已发布：`88321a90` / `0.21.41.0`。旧 RF-07 验证快照仅作增量来源：`/Users/hutou/Documents/Codex/audits/beian-rf06-rf07-20260907/rf07-verified-snapshot/manifest.json`。杭州 Windows Blender L1、真实稿 L2、UAT、生产注册、正式 baseline 与色彩赢家仍未批准。
+RF-06 已发布：`d2657f0` / `0.21.40.0`。RF-07 已发布：`88321a90` / `0.21.41.0`。旧 RF-07 验证快照仅作增量来源：`/Users/hutou/Documents/Codex/audits/beian-rf06-rf07-20260907/rf07-verified-snapshot/manifest.json`。RF-11 Blender 合同冒烟（计划）、真实稿 L2、UAT、生产注册、正式 baseline 与色彩赢家仍未批准。

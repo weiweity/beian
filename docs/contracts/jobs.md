@@ -24,3 +24,13 @@ cd apps/web/backend && PYTHONPATH=. .venv/bin/python -m app.cli --help
 ## 作业入口与等待
 
 UI 等待：`shouldShowWaitCard`（`queued` | `running` | `comparing`；`done`/`failed`/`completed` 不当等待）。离开核对页后，看板 `liveJobLine` 和侧栏 `liveNavPulse` 仍显示阶段。打样台只交稿；点进度/已出图进单独打样单（WaitCard 或成片/三图看形，下面印刷面读字），不要在打样台底下摊开结果。唯一「上刀线」（或单层「刀线」/「刀版」）默认黑盒提交识别，候选里唯一「印刷」可随刀线带上，失败对籽烨结案为打样失败，选层只给 admin；单独「印刷」和工艺板不能当刀线。
+
+## 补印刷面持久队列
+
+`POST /api/mockups/:id/print-faces` 保持既有 create 权限与团队共享范围。首次入队由 jobs 写 `print_faces_request`，立即返回 202；同单在途请求返回既有工作，跨单进入同一打样执行槽串行等待。成片 `status=done`、既有图片和下载保持；公开详情只给 `print_faces_repair.status/error`，不返回 PID、源稿哈希、尝试身份或私有路径。已经完整且成功的请求返回 200，不重复切面。
+
+补面 queued/running 都进入 `queueSnapshot().blender`，发版 drain 在请求响应结束后仍能看见持久工作；损坏记录进入 jobs_unknown。补面与换正面、切代、删除互斥，托管代继续拒绝原位补面。页面轮询该子状态，不把已出图单变成全屏等待。
+
+执行时冻结源文件身份并复制到本次私有目录；Python 只写本次暂存 assets，正常退出并复核源稿/任务身份后才发布 PNG。中断恢复使用新尝试身份，防止旧回调和旧暂存覆盖新工作；只在核实旧 PID 不存在或已确认终止后恢复。PID 归属不明或处在 spawn/持久化间隙时保留 running 与执行围栏，不自动重跑或宣称排干。逐张 PNG 原子替换并非整套文件的断电事务；未确认完成的请求从同一冻结源重做，Windows/断电实证另验。
+
+普通发布异常可能发生在部分 PNG 已替换之后；请求保存为 failed，错误和重试入口不因必需四面已存在而隐藏。重试重新排队切面，排队/执行提示保持到成功；不把部分文件存在当成补面已完成。

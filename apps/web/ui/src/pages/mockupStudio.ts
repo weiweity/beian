@@ -307,14 +307,20 @@ export async function blobFromLitStill(
   canvas.width = width;
   canvas.height = height;
   const ctx = canvas.getContext("2d");
-  if (!ctx) throw new Error("这台浏览器不能导出白底图");
-  composeStudioStill(ctx, width, height, image, null, {
-    ...opts,
-    filterSupported: canvasFilterSupported(ctx),
-  });
-  return await new Promise((resolve, reject) => {
-    canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error("导出失败"))), "image/png");
-  });
+  if (!ctx) {
+    releaseCanvasBacking(canvas);
+    throw new Error("这台浏览器不能导出白底图");
+  }
+  try {
+    composeStudioStill(ctx, width, height, image, null, {
+      ...opts,
+      filterSupported: canvasFilterSupported(ctx),
+    });
+  } catch (error) {
+    releaseCanvasBacking(canvas);
+    throw error;
+  }
+  return blobFromCanvasPng(canvas);
 }
 
 const stillLoads = new Map<string, Promise<HTMLImageElement>>();
@@ -353,6 +359,7 @@ export function loadStillImage(url: string): Promise<HTMLImageElement> {
     throw error;
   });
   stillLoads.set(url, pending);
+  attachPerfProbe();
   return pending;
 }
 
@@ -364,10 +371,99 @@ export function releaseStudioGeneration(jobId:string,generation:string): void {
     const query=new URLSearchParams(url.split("?")[1] || "");
     if ((query.get("generation_id") || query.get("generation") || "") === generation) stillLoads.delete(url);
   }
+  attachPerfProbe();
 }
 
 export function studioStillCacheHas(url: string): boolean {
   return stillLoads.has(url);
+}
+
+export function studioStillCacheSize(): number {
+  return stillLoads.size;
+}
+
+function studioStillCacheUrls(): string[] {
+  return [...stillLoads.keys()];
+}
+
+/** Setting canvas width/height to the current value still resets the backing store. */
+export function canvasBackingSize(width: number, height: number): { width: number; height: number } {
+  return {
+    width: Math.max(0, Math.round(Number(width) || 0)),
+    height: Math.max(0, Math.round(Number(height) || 0)),
+  };
+}
+
+export function setCanvasBacking(canvas: HTMLCanvasElement, width: number, height: number): boolean {
+  const next = canvasBackingSize(width, height);
+  if (canvas.width === next.width && canvas.height === next.height) return false;
+  canvas.width = next.width;
+  canvas.height = next.height;
+  return true;
+}
+
+export function releaseCanvasBacking(canvas: HTMLCanvasElement): void {
+  canvas.width = 0;
+  canvas.height = 0;
+}
+
+function resetCanvas2d(ctx: CanvasRenderingContext2D, width: number, height: number): void {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = "source-over";
+  if (typeof ctx.filter === "string") ctx.filter = "none";
+  ctx.clearRect(0, 0, width, height);
+}
+
+/** Size the backing store; same-size redraws clear context state instead of skipping the paint. */
+export function prepareStudioCanvas(
+  canvas: HTMLCanvasElement,
+  width: number,
+  height: number,
+): CanvasRenderingContext2D | null {
+  const next = canvasBackingSize(width, height);
+  if (!next.width || !next.height) {
+    releaseCanvasBacking(canvas);
+    return null;
+  }
+  const resized = setCanvasBacking(canvas, next.width, next.height);
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    releaseCanvasBacking(canvas);
+    return null;
+  }
+  if (!resized) resetCanvas2d(ctx, next.width, next.height);
+  return ctx;
+}
+
+function blobFromCanvasPng(canvas: HTMLCanvasElement): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (blob: Blob | null, error?: unknown) => {
+      if (settled) return;
+      settled = true;
+      releaseCanvasBacking(canvas);
+      if (error) reject(error instanceof Error ? error : new Error("导出失败"));
+      else if (blob) resolve(blob);
+      else reject(new Error("导出失败"));
+    };
+    try {
+      canvas.toBlob((blob) => finish(blob), "image/png");
+    } catch (error) {
+      finish(null, error);
+    }
+  });
+}
+
+function attachPerfProbe(): void {
+  if (typeof window === "undefined") return;
+  if (!Boolean((window as Window & { __RF09_PERF__?: boolean }).__RF09_PERF__)) return;
+  (window as Window & {
+    __q05Studio?: { cacheSize: () => number; cacheUrls: () => string[] };
+  }).__q05Studio = {
+    cacheSize: studioStillCacheSize,
+    cacheUrls: studioStillCacheUrls,
+  };
 }
 
 type StudioSourceUrls = { full: string; card?: string };
@@ -519,6 +615,7 @@ export function loadStudioPreview(
     return image;
   },
 ): () => void {
+  attachPerfProbe();
   let cancelled = false;
   let closed = false;
   const images: { product?: HTMLImageElement; ground?: HTMLImageElement; set: HTMLImageElement | null } = { set: null };
@@ -666,12 +763,18 @@ export async function blobFromStudioStill(
   canvas.width = width;
   canvas.height = height;
   const ctx = canvas.getContext("2d");
-  if (!ctx) throw new Error("这台浏览器不能导出成片");
-  composeStudioStill(ctx, width, height, product, ground, {
-    ...opts,
-    filterSupported: canvasFilterSupported(ctx),
-  });
-  return await new Promise((resolve, reject) => {
-    canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error("导出失败"))), "image/png");
-  });
+  if (!ctx) {
+    releaseCanvasBacking(canvas);
+    throw new Error("这台浏览器不能导出成片");
+  }
+  try {
+    composeStudioStill(ctx, width, height, product, ground, {
+      ...opts,
+      filterSupported: canvasFilterSupported(ctx),
+    });
+  } catch (error) {
+    releaseCanvasBacking(canvas);
+    throw error;
+  }
+  return blobFromCanvasPng(canvas);
 }

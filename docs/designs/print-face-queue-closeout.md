@@ -1,0 +1,40 @@
+# R01 补印刷面持久队列交付记录
+
+日期：2026-09-08。基于 `dc5fc3a` / `0.21.46.1`，工作分支 `codex/r01-print-face-queue`。实现已提交并推送，纳入 `v0.22.0.0` 候选；最新功能提交为 `1881e5b`。本页记录本地交付，尚未合并或发布，不是杭州或真实稿验收证据。当前任务状态只维护在 [TODOS](../../TODOS.md)。
+
+## 问题与选择
+
+原 `repairMockupPrintFaces` 在 HTTP handler 内等待 Python，执行状态只保存在 Set/单个 busy 变量中。请求响应丢失或 Node 重启后缺少持久工作事实；release 作业计数也没有补面。重复点击分别得到 409/429，而非同单复用或跨单排队。
+
+比较了独立补面任务资源和复用打样单内持久子状态两种方案。选择后者：沿用 `/api/mockups/:id/print-faces`、现有调度与打样执行槽，不增加 `/api/jobs`、存储系统或通知发送路径；成片仍为 done。
+
+## 已实现
+
+- `jobs.ts` 持久化 queued/running/终态、操作者、源文件身份和每次尝试身份；202 确认不等待 Python。重复在途请求复用已有工作，其他单串行等待。
+- release 的 blender 计数合并补面持久状态与现有内存槽；不可读状态仍为 jobs_unknown。HTTP 响应结束不等于补面排干。
+- 执行使用私有源文件副本和本次暂存 assets；Python 不直接写公开切面。正常退出后复核源身份与当前请求、所有必需 PNG，再逐张原子替换。路径拒绝符号链接，失败保留现有成片，公开错误不返回文件系统路径。
+- 重启时 queued 继续执行；running 只有在旧进程已缺失或经身份确认终止后才换新尝试身份恢复。PID 不明或 spawn/持久化间隙保留 running 围栏，不能自动重跑或假称 drain 完成。
+- 补面与删除、换正面、代际操作互斥；托管代继续拒绝旧原位补面。公开详情仅新增 status/error，不返回私有 PID/哈希/尝试身份。
+- 页面按补面子状态轮询；刷新、离页不取消排队，保持成片可见；失败可重试，完成后更新印刷面。即使部分发布已使必需四面齐全，failed 仍保留错误/重试入口；重新排队后继续展示进度，成功才清除提示。
+- `runPython` 在注册 child 退出处理后执行 onSpawn；持久化回调抛错时终止该 child，等待退出再拒绝，避免遗留无人记账的进程。
+
+## 验证与证据
+
+日志及空白验收模板保留在仓库外 `beian-evidence/2026-09-08-next-stage/`。本地 receipt 记录最终文件哈希，日志不是杭州实证。
+
+- 红绿回归：将 jobs.ts 临时替换为原 HEAD 实现，新增“及时确认”测试明确失败 `HTTP still waits for worker`（退出 1）；恢复实现后通过。
+- 服务端全集：741 passed、1 skipped、0 failed。之后路径/公开错误/终态审计小幅补强，重跑受影响 HTTP、队列、代际和 worker 测试；最终150项通过、0失败，见对应日志及 receipt。
+- `npm run typecheck` 通过，包含 server 类型与 UI build。UI build 保留已有大 bundle 提醒，未为本切片拆包。
+- Python：`test_packaging_structure_repair.py` 与 `test_packaging_windows_owned_job.py`，19 passed、4 skipped。4 项是 Windows 原生路径，未在 Mac 冒充通过。首次命令误用了不存在的测试文件名（退出 4、未运行），更正文件名后完成上述验证。
+- 浏览器：印刷面相关4个原有场景及新补面排队/刷新/失败重试场景通过；新场景曾漏配合成图片路由，修正后重验。使用已构建 UI 与全部合成 API 的 artifact 模式，不占用或停止用户已有的5173进程。最初常规模式因5173已占用而未启动测试。
+- `npm run quality` 最终通过，未扩大复杂度基线。初次发现不必要的类型导出，收回模块内部后通过。
+
+后续失败重试修复的最终本地回归（2026-09-08）：`npm run verify -- full` 四步均 exit 0，服务端 745 passed / 1 skipped、UI 357 passed、Python 1250 passed / 9 skipped / 10 deselected；补面相关合成浏览器 5 项通过。原字节回执在 Git 外 `beian-evidence/2026-09-08-ship-retry/beian-verify-hrr9aU/receipt.json`，摘要为同目录上级 `retry-fix-complete.md`。回执记录的是提交前源码快照（HEAD 当时为 `dc5fc3a`），`source_stable=true`；`documentation_stable=false` 仅为运行期间补充本页行为描述。以上早期计数保留为阶段记录，不替代该次完整回归；最终 PR HEAD CI 仍需单独核对。
+
+## 未执行与限制
+
+- 尚未合并或发布；此前上线的 `0.21.46.1` 不包含本切片。提交/推送只证明候选已保存，不代表发版 L1、杭州补面或业务验收通过。
+- 未执行杭州补面、真实 PDF、OCR、真实消息或 L2/UAT。Python 和浏览器测试只使用合成内容。
+- PNG 是逐文件原子替换，不是整套文件的断电事务；中断后从被冻结的同一源重做。Windows 文件替换/重启恢复仍需现场证据，断电验证暂缓。
+- 无法确认旧进程归属时保留围栏，需要后续受控恢复证明；不自动清 PID 或把未知当空闲。
+- RF-03 Windows 异常证明、主桥生产注册及默认 profile 切换不因 R01 完成而开放。用户本轮决定暂缓隔离 Windows 验证，保留杭州现有生产环境。

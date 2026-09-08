@@ -545,3 +545,40 @@ test("无 ground 的已出图单保持 canvas 合成、三栏和 PPT", async ({ 
   await expect(page.getByRole("slider", { name: "产品灯光" })).toHaveCount(0);
   await expect(page.locator(".mockup-sheet-hero")).toHaveCount(0);
 });
+
+
+test("补面排队刷新后继续轮询，失败可重试且成片保持可见", async ({ page, syntheticApi }) => {
+  const mockup = completedMockup("cc11dd22ee44", "排队补面盒");
+  mockup.files = [{ key: "white_a", name: "front.png" }, { key: "white_b", name: "back.png" }];
+  mockup.can_repair_print_faces = true;
+  mockup.print_faces_repair = { status: "queued" };
+  syntheticApi.mockups.push(mockup);
+  await page.route(`**/api/mockups/${mockup.id}/files/*`, route => route.fulfill({ status: 200, contentType: "image/svg+xml",
+    body: `<svg xmlns="http://www.w3.org/2000/svg" width="800" height="1200"><rect width="800" height="1200" fill="white"/></svg>` }));
+  await page.goto(`/mockup/${mockup.id}`);
+  await expect(page.locator(".mockup-print-alert")).toContainText("补印刷面已排队");
+  await expect(page.getByRole("button", { name: "正在补印刷面" })).toBeDisabled();
+  await expect(page.locator(".mockup-sheet-photos")).toBeVisible();
+  await expect(page.locator(".wait-card")).toHaveCount(0);
+  await page.reload();
+  await expect(page.locator(".mockup-print-alert")).toContainText("补印刷面已排队");
+  mockup.files.push(...["front", "back", "left", "right"].map(face => ({ key: `read_${face}`, name: `${face}.png` })));
+  mockup.print_faces_repair = { status: "failed", error: "切面超时，请稍后再试。" };
+  await expect(page.locator(".mockup-print-alert")).toContainText("切面超时");
+  await page.reload();
+  await expect(page.locator(".mockup-print-alert")).toContainText("切面超时");
+  await expect(page.getByRole("button", { name: "补印刷面", exact: true })).toBeEnabled();
+  await page.route(`**/api/mockups/${mockup.id}/print-faces`, async route => {
+    mockup.print_faces_repair = { status: "queued" };
+    await route.fulfill({ status: 202, contentType: "application/json", body: JSON.stringify(mockup) });
+  });
+  await page.getByRole("button", { name: "补印刷面", exact: true }).click();
+  await expect(page.locator(".mockup-print-alert")).toContainText("已排队");
+  await expect(page.getByRole("button", { name: "正在补印刷面" })).toBeDisabled();
+  await page.reload();
+  await expect(page.locator(".mockup-print-alert")).toContainText("已排队");
+  mockup.print_faces_repair = { status: "succeeded" };
+  mockup.can_repair_print_faces = false;
+  await expect(page.locator(".mockup-print-alert")).toHaveCount(0);
+  await expect(page.locator(".wait-card")).toHaveCount(0);
+});

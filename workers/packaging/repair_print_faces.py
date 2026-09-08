@@ -26,6 +26,7 @@ def _under_job_dir(job_dir: Path, path: Path) -> bool:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="从 V2 artwork 补切印刷面，不跑 Blender")
+    parser.add_argument("--execution-id", help="private queue attempt identity")
     parser.add_argument("--job-dir", type=Path, required=True)
     parser.add_argument("--artwork", type=Path, required=True)
     parser.add_argument("--resolved", type=Path, required=True)

@@ -22,6 +22,18 @@ import { canAccessOwner, isTid, replaceFile, type Viewer } from "./tasks.js";
 import { atomicReplaceJobJson } from "./mockupAtomicWrite.js";
 import { isRenderGenerationOutputKey, type RenderActivationFact } from "./renderGenerations.js";
 
+type PrintFaceRepairRequest = {
+  id: string;
+  status: "queued" | "running" | "succeeded" | "failed";
+  created_at: string;
+  actor_id: string;
+  source_sha256: string;
+  started_at?: string;
+  finished_at?: string;
+  worker_pid?: number;
+  error?: string;
+};
+
 export type MockupJob = {
   id: string;
   status: "queued" | "running" | "review_required" | "unsupported" | "done" | "failed";
@@ -65,6 +77,7 @@ export type MockupJob = {
   /** 首次选层前的原稿预览；重跑会隐藏所选结构线，不能覆盖这份核对依据。 */
   structure_input_preview_path?: string;
   /** 补印刷面审计：谁切的、何时。不参与权限。 */
+  print_faces_request?: PrintFaceRepairRequest;
   print_faces_repaired_by?: string;
   print_faces_repaired_at?: string;
   /** 重渲棚审计。不参与权限。 */
@@ -260,6 +273,7 @@ export function resetMockupCache(): void {
 export function beginStructureConfirmation(job: MockupJob): void {
   const current = readMockupFromDisk(job.id) ?? job;
   if (isGenerationManagedMockup(current)) throw generationManagedReject("structure");
+  if (printFaceRepairActive(current)) throw Object.assign(new Error("正在补印刷面，暂时不能换正面。"), { status: 409 });
   if (current.render_mutation?.status === "queued" || current.render_mutation?.status === "running"
     || current.render_generation_request?.worker_pid !== undefined) {
     throw Object.assign(new Error("这单渲染版本尚未结束，暂时不能换正面。"), { status: 409, code: "render_generation_busy" });
@@ -408,6 +422,11 @@ const MOCKUP_JOB_STATUSES = new Set(["queued", "running", "waiting_input", "succ
 /** Keep corrupt or contradictory durable state out of release counters. */
 function hasValidMockupJobState(job: MockupJob): boolean {
   if (!MOCKUP_STATUSES.has(job.status)) return false;
+  const repair = job.print_faces_request;
+  if (repair && (!/^[a-f0-9]{32}$/.test(repair.id) || !["queued", "running", "succeeded", "failed"].includes(repair.status)
+    || typeof repair.created_at !== "string" || typeof repair.actor_id !== "string"
+    || !/^[a-f0-9]{64}$/.test(repair.source_sha256) || (printFaceRepairActive(job) && job.status !== "done")
+    || (repair.worker_pid !== undefined && (repair.status !== "running" || !Number.isSafeInteger(repair.worker_pid) || repair.worker_pid <= 0)))) return false;
   const hasKind = job.job_kind !== undefined;
   const hasJobStatus = job.job_status !== undefined;
   const hasPid = job.job_pid !== undefined;
@@ -547,6 +566,7 @@ export function publicMockup(job: MockupJob, view: PublicMockupView = {}) {
     ...publicMockupSummaryFields(job),
     files: visibleMockupFiles(job),
     can_repair_print_faces: canRepairPrintFaces(job),
+    print_faces_repair: job.print_faces_request ? { status: job.print_faces_request.status, error: job.print_faces_request.error } : undefined,
     print_faces_repaired_by: job.print_faces_repaired_by,
     print_faces_repaired_at: job.print_faces_repaired_at,
     can_relight_studio: canRelightStudio(job),
@@ -1448,9 +1468,14 @@ export function printFaceRepairSource(job: MockupJob): PrintFaceRepairSource | n
   return { jobDir, artwork, resolved, assets: join(jobDir, "assets") };
 }
 
+export function printFaceRepairActive(job: MockupJob): boolean {
+  return job.print_faces_request?.status === "queued" || job.print_faces_request?.status === "running";
+}
+
 function canRepairPrintFaces(job: MockupJob): boolean {
   if (isGenerationManagedMockup(job)) return false;
-  return job.status === "done" && !requiredPrintFacesReady(job.id) && printFaceRepairSource(job) !== null;
+  return job.status === "done" && printFaceRepairSource(job) !== null
+    && (printFaceRepairActive(job) || job.print_faces_request?.status === "failed" || !requiredPrintFacesReady(job.id));
 }
 
 type RelightStudioSource = {
@@ -1817,6 +1842,7 @@ export function resetMockupForRetry(job: MockupJob): MockupJob {
 export function deleteMockup(id: string): void {
   const job = loadMockup(id);
   if (!job) throw Object.assign(new Error("没有这单打样"), { status: 404 });
+  if (printFaceRepairActive(job)) throw Object.assign(new Error("正在补印刷面，暂时不能删除。"), { status: 409 });
   if (activeStructureConfirmations.has(id)) {
     throw Object.assign(new Error("结构正在确认，暂时不能删除"), { status: 409 });
   }
