@@ -1,3 +1,6 @@
+import { readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   expect,
   test as base,
@@ -63,6 +66,7 @@ export type SyntheticMockup = {
   job_stage_label?: string;
   queue_ahead?: number;
   can_repair_print_faces?: boolean;
+  print_faces_repair?: import("../src/api").MockupJob["print_faces_repair"];
   can_relight_studio?: boolean;
   structure_status?: "analyzing" | "review_required" | "unsupported" | "ready";
   structure_code?: string;
@@ -675,6 +679,31 @@ async function installSyntheticApi(page: Page, state: SyntheticApi) {
   });
 }
 
+/** Serve the verified build in-process when a user's Vite already owns 5173. */
+async function installBuiltUi(page: Page) {
+  const root = fileURLToPath(new URL("../dist/", import.meta.url));
+  const files = new Map<string, Buffer>();
+  function load(dir: string, prefix: string) {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      const key = `${prefix}/${entry.name}`;
+      if (entry.isDirectory()) load(path, key);
+      else if (entry.isFile()) files.set(key, readFileSync(path));
+    }
+  }
+  load(root, "");
+  await page.route("**/*", async route => {
+    const url = new URL(route.request().url());
+    if (url.origin !== "http://127.0.0.1:5173") return route.abort();
+    if (url.pathname.startsWith("/api/")) return route.fallback();
+    const body = files.get(url.pathname) || (route.request().isNavigationRequest() ? files.get("/index.html") : undefined);
+    if (!body) return route.fulfill({ status: 404, body: "" });
+    const type = url.pathname.endsWith(".js") ? "text/javascript" : url.pathname.endsWith(".css") ? "text/css"
+      : url.pathname.endsWith(".png") ? "image/png" : url.pathname.endsWith(".svg") ? "image/svg+xml" : "text/html";
+    return route.fulfill({ status: 200, contentType: type, body });
+  });
+}
+
 export const test = base.extend<{ syntheticApi: SyntheticApi }>({
   syntheticApi: [async ({ page }, use) => {
     const state: SyntheticApi = {
@@ -691,6 +720,7 @@ export const test = base.extend<{ syntheticApi: SyntheticApi }>({
       expireNextMockupStart: false,
       unhandled: [],
     };
+    if (process.env.PLAYWRIGHT_ARTIFACT_ONLY === "1") await installBuiltUi(page);
     await installSyntheticApi(page, state);
     await use(state);
   }, { auto: true }],

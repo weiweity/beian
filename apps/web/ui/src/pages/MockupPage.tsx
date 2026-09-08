@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Alert, App, Button, ConfigProvider, Empty, Input, Segmented, Space, Table, Tag, theme as antdTheme } from "antd";
 import { api, ApiError, isUploadReceiptExpired, UPLOAD_TIMEOUT_MS, type MockupJob, type PendingUploadReceipt } from "../api";
@@ -41,6 +41,9 @@ import {
   jobHasReviewCard,
   jobHasSet,
   loadStillImage,
+  canvasBackingSize,
+  prepareStudioCanvas,
+  releaseCanvasBacking,
   releaseStudioGeneration,
   stillSetKey,
   parseBackdropPreset,
@@ -781,6 +784,7 @@ export function MockupJobPage({
   const lastGlbFs = useRef(false);
   const seededJobId = useRef(jobId);
   const waiting = Boolean(job) && shouldShowWaitCard(job);
+  const repairPending = job?.print_faces_repair?.status === "queued" || job?.print_faces_repair?.status === "running";
   const generation=job?.current_render_generation_id || job?.studio_relit_at || job?.job_finished_at || "";
   const visibleGeneration=useRef(generation);
   visibleGeneration.current=generation;
@@ -824,14 +828,15 @@ export function MockupJobPage({
   }
 
   async function repairPrintFaces() {
-    if (!job || repairing) return;
+    if (!job || repairing || repairPending) return;
     setRepairing(true);
     notice("正在补印刷面");
     try {
       const next = await api.repairMockupPrintFaces(job.id);
       setError(null);
       setJob(next);
-      notice("印刷面已补上");
+      notice(next.print_faces_repair?.status === "queued" || next.print_faces_repair?.status === "running"
+        ? "补印刷面已排队，可以离开此页" : "印刷面已补上");
     } catch (err: unknown) {
       const status = err instanceof ApiError ? err.status : 0;
       notice("");
@@ -902,7 +907,7 @@ export function MockupJobPage({
   }, [jobId]);
 
   useEffect(() => {
-    if (!job?.id || !waiting) return;
+    if (!job?.id || (!waiting && !repairPending)) return;
     let cancelled = false;
     const id = window.setInterval(() => {
       void api
@@ -911,6 +916,11 @@ export function MockupJobPage({
           if (cancelled) return;
           setError(null);
           setJob(next);
+          if (repairPending) {
+            if (next.print_faces_repair?.status === "failed") notice(next.print_faces_repair.error || "补印刷面失败，请重试");
+            else if (next.print_faces_repair?.status === "succeeded") notice("印刷面已补上");
+            return;
+          }
           if (shouldShowWaitCard(next)) return;
           const key = `${next.id}:${next.status}`;
           if (announced.current === key) return;
@@ -931,7 +941,7 @@ export function MockupJobPage({
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [job?.id, waiting, message]);
+  }, [job?.id, waiting, repairPending, message]);
 
   if (error && !job) {
     return (
@@ -1035,8 +1045,9 @@ export function MockupJobPage({
   const readFaces = listedReadFaces(job.files || []);
   const missingRequired = (["front", "back", "left", "right"] as const).filter((role) => !readFaces.includes(role));
   const canRepairPrint = Boolean(job.can_repair_print_faces);
-  const showPrintAlert = job.status === "done" && missingRequired.length > 0;
-  const printAlertCopy = canRepairPrint && canCreate
+  const repairFailed = job.print_faces_repair?.status === "failed";
+  const showPrintAlert = job.status === "done" && (missingRequired.length > 0 || repairPending || repairFailed);
+  const printAlertCopy = repairFailed ? "补印刷面失败，请重试。" : canRepairPrint && canCreate
     ? "缺少印刷面图。可从已保存底稿补生成，不会重新打样。"
     : canCreate
       ? "这单没有可用底稿，无法补生成。请重新打样。"
@@ -1124,24 +1135,25 @@ export function MockupJobPage({
         <Alert type="error" showIcon title={mockupFailReason(job.error || job.job_error)} />
       ) : null}
 
-      {canAdmin && job.status === "done" && !job.has_render_generations && !job.render_mutation ? (
+      {canAdmin && !repairPending && job.status === "done" && !job.has_render_generations && !job.render_mutation ? (
         <AdminRotateFront job={job} onConfirmed={setJob} />
       ) : null}
 
       {showPrintAlert ? (
         <div className="mockup-print-alert" role="status" aria-live="polite">
           <p className="mockup-print-alert-copy">
-            {repairing ? "正在补印刷面" : printAlertCopy}
+            {repairPending ? (job.print_faces_repair?.status === "queued" ? "补印刷面已排队，可以离开此页" : "正在补印刷面，可以离开此页")
+              : repairing ? "正在提交补面请求" : job.print_faces_repair?.error || printAlertCopy}
           </p>
           {canRepairPrint && canCreate ? (
             <button
               type="button"
               className="btn-ghost"
-              disabled={repairing}
-              aria-busy={repairing || undefined}
+              disabled={repairing || repairPending}
+              aria-busy={repairing || repairPending || undefined}
               onClick={() => void repairPrintFaces()}
             >
-              {repairing ? "正在补印刷面" : "补印刷面"}
+              {repairing || repairPending ? "正在补印刷面" : "补印刷面"}
             </button>
           ) : null}
         </div>
@@ -1582,6 +1594,15 @@ function GlbShot({
 
 type PreviewSource = CanvasImageSource & { naturalWidth?: number; naturalHeight?: number; width?: number; height?: number };
 
+function useReleasedCanvasRef() {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const setCanvasRef = useCallback((node: HTMLCanvasElement | null) => {
+    if (canvasRef.current && canvasRef.current !== node) releaseCanvasBacking(canvasRef.current);
+    canvasRef.current = node;
+  }, []);
+  return [canvasRef, setCanvasRef] as const;
+}
+
 function GroundedShot({
   generation,
   onSourceError,
@@ -1626,7 +1647,7 @@ function GroundedShot({
   const [frameSize, setFrameSize] = useState<[number, number]>([0, 0]);
   const [originalOpen, setOriginalOpen] = useState(false);
   const [visible, setVisible] = useState(!lazy);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [canvasRef, setCanvasRef] = useReleasedCanvasRef();
   const frameRef = useRef<HTMLDivElement>(null);
   const previewRef = useRef<StudioPreviewSources | null>(null);
   const lightboxSourcesRef = useRef<{ product: PreviewSource; ground: PreviewSource; set: PreviewSource | null } | null>(null);
@@ -1641,8 +1662,7 @@ function GroundedShot({
     previewRef.current = null;
     noticedUpgrade.current = "";
     if (canvasRef.current) {
-      canvasRef.current.width = 0;
-      canvasRef.current.height = 0;
+      releaseCanvasBacking(canvasRef.current);
       applyStudioPreviewDataset(canvasRef.current, null, backdrop, null);
     }
   }, [sourceIdentity]);
@@ -1691,9 +1711,7 @@ function GroundedShot({
     const canvas = canvasRef.current;
     const sources = previewRef.current;
     if (!canvas || !sources || !frameSize[0] || !frameSize[1]) return;
-    canvas.width = frameSize[0];
-    canvas.height = frameSize[1];
-    const ctx = canvas.getContext("2d");
+    const ctx = prepareStudioCanvas(canvas, frameSize[0], frameSize[1]);
     if (!ctx) { setBad(true); applyStudioPreviewDataset(canvas, null, backdrop, null); return; }
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = "high";
@@ -1798,7 +1816,7 @@ function GroundedShot({
         {bad ? (
           <p className="page-lead">这张白底图坏了，回到打样台重新打。</p>
         ) : (
-          <canvas ref={canvasRef} className="mockup-studio-canvas" aria-label={alt} />
+          <canvas ref={setCanvasRef} className="mockup-studio-canvas" aria-label={alt} />
         )}
         {bad ? null : (
           <>
@@ -1899,19 +1917,22 @@ function GroundedLightboxStill({
   placeholder?: { product: PreviewSource; ground: PreviewSource; set: PreviewSource | null } | null;
   sourcesOut?: { current: { product: PreviewSource; ground: PreviewSource; set: PreviewSource | null } | null };
 }) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [canvasRef, setCanvasRef] = useReleasedCanvasRef();
   const sourcesRef = useRef<{ product: PreviewSource; ground: PreviewSource; set: PreviewSource | null } | null>(
     placeholder || null,
   );
   const [loaded, setLoaded] = useState(placeholder ? 1 : 0);
   const [paintError, setPaintError] = useState(false);
-  function publishSources(next: { product: PreviewSource; ground: PreviewSource; set: PreviewSource | null }) {
+  function publishSources(next: { product: PreviewSource; ground: PreviewSource; set: PreviewSource | null } | null) {
     sourcesRef.current = next;
     if (sourcesOut) sourcesOut.current = next;
   }
   useEffect(() => {
-    if (sourcesRef.current) publishSources(sourcesRef.current);
-    else if (placeholder) publishSources(placeholder);
+    const seed = placeholder ?? null;
+    publishSources(seed);
+    setLoaded(seed ? 1 : 0);
+    setPaintError(false);
+    const seedSet = seed?.set ?? null;
     let cancelled = false;
     void (async () => {
       try {
@@ -1926,7 +1947,7 @@ function GroundedLightboxStill({
         setP.catch(() => undefined);
         const [product, ground] = await required;
         if (cancelled) return;
-        publishSources({ product, ground, set: sourcesRef.current?.set ?? placeholder?.set ?? null });
+        publishSources({ product, ground, set: seedSet });
         setLoaded((n) => n + 1);
         try {
           const set = await setP;
@@ -1942,16 +1963,18 @@ function GroundedLightboxStill({
     })();
     return () => {
       cancelled = true;
+      if (canvasRef.current) releaseCanvasBacking(canvasRef.current);
     };
-  }, [jobId, generation, files, fileKey, groundKey, placeholder]);
+  }, [jobId, generation, files, fileKey, groundKey]);
   useEffect(() => {
     const canvas = canvasRef.current;
     const sources = sourcesRef.current;
     if (!canvas || !sources || !loaded) return;
-    canvas.width = Number(sources.product.naturalWidth || sources.product.width || 0);
-    canvas.height = Number(sources.product.naturalHeight || sources.product.height || 0);
-    if (!canvas.width || !canvas.height) return;
-    const ctx = canvas.getContext("2d");
+    const ctx = prepareStudioCanvas(
+      canvas,
+      Number(sources.product.naturalWidth || sources.product.width || 0),
+      Number(sources.product.naturalHeight || sources.product.height || 0),
+    );
     if (!ctx) return;
     try {
     composeStudioStill(ctx, canvas.width, canvas.height, sources.product, sources.ground, {
@@ -1963,8 +1986,8 @@ function GroundedLightboxStill({
     });
     setPaintError(false);
     } catch { ctx.clearRect(0, 0, canvas.width, canvas.height); setPaintError(true); }
-  }, [loaded, productLight, backgroundLight, backdrop]);
-  return <>{paintError ? <p className="page-lead">调灯失败，请重新加载图片。</p> : null}<canvas ref={canvasRef} className="mockup-studio-lightbox-canvas" aria-label={alt} /></>;
+  }, [loaded, productLight, backgroundLight, backdrop, jobId, generation]);
+  return <>{paintError ? <p className="page-lead">调灯失败，请重新加载图片。</p> : null}<canvas ref={setCanvasRef} className="mockup-studio-lightbox-canvas" aria-label={alt} /></>;
 }
 
 function StudioLightSliders({
@@ -2161,7 +2184,7 @@ function WhiteShot({
 function LegacyLitCanvas({ image, alt, productLight, backgroundLight, backdrop, full = false }: {
   image: HTMLImageElement; alt: string; productLight: number; backgroundLight: number; backdrop: BackdropPreset; full?: boolean;
 }) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [canvasRef, setCanvasRef] = useReleasedCanvasRef();
   const [size, setSize] = useState<[number, number]>([0, 0]);
   const [error, setError] = useState(false);
   useEffect(() => {
@@ -2172,15 +2195,17 @@ function LegacyLitCanvas({ image, alt, productLight, backgroundLight, backdrop, 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    canvas.width = full ? image.naturalWidth : size[0];
-    canvas.height = full ? image.naturalHeight : size[1];
-    if (!canvas.width || !canvas.height) return;
-    const ctx = canvas.getContext("2d");
+    const target = canvasBackingSize(
+      full ? image.naturalWidth : size[0],
+      full ? image.naturalHeight : size[1],
+    );
+    if (!target.width || !target.height) return;
+    const ctx = prepareStudioCanvas(canvas, target.width, target.height);
     if (!ctx) { setError(true); return; }
     try {
       composeStudioStill(ctx, canvas.width, canvas.height, image, null, { productLight, backgroundLight, backdrop, filterSupported: canvasFilterSupported(ctx) });
       setError(false);
     } catch { ctx.clearRect(0, 0, canvas.width, canvas.height); setError(true); }
   }, [image, size, full, productLight, backgroundLight, backdrop]);
-  return <>{error ? <p className="page-lead">调灯失败，请重新加载图片。</p> : null}<canvas ref={canvasRef} className={full ? "mockup-studio-lightbox-canvas" : "mockup-studio-canvas"} aria-label={alt} /></>;
+  return <>{error ? <p className="page-lead">调灯失败，请重新加载图片。</p> : null}<canvas ref={setCanvasRef} className={full ? "mockup-studio-lightbox-canvas" : "mockup-studio-canvas"} aria-label={alt} /></>;
 }

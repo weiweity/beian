@@ -1,11 +1,12 @@
 import { expect, test, type Page } from "@playwright/test";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { tmpdir } from "node:os";
+import { cpus, hostname, loadavg, tmpdir, totalmem } from "node:os";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { deflateSync } from "node:zlib";
-import type { MockupJob } from "../src/api";
+import type { MockupJob, RenderGenerationRow } from "../src/api";
 
 let dist: string;
 const assets = new Map<string, Buffer>();
@@ -20,8 +21,10 @@ test.afterAll(() => { if (dist) rmSync(dist, { recursive: true }); });
 
 const ID = "af0900000001";
 const GEN = "g1-rf09-preview-" + "a".repeat(48);
+const GEN2 = "g2-rf09-preview-" + "b".repeat(48);
 const FULL_UPGRADE_NOTICE = "高清图暂时未加载，重新打开此单可重试";
 const MEASURE_DIR = process.env.RF09_MEASURE_DIR || "";
+const UI_ROOT = fileURLToPath(new URL("../", import.meta.url));
 
 function deferred() {
   let release!: () => void;
@@ -125,6 +128,7 @@ async function serve(page: Page, opts: {
   pngs?: Map<string, Buffer>;
   job?: MockupJob;
   urls?: string[];
+  history?: RenderGenerationRow[];
 }) {
   const job = opts.job || jobModel();
   const urls = opts.urls || [];
@@ -144,7 +148,20 @@ async function serve(page: Page, opts: {
     if (path === "/api/uploads" || path === "/api/tasks") return json([]);
     if (path === "/api/mockups") return json([job]);
     if (path === `/api/mockups/${job.id}`) return json(job);
-    if (path === `/api/mockups/${job.id}/render-generations` && method === "GET") return json({ items: [], next_cursor: null });
+    if (path === `/api/mockups/${job.id}/render-generations` && method === "GET") {
+      return json({ items: opts.history || [], next_cursor: null });
+    }
+    if (path.startsWith(`/api/mockups/${job.id}/render-generations/`) && path.endsWith("/activate")) {
+      const generationId = decodeURIComponent(path.slice(
+        `/api/mockups/${job.id}/render-generations/`.length,
+        -"/activate".length,
+      ));
+      job.current_render_generation_id = generationId;
+      if (opts.history) {
+        for (const row of opts.history) row.current = row.generation_id === generationId;
+      }
+      return json(job);
+    }
     if (path === `/api/mockups/${job.id}/render-generations` && method === "POST") {
       urls.push(`POST:${path}`);
       return json({ message: "not used" }, 409);
@@ -209,6 +226,89 @@ async function trackUnhandled(page: Page) {
     async snapshot() {
       const extra = await page.evaluate(() => (window as Window & { __rf09Unhandled?: string[] }).__rf09Unhandled || []);
       return [...errors, ...extra];
+    },
+  };
+}
+
+function fileSha(rel: string): string {
+  return createHash("sha256").update(readFileSync(join(UI_ROOT, rel))).digest("hex");
+}
+
+function q05Machine() {
+  const cpu = cpus()[0];
+  return {
+    hostname: hostname(),
+    platform: process.platform,
+    arch: process.arch,
+    node: process.version,
+    cpu: cpu?.model,
+    cores: cpus().length,
+    totalmem: totalmem(),
+    loadavg: loadavg(),
+  };
+}
+
+type Q05StudioProbe = { cacheSize: () => number; cacheUrls: () => string[] };
+
+async function q05AttachHeap(page: Page) {
+  const client = await page.context().newCDPSession(page);
+  const send = (method: string) => (client as { send: (name: string) => Promise<unknown> }).send(method);
+  await send("Runtime.enable");
+  try { await send("Performance.enable"); } catch { /* optional */ }
+  try { await send("HeapProfiler.enable"); } catch { /* optional */ }
+  return {
+    async sample(gc: boolean) {
+      if (gc) {
+        try { await send("HeapProfiler.collectGarbage"); } catch { /* Chromium may omit */ }
+      }
+      let usedSize: number | null = null;
+      let totalSize: number | null = null;
+      try {
+        const usage = await send("Runtime.getHeapUsage") as { usedSize?: number; totalSize?: number };
+        usedSize = usage.usedSize ?? null;
+        totalSize = usage.totalSize ?? null;
+      } catch { /* */ }
+      let metrics: Array<{ name: string; value: number }> = [];
+      try {
+        const result = await send("Performance.getMetrics") as { metrics: Array<{ name: string; value: number }> };
+        metrics = result.metrics;
+      } catch { /* */ }
+      const pick = (name: string) => metrics.find((row) => row.name === name)?.value ?? null;
+      const memory = await page.evaluate(() => {
+        const info = (performance as Performance & { memory?: { usedJSHeapSize: number; totalJSHeapSize: number; jsHeapSizeLimit: number } }).memory;
+        return info
+          ? { used: info.usedJSHeapSize, total: info.totalJSHeapSize, limit: info.jsHeapSizeLimit, method: "performance.memory" }
+          : { used: null, total: null, limit: null, method: "unavailable_not_performance.memory" };
+      });
+      const cache = await page.evaluate(() => {
+        const probe = (window as Window & { __q05Studio?: Q05StudioProbe }).__q05Studio;
+        return probe ? { size: probe.cacheSize(), urls: probe.cacheUrls(), probe: true } : { size: null, urls: [] as string[], probe: false };
+      });
+      const canvases = await page.evaluate(() => Array.from(document.querySelectorAll("canvas")).map((node) => {
+        const canvas = node as HTMLCanvasElement;
+        return {
+          label: canvas.getAttribute("aria-label"),
+          width: canvas.width,
+          height: canvas.height,
+          cssW: canvas.clientWidth,
+          cssH: canvas.clientHeight,
+        };
+      }));
+      return {
+        gc,
+        memory,
+        cdp: {
+          usedSize,
+          totalSize,
+          jsHeapUsed: pick("JSHeapUsedSize"),
+          jsHeapTotal: pick("JSHeapTotalSize"),
+          nodes: pick("Nodes"),
+          listeners: pick("JSEventListeners"),
+        },
+        cache,
+        canvases,
+        canvasPixels: canvases.reduce((sum, row) => sum + row.width * row.height, 0),
+      };
     },
   };
 }
@@ -701,80 +801,193 @@ test("代表尺寸 PNG：记录 card 可见、full decode 与绘制", async ({ b
 });
 
 test("Q05 切代/resize/离页：记录 heap 与 rAF 间隔，不把 rAF 当成屏幕合成时刻", async ({ page, browserName }, testInfo) => {
-  test.setTimeout(120_000);
+  test.setTimeout(180_000);
   const pngs = new Map<string, Buffer>([
-    ["product:card", pngFill(400, 480, [0, 0, 0, 0], { x: 80, y: 96, w: 240, h: 288, color: [200, 0, 0, 255] })],
-    ["product:full", pngFill(800, 960, [0, 0, 0, 0], { x: 160, y: 192, w: 480, h: 576, color: [0, 20, 230, 255] })],
-    ["ground:card", pngFill(400, 480, [0, 160, 0, 255])],
-    ["ground:full", pngFill(800, 960, [200, 200, 0, 255])],
-    ["set:card", pngFill(400, 480, [200, 0, 200, 255])],
-    ["set:full", pngFill(800, 960, [0, 200, 200, 255])],
+    ["product:card", pngFill(1200, 1440, [0, 0, 0, 0], { x: 300, y: 360, w: 600, h: 720, color: [200, 0, 0, 255] })],
+    ["product:full", pngFill(3000, 3600, [0, 0, 0, 0], { x: 750, y: 900, w: 1500, h: 1800, color: [0, 20, 230, 255] })],
+    ["ground:card", pngFill(1200, 1440, [0, 160, 0, 255])],
+    ["ground:full", pngFill(3000, 3600, [200, 200, 0, 255])],
+    ["set:card", pngFill(1200, 1440, [200, 0, 200, 255])],
+    ["set:full", pngFill(3000, 3600, [0, 200, 200, 255])],
   ]);
+  const job = jobModel();
+  job.has_render_generations = true;
+  job.render_generation_capabilities = {
+    history: { allowed: true },
+    activate: { allowed: true },
+    legacy_relight: { allowed: true },
+    upgrade: { allowed: false, reason: "upgrade_unwired" },
+  };
+  const history: RenderGenerationRow[] = [
+    { generation_id: GEN, mode: "legacy_relight", profile: "synthetic", quality_status: "unwired", created_at: "2026-09-08T00:00:00Z", current: true },
+    { generation_id: GEN2, mode: "legacy_relight", profile: "synthetic", quality_status: "unwired", created_at: "2026-09-08T00:01:00Z", current: false },
+  ];
   await page.addInitScript(() => { (window as Window & { __RF09_PERF__?: boolean }).__RF09_PERF__ = true; });
-  const heap = async () => page.evaluate(() => {
-    const memory = (performance as Performance & { memory?: { usedJSHeapSize: number; totalJSHeapSize: number } }).memory;
-    return memory ? { used: memory.usedJSHeapSize, total: memory.totalJSHeapSize, method: "performance.memory" }
-      : { used: null, total: null, method: "unavailable_not_performance.memory" };
-  });
+  const heap = await q05AttachHeap(page);
   const stages: Array<Record<string, unknown>> = [];
-  await serve(page, { pngs });
+  const gates: GateMap = {
+    white_a: deferred(), white_b: deferred(),
+    white_a_ground: deferred(), white_b_ground: deferred(),
+    white_a_set: deferred(), white_b_set: deferred(),
+  };
+  await serve(page, { pngs, job, history, gates });
   const t0 = Date.now();
   await page.goto(`/mockup/${ID}`, { waitUntil: "domcontentloaded" });
   await page.locator(".mockup-backdrop-switch").getByText("白桌白墙", { exact: true }).click();
   const shot = canvas(page);
-  await expect(shot).toHaveAttribute("data-preview-product", /card|full/);
+  await expect(shot).toHaveAttribute("data-preview-product", "card");
   const tCard = Date.now() - t0;
-  await expect(shot).toHaveAttribute("data-preview-product", "full");
-  await expect.poll(async () => isBlue(await sample(page, 0.5, 0.5))).toBe(true);
-  const tFullPx = Date.now() - t0;
-  stages.push({ phase: "full-visible", tCardMs: tCard, tFullPxMs: tFullPx, heap: await heap(),
-    note: "t* 是 DOM 属性/canvas 采样时刻，不是屏幕合成精确时刻" });
+  await expect.poll(async () => isRed(await sample(page, 0.5, 0.5))).toBe(true);
+  const tCardPx = Date.now() - t0;
+  stages.push({
+    phase: "card-visible",
+    tCardMs: tCard,
+    tCardPxMs: tCardPx,
+    heap: await heap.sample(false),
+    note: "card 已绘制；full 仍 gated。t* 是 DOM/canvas 采样，不是屏幕合成精确时刻",
+  });
 
-  const frameDts: number[] = [];
-  await page.evaluate(async () => {
-    (window as Window & { __q05Frames?: number[] }).__q05Frames = [];
-    await new Promise<void>((resolve) => {
-      let last = 0;
-      let n = 0;
-      const tick = (now: number) => {
-        const bag = (window as Window & { __q05Frames?: number[] }).__q05Frames!;
-        if (last) bag.push(now - last);
-        last = now;
-        n += 1;
-        if (n < 45) requestAnimationFrame(tick);
-        else resolve();
-      };
-      requestAnimationFrame(tick);
+  const netFull = Date.now();
+  (gates.white_a as ReturnType<typeof deferred>).release();
+  (gates.white_b as ReturnType<typeof deferred>).release();
+  (gates.white_a_ground as ReturnType<typeof deferred>).release();
+  (gates.white_b_ground as ReturnType<typeof deferred>).release();
+  (gates.white_a_set as ReturnType<typeof deferred>).release();
+  (gates.white_b_set as ReturnType<typeof deferred>).release();
+  await expect(shot).toHaveAttribute("data-preview-product", "full");
+  const tProductFullAttr = Date.now() - netFull;
+  const marksAtAttr = await page.evaluate(() => performance.getEntriesByType("mark").map((entry) => ({ name: entry.name, startTime: Math.round(entry.startTime) })));
+  stages.push({
+    phase: "full-decode-attr",
+    tProductFullAttrMs: tProductFullAttr,
+    marks: marksAtAttr,
+    heap: await heap.sample(false),
+    note: "dataset 已是 full；网络在本机拦截中约等于 0，此段主要是 decode + React 发布",
+  });
+  await expect.poll(async () => isBlue(await sample(page, 0.5, 0.5))).toBe(true);
+  await expect(shot).toHaveAttribute("data-preview-source", "full");
+  const tProductFullPx = Date.now() - netFull;
+  stages.push({
+    phase: "full-replace-px",
+    tProductFullPxMs: tProductFullPx,
+    heap: await heap.sample(false),
+    heapAfterGc: await heap.sample(true),
+    note: "像素已替换。heapAfterGc 仍不是 GPU 纹理证明",
+  });
+
+  await page.getByRole("button", { name: "出图版本", exact: true }).click();
+  for (const [from, to] of [[GEN, GEN2], [GEN2, GEN], [GEN, GEN2]] as const) {
+    await page.locator(`[data-generation-id="${to}"]`).getByRole("button", { name: "使用此版本" }).click();
+    await expect(page.locator(".mockup-sheet-photos")).toHaveAttribute("data-render-generation", to);
+    await expect(shot).toHaveAttribute("data-preview-product", /card|full/);
+    await expect.poll(async () => isBlue(await sample(page, 0.5, 0.5))).toBe(true);
+    stages.push({
+      phase: `switch-${from}-to-${to}`,
+      heap: await heap.sample(false),
+      heapAfterGc: await heap.sample(true),
+      note: "同 fixture 切代；cache 应按 asset path 淘汰旧代，不得按次数单调增长",
     });
+  }
+
+  await page.evaluate(() => {
+    const w = window as Window & { __q05Frames?: number[]; __q05RafOn?: boolean };
+    w.__q05Frames = [];
+    w.__q05RafOn = true;
+    let last = 0;
+    const tick = (now: number) => {
+      if (!w.__q05RafOn) return;
+      if (last) w.__q05Frames!.push(now - last);
+      last = now;
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
   });
   await page.setViewportSize({ width: 1100, height: 800 });
-  await page.waitForTimeout(80);
+  await page.waitForTimeout(180);
   await page.setViewportSize({ width: 1440, height: 900 });
-  frameDts.push(...await page.evaluate(() => (window as Window & { __q05Frames?: number[] }).__q05Frames || []));
-  stages.push({ phase: "resize", heap: await heap(), rafDtMs: frameDts.slice(0, 24),
-    canvas: await shot.evaluate((node: HTMLCanvasElement) => ({ width: node.width, height: node.height })),
-    note: "rAF 间隔是脚本调度，不是 GPU 上屏时刻" });
+  await page.waitForTimeout(180);
+  const frameDts = await page.evaluate(() => {
+    const w = window as Window & { __q05Frames?: number[]; __q05RafOn?: boolean };
+    w.__q05RafOn = false;
+    return w.__q05Frames || [];
+  });
+  const longFrames = frameDts.filter((dt) => dt > 32);
+  stages.push({
+    phase: "resize",
+    heap: await heap.sample(false),
+    rafDtMs: frameDts.slice(0, 48),
+    rafCount: frameDts.length,
+    rafMaxMs: frameDts.reduce((max, dt) => Math.max(max, dt), 0),
+    rafLongOver32ms: longFrames.length,
+    canvas: await shot.evaluate((node: HTMLCanvasElement) => ({ width: node.width, height: node.height, cssW: node.clientWidth, cssH: node.clientHeight })),
+    note: "rAF 间隔在 resize 期间采集；是脚本调度，不是 GPU 上屏时刻",
+  });
 
-  for (let i = 0; i < 4; i++) {
-    await page.goto(`/mockup/${ID}`, { waitUntil: "domcontentloaded" });
-    await page.locator(".mockup-backdrop-switch").getByText("白桌白墙", { exact: true }).click();
-    await expect(canvas(page)).toHaveAttribute("data-preview-product", /card|full/);
-    stages.push({ phase: `reload-${i + 1}`, heap: await heap() });
-  }
+  await page.getByRole("button", { name: "打开正面 + 侧面原图", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  const box = dialog.locator("canvas");
+  await expect.poll(async () => box.evaluate((node: HTMLCanvasElement) => node.width)).toBeGreaterThan(0);
+  stages.push({
+    phase: "lightbox-open",
+    heap: await heap.sample(false),
+    lightbox: await box.evaluate((node: HTMLCanvasElement) => ({ width: node.width, height: node.height })),
+  });
+  await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  stages.push({
+    phase: "lightbox-closed",
+    heap: await heap.sample(false),
+    heapAfterGc: await heap.sample(true),
+  });
+
+  const beforeDownload = await heap.sample(true);
+  const download = page.waitForEvent("download");
+  await page.getByRole("button", { name: "下载正面 + 侧面", exact: true }).click();
+  const saved = await download;
+  const bytes = readFileSync((await saved.path())!);
+  const size: [number, number] = [bytes.readUInt32BE(16), bytes.readUInt32BE(20)];
+  stages.push({
+    phase: "download",
+    heapBeforeGc: beforeDownload,
+    heap: await heap.sample(false),
+    heapAfterGc: await heap.sample(true),
+    download: { bytes: bytes.length, size, pngSignature: bytes[0] === 137 },
+    note: "下载尺寸用 Node IHDR，不把 PNG 送回页面以免污染 heap。导出 canvas 不在 DOM。",
+  });
+  expect(size).toEqual([3000, 3600]);
+
   await page.goto("about:blank");
-  await page.waitForTimeout(200);
-  stages.push({ phase: "left-page", heap: await heap(),
-    note: "离页后 JS heap 不一定立即回收；不能据此宣称泄漏或已释放 GPU 纹理" });
+  await page.waitForTimeout(250);
+  stages.push({
+    phase: "left-page",
+    heap: await heap.sample(false),
+    heapAfterGc: await heap.sample(true),
+    note: "离页后 JS heap 不一定立即回收；cache probe 在 blank 页应为 0 或 probe=false。不能据此宣称已释放 GPU 纹理",
+  });
 
+  const cacheSizes = stages
+    .map((row) => {
+      const heapRow = (row.heapAfterGc || row.heap) as { cache?: { size: number | null } } | undefined;
+      return typeof heapRow?.cache?.size === "number" ? heapRow.cache.size : null;
+    })
+    .filter((size): size is number => size != null);
   const payload = {
     recorded_at: new Date().toISOString(),
+    gitHead: execFileSync("git", ["rev-parse", "HEAD"], { cwd: UI_ROOT, encoding: "utf8" }).trim(),
     browser: browserName,
-    userAgent: await page.evaluate(() => navigator.userAgent),
-    viewport: { width: 1440, height: 900 },
-    fixture: "synthetic-png-800x960-alpha-product",
-    machine: { platform: process.platform, arch: process.arch },
-    method: "Playwright Chromium + API 全拦截；无登录生产页、无真实 API、不占用 :5173 产品 dev（PLAYWRIGHT_ARTIFACT_ONLY）",
-    disclaimer: "本机合成性能不代表杭州或真实用户。DOM/rAF 不是屏幕实际合成时刻。",
+    userAgent: await page.evaluate(() => navigator.userAgent).catch(() => ""),
+    viewport: { width: 1440, height: 900, dpr: 1 },
+    fixture: "synthetic-png-card-1200x1440-full-3000x3600-alpha-product",
+    machine: q05Machine(),
+    sources: {
+      mockupStudio: fileSha("src/pages/mockupStudio.ts"),
+      mockupPage: fileSha("src/pages/MockupPage.tsx"),
+      thisSpec: fileSha("e2e/mockup-preview-upgrade.spec.ts"),
+    },
+    method: "Playwright Chromium + API 全拦截；PLAYWRIGHT_ARTIFACT_ONLY=1；不连 Hono/杭州/真实稿；5173 有无占用不影响拦截。CDP HeapProfiler.collectGarbage + Runtime.getHeapUsage。",
+    disclaimer: "本机合成性能不代表杭州或真实用户。DOM/rAF/CDP heap 不是屏幕合成精确时刻，也不是 GPU 纹理占用。",
+    adr_17_4: "网络完成后仍需 decode；decode 就绪后下一可用绘制机会替换。不声称 rAF 等于屏幕合成时刻。",
     stages,
   };
   const out = testInfo.outputPath("q05-heap-raf.json");
@@ -784,6 +997,14 @@ test("Q05 切代/resize/离页：记录 heap 与 rAF 间隔，不把 rAF 当成�
     mkdirSync(MEASURE_DIR, { recursive: true });
     writeFileSync(join(MEASURE_DIR, "q05-heap-raf.json"), JSON.stringify(payload, null, 2));
   }
-  expect(stages.some((row) => row.phase === "full-visible")).toBe(true);
+  expect(stages.some((row) => row.phase === "card-visible")).toBe(true);
+  expect(stages.some((row) => row.phase === "full-replace-px")).toBe(true);
+  expect(stages.some((row) => row.phase === "lightbox-open")).toBe(true);
+  expect(stages.some((row) => row.phase === "download")).toBe(true);
   expect(stages.some((row) => row.phase === "left-page")).toBe(true);
+  expect(size).toEqual([3000, 3600]);
+  if (cacheSizes.length >= 2) {
+    const peak = Math.max(...cacheSizes);
+    expect(peak).toBeLessThan(40);
+  }
 });
