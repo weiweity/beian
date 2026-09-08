@@ -34,7 +34,7 @@
 | `docs/adr-004-ousterhout-design.md` | 深模块、唯一入口、8/31 前不拆引擎 |
 | `docs/adr-005-packaging-structure-v2.md` | 包装语义 IR、人工确认闸门与 V1 退场条件 |
 | `docs/adr-006-continuous-complexity-governance.md` | TypeScript 控制面 / Python 计算内核边界、死代码单调基线与 PR 质量门禁 |
-| `docs/adr-007-packaging-render-fidelity.md` | 包装 3D 渲染真实感、材质、棚光、清晰度、能力矩阵与评测合同；RF-00–07 已合入 main（RF-07 为 `88321a90` / `0.21.41.0`，仅诊断 registry）；RF-08 投影采样已有诊断 profile 的 Code/L0；RF-09 浏览器分层升级与下载冻结已完成本地实现、合成验证和独立复核；剩余验收与 RF-10+ 见 [TODOS.md](TODOS.md) |
+| `docs/adr-007-packaging-render-fidelity.md` | 包装 3D 渲染真实感、材质、棚光、清晰度、能力矩阵与评测合同；RF-00–07 已合入 main（RF-07 为 `88321a90` / `0.21.41.0`，仅诊断 registry）；RF-08 投影采样已有诊断 profile 的 Code/L0；RF-09 浏览器分层升级与下载冻结已完成本地实现、合成验证和独立复核；RF-10 三层质量门已接到 evaluator / generation（Code/普通 L0），正式 baseline 仍不存在；RF-11 本地 Blender 合同冒烟 wrapper 已接线，杭州 90 秒预算未冻结。剩余 L1/L2/UAT 与生产注册见 [TODOS.md](TODOS.md) |
 | [RF-03 runtime 收口记录](docs/designs/packaging-quality-rf03-runtime-closeout.md) | 本次独立候选的 L0 证据、原开发树的历史轮次，以及生产注册、Windows 原生和真实验收边界 |
 | [RF-04 出图版本交付记录](docs/designs/packaging-quality-rf04-closeout.md) | 同代文件读取、历史切换、创建幂等、失败留图与本次独立验证；生产新代执行仍未开放 |
 | [RF-05 纸盒几何交付记录](docs/designs/packaging-quality-rf05-closeout.md) | 显式 family 分派、纸板壳/倒角、完整六面 UV 与 GLB 验证；旧 profile 保持，生产升级仍关闭 |
@@ -53,7 +53,7 @@
 | `TODOS.md` | 未做项 |
 | [AGENTS.md](AGENTS.md) | 授权、任务路由和完成条件；详细工程合同按主题链接读取 |
 | `scripts/windows/README.md` | 杭州 Windows 生产备忘 |
-| `workers/packaging/README.md` | 打样 CLI、`PackagingStructure` 语义合同、完整盒型与正面锚点确认、pymupdf 平面出图、白底/印刷面/PPT/GLB 产物合同，以及 RF-00 测量尺、RF-02 同步回滚、RF-03 本地候选验证/资源生命周期，以及 RF-06/RF-07/RF-08 诊断 registry 边界 |
+| `workers/packaging/README.md` | 打样 CLI、`PackagingStructure` 语义合同、完整盒型与正面锚点确认、pymupdf 平面出图、白底/印刷面/PPT/GLB 产物合同，以及 RF-00/RF-10 测量尺与三层质量结果、RF-11 Blender 合同冒烟、RF-02 同步回滚、RF-03 本地候选验证/资源生命周期，以及 RF-06/RF-07/RF-08 诊断 registry 边界 |
 
 ## 本机启动
 
