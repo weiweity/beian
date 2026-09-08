@@ -7,6 +7,7 @@ facts. Machine results never write human_acceptance or production_ready.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from hmac import compare_digest
 from typing import Any
 
 
@@ -16,9 +17,6 @@ HUMAN_PENDING = "pending"
 HUMAN_ACCEPTED = "accepted"
 HUMAN_REJECTED = "rejected"
 ALLOWED_HUMAN = (HUMAN_PENDING, HUMAN_ACCEPTED, HUMAN_REJECTED)
-RUNTIME_STATUSES = ("pass", "fail", "not-run")
-FIXTURE_STATUSES = ("pass", "fail", "not-run", "baseline_mismatch", "baseline_absent")
-VISUAL_STATUSES = ("warn", "observed", "not-run")
 
 
 def _reasons(*parts: str | None) -> list[str]:
@@ -145,6 +143,13 @@ def classify_quality_layers(
     }
 
 
+def _fingerprint_values_equal(left: Any, right: Any) -> bool:
+    """Exact compare. Use compare_digest only for equal-length strings."""
+    if isinstance(left, str) and isinstance(right, str):
+        return len(left) == len(right) and compare_digest(left, right)
+    return left == right
+
+
 def compare_fixture_metric_fingerprints(
     current: Mapping[str, Mapping[str, Any]],
     baseline: Mapping[str, Mapping[str, Any]],
@@ -172,7 +177,7 @@ def compare_fixture_metric_fingerprints(
                 return False, f"metric_missing:{fixture_id}:{absent[0]}"
             return False, f"metric_unexpected:{fixture_id}:{added[0]}"
         for key in sorted(left):
-            if left[key] != right[key]:
+            if not _fingerprint_values_equal(left[key], right[key]):
                 return False, f"metric_regression:{fixture_id}:{key}"
     return True, "ok"
 

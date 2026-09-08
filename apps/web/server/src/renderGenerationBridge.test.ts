@@ -91,6 +91,10 @@ process.stdin.on('end', () => {
   if (behavior === 'asset-mismatch') result.source_identity.assets.front=hash('wrong');
   if (behavior === 'plan-mismatch') result.candidate_plan_identity=hash('wrong');
   if (behavior === 'quality-pass') result.quality.production_ready=true;
+  if (behavior === 'quality-runtime-fail') result.quality.runtime_gate='fail';
+  if (behavior === 'quality-runtime-not-run') result.quality.runtime_gate='not-run';
+  if (behavior === 'quality-human-accepted') result.quality.human_acceptance='accepted';
+  if (behavior === 'quality-fixture-pass') result.quality.fixture_regression='pass';
   if (behavior === 'lighting-mismatch') result.studio_adjustment={product_light:4,background_light:4};
   if (behavior === 'source-changed') fs.appendFileSync(path.join(req.job_root,'resolved_job.json'), ' ');
   if (behavior === 'asset-changed') fs.appendFileSync(JSON.parse(fs.readFileSync(path.join(req.job_root,'resolved_job.json'))).assets.front, '!');
@@ -471,7 +475,8 @@ describe("RF-03C2.1 async render bridge", { skip: !renderGenerationProcessSuppor
     assert.equal(existsSync(f.candidate), false);
   });
 
-  for (const behavior of ["source-mismatch", "asset-mismatch", "plan-mismatch", "quality-pass", "lighting-mismatch",
+  for (const behavior of ["source-mismatch", "asset-mismatch", "plan-mismatch", "quality-pass", "quality-human-accepted",
+    "quality-fixture-pass", "lighting-mismatch",
     "source-changed", "asset-changed", "bad-json", "nonzero", "stdout-budget", "stderr-budget"]) {
     it(`rejects validation ${behavior}`, async () => {
       const f = fixture();
@@ -482,7 +487,8 @@ describe("RF-03C2.1 async render bridge", { skip: !renderGenerationProcessSuppor
   }
 
   for (const behavior of ["output-hash", "output-size", "output-path", "output-symlink", "missing-output",
-    "missing-nonce", "execution-identity", "candidate-path", "source-changed", "asset-changed", "quality-pass"]) {
+    "missing-nonce", "execution-identity", "candidate-path", "source-changed", "asset-changed", "quality-pass",
+    "quality-runtime-fail", "quality-runtime-not-run"]) {
     it(`rejects candidate ${behavior} without marking ready`, async () => {
       const f = fixture();
       const receipt = await f.bridge.verify(f.input);

@@ -9,6 +9,9 @@
 ### Changed
 - 质量 CLI 输出三层结果、身份和采样事实；缺 Blender 或缺正式 baseline 不再假绿。普通运行仍不更新正式 baseline。
 
+### Fixed
+- 杭州发版里的 Blender 合同冒烟改用 PowerShell 5.1 可用的环境变量接口，并传入已解析的 Python；机器上还没配置 Blender 时跳过，避免把整个发版回滚。
+
 ## [0.21.43.0] - 2026-09-07
 
 ### Fixed

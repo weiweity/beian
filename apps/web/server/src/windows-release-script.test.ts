@@ -866,6 +866,14 @@ describe("windows release.ps1 contract", () => {
     assert.match(blenderSmoke, /WaitForExit\(\$TimeoutMs\)/);
     assert.match(blenderSmoke, /timed out and could not be killed/);
     assert.match(blenderSmoke, /WINDOWS_BLENDER_CONTRACT_SMOKE ok/);
+    assert.match(blenderSmoke, /EnvironmentVariables\["RUNNER_TEMP"\]/);
+    assert.match(blenderSmoke, /ReadToEndAsync\(\)/);
+    assert.match(blenderSmoke, /taskkill\.exe \/PID/);
+    assert.doesNotMatch(blenderSmoke, /Environment\["RUNNER_TEMP"\]/);
+    assert.match(script, /-Python \$releasePython/);
+    assert.match(script, /TimeoutMs 720000/);
+    assert.match(script, /Blender 合同冒烟跳过：未解析到 BLENDER_EXECUTABLE/);
+    assert.match(script, /BLENDER_EXECUTABLE/);
     assert.doesNotMatch(blenderSmoke, /compare_glb_artifact_contract/);
     assert.doesNotMatch(blenderSmoke, /generation\.json/);
     assert.doesNotMatch(blenderSmoke, /sealGeneration/);

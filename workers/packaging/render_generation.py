@@ -1385,7 +1385,8 @@ def _run_request(request: Mapping[str, Any]) -> dict[str, Any]:
     evidence, warnings = collect_output_evidence(rendered)
     check_output_byte_budget(rendered, result["resource_admission"]["candidate_output_ceiling_bytes"])
     # Inspect actual geometry/UV/material bytes, not the worker's dimensions or
-    # success boolean. This subgate alone does not authorize runtime quality.
+    # success boolean. RF-10 runtime hard (artifact/resource) — not visual
+    # acceptance or production_ready.
     glb_path = Path(evidence["glb"]["path"])
     report = compare_glb_artifact_contract(
         load_glb_artifact(glb_path, max_bytes=MAX_FILE_BYTES), rendered["assets"],

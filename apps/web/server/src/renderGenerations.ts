@@ -168,7 +168,7 @@ export type QualityVerifyInput = {
   faces: Record<RenderFace, string>;
 };
 
-export type QualityVerifyLayers = {
+type QualityVerifyLayers = {
   runtime_hard: "pass" | "fail" | "not-run";
   fixture_regression_hard: "pass" | "fail" | "not-run" | "baseline_mismatch" | "baseline_absent";
   human_acceptance: "pending" | "accepted" | "rejected";

@@ -297,6 +297,12 @@ def test_cli_request_budget_before_json_or_source_reads(tmp_path: Path, use_stdi
     result = json.loads(run.stdout.splitlines()[-1])
     assert result["cause"] == "request_budget"
     assert result["ok"] is False
+    quality = result["quality"]
+    assert quality["status"] == "layered"
+    assert quality["runtime_gate"] == "fail"
+    assert quality["fixture_regression"] == "not-run"
+    assert quality["human_acceptance"] == "pending"
+    assert quality["production_ready"] is False
 
 
 @pytest.mark.skipif(sys.platform not in ("darwin", "linux"), reason="C2 bridge requires POSIX group evidence; Windows containment is not implemented")

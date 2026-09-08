@@ -1,21 +1,14 @@
 from __future__ import annotations
 
 import copy
-import hashlib
 import importlib.util
 import json
 from pathlib import Path
 
-from PIL import Image, ImageDraw
 import pytest
 
 from test_packaging_render_quality import (
-    EVAL_PATH,
     PACKAGING,
-    _approvable_report,
-    _carton,
-    _complete_deps,
-    _complete_identity,
     _install_successful_fake_pipeline,
     eval_module,
 )
@@ -172,6 +165,24 @@ def test_metric_fingerprint_compare_is_exact_and_closed():
     ok, reason = ql.compare_fixture_metric_fingerprints(missing, baseline)
     assert ok is False
     assert reason == "metric_missing:rf00-white-carton:glb.sha256"
+
+
+def test_metric_fingerprint_accepts_bool_and_mapping_leaves():
+    ql = layers_module()
+    payload = {
+        "rf00-white-carton": {
+            "rendered": True,
+            "family_status": "supported",
+            "glb.sha256": "b" * 64,
+            "front_right.white_separation": {"status": "measured", "mean": 0.12},
+        }
+    }
+    assert ql.compare_fixture_metric_fingerprints(payload, payload) == (True, "ok")
+    drifted = copy.deepcopy(payload)
+    drifted["rf00-white-carton"]["rendered"] = False
+    ok, reason = ql.compare_fixture_metric_fingerprints(drifted, payload)
+    assert ok is False
+    assert reason == "metric_regression:rf00-white-carton:rendered"
 
 
 def test_runtime_quality_report_never_sets_human_or_production_ready():
@@ -350,3 +361,137 @@ def test_explicit_temp_baseline_update_does_not_touch_official_path(
     assert (tmp_path / "temp-approved.json").is_file()
     assert not official.exists()
     assert report["human_acceptance"] == "pending"
+
+
+def test_identity_unverified_with_blender_ready_is_runtime_fail():
+    ql = layers_module()
+    result = ql.classify_quality_layers(
+        render_requested=True,
+        blender_ready=True,
+        identity_verified=False,
+        identity_reason="identity_changed_during_run",
+        runtime_complete=True,
+        baseline_present=True,
+        baseline_status="ok",
+        fixture_metrics_ok=True,
+    )
+    assert result["runtime_hard"]["status"] == "fail"
+    assert result["runtime_hard"]["blocks_current"] is True
+    assert "identity_changed_during_run" in result["runtime_hard"]["reasons"]
+    assert result["fixture_regression_hard"]["status"] == "not-run"
+    assert result["official_machine_green"] is False
+    assert result["human_acceptance"] == "pending"
+
+
+def test_invalid_baseline_status_fails_fixture_not_visual():
+    ql = layers_module()
+    result = ql.classify_quality_layers(
+        render_requested=True,
+        blender_ready=True,
+        identity_verified=True,
+        runtime_complete=True,
+        baseline_present=True,
+        baseline_status="invalid",
+        baseline_reason="approved_baseline_invalid",
+        fixture_metrics_ok=True,
+    )
+    assert result["runtime_hard"]["status"] == "pass"
+    assert result["fixture_regression_hard"]["status"] == "fail"
+    assert result["fixture_regression_hard"]["visual_task_fail"] is False
+    assert result["fixture_regression_hard"]["blocks_current"] is False
+    assert "approved_baseline_invalid" in result["fixture_regression_hard"]["reasons"]
+    assert result["official_machine_green"] is False
+
+
+def test_unknown_fixture_metric_state_is_not_run():
+    ql = layers_module()
+    result = ql.classify_quality_layers(
+        render_requested=True,
+        blender_ready=True,
+        identity_verified=True,
+        runtime_complete=True,
+        baseline_present=True,
+        baseline_status="ok",
+        fixture_metrics_ok=None,
+    )
+    assert result["runtime_hard"]["status"] == "pass"
+    assert result["fixture_regression_hard"]["status"] == "not-run"
+    assert "fixture_regression_not_run" in result["fixture_regression_hard"]["reasons"]
+    assert result["human_acceptance"] == "pending"
+
+
+def test_invalid_human_acceptance_is_rejected():
+    ql = layers_module()
+    with pytest.raises(ValueError, match="human_acceptance_invalid"):
+        ql.classify_quality_layers(
+            render_requested=True,
+            blender_ready=True,
+            identity_verified=True,
+            runtime_complete=True,
+            baseline_present=True,
+            baseline_status="ok",
+            fixture_metrics_ok=True,
+            human_acceptance="approved",
+        )
+
+
+def test_metric_fingerprint_rejects_non_mapping_and_extra_keys():
+    ql = layers_module()
+    baseline = {"rf00-white-carton": {"glb.sha256": "b" * 64}}
+    ok, reason = ql.compare_fixture_metric_fingerprints("not-a-map", baseline)
+    assert ok is False
+    assert reason == "fixture_fingerprint_invalid"
+    extra_fixture = {
+        "rf00-white-carton": {"glb.sha256": "b" * 64},
+        "rf00-extra": {"glb.sha256": "c" * 64},
+    }
+    ok, reason = ql.compare_fixture_metric_fingerprints(extra_fixture, baseline)
+    assert ok is False
+    assert reason == "fixture_unexpected:rf00-extra"
+    extra_metric = {"rf00-white-carton": {"glb.sha256": "b" * 64, "front.pixel_sha256": "a" * 64}}
+    ok, reason = ql.compare_fixture_metric_fingerprints(extra_metric, baseline)
+    assert ok is False
+    assert reason == "metric_unexpected:rf00-white-carton:front.pixel_sha256"
+
+
+def test_observations_are_warn_not_blocking_or_human_accept():
+    ql = layers_module()
+    result = ql.classify_quality_layers(
+        render_requested=True,
+        blender_ready=True,
+        identity_verified=True,
+        runtime_complete=True,
+        baseline_present=True,
+        baseline_status="ok",
+        fixture_metrics_ok=True,
+        observations=[{"code": "white_separation_recorded", "blocking": False}],
+    )
+    assert result["warning_human"]["status"] == "warn"
+    assert result["warning_human"]["blocks_current"] is False
+    assert result["human_acceptance"] == "pending"
+    assert result["fixture_regression_hard"]["visual_task_fail"] is False
+    assert result["production_ready"] is False
+
+
+def test_metric_fingerprint_missing_fixture_id_fails_closed():
+    ql = layers_module()
+    baseline = {
+        "rf00-white-carton": {"glb.sha256": "b" * 64},
+        "rf00-dark-carton": {"glb.sha256": "c" * 64},
+    }
+    current = {"rf00-white-carton": {"glb.sha256": "b" * 64}}
+    ok, reason = ql.compare_fixture_metric_fingerprints(current, baseline)
+    assert ok is False
+    assert reason == "fixture_missing:rf00-dark-carton"
+
+
+def test_runtime_quality_report_rejects_invalid_gate():
+    ql = layers_module()
+    with pytest.raises(ValueError, match="runtime_gate_invalid"):
+        ql.build_runtime_quality_report(action="render-candidate", runtime_gate="ok")
+    noted = ql.build_runtime_quality_report(
+        action="render-candidate", runtime_gate="fail", note="custom-runtime-fail"
+    )
+    assert noted["note"] == "custom-runtime-fail"
+    assert noted["human_acceptance"] == "pending"
+    assert noted["production_ready"] is False

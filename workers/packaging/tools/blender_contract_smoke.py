@@ -14,7 +14,6 @@ import importlib.util
 import json
 import os
 from pathlib import Path
-import sys
 import uuid
 
 
@@ -89,13 +88,13 @@ def verify_rendered_contract(eval_mod: object, report: dict) -> str | None:
                 (job.get("render") or {}).get("substrate_rgba"),
                 geometry=((job.get("render_spec") or {}).get("geometry")),
                 render_identity=job,
-                material_layers=gen.material_runtime_from_job(job) if hasattr(gen, "material_runtime_from_job") else None,
+                material_layers=gen.material_runtime_from_job(job),
             )
         except Exception:
             return "runtime_glb_quality"
         if not isinstance(glb_report, dict) or glb_report.get("ok") is not True:
             return "runtime_glb_quality"
-        for face in getattr(gen, "SEMANTIC_FACES", ()):
+        for face in gen.SEMANTIC_FACES:
             path = Path(str(assets.get(face) or ""))
             reported = ((item.get("outputs") or {}).get(f"read_{face}") or {}).get("sha256") or {}
             value = reported.get("value") if isinstance(reported, dict) else None
