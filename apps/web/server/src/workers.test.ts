@@ -112,3 +112,21 @@ describe("runPython output bounds", () => {
     assert.deepEqual(stages, ["STAGE ocr"]);
   });
 });
+
+
+it("print-face worker identity binds job and attempt, and never matches the packaging pipeline", () => {
+  const expected = { kind: "print_faces" as const, id: "aa00aa00aa01", executionId: "a".repeat(32) };
+  const command = `python repair_print_faces.py --execution-id ${expected.executionId} --job-dir /tmp/${expected.id} --assets /tmp/staging`;
+  assert.equal(workerCommandMatches(command, expected), true);
+  assert.equal(workerCommandMatches(command, { ...expected, executionId: "b".repeat(32) }), false);
+  assert.equal(workerCommandMatches(command, { ...expected, id: "aa00aa00aa02" }), false);
+  assert.equal(workerCommandMatches(command, { kind: "mockup", id: expected.id }), false);
+});
+
+it("spawn bookkeeping failure terminates the child before rejecting", async () => {
+  let pid = 0;
+  await assert.rejects(runPython({ args: ["-c", "import time; time.sleep(30)"], timeoutMs: 1000,
+    onSpawn: value => { pid = value; throw new Error("synthetic persist failure"); } }), /synthetic persist failure/);
+  assert.ok(pid > 0);
+  assert.equal(pidAlive(pid), false);
+});

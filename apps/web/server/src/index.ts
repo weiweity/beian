@@ -1472,7 +1472,8 @@ app.post("/api/mockups/:id/print-faces", async (c) => {
   const s = need(c, "create");
   try {
     const job = await repairMockupPrintFaces(assertTid(c.req.param("id")), viewerFromSession(s));
-    return c.json(decorateQueueAhead([publishMockup(job, s)])[0]);
+    return c.json(decorateQueueAhead([publishMockup(job, s)])[0],
+      job.print_faces_request?.status === "queued" || job.print_faces_request?.status === "running" ? 202 : 200);
   } catch (e) {
     boom(e);
   }

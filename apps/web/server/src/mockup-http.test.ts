@@ -1760,6 +1760,16 @@ function writeRequiredFaces(assets: string) {
   }
 }
 
+async function waitPrintFaces(id: string) {
+  const { readMockupFromDisk } = await import("./mockup.js");
+  for (let attempt = 0; attempt < 100; attempt++) {
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const job = readMockupFromDisk(id)!;
+    if (job.print_faces_request?.status === "succeeded" || job.print_faces_request?.status === "failed") return job;
+  }
+  throw new Error("补印刷面未结束");
+}
+
 describe("mockup print-faces http", { concurrency: false }, () => {
   it("GET detail returns can_repair without paths; list does not scan", async () => {
     seedPrintFaceJob("aa01aa01aa01", "ou_pf_get");
@@ -1809,8 +1819,10 @@ describe("mockup print-faces http", { concurrency: false }, () => {
         method: "POST",
         headers: { authorization: `Bearer ${sess.token}` },
       });
-      assert.equal(res.status, 200);
-      const body = (await res.json()) as {
+      assert.equal(res.status, 202);
+      await waitPrintFaces("aa03aa03aa03");
+      const detail = await app.request("/api/mockups/aa03aa03aa03", { headers: { authorization: `Bearer ${sess.token}` } });
+      const body = (await detail.json()) as {
         status?: string;
         can_repair_print_faces?: boolean;
         files?: Array<{ key: string }>;
@@ -1882,8 +1894,10 @@ describe("mockup print-faces http", { concurrency: false }, () => {
         method: "POST",
         headers: { authorization: `Bearer ${peer.token}` },
       });
-      assert.equal(res.status, 200);
-      const body = (await res.json()) as {
+      assert.equal(res.status, 202);
+      await waitPrintFaces("aa13aa13aa13");
+      const detail = await app.request("/api/mockups/aa13aa13aa13", { headers: { authorization: `Bearer ${peer.token}` } });
+      const body = (await detail.json()) as {
         print_faces_repaired_by?: string;
         print_faces_repaired_at?: string;
       };
@@ -1934,7 +1948,7 @@ describe("mockup print-faces http", { concurrency: false }, () => {
     }
   });
 
-  it("same-job second POST is 409; another job is 429", async () => {
+  it("same-job second POST reuses work; another job is durably queued", async () => {
     const { setJobsTestHooks, resetJobsTestHooks } = await import("./jobs.js");
     seedPrintFaceJob("aa10aa10aa10", "ou_pf_hold");
     seedPrintFaceJob("aa11aa11aa11", "ou_pf_wait");
@@ -1966,19 +1980,21 @@ describe("mockup print-faces http", { concurrency: false }, () => {
         method: "POST",
         headers: { authorization: `Bearer ${firstOwner.token}` },
       });
-      assert.equal(again.status, 409);
-      const againBody = (await again.json()) as { detail?: string };
-      assert.equal(againBody.detail, "正在切，不要重复点。");
+      assert.equal(again.status, 202);
+      const againBody = (await again.json()) as { print_faces_repair?: { status: string } };
+      assert.equal(againBody.print_faces_repair?.status, "running");
       const other = await app.request("/api/mockups/aa11aa11aa11/print-faces", {
         method: "POST",
         headers: { authorization: `Bearer ${secondOwner.token}` },
       });
-      assert.equal(other.status, 429);
-      const otherBody = (await other.json()) as { detail?: string };
-      assert.equal(otherBody.detail, "前面还有切面在跑，请稍后再试。");
+      assert.equal(other.status, 202);
+      const otherBody = (await other.json()) as { print_faces_repair?: { status: string } };
+      assert.equal(otherBody.print_faces_repair?.status, "queued");
       release();
       const done = await first;
-      assert.equal(done.status, 200);
+      assert.equal(done.status, 202);
+      await waitPrintFaces("aa10aa10aa10");
+      await waitPrintFaces("aa11aa11aa11");
     } finally {
       release();
       resetJobsTestHooks();
@@ -1998,9 +2014,9 @@ describe("mockup print-faces http", { concurrency: false }, () => {
         method: "POST",
         headers: { authorization: `Bearer ${sess.token}` },
       });
-      assert.equal(res.status, 409);
-      const body = (await res.json()) as { detail?: string };
-      assert.equal(body.detail, "切面失败，请稍后再试。");
+      assert.equal(res.status, 202);
+      const finished = await waitPrintFaces("aa12aa12aa12");
+      assert.equal(finished.print_faces_request?.error, "切面失败，请稍后再试。");
       assert.deepEqual(readFileSync(join(dir, "assets", "panel_front.png")), before);
       const detail = await app.request("/api/mockups/aa12aa12aa12", {
         headers: { authorization: `Bearer ${sess.token}` },

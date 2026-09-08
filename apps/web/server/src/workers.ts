@@ -22,7 +22,7 @@ export type RunPythonOpts = {
 export type WorkerProcessIdentity = {
   kind: "compare" | "rework" | "mockup";
   id: string;
-} | { kind: "render_generation"; id: string; mutationId: string; executionId: string;
+} | { kind: "print_faces"; id: string; executionId: string } | { kind: "render_generation"; id: string; mutationId: string; executionId: string;
   container?: "windows-job-object/1" };
 
 export type WorkerProcessState = "owned" | "missing" | "other" | "unknown";
@@ -105,6 +105,13 @@ export function workerCommandMatches(commandLine: string, expected: WorkerProces
     const script = tokens.findIndex(token => /(^|[\\/])render_generation\.py$/i.test(token));
     return script >= 0 && tokens[script + 1] === "-" && tokens[script + 2] === "--execution-id"
       && tokens[script + 3] === expected.executionId && tokens.length === script + 4;
+  }
+  if (expected.kind === "print_faces") {
+    const script = tokens.findIndex(token => /(^|[\\/])repair_print_faces\.py$/i.test(token));
+    const execution = tokens.indexOf("--execution-id", script + 1);
+    const job = tokens.indexOf("--job-dir", script + 1);
+    return script >= 0 && execution > script && tokens[execution + 1] === expected.executionId
+      && job > script && String(tokens[job + 1] || "").replace(/\\/g, "/").split("/").pop() === expected.id;
   }
   if (expected.kind === "mockup") {
     const pipeline = tokens.findIndex((token) => /(^|[\\/])pipeline\.py$/i.test(token));
@@ -207,7 +214,7 @@ export function runPython(opts: RunPythonOpts): Promise<RunPythonResult> {
       stdio: ["ignore", "pipe", "pipe"],
     });
     const pid = child.pid;
-    if (pid && opts.onSpawn) opts.onSpawn(pid);
+    let spawnError: unknown;
     const stdout = new ByteTail();
     const stderr = new ByteTail();
     let stderrRest = "";
@@ -216,7 +223,8 @@ export function runPython(opts: RunPythonOpts): Promise<RunPythonResult> {
     const finish = (code: number) => {
       if (settled) return;
       settled = true;
-      resolve({ code, stdout: stdout.text(), stderr: stderr.text(), timedOut, pid });
+      if (spawnError) reject(spawnError);
+      else resolve({ code, stdout: stdout.text(), stderr: stderr.text(), timedOut, pid });
     };
     const timer = setTimeout(() => {
       timedOut = true;
@@ -246,6 +254,11 @@ export function runPython(opts: RunPythonOpts): Promise<RunPythonResult> {
       if (stderrRest.trim() && opts.onStderrLine) opts.onStderrLine(stderrRest.trim());
       finish(code ?? 1);
     });
+    try { if (pid) opts.onSpawn?.(pid); }
+    catch (error) {
+      spawnError = error;
+      if (pid) killTree(pid, true);
+    }
   });
 }
 
@@ -398,6 +411,8 @@ export async function confirmPackagingStructure(opts: ConfirmPackagingStructureO
 }
 
 export type PrintFaceRepairOpts = {
+  executionId: string;
+  onSpawn?: (pid: number) => void;
   jobDir: string;
   artwork: string;
   resolved: string;
@@ -408,6 +423,7 @@ export async function runPrintFaceRepair(opts: PrintFaceRepairOpts): Promise<Run
   return runPython({
     args: [
       "repair_print_faces.py",
+      "--execution-id", opts.executionId,
       "--job-dir",
       opts.jobDir,
       "--artwork",
@@ -419,5 +435,6 @@ export async function runPrintFaceRepair(opts: PrintFaceRepairOpts): Promise<Run
     ],
     cwd: PACKAGING,
     timeoutMs: 60_000,
+    onSpawn: opts.onSpawn,
   });
 }
