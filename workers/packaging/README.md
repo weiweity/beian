@@ -2,7 +2,7 @@
 
 这是包装平面稿到既有 Blender 流水线的本地批处理入口。V2 不再把“红线、间距或 bbox 看起来像盒子”当作可自动接受的结构事实；它消费版本化 `PackagingStructure`，把结构识别、拓扑验证、人工确认和 3D 生成分开。旧 `dieline.py` 只保留给命令行诊断，不在网页新任务路径中。
 
-结构事实与成盒闸门以 `docs/adr-005-packaging-structure-v2.md` 为准；渲染真实感、family 几何分派、纸材/涂层、棚光、清晰度预算和质量评测以 `docs/adr-007-packaging-render-fidelity.md` 为准。RF-00 测量尺、RF-01 独立合同和 RF-02 流水线接线（含 RF-02.3 磁盘执行边界）已交 Code/L0：新 V2 任务在切面栅格前解析 persistable render plan，写入 resolved job、fingerprint 和 result；这没有改变 Blender 几何或棚光。非 V2 只是命令行诊断路径，不是网页产品通道。RF-03 本地产物验证、资源生命周期与 Windows 托管代码，以及 RF-04 出图版本 API/UI、RF-05 显式纸盒壳几何已实现；RF-06 显式分层材质已合入 `main` `d2657f0` / `0.21.40.0`，仅在诊断 registry/候选 profile 中生效，见 [RF-06 交付记录](../../docs/designs/packaging-quality-rf06-closeout.md)；RF-07 尺寸归一显式棚光与 Standard/Neutral/AgX 受控对照已合入 `main` `88321a90` / `0.21.41.0`，仍只在诊断 registry 生效，见 [RF-07 交付记录](../../docs/designs/packaging-quality-rf07-closeout.md)；RF-08 投影 Jacobian 切面预算同样只在诊断 registry 生效，见 [RF-08 交付记录](../../docs/designs/packaging-quality-rf08-closeout.md)；RF-09 浏览器分层升级已完成本地实现与合成验证；RF-10/RF-11 已合 `0.21.44.0`（Code/普通 L0）；`0.21.45.0` 发版 L1 已过且杭州真跑 Blender 5.2 冒烟约 63s。`0.21.46.0` 冻结 90 秒并用 Job Object 杀树；质量门杭州实跑须下次发版证明。生产注册、approved baseline、L2/UAT 和断电耐久性见 [TODOS.md](../../TODOS.md)。`0.21.25.0` 起的膜袋仍只是 `add_box` 生成的 3 mm 薄盒预览，不是写实软袋。
+结构事实与成盒闸门以 `docs/adr-005-packaging-structure-v2.md` 为准；渲染真实感、family 几何分派、纸材/涂层、棚光、清晰度预算和质量评测以 `docs/adr-007-packaging-render-fidelity.md` 为准。RF-00 测量尺、RF-01 独立合同和 RF-02 流水线接线（含 RF-02.3 磁盘执行边界）已交 Code/L0：新 V2 任务在切面栅格前解析 persistable render plan，写入 resolved job、fingerprint 和 result；这没有改变 Blender 几何或棚光。非 V2 只是命令行诊断路径，不是网页产品通道。RF-03 本地产物验证、资源生命周期与 Windows 托管代码，以及 RF-04 出图版本 API/UI、RF-05 显式纸盒壳几何已实现；RF-06 显式分层材质已合入 `main` `d2657f0` / `0.21.40.0`，仅在诊断 registry/候选 profile 中生效，见 [RF-06 交付记录](../../docs/designs/packaging-quality-rf06-closeout.md)；RF-07 尺寸归一显式棚光与 Standard/Neutral/AgX 受控对照已合入 `main` `88321a90` / `0.21.41.0`，仍只在诊断 registry 生效，见 [RF-07 交付记录](../../docs/designs/packaging-quality-rf07-closeout.md)；RF-08 投影 Jacobian 切面预算同样只在诊断 registry 生效，见 [RF-08 交付记录](../../docs/designs/packaging-quality-rf08-closeout.md)；RF-09 浏览器分层升级已完成本地实现与合成验证；RF-10/RF-11 已合 `0.21.44.0`（Code/普通 L0）；`0.21.46.0` 发版 L1 已过且杭州真跑冒烟约 62s，质量门杭州实跑（90s 冻结、Job Object 成功路径）已满足。生产注册、approved baseline、L2/UAT 和断电耐久性见 [TODOS.md](../../TODOS.md)。`0.21.25.0` 起的膜袋仍只是 `add_box` 生成的 3 mm 薄盒预览，不是写实软袋。
 
 RF-03 新候选路径由 `render_generation.py` 校验实际 GLB、full/card 和六面 PNG 网格，Hono 的 `renderGenerationBudget.ts` 把磁盘预留、运行输出/RSS 采样、封存与最终 current 提交绑定到同一资源和时间预算。一次性 `runtime_verified` 凭证仅表示本轮产物合同与资源执行验证，不代表人工视觉通过。正常 registry 只接受系统临时目录内的显式本地评审数据根，生产注册与主 Node 桥的 Windows 新建仍关闭，没有可打开生产能力的环境开关。独立候选 L0、历史开发证据和未完成门见 [RF-03 收口记录](../../docs/designs/packaging-quality-rf03-runtime-closeout.md)。 RF-04 在同一打样单提供“出图版本”：历史切换改变团队共享 current，不启动 Blender；重新出图期间保留当前成片，文件读取和下载绑定同一代。旧 `/relight` 已转入同一代际队列，托管代禁止旧换正面/补面入口原位覆盖；生产新代执行和升级仍未开放，HTTP、操作及本次 Code/L0 证据见 [RF-04 交付记录](../../docs/designs/packaging-quality-rf04-closeout.md)。
 
@@ -59,13 +59,13 @@ CLI 没有 `--fixtures` / `--manifest`：夹具固定为仓库内 `workers/packa
 
 ## RF-11 Blender 合同冒烟
 
-独立冒烟只证明合成 carton 能走过 quality eval 与 generation GLB/hash 门，不证明真实感，也不替代发版 L1。输出必须落在 `RUNNER_TEMP` 下，不读客户任务、不上传、不切产品 current。PowerShell 只编排超时、Job Object 与环境变量，不复制 GLB 校验。杭州发版跳过冒烟时，质量门杭州实跑仍开放，见 [TODOS.md](../../TODOS.md)。
+独立冒烟只证明合成 carton 能走过 quality eval 与 generation GLB/hash 门，不证明真实感，也不替代发版 L1。输出必须落在 `RUNNER_TEMP` 下，不读客户任务、不上传、不切产品 current。PowerShell 只编排超时、Job Object 与环境变量，不复制 GLB 校验。杭州发版跳过冒烟时，不能把该次写成质量门杭州实跑完成，见 [TODOS.md](../../TODOS.md)。
 
     RUNNER_TEMP=/tmp/beian-rf11-smoke \
     apps/web/backend/.venv/bin/python workers/packaging/tools/blender_contract_smoke.py \
       --blender /absolute/path/to/blender
 
-Windows 入口是 `scripts/windows/blender-contract-smoke.ps1`。`0.21.46.0` 把发版 `TimeoutMs` 冻结为 90000（`0.21.45.0` 杭州真跑约 63s）。wrapper 用 Job Object 杀树（`PROC_THREAD_ATTRIBUTE_JOB_LIST` + `CREATE_SUSPENDED`，`KILL_ON_JOB_CLOSE`）。缺 `RUNNER_TEMP` / 已解析 Blender 时：独立脚本失败关闭，发版路径跳过且不回滚。stdout JSON 含 `quality_layers` 与 `timeout_budget_status=hangzhou_frozen_90s`，`human_acceptance` 保持 pending，`production_ready` 保持 false。
+Windows 入口是 `scripts/windows/blender-contract-smoke.ps1`。`0.21.46.0` hangzhou-release `34191398011` 真跑约 62s，发版 `TimeoutMs` 为 90000。wrapper 用 Job Object 杀树（`PROC_THREAD_ATTRIBUTE_JOB_LIST` + `CREATE_SUSPENDED`，`KILL_ON_JOB_CLOSE`）。缺 `RUNNER_TEMP` / 已解析 Blender 时：独立脚本失败关闭，发版路径跳过且不回滚。stdout JSON 含 `quality_layers` 与 `timeout_budget_status=hangzhou_frozen_90s`，`human_acceptance` 保持 pending，`production_ready` 保持 false。
 
 ## RF-07 诊断棚光与色彩对照
 
