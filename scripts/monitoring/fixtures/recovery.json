@@ -1,0 +1,16 @@
+{
+  "_comment": "故障后连续正常达到恢复阈值，各产生一条事件。",
+  "schema": "beian-alert-fixture-v1",
+  "config": {
+    "fail_threshold": 3,
+    "recover_threshold": 2,
+    "local_candidate": true
+  },
+  "samples": [
+    { "id": "r1", "sampled_at": "2026-09-09T04:00:00.000Z", "facts": { "beian-server-8787": { "kind": "windows_service", "sample_ok": true, "observed": "stopped" } } },
+    { "id": "r2", "sampled_at": "2026-09-09T04:00:30.000Z", "facts": { "beian-server-8787": { "kind": "windows_service", "sample_ok": true, "observed": "stopped" } } },
+    { "id": "r3", "sampled_at": "2026-09-09T04:01:00.000Z", "facts": { "beian-server-8787": { "kind": "windows_service", "sample_ok": true, "observed": "stopped" } } },
+    { "id": "r4", "sampled_at": "2026-09-09T04:01:30.000Z", "facts": { "beian-server-8787": { "kind": "windows_service", "sample_ok": true, "observed": "running" } } },
+    { "id": "r5", "sampled_at": "2026-09-09T04:02:00.000Z", "facts": { "beian-server-8787": { "kind": "windows_service", "sample_ok": true, "observed": "running" } } }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "_comment": "持续故障不刷屏：8 次 stopped 只产生一条故障事件。",
+  "schema": "beian-alert-fixture-v1",
+  "config": {
+    "fail_threshold": 3,
+    "recover_threshold": 2,
+    "local_candidate": true
+  },
+  "samples": [
+    { "id": "s1", "sampled_at": "2026-09-09T02:00:00.000Z", "facts": { "beian-server-8787": { "kind": "windows_service", "sample_ok": true, "observed": "stopped" } } },
+    { "id": "s2", "sampled_at": "2026-09-09T02:00:30.000Z", "facts": { "beian-server-8787": { "kind": "windows_service", "sample_ok": true, "observed": "stopped" } } },
+    { "id": "s3", "sampled_at": "2026-09-09T02:01:00.000Z", "facts": { "beian-server-8787": { "kind": "windows_service", "sample_ok": true, "observed": "stopped" } } },
+    { "id": "s4", "sampled_at": "2026-09-09T02:01:30.000Z", "facts": { "beian-server-8787": { "kind": "windows_service", "sample_ok": true, "observed": "stopped" } } },
+    { "id": "s5", "sampled_at": "2026-09-09T02:02:00.000Z", "facts": { "beian-server-8787": { "kind": "windows_service", "sample_ok": true, "observed": "stopped" } } },
+    { "id": "s6", "sampled_at": "2026-09-09T02:02:30.000Z", "facts": { "beian-server-8787": { "kind": "windows_service", "sample_ok": true, "observed": "stopped" } } },
+    { "id": "s7", "sampled_at": "2026-09-09T02:03:00.000Z", "facts": { "beian-server-8787": { "kind": "windows_service", "sample_ok": true, "observed": "stopped" } } },
+    { "id": "s8", "sampled_at": "2026-09-09T02:03:30.000Z", "facts": { "beian-server-8787": { "kind": "windows_service", "sample_ok": true, "observed": "stopped" } } }
+  ]
+}

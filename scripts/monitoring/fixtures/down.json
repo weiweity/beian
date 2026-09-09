@@ -1,0 +1,38 @@
+{
+  "_comment": "beian-server-8787 连续 3 次 stopped，产生一条故障。cloudflared 仍 running。环回 HTTP 采样失败记为未知，不把公网失败写成进程已停。",
+  "schema": "beian-alert-fixture-v1",
+  "config": {
+    "fail_threshold": 3,
+    "recover_threshold": 2,
+    "local_candidate": true
+  },
+  "samples": [
+    {
+      "id": "d1",
+      "sampled_at": "2026-09-09T01:00:00.000Z",
+      "facts": {
+        "beian-server-8787": { "kind": "windows_service", "sample_ok": true, "observed": "stopped" },
+        "cloudflared": { "kind": "windows_service", "sample_ok": true, "observed": "running" },
+        "http_health": { "kind": "http", "target": "loopback", "sample_ok": false }
+      }
+    },
+    {
+      "id": "d2",
+      "sampled_at": "2026-09-09T01:00:30.000Z",
+      "facts": {
+        "beian-server-8787": { "kind": "windows_service", "sample_ok": true, "observed": "stopped" },
+        "cloudflared": { "kind": "windows_service", "sample_ok": true, "observed": "running" },
+        "http_health": { "kind": "http", "target": "loopback", "sample_ok": false }
+      }
+    },
+    {
+      "id": "d3",
+      "sampled_at": "2026-09-09T01:01:00.000Z",
+      "facts": {
+        "beian-server-8787": { "kind": "windows_service", "sample_ok": true, "observed": "stopped" },
+        "cloudflared": { "kind": "windows_service", "sample_ok": true, "observed": "running" },
+        "http_health": { "kind": "http", "target": "loopback", "sample_ok": false }
+      }
+    }
+  ]
+}
