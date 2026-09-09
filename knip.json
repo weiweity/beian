@@ -5,6 +5,8 @@
       "entry": [
         "scripts/quality/check-complexity.mjs!",
         "scripts/quality/*.test.mjs",
+        "scripts/monitoring/replay.mjs!",
+        "scripts/monitoring/*.test.mjs",
         "scripts/windows/release-dependency-check.mjs!",
         "workers/packaging/ppt/build_product_ppt.mjs!",
         "workers/packaging/illustrator/export_ai.jsx!",

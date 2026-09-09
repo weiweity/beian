@@ -1,0 +1,15 @@
+{
+  "_comment": "启动未知/采样失败不产生故障。",
+  "schema": "beian-alert-fixture-v1",
+  "config": {
+    "fail_threshold": 3,
+    "recover_threshold": 2,
+    "local_candidate": true
+  },
+  "samples": [
+    { "id": "u1", "sampled_at": "2026-09-09T05:00:00.000Z", "facts": { "beian-server-8787": { "kind": "windows_service", "sample_ok": false }, "cloudflared": { "kind": "windows_service", "sample_ok": false }, "http_health": { "kind": "http", "target": "loopback", "sample_ok": false } } },
+    { "id": "u2", "sampled_at": "2026-09-09T05:00:30.000Z", "facts": { "beian-server-8787": { "kind": "windows_service", "sample_ok": true, "observed": "unknown" }, "http_health": { "kind": "http", "target": "public", "sample_ok": true, "parse_ok": false, "http_status": 200 } } },
+    { "id": "u3", "sampled_at": "2026-09-09T05:01:00.000Z", "facts": { "beian-server-8787": { "kind": "windows_service", "sample_ok": true, "observed": "start_pending" }, "http_health": { "kind": "http", "target": "loopback", "sample_ok": true, "http_status": 200 } } },
+    { "id": "u4", "sampled_at": "2026-09-09T05:01:30.000Z", "facts": { "cloudflared": { "kind": "windows_service", "sample_ok": false } } }
+  ]
+}
