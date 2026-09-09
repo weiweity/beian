@@ -4560,3 +4560,7 @@ html[data-theme="dark"] .notes.is-float {
     padding-right: 16px;
   }
 }
+
+/* Viewer controls stay outside the product silhouette. */
+.mockup-glb-reset { position: absolute; z-index: 2; left: 8px; bottom: 8px; top: auto; }
+.mockup-glb-message { position: absolute; inset: 45% 20px auto; text-align: center; color: var(--text-mute); }

@@ -1,3 +1,4 @@
+import { carton } from "./fixtures/glbFixture";
 import { expect, test, type Page } from "@playwright/test";
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -19,20 +20,6 @@ test.afterAll(()=>{if(dist)rmSync(dist,{recursive:true});});
 const ID="af0400000001", LEGACY="legacy-current-v2-"+"a".repeat(64), G0="g0-legacy-original", G1="g1-legacy-relight-12345678-abcdef12";
 const deferred=()=>{let release!:()=>void;const promise=new Promise<void>(resolve=>{release=resolve;});return {promise,release};};
 
-function syntheticGlb():Buffer {
-  const binary=Buffer.alloc(44);[-1,0,0,1,0,0,0,2,0].forEach((value,i)=>binary.writeFloatLE(value,i*4));
-  [0,1,2].forEach((value,i)=>binary.writeUInt16LE(value,36+i*2));
-  const raw=Buffer.from(JSON.stringify({asset:{version:"2.0"},scene:0,scenes:[{nodes:[0]}],nodes:[{mesh:0}],
-    meshes:[{primitives:[{attributes:{POSITION:0},indices:1}]}],buffers:[{byteLength:44}],
-    bufferViews:[{buffer:0,byteOffset:0,byteLength:36,target:34962},{buffer:0,byteOffset:36,byteLength:6,target:34963}],
-    accessors:[{bufferView:0,componentType:5126,count:3,type:"VEC3",min:[-1,0,0],max:[1,2,0]},
-      {bufferView:1,componentType:5123,count:3,type:"SCALAR"}]}));
-  const json=Buffer.concat([raw,Buffer.alloc((4-raw.length%4)%4,32)]);
-  const head=Buffer.alloc(20);head.write("glTF");head.writeUInt32LE(2,4);head.writeUInt32LE(28+json.length+binary.length,8);
-  head.writeUInt32LE(json.length,12);head.writeUInt32LE(0x4e4f534a,16);
-  const binHead=Buffer.alloc(8);binHead.writeUInt32LE(binary.length);binHead.writeUInt32LE(0x004e4942,4);
-  return Buffer.concat([head,json,binHead,binary]);
-}
 
 function model() {
   const files=["white_a","white_b","white_a_ground","white_b_ground","white_a_set","white_b_set",
@@ -103,7 +90,7 @@ async function serve(page:Page,state:ReturnType<typeof model>,options:{oldFull?:
       if(!key.startsWith("read_") && !generation){state.unknown.push(`unbound:${key}`);return route.fulfill({status:409});}
       if(generation === LEGACY && key === "glb" && options.oldGlb)await options.oldGlb.promise;
       if(generation === LEGACY && !key.endsWith("_card") && key !== "glb" && options.oldFull)await options.oldFull.promise;
-      if(key === "glb")return route.fulfill({contentType:"model/gltf-binary",body:syntheticGlb()});
+      if(key === "glb")return route.fulfill({contentType:"model/gltf-binary",body:carton()});
       const layer=key.includes("ground") || key.includes("set");
       const color=layer ? "white" : generation === G1 ? "rgb(20,50,230)" : "rgb(220,60,30)";
       return route.fulfill({contentType:"image/svg+xml",body:`<svg xmlns="http://www.w3.org/2000/svg" width="80" height="96"><rect width="80" height="96" fill="${color}"/></svg>`});
@@ -169,7 +156,8 @@ test("响应丢失后刷新仅恢复请求，显式确认复用同号同内容",
   await page.reload();await page.getByRole("button",{name:"出图版本",exact:true}).click();
   expect(state.calls.filter(call=>call.method === "POST")).toHaveLength(count);
   await page.getByRole("button",{name:"确认上次请求",exact:true}).click();
-  await expect(page.getByRole("button",{name:"按旧版重新出图",exact:true})).toBeVisible();
+  // The loading icon may remain during its exit animation; assert the action is usable.
+  await expect(page.getByRole("button",{name:/按旧版重新出图$/})).toBeEnabled();
   const posts=state.calls.filter(call=>call.method === "POST");expect(posts).toHaveLength(2);
   expect(posts[1].body).toEqual(original);expect(state.facts.size).toBe(1);
   expect(await page.evaluate(()=>sessionStorage.getItem("wb_render_request:af0400000001"))).toBeNull();
@@ -318,58 +306,27 @@ test("旧代图片报错仅刷新一次，新代已显示后迟到的旧详情�
   } finally {oldDetail.release();}
 });
 
-test("GLB 白桌白墙透过查看器显示，切背景及全屏保留模型资产", async ({ page }) => {
+test("GLB 显示桌墙与原始下载分离，切背景和全屏不发起作业", async ({ page }) => {
   const state = model();
   await serve(page, state);
   await page.goto(`/mockup/${ID}`);
   const viewer = page.locator("model-viewer");
   const frame = page.locator(".mockup-sheet-glb");
-  await expect(viewer).toHaveAttribute("exposure", "1.1");
-  await expect(viewer).toHaveAttribute("camera-orbit", "0deg 75deg 155%");
-  await expect.poll(() => viewer.evaluate((el) => Boolean((el as HTMLElement & { loaded?: boolean }).loaded))).toBe(true);
-  // Assert the actual camera, not just an attribute that may be clamped.
-  const radii = await viewer.evaluate(async el => {
-    const camera = el as HTMLElement & { updateComplete: Promise<unknown>; jumpCameraToGoal(): void; getCameraOrbit(): { radius: number } };
-    camera.jumpCameraToGoal();
-    const initial = camera.getCameraOrbit().radius;
-    camera.setAttribute("camera-orbit", "0deg 75deg 105%");
-    await camera.updateComplete;
-    camera.jumpCameraToGoal();
-    const near = camera.getCameraOrbit().radius;
-    camera.setAttribute("camera-orbit", "0deg 75deg 155%");
-    await camera.updateComplete;
-    camera.jumpCameraToGoal();
-    return { initial, near };
-  });
-  expect(radii.initial / radii.near).toBeCloseTo(155 / 105, 2);
-  await expect(frame).toHaveCSS("background-image", /linear-gradient/);
-  await expect(viewer).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
-  // Read composited screenshot pixels: host CSS alone cannot prove WebGL transparency.
-  const pixels = await page.evaluate(async bytes => {
-    const bitmap = await createImageBitmap(new Blob([new Uint8Array(bytes)], { type: "image/png" }));
-    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
-    const ctx = canvas.getContext("2d")!;
-    ctx.drawImage(bitmap, 0, 0);
-    const wall = [...ctx.getImageData(12, Math.round(bitmap.height * 0.3), 1, 1).data];
-    const table = [...ctx.getImageData(12, Math.round(bitmap.height * 0.8), 1, 1).data];
-    bitmap.close();
-    return { wall, table };
-  }, [...await frame.screenshot()]);
-  expect(pixels.wall).toEqual([238, 238, 236, 255]);
-  expect(pixels.table).toEqual([228, 228, 232, 255]);
-  const source = await viewer.getAttribute("src");
-  const download = await page.getByRole("link", { name: "下载 GLB", exact: true }).getAttribute("href");
-  await page.locator(".mockup-backdrop-switch").getByText("银底", { exact: true }).click();
+  await expect(frame.getByRole("button", {name:"复位模型视角"})).toBeEnabled();
+  await expect(viewer).toHaveAttribute("src", /^blob:/);
+  await expect(viewer).toHaveAttribute("camera-orbit", /^35deg 72deg .*m$/);
   await expect(frame).toHaveCSS("background-image", "none");
+  const download = await page.getByRole("link", {name:"下载 GLB", exact:true}).getAttribute("href");
+  await page.locator(".mockup-backdrop-switch").getByText("银底", {exact:true}).click();
+  await expect(viewer).toHaveAttribute("src", new RegExp(`generation_id=${LEGACY}`));
   await expect(frame).toHaveCSS("background-color", "rgb(196, 201, 208)");
-  await page.locator(".mockup-backdrop-switch").getByText("白桌白墙", { exact: true }).click();
-  await frame.getByRole("button", { name: "全屏截图", exact: true }).click();
+  await page.locator(".mockup-backdrop-switch").getByText("白桌白墙", {exact:true}).click();
+  await expect(frame.getByRole("button", {name:"复位模型视角"})).toBeEnabled();
+  await frame.getByRole("button", {name:"全屏截图", exact:true}).click();
   await expect.poll(() => frame.evaluate(el => document.fullscreenElement === el)).toBe(true);
-  await expect(frame).toHaveCSS("background-image", /linear-gradient/);
-  await expect(viewer).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  await expect(viewer).toHaveAttribute("src", /^blob:/);
   await page.evaluate(() => document.exitFullscreen());
-  await expect(viewer).toHaveAttribute("src", source!);
-  await expect(page.getByRole("link", { name: "下载 GLB", exact: true })).toHaveAttribute("href", download!);
+  await expect(page.getByRole("link", {name:"下载 GLB",exact:true})).toHaveAttribute("href", download!);
   expect(state.calls.filter(call => call.method !== "GET")).toEqual([]);
   expect(state.unknown).toEqual([]);
 });

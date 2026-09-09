@@ -1,0 +1,2 @@
+# Keep the generated lighting image out of textual diffs.
+/apps/web/ui/src/assets/carton-studio-v1.hdr binary

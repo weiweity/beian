@@ -8,7 +8,6 @@ import {
   clampStudioLight,
   composeStudioStill,
   containRect,
-  glbExposure,
   glbBackdrop,
   jobHasGround,
   jobHasReviewCard,
@@ -42,28 +41,20 @@ describe("mockup studio light", () => {
     assert.deepEqual([...pixels], [lut[218], lut[240], lut[254], 127, 0, lut[32], lut[200], 0]);
     for (const light of [1, 0.6, NaN]) assert.deepEqual([...highlightLut(light)], Array.from({ length: 256 }, (_, i) => i));
   });
-  it("clamps product brightness and maps GLB exposure from the product slider", () => {
+  it("clamps product brightness without changing the still filter", () => {
     assert.equal(clampStudioLight(1), 1);
     assert.equal(clampStudioLight(0), 0.6);
     assert.equal(clampStudioLight(9), 1.4);
     assert.equal(clampStudioLight(Number.NaN), 1);
     assert.equal(stillsFilter(1), "contrast(1.04) brightness(1)");
-    assert.equal(glbExposure(1), "1.1");
-    assert.equal(glbExposure(1.4), "1.54");
-    assert.equal(glbExposure(0.6), "0.66");
   });
 
-  it("keeps the GLB wall and table distinct and follows background light", () => {
-    assert.match(glbBackdrop(1, "white_set"), /^linear-gradient/);
-    assert.ok(glbBackdrop(1, "white_set").includes("rgb(238, 238, 236)"));
-    assert.ok(glbBackdrop(1, "white_set").includes(STUDIO_GROUND_FILL));
+  it("uses a solid GLB fallback and follows background light", () => {
     assert.notEqual(glbBackdrop(0.6, "white_set"), glbBackdrop(1, "white_set"));
     assert.equal(glbBackdrop(NaN, "white_set"), glbBackdrop(1, "white_set"));
     for (const preset of ["white", "silver"] as const) {
       assert.equal(glbBackdrop(1, preset), studioBackdrop(1, preset));
     }
-    assert.equal(glbExposure(NaN), "1.1");
-    assert.equal(glbExposure(99), "1.54");
   });
 
   it("maps background light to a packshot cyc that stays below paper white at default", () => {

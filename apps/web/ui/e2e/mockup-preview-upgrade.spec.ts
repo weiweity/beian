@@ -1,3 +1,4 @@
+import { carton } from "./fixtures/glbFixture";
 import { expect, test, type Page } from "@playwright/test";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -109,7 +110,7 @@ function jobModel(): MockupJob {
 type GateMap = Record<string, ReturnType<typeof deferred> | "fail" | "open">;
 
 function layerBody(key: string, pngs?: Map<string, Buffer>): { type: string; body: string | Buffer } | null {
-  if (key === "glb") return { type: "model/gltf-binary", body: Buffer.from("glTF") };
+  if (key === "glb") return { type: "model/gltf-binary", body: carton() };
   const card = key.endsWith("_card");
   const base = card ? key.slice(0, -5) : key;
   const kind = base.includes("set") ? "set" : base.includes("ground") ? "ground" : "product";
