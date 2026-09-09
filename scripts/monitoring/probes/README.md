@@ -2,7 +2,7 @@
 
 把 `beian-server-8787`、`cloudflared` 的 Windows 服务观察，以及**明确配置**的环回/公网 HTTP health，收成现有 `alert-core` 可接受的 `facts` / `sample`。本目录不分类、不去抖、不发事件；那些能力仍只在 `../alert-core.mjs`。
 
-不探测生产、不发送消息、不注册计划任务或 Windows 服务，也不改 `/api/health`。没有常驻调度器。
+本轮仅做本地 mock 验证，未探测生产或发送消息，未注册计划任务或 Windows 服务，也不改 `/api/health`。本模块提供单次采样，本地循环由 [runner](../runner/README.md) 负责。
 
 ## 合同口径
 
@@ -51,7 +51,7 @@ node --test scripts/monitoring/*.test.mjs
 - 飞书或其他通知渠道
 - 计划任务、WinSW、cloudflared 安装
 - 生产 health 路由变更
-- 常驻调度器、状态文件、exactly-once
+- 本模块内的常驻调度器、状态文件与 exactly-once；本地持久交接见 [runner](../runner/README.md)，不代表生产部署
 
 ## 质量入口
 

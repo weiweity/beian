@@ -120,8 +120,8 @@ node --test scripts/monitoring/*.test.mjs
 - 真实消息、飞书 webhook、产品 `notify.ts` / `FEISHU_*`
 - 接收人与渠道配置、Windows 探测与部署
 - 数据库、通用队列框架、新依赖
-- 常驻调度接线
+- 生产常驻部署；本地循环接线已由 [runner](../runner/README.md) 提供
 - 端到端 exactly-once、断电耐久、杭州/Windows 实机验收
-- 修改 `alert-core.mjs`、`replay.mjs` 或父目录 README
+- 修改 `alert-core.mjs` 或 `replay.mjs`；模块入口与集成说明见 [父目录 README](../README.md)
 
 根 knip 已登记 example 与本目录测试。

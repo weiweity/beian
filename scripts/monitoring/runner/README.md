@@ -2,7 +2,7 @@
 
 把只读探测、告警核心和本地投递串成可测试的常驻循环：采样 → 核心判断 → 持久交接 → `enqueueFromReplay` → `await queue.tick()`。
 
-本目录不判断告警、不实现投递、不探测生产、不发送消息。默认无 transport、无环回/公网 URL。时间、定时器、采样器和队列都可注入。
+本目录复用既有告警核心、探测和投递接口，不另写判断或投递逻辑。默认无 transport、无环回/公网 URL；本轮示例与验证使用合成数据，未执行生产探测或真实发送。时间、定时器、采样器和队列都可注入。
 
 ## 合同口径
 
@@ -10,7 +10,7 @@
 - 一律 `await queue.tick()`，兼容同步与 Promise 实现。
 - 不读取、不修改 delivery 私有状态文件，不依赖其内部字段。
 - 保留核心 `event.id`（`type:source:sampled_at`）和 replay 事件格式。重复交接由该 id 在投递层去重。
-- 默认 fixture/fake。不读密钥，不选飞书，不注册计划任务或 WinSW。
+- 示例显式注入 fixture/fake。构造器默认使用 `Date.now`、真实定时器及 `createProbe`：Windows 上采样会查询本机固定服务，非 Windows 返回 `platform_not_windows`；HTTP 只有显式提供 `probe.loopbackUrl` / `probe.publicUrl` 才执行。不读密钥，不选飞书，不注册计划任务或 WinSW。
 
 ## 持久交接协议
 
@@ -95,7 +95,7 @@ node --test scripts/monitoring/runner/*.test.mjs
 
 - 飞书或其他真实渠道、接收人配置
 - Windows 计划任务 / WinSW / 杭州实机探测
-- 修改 `alert-core`、`replay`、`probes`、`delivery` 或现有共享测试
+- 重写 `alert-core`、`replay` 或 `probes`；Promise 投递与共享合成测试已随本轮整合，见 [投递模块](../delivery/README.md)
 - 端到端 exactly-once、断电耐久、生产默认
 
 ## 测试入口
@@ -108,4 +108,4 @@ node --test scripts/monitoring/runner/*.test.mjs
 - TESTING 本地运维命令把 `scripts/monitoring/runner/*.test.mjs` 加进 F02 glob
 - 父 `scripts/monitoring/README.md` 增加本目录链接
 
-不要改 dead-code baseline、TODOS、VERSION 或 package 文件。
+当前进度与真实渠道、Windows、现场验收欠项只维护在 [TODOS.md](../../../TODOS.md)；本模块文档不授予部署或真实通知授权。
