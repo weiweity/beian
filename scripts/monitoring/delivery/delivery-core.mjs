@@ -108,12 +108,39 @@ export function emptyDeliveryState() {
 export function createFakeClock(startMs = Date.parse("2026-09-09T00:00:00.000Z")) {
   if (!Number.isFinite(startMs)) throw new Error("startMs must be a number");
   let now = startMs;
+  let nextTimerId = 1;
+  const timers = new Map();
+  function fireDue() {
+    let fired;
+    do {
+      fired = false;
+      for (const [id, timer] of [...timers]) {
+        if (timer.due <= now) {
+          timers.delete(id);
+          fired = true;
+          timer.fn();
+        }
+      }
+    } while (fired);
+  }
   return {
     now: () => now,
     advance(ms) {
       if (!Number.isFinite(ms) || ms < 0) throw new Error("advance ms must be >= 0");
       now += ms;
+      fireDue();
       return now;
+    },
+    setTimeout(fn, ms) {
+      if (typeof fn !== "function") throw new Error("setTimeout fn must be a function");
+      const delay = Number(ms);
+      if (!Number.isFinite(delay) || delay < 0) throw new Error("setTimeout ms must be >= 0");
+      const id = nextTimerId++;
+      timers.set(id, { due: now + delay, fn });
+      return id;
+    },
+    clearTimeout(id) {
+      timers.delete(id);
     },
   };
 }
@@ -362,6 +389,37 @@ function backoffDelay(config, attempt) {
   return config.backoff_ms * (2 ** exp);
 }
 
+function isThenable(value) {
+  return Boolean(value) && (typeof value === "object" || typeof value === "function") && typeof value.then === "function";
+}
+
+function timerHost(clock) {
+  if (clock && typeof clock.setTimeout === "function" && typeof clock.clearTimeout === "function") {
+    return clock;
+  }
+  return globalThis;
+}
+
+function waitTimeout(clock, ms, signal) {
+  return new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve("aborted");
+      return;
+    }
+    if (!Number.isFinite(ms) || ms <= 0) {
+      resolve("timeout");
+      return;
+    }
+    const host = timerHost(clock);
+    const id = host.setTimeout(() => resolve("timeout"), ms);
+    const onAbort = () => {
+      host.clearTimeout(id);
+      resolve("aborted");
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 function findById(state, eventId) {
   return state.items.find((item) => item.event_id === eventId) || null;
 }
@@ -429,6 +487,8 @@ export function createDeliveryQueue(options = {}) {
 
   recoverSendingOnLoad();
 
+  const inflight = new Map();
+
   function mutate(fn) {
     const previous = cloneJson(state);
     try {
@@ -441,10 +501,18 @@ export function createDeliveryQueue(options = {}) {
     }
   }
 
-  function pickNext(now) {
+  function sourceHasInflight(source) {
+    for (const flight of inflight.values()) {
+      if (flight.source === source) return true;
+    }
+    return false;
+  }
+
+  function pickDue(now) {
     const due = [];
     const sources = [...new Set(state.items.map((item) => item.source))];
     for (const source of sources) {
+      if (sourceHasInflight(source)) continue;
       const head = sourceHead(state, source);
       if (!head) continue;
       if (!ACTIVE.has(head.status)) continue;
@@ -452,13 +520,17 @@ export function createDeliveryQueue(options = {}) {
       due.push(head);
     }
     due.sort(compareItems);
-    return due[0] || null;
+    return due;
+  }
+
+  function pickNext(now) {
+    return pickDue(now)[0] || null;
   }
 
   function applyResult(item, result, now) {
     const nowIso = iso(now);
     item.updated_at = nowIso;
-    if (item.status === "unknown" || item.status === "cancelled") {
+    if (item.status !== "sending") {
       return item.status;
     }
     item.last_outcome = {
@@ -487,31 +559,10 @@ export function createDeliveryQueue(options = {}) {
     return item.status;
   }
 
-  function attemptOne(item) {
-    const now = clock.now();
-    mutate(() => {
-      item.status = "sending";
-      item.send_issued = true;
-      item.attempt += 1;
-      item.updated_at = iso(now);
-    });
-
-    let result;
-    try {
-      result = normalizeSendResult(transport.send(payloadOf(item), {
-        now,
-        deadline_at: now + config.timeout_ms,
-        attempt: item.attempt,
-        event_id: item.event_id,
-      }));
-    } catch {
-      result = { outcome: "unknown", code: "transport_threw" };
-    }
-
-    const after = clock.now();
-
+  function persistAfterSend(item, result, now, persistCode = "persist_after_send_failed") {
     const previous = cloneJson(state);
-    applyResult(item, result, after);
+    const live = findById(state, item.event_id) || item;
+    applyResult(live, result, now);
     try {
       persist();
     } catch (err) {
@@ -523,14 +574,160 @@ export function createDeliveryQueue(options = {}) {
         frozen.updated_at = iso(clock.now());
         frozen.last_outcome = {
           kind: "unknown",
-          code: "persist_after_send_failed",
+          code: persistCode,
           at: frozen.updated_at,
           retryable: false,
         };
       }
       throw err;
     }
-    return { event_id: item.event_id, status: item.status, outcome: result.outcome, code: result.code };
+    const current = findById(state, item.event_id);
+    return {
+      event_id: item.event_id,
+      status: current ? current.status : live.status,
+      outcome: result.outcome,
+      code: result.code,
+    };
+  }
+
+  function applySettled(eventId, attempt, result, now) {
+    const live = findById(state, eventId);
+    if (!live) return null;
+    if (live.attempt !== attempt || live.status !== "sending") {
+      return {
+        event_id: eventId,
+        status: live.status,
+        outcome: result.outcome,
+        code: result.code,
+        ignored: true,
+      };
+    }
+    return persistAfterSend(live, result, now);
+  }
+
+  function decidedReport(eventId, result) {
+    const live = findById(state, eventId);
+    return {
+      event_id: eventId,
+      status: live ? live.status : "unknown",
+      outcome: result.outcome,
+      code: live?.last_outcome?.code || result.code,
+    };
+  }
+
+  function clearFlight(eventId, flight) {
+    if (inflight.get(eventId) === flight) inflight.delete(eventId);
+  }
+
+  function attemptOne(item) {
+    const startedAt = clock.now();
+    mutate(() => {
+      item.status = "sending";
+      item.send_issued = true;
+      item.attempt += 1;
+      item.updated_at = iso(startedAt);
+    });
+
+    const deadline_at = startedAt + config.timeout_ms;
+    const sendController = new AbortController();
+    const flight = {
+      event_id: item.event_id,
+      source: item.source,
+      attempt: item.attempt,
+      controller: sendController,
+      notify: null,
+    };
+    flight.cancelP = new Promise((resolve) => {
+      flight.notify = () => resolve({ kind: "cancel" });
+    });
+    inflight.set(item.event_id, flight);
+
+    const ctx = {
+      now: startedAt,
+      deadline_at,
+      attempt: item.attempt,
+      event_id: item.event_id,
+      signal: sendController.signal,
+    };
+
+    let raw;
+    try {
+      raw = transport.send(payloadOf(item), ctx);
+    } catch {
+      clearFlight(item.event_id, flight);
+      return persistAfterSend(item, { outcome: "unknown", code: "transport_threw" }, clock.now());
+    }
+
+    if (!isThenable(raw)) {
+      const after = clock.now();
+      const live = findById(state, item.event_id);
+      if (!live || live.status !== "sending") {
+        clearFlight(item.event_id, flight);
+        return decidedReport(item.event_id, { outcome: "unknown", code: "cancelled_after_send_issued" });
+      }
+      if (after >= deadline_at) {
+        sendController.abort();
+        clearFlight(item.event_id, flight);
+        return persistAfterSend(item, { outcome: "unknown", code: "timeout" }, after);
+      }
+      clearFlight(item.event_id, flight);
+      return persistAfterSend(item, normalizeSendResult(raw), after);
+    }
+
+    return settleAsync(item.event_id, flight, raw, deadline_at);
+  }
+
+  async function settleAsync(eventId, flight, rawPromise, deadline_at) {
+    const timeoutCtl = new AbortController();
+    const remaining = deadline_at - clock.now();
+    const sendP = Promise.resolve(rawPromise).then(
+      (raw) => ({ kind: "send", raw }),
+      () => ({ kind: "throw" }),
+    );
+    sendP.finally(() => clearFlight(eventId, flight));
+    const timeoutP = waitTimeout(clock, remaining, timeoutCtl.signal).then((reason) => ({ kind: reason }));
+
+    let winner;
+    try {
+      winner = await Promise.race([sendP, timeoutP, flight.cancelP]);
+    } finally {
+      timeoutCtl.abort();
+    }
+
+    if (winner.kind === "timeout") {
+      flight.controller.abort();
+      // A failed timeout write does not mean the transport has settled.
+      // sendP.finally owns cleanup so later events from this source stay blocked.
+      const reported = applySettled(eventId, flight.attempt, { outcome: "unknown", code: "timeout" }, clock.now());
+      return reported || decidedReport(eventId, { outcome: "unknown", code: "timeout" });
+    }
+
+    if (winner.kind === "cancel" || winner.kind === "aborted") {
+      flight.controller.abort();
+      return decidedReport(eventId, { outcome: "unknown", code: "cancelled_after_send_issued" });
+    }
+
+    if (winner.kind === "throw") {
+      clearFlight(eventId, flight);
+      return applySettled(eventId, flight.attempt, { outcome: "unknown", code: "transport_threw" }, clock.now())
+        || decidedReport(eventId, { outcome: "unknown", code: "transport_threw" });
+    }
+
+    const after = clock.now();
+    if (after >= deadline_at) {
+      flight.controller.abort();
+      try {
+        const reported = applySettled(eventId, flight.attempt, { outcome: "unknown", code: "timeout" }, after);
+        return reported || decidedReport(eventId, { outcome: "unknown", code: "timeout" });
+      } catch (err) {
+        clearFlight(eventId, flight);
+        throw err;
+      }
+    }
+
+    clearFlight(eventId, flight);
+    return applySettled(eventId, flight.attempt, normalizeSendResult(winner.raw), after)
+      || decidedReport(eventId, normalizeSendResult(winner.raw));
   }
 
   return {
@@ -584,11 +781,8 @@ export function createDeliveryQueue(options = {}) {
       if (!transport) {
         const due = [];
         const now = clock.now();
-        let item = pickNext(now);
-        while (item) {
-          due.push(item.event_id);
-          break;
-        }
+        const item = pickNext(now);
+        if (item) due.push(item.event_id);
         return {
           attempted: [],
           skipped: "no_transport",
@@ -596,29 +790,83 @@ export function createDeliveryQueue(options = {}) {
           exactly_once: false,
         };
       }
+
       const attempted = [];
-      const blocked = [];
-      let guard = state.items.length + 2;
-      while (guard-- > 0) {
-        const now = clock.now();
-        const item = pickNext(now);
-        if (!item) {
-          for (const row of state.items) {
-            if (!ACTIVE.has(row.status)) continue;
-            const head = sourceHead(state, row.source);
-            if (head && head.event_id !== row.event_id) {
-              blocked.push({ event_id: row.event_id, blocked_by: head.event_id });
+      const collectBlocked = () => {
+        const blocked = [];
+        const seen = new Set();
+        for (const row of state.items) {
+          if (!ACTIVE.has(row.status)) continue;
+          let blockedBy = null;
+          const head = sourceHead(state, row.source);
+          if (head && head.event_id !== row.event_id) blockedBy = head.event_id;
+          if (!blockedBy) {
+            for (const [id, flight] of inflight) {
+              if (flight.source === row.source && id !== row.event_id) {
+                blockedBy = id;
+                break;
+              }
             }
           }
-          break;
+          if (!blockedBy || seen.has(`${row.event_id}:${blockedBy}`)) continue;
+          seen.add(`${row.event_id}:${blockedBy}`);
+          blocked.push({ event_id: row.event_id, blocked_by: blockedBy });
         }
-        attempted.push(attemptOne(item));
+        return blocked;
+      };
+      const finish = () => ({
+        attempted,
+        blocked: collectBlocked(),
+        skipped: null,
+        exactly_once: false,
+      });
+
+      const runBatch = () => {
+        const due = pickDue(clock.now());
+        if (!due.length) return null;
+        const batch = [];
+        for (const item of due) {
+          try {
+            batch.push(attemptOne(item));
+          } catch (err) {
+            if (!batch.some(isThenable)) throw err;
+            batch.push(Promise.reject(err));
+            break;
+          }
+        }
+        return batch;
+      };
+
+      const settleBatch = async (batch) => {
+        // Do not report the tick finished while a sibling can still persist a result.
+        const results = await Promise.allSettled(batch);
+        const failed = results.find(row => row.status === "rejected");
+        if (failed) throw failed.reason;
+        return results.map(row => row.value);
+      };
+      const drainAsync = async (batch) => {
+        attempted.push(...await settleBatch(batch));
+        let guard = state.items.length + 2;
+        while (guard-- > 0) {
+          const next = runBatch();
+          if (!next) break;
+          attempted.push(...await settleBatch(next));
+        }
+        return finish();
+      };
+
+      let guard = state.items.length + 2;
+      while (guard-- > 0) {
+        const batch = runBatch();
+        if (!batch) return finish();
+        if (batch.some(isThenable)) return drainAsync(batch);
+        attempted.push(...batch);
       }
-      return { attempted, blocked, skipped: null, exactly_once: false };
+      return finish();
     },
     cancel(eventId) {
       if (typeof eventId !== "string" || !eventId) throw new Error("eventId is required");
-      return mutate(() => {
+      const result = mutate(() => {
         const item = findById(state, eventId);
         if (!item) return { ok: false, reason: "not_found" };
         if (item.status === "cancelled") return { ok: true, status: "cancelled", reason: "already_cancelled" };
@@ -649,6 +897,15 @@ export function createDeliveryQueue(options = {}) {
         };
         return { ok: true, status: "cancelled", reason: "cancelled_before_send" };
       });
+      // Abort/notification cannot be rolled back if the cancellation write fails.
+      if (result.reason === "inflight_unknown") {
+        const flight = inflight.get(eventId);
+        if (flight) {
+          flight.controller.abort();
+          if (typeof flight.notify === "function") flight.notify();
+        }
+      }
+      return result;
     },
     retryUnknown(eventId) {
       if (typeof eventId !== "string" || !eventId) throw new Error("eventId is required");
@@ -684,6 +941,8 @@ export function createDeliveryQueue(options = {}) {
           "默认无 transport，不会发送真实消息，也不会读取产品飞书开关或密钥。",
           "坏损状态文件会拒绝操作，不会静默清空后重发。",
           "本地 JSON 原子写不是断电耐久性或 Windows 实机证明。",
+          "Promise transport 由队列用截止时间与 AbortSignal 竞速；超时或取消后迟到成功不能覆盖已确定状态。同步 send 卡住时仍无法强杀。",
+          "同来源在未决发送 Promise 结束前不会启动后一条，避免异步完成把故障/恢复颠倒。不同来源可在同一次 tick 并行发出。",
         ],
       };
     },

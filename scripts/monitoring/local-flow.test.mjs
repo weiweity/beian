@@ -50,10 +50,10 @@ it("probe to alert to delivery preserves source, retry order and restart dedup",
   ]);
   const queue = createDeliveryQueue({ statePath, clock, transport });
   queue.enqueueFromReplay(replay);
-  queue.tick();
+  await queue.tick();
   assert.deepEqual(transport.calls.map(({ type }) => type), ["fault"]);
   clock.advance(1000);
-  queue.tick();
+  await queue.tick();
   assert.deepEqual(transport.calls.map(({ type }) => type), ["fault", "fault", "recovery"]);
   const restarted = createDeliveryQueue({ statePath, clock, transport });
   assert.equal(restarted.enqueueFromReplay(replay).added.length, 0);
@@ -74,7 +74,7 @@ it("sampling timeout remains unknown and never invents a stopped-service deliver
   const transport = createFakeTransport();
   const queue = createDeliveryQueue({ statePath: stateFile(t), transport });
   queue.enqueueFromReplay(replay);
-  queue.tick();
+  await queue.tick();
   assert.equal(replay.events.length, 0);
   assert.equal(transport.calls.length, 0);
 });

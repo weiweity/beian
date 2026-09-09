@@ -24,11 +24,28 @@
 
 每条记录的 `max_attempts` 在入队时固定，重启后仍沿用该值；新的默认上限只影响新入队记录。
 
-确认失败（`failed` / `retry_wait`）来自 transport 返回 `{ outcome: "failed", retryable }`。结果不明（`unknown`）来自超时、`send` 抛错、发送标记已写下但结果没能落盘、重启时仍为 `sending`、或取消发生在 `send` 已发出之后。
+确认失败（`failed` / `retry_wait`）来自 transport 返回 `{ outcome: "failed", retryable }`。结果不明（`unknown`）来自独立超时、transport 报告 timeout/unknown、`send` 抛错、发送标记已写下但结果没能落盘、重启时仍为 `sending`、或取消发生在 `send` 已发出之后。
 
 `unknown` **不会自动重试**，避免把“可能已送达”再发一次。`retryUnknown(eventId)` 是显式操作，仍使用同一条记录，但 **可能在 transport 侧重复送达**。这不是 exactly-once。
 
-同来源按事件时间 `at`、再按入队序号排序。未完成的前一条（`queued` / `retry_wait` / `sending`）会挡住后一条，避免重试把故障/恢复顺序颠倒。不同来源互不阻塞。
+同来源按事件时间 `at`、再按入队序号排序。未完成的前一条（`queued` / `retry_wait` / `sending`）以及**尚未 settle 的发送 Promise**会挡住后一条，避免异步完成或重试把故障/恢复顺序颠倒。不同来源互不阻塞，同一次 `tick` 可以并行发出。
+
+## 异步投递、超时与取消
+
+`transport.send` 可以同步返回结果，也可以返回 Promise。调用方统一 `await queue.tick()`；当本轮所有 `send` 都同步时，`tick()` 仍直接返回结果对象，现有同步调用继续可用。
+
+队列为每次发送提供独立截止时间与 `AbortSignal`：
+
+- `ctx.deadline_at`：`clock.now() + timeout_ms`（毫秒时间戳）
+- `ctx.signal`：超时或“发送已发出后取消”时 abort
+
+超时由队列判定，不依赖 transport 合作返回 `timeout`。超时后即使 Promise 迟到 `confirmed`，也不能覆盖已经确定的队列状态（`unknown` / `cancelled` / 其他终态）。迟到结果还按 `attempt` 代际丢弃，避免覆盖后续显式 `retryUnknown`。
+
+发送前取消记 `cancelled`。`send` 一旦发出（已持久化 `sending` / `send_issued`），结果不明必须记 `unknown`，并 abort `ctx.signal`。
+
+同步 `send` 卡住时本模块仍然无法强杀；Promise 发送才会与截止时间竞速。本模块不 sleep、不注册计划任务；fake clock 的 `advance` 会触发已注册的超时回调。
+
+若 transport 在 abort 之后永不 settle，同来源后一条会一直被挡住。这是顺序保护，不是耐久性或 exactly-once。
 
 ## 失败窗口
 
@@ -40,6 +57,7 @@
 | 写下 `sending` 之前失败 | 仍为 `queued` / `retry_wait` | 不调用 `send` |
 | 已写下 `sending`，`send` 前崩溃 | `sending` | 重启 → `unknown` |
 | `send` 已调用，结果写入失败 | `sending` | 内存记 `unknown`；重启从磁盘恢复为 `unknown`，不自动再发 |
+| 队列已超时/取消，transport 迟到成功 | 已确定状态 | 忽略迟到结果，不覆盖 |
 | 状态文件坏损 / 声称 exactly-once | 原文件不动 | 构造队列抛错，拒绝操作 |
 
 本地 JSON 原子写 **不是** 断电耐久性证明，也不是 Windows 实机 `File.Replace` 验收。
@@ -54,12 +72,12 @@ import { createFakeTransport } from "./fake-transport.mjs";
 const replay = replaySamples(samples, { config });
 const queue = createDeliveryQueue({
   statePath: "/tmp/beian-delivery.json", // 必须是绝对路径
-  clock: createFakeClock(),              // 可注入；默认 Date.now
+  clock: createFakeClock(),              // 可注入；默认 Date.now。fake clock 带 setTimeout/clearTimeout
   transport: createFakeTransport(),      // 省略则不发送
   config: { max_attempts: 3, backoff_ms: 1000, timeout_ms: 5000 },
 });
-queue.enqueueFromReplay(replay);
-queue.tick();
+queue.enqueueFromReplay(replay); // 同步持久入队，成功返回前已落盘
+await queue.tick();              // 同步 transport 时也可以不 await
 queue.cancel(eventId);
 queue.retryUnknown(eventId); // 可能重复送达
 queue.snapshot();
@@ -71,15 +89,15 @@ queue.snapshot();
 node scripts/monitoring/delivery/example.mjs
 ```
 
-`transport.send(payload, ctx)` 必须同步返回：
+`transport.send(payload, ctx)` 可同步返回或返回 Promise，结果为：
 
 - `{ outcome: "confirmed" }`
 - `{ outcome: "failed", retryable: true|false, code }`
 - `{ outcome: "unknown", code }` 或 `{ outcome: "timeout" }`
 
-`payload` 只有脱敏字段：`event_id` / `type` / `source` / `at` / `incident_id` / `title` / `body`。持久记录不保存凭据或原始响应。transport 的 code 只接受本地有限词表，其他值降为对应 outcome；对象和任意诊断文本不会原样落盘。超时由 transport 合作遵守 `ctx.deadline_at`；同步 `send` 卡住时本模块无法强杀。
+`ctx` 包含 `now` / `deadline_at` / `attempt` / `event_id` / `signal`（`AbortSignal`）。`payload` 只有脱敏字段：`event_id` / `type` / `source` / `at` / `incident_id` / `title` / `body`。持久记录不保存凭据或原始响应。transport 的 code 只接受本地有限词表，其他值降为对应 outcome；对象和任意诊断文本不会原样落盘。
 
-主循环应定期调用 `tick()`。本模块不 sleep、不注册计划任务。
+主循环应定期 `await queue.tick()`。调用方不读取或修改 delivery 状态文件，不依赖内部字段。
 
 ## 测试
 
@@ -102,6 +120,7 @@ node --test scripts/monitoring/*.test.mjs
 - 真实消息、飞书 webhook、产品 `notify.ts` / `FEISHU_*`
 - 接收人与渠道配置、Windows 探测与部署
 - 数据库、通用队列框架、新依赖
+- 常驻调度接线
 - 端到端 exactly-once、断电耐久、杭州/Windows 实机验收
 - 修改 `alert-core.mjs`、`replay.mjs` 或父目录 README
 
