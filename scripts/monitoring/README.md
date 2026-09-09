@@ -1,6 +1,6 @@
-# 本地告警核心（F02 第一阶段）
+# 本地告警工具（F02）
 
-判断 `beian-server-8787`、`cloudflared` 和 HTTP health 的本地候选规则：去抖、重复抑制、脱敏草稿。本目录不探测生产、不发送消息、不注册计划任务或 Windows 服务，也不改 `/api/health`。
+判断 `beian-server-8787`、`cloudflared` 和 HTTP health 的本地候选规则：去抖、重复抑制、脱敏草稿。核心与回放入口不探测生产、不发送消息；只读探测与本地投递模块见下文。未注册计划任务或 Windows 服务，也不改 `/api/health`。
 
 ## 合同口径
 
@@ -30,9 +30,16 @@ stdout 是结构化 JSON（事件、草稿、最终状态）。`--text` 把脱�
 node --test scripts/monitoring/*.test.mjs
 ```
 
+## 第二阶段模块
+
+- [只读探测适配器](probes/README.md)：固定服务查询与显式 HTTP URL，输出核心可消费的 sample；仅本地 mock 验证，Windows/真实网络待验。
+- [本地投递模块](delivery/README.md)：事件持久入队、有限重试与结果不明处理。默认无 transport，当前接口仅支持同步合作式 transport；异步网络发送、独立超时和常驻调度接线尚未实现。
+- `local-flow.test.mjs` 验证三个模块的合成串联、故障恢复顺序、重启去重及默认不发送；不代表跨核心状态与投递文件的事务恢复已解决。
+- 完整局部测试命令见 [TESTING](../../TESTING.md)。
+
 ## 明确未做
 
-- 真实 Windows `Get-Service` / 环回或公网探测
+- Windows `Get-Service` / 环回或公网探测的实机验收
 - 飞书或其他通知渠道
 - 计划任务、WinSW、cloudflared 安装
 - 生产 health 路由变更
