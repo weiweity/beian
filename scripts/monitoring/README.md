@@ -33,8 +33,9 @@ node --test scripts/monitoring/*.test.mjs
 ## 第二阶段模块
 
 - [只读探测适配器](probes/README.md)：固定服务查询与显式 HTTP URL，输出核心可消费的 sample；仅本地 mock 验证，Windows/真实网络待验。
-- [本地投递模块](delivery/README.md)：事件持久入队、有限重试与结果不明处理。默认无 transport，当前接口仅支持同步合作式 transport；异步网络发送、独立超时和常驻调度接线尚未实现。
-- `local-flow.test.mjs` 验证三个模块的合成串联、故障恢复顺序、重启去重及默认不发送；不代表跨核心状态与投递文件的事务恢复已解决。
+- [本地投递模块](delivery/README.md)：事件持久入队、有限重试与结果不明处理。默认无 transport，接口支持同步/Promise transport、截止时间与 AbortSignal；超时或取消后迟到成功不覆盖状态。真实渠道仍未接入。
+- [本地循环协调器](runner/README.md)：核心与 pending 同次落盘，重启后重复交接由投递层去重；持锁后重读状态，有界停止期间保留所有权。
+- `local-flow.test.mjs` 与 runner 集成测试验证合成串联、异步超时、重启去重及默认不发送；不是 Windows/断电耐久验收。
 - 完整局部测试命令见 [TESTING](../../TESTING.md)。
 
 ## 明确未做
