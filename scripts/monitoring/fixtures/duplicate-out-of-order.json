@@ -1,0 +1,16 @@
+{
+  "_comment": "重复采样忽略；乱序旧样本丢弃。只有按时间前进的 3 次 stopped 产生一条故障。",
+  "schema": "beian-alert-fixture-v1",
+  "config": {
+    "fail_threshold": 3,
+    "recover_threshold": 2,
+    "local_candidate": true
+  },
+  "samples": [
+    { "id": "o1", "sampled_at": "2026-09-09T06:00:00.000Z", "sequence": 1, "facts": { "beian-server-8787": { "kind": "windows_service", "sample_ok": true, "observed": "stopped" } } },
+    { "id": "o1", "sampled_at": "2026-09-09T06:00:00.000Z", "sequence": 1, "facts": { "beian-server-8787": { "kind": "windows_service", "sample_ok": true, "observed": "stopped" } } },
+    { "id": "o2", "sampled_at": "2026-09-09T06:00:30.000Z", "sequence": 2, "facts": { "beian-server-8787": { "kind": "windows_service", "sample_ok": true, "observed": "stopped" } } },
+    { "id": "o0", "sampled_at": "2026-09-09T05:59:00.000Z", "sequence": 0, "facts": { "beian-server-8787": { "kind": "windows_service", "sample_ok": true, "observed": "stopped" } } },
+    { "id": "o3", "sampled_at": "2026-09-09T06:01:00.000Z", "sequence": 3, "facts": { "beian-server-8787": { "kind": "windows_service", "sample_ok": true, "observed": "stopped" } } }
+  ]
+}

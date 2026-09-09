@@ -1,0 +1,47 @@
+{
+  "_comment": "连续正常：不应产生事件。阈值是本地候选。",
+  "schema": "beian-alert-fixture-v1",
+  "config": {
+    "fail_threshold": 3,
+    "recover_threshold": 2,
+    "local_candidate": true
+  },
+  "samples": [
+    {
+      "id": "h1",
+      "sampled_at": "2026-09-09T00:00:00.000Z",
+      "facts": {
+        "beian-server-8787": { "kind": "windows_service", "sample_ok": true, "observed": "running" },
+        "cloudflared": { "kind": "windows_service", "sample_ok": true, "observed": "running" },
+        "http_health": {
+          "loopback": { "kind": "http", "target": "loopback", "sample_ok": true, "http_status": 200, "body_ok": true, "parse_ok": true, "version": "0.23.2.0" },
+          "public": { "kind": "http", "target": "public", "sample_ok": true, "http_status": 200, "body_ok": true, "parse_ok": true, "version": "0.23.2.0" }
+        }
+      }
+    },
+    {
+      "id": "h2",
+      "sampled_at": "2026-09-09T00:00:30.000Z",
+      "facts": {
+        "beian-server-8787": { "kind": "windows_service", "sample_ok": true, "observed": "running" },
+        "cloudflared": { "kind": "windows_service", "sample_ok": true, "observed": "running" },
+        "http_health": {
+          "loopback": { "kind": "http", "target": "loopback", "sample_ok": true, "http_status": 200, "body_ok": true, "parse_ok": true, "version": "0.23.2.0" },
+          "public": { "kind": "http", "target": "public", "sample_ok": true, "http_status": 200, "body_ok": true, "parse_ok": true, "version": "0.23.2.0" }
+        }
+      }
+    },
+    {
+      "id": "h3",
+      "sampled_at": "2026-09-09T00:01:00.000Z",
+      "facts": {
+        "beian-server-8787": { "kind": "windows_service", "sample_ok": true, "observed": "running" },
+        "cloudflared": { "kind": "windows_service", "sample_ok": true, "observed": "running" },
+        "http_health": {
+          "loopback": { "kind": "http", "target": "loopback", "sample_ok": true, "http_status": 200, "body_ok": true, "parse_ok": true, "version": "0.23.2.0" },
+          "public": { "kind": "http", "target": "public", "sample_ok": true, "http_status": 200, "body_ok": true, "parse_ok": true, "version": "0.23.2.0" }
+        }
+      }
+    }
+  ]
+}
