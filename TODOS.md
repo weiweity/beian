@@ -2,11 +2,13 @@
 
 这是当前未完成事项的唯一清单。已完成代码和版本历史写 `CHANGELOG.md`；设计理由写 ADR；阶段证据留在对应 closeout，真实稿与输出留在 Git 外的私有证据目录。
 
-更新：2026-09-09。按 `7380228` / `0.23.2.0` 主线与本轮交付证据核对，保留 **21 个未闭环主题（P1 10、P2 7、P3 4）**。阶段实现与验证记录随下方条目更新；历史发布证据不替代本轮本地回归或业务验收。“待确认”表示未见批准/完成证据，不替用户判断外部事项已办或未办。
+更新：2026-09-09。按 `263e7bd` / `0.24.0.0` 主线与本轮交付证据核对，保留 **21 个未闭环主题（P1 10、P2 7、P3 4）**。阶段实现与验证记录随下方条目更新；历史发布证据不替代本轮本地回归或业务验收。“待确认”表示未见批准/完成证据，不替用户判断外部事项已办或未办。
 
 此前发布证据：[PR #102](https://github.com/weiweity/beian/pull/102)、merge `c62caed`、[hangzhou-release 34244831374](https://github.com/weiweity/beian/actions/runs/34244831374) 成功及同次公网 health `0.23.0.0`。仓库外完整记录：`~/Desktop/beian-evidence/2026-09-08-two-pr-ship/REPORT.md`。以下 R01/Q05 的已发布状态复用此证据，不代表业务验收完成。
 
-当前发布：[PR #104](https://github.com/weiweity/beian/pull/104)，merge `7380228` / `0.23.2.0`；[hangzhou-release 34318804949](https://github.com/weiweity/beian/actions/runs/34318804949) 成功，杭州来源、Illustrator Session 1、Blender 合同冒烟与同次公网 health/version 已核对。完整记录：`~/Desktop/beian-evidence/2026-09-09-glb-integration/ship/RELEASE.md`。2026-09-09 用户确认当前白色花盒 GLB 画面无问题：镜头、灯光、桌墙切片结案；仅限本例视觉接受，不代替 Q02/Q04 整体、13 稿矩阵、L2/UAT。
+此前 GLB 发布：[PR #104](https://github.com/weiweity/beian/pull/104)，merge `7380228` / `0.23.2.0`；[hangzhou-release 34318804949](https://github.com/weiweity/beian/actions/runs/34318804949) 成功，杭州来源、Illustrator Session 1、Blender 合同冒烟与同次公网 health/version 已核对。完整记录：`~/Desktop/beian-evidence/2026-09-09-glb-integration/ship/RELEASE.md`。2026-09-09 用户确认当前白色花盒 GLB 画面无问题：镜头、灯光、桌墙切片结案；仅限本例视觉接受，不代替 Q02/Q04 整体、13 稿矩阵、L2/UAT。
+
+当前发布：[PR #105](https://github.com/weiweity/beian/pull/105)，merge `263e7bd` / `0.24.0.0`；[hangzhou-release 34326190730](https://github.com/weiweity/beian/actions/runs/34326190730) 成功，杭州来源、Illustrator Session 1、Blender 合同冒烟与公网 version 已核对。发布的是 F02 本地告警核心和 R04 采证工具，不代表生产告警接入或资源预算验收。证据：`~/Desktop/beian-evidence/2026-09-09-monitoring-resource-integration/ship/RELEASE.md`。
 
 ## 状态与执行口径
 
@@ -164,7 +166,7 @@ RF-10–RF-13 的原始依赖见 [ADR-007 §20.7](docs/adr-007-packaging-render-
 
 - [ ] **R04 — 切面与渲染资源压测**
 
-  状态：2026-09-08 已完成基于 `004ed374` / 0.22.0.0 的本地合成切片，覆盖极端切面、接近像素上限、双上传、队列串行/drain、预留与失败释放；Illustrator busy、部分取消/调灯场景为模拟或合同回归。报告在仓库外 `~/Desktop/beian-evidence/2026-09-08-r04-resource-stress/REPORT.md`，产品零改动。Blender 测量受外部负载干扰，不作为独占预算；仍缺独占 Blender/浏览器预算、复杂多图层与长循环、最大像素整链路、真实网络与宿主验证。Windows 原生异常按用户决定暂缓；R04 整项未完成。2026-09-09 第二阶段采证工具已整合至 `codex/monitoring-resource-integration`（代码已提交，尚未发布）：`scripts/resource-stress/` 提供身份/预检/矩阵/命令采样及轻量合成回归。整合修正空运行、失败/取消、无采样不得成为有效预算，以及父进程退出后的组内后代清理。只验证工具，不冻结预算；正式独占 Blender/浏览器测量未执行。
+  状态：2026-09-08 已完成基于 `004ed374` / 0.22.0.0 的本地合成切片，覆盖极端切面、接近像素上限、双上传、队列串行/drain、预留与失败释放；Illustrator busy、部分取消/调灯场景为模拟或合同回归。报告在仓库外 `~/Desktop/beian-evidence/2026-09-08-r04-resource-stress/REPORT.md`，产品零改动。Blender 测量受外部负载干扰，不作为独占预算；仍缺独占 Blender/浏览器预算、复杂多图层与长循环、最大像素整链路、真实网络与宿主验证。Windows 原生异常按用户决定暂缓；R04 整项未完成。2026-09-09 第二阶段采证工具已随 PR #105 / `0.24.0.0` 发布：`scripts/resource-stress/` 提供身份/预检/矩阵/命令采样及轻量合成回归。整合修正空运行、失败/取消、无采样不得成为有效预算，以及父进程退出后的组内后代清理。只验证工具，不冻结预算；正式独占 Blender/浏览器测量未执行。
 
   1. 固定机器/版本/fixture 与测量方法，覆盖极端长宽比、最高允许像素、两个并发上传、Illustrator busy、Blender 单槽、重渲棚和发版排干。
   2. 先在合成隔离环境测峰值内存、磁盘/预留、排队及总耗时，记录失败/取消后的资源释放；生产场景在另获授权后取证。
@@ -208,7 +210,7 @@ RF-10–RF-13 的原始依赖见 [ADR-007 §20.7](docs/adr-007-packaging-render-
 
 - [ ] **F02 — Tunnel / 服务掉线告警**
 
-  状态：2026-09-09 本地判断核心与 fixture 回放已整合至 `codex/monitoring-resource-integration`（代码已提交，尚未发布），实现位于 `scripts/monitoring/`。来源独立分类、去抖、故障/恢复去重、状态持久化与脱敏草稿已有合成回归；整合补充 URL/嵌套字段不进入事件草稿的回归。真实探测适配器、接收渠道、发送和 Windows 部署未实施，整项仍开放。
+  状态：2026-09-09 本地判断核心与 fixture 回放已随 PR #105 / `0.24.0.0` 发布，实现位于 `scripts/monitoring/`。来源独立分类、去抖、故障/恢复去重、状态持久化与脱敏草稿已有合成回归；整合补充 URL/嵌套字段不进入事件草稿的回归。第二阶段只读探测适配器与渠道无关投递模块已在 `codex/f02-integration` 整合，纳入 `0.25.0.0` 发布候选（待合并、未发布），新增非零退出/诊断脱敏修复与三模块串联回归。探测仅 mock、投递仅同步 fake transport；真实渠道、异步发送、常驻调度、核心状态到投递文件的恢复接线和 Windows 部署仍待实施。OCR 审查后已修复 HTTP 错误状态丢失、正文读取无容量上限、重启重试上限漂移及取消监听残留；83 项本地测试通过；证据在仓库外 `~/Desktop/beian-evidence/2026-09-09-f02-integration/`。整项仍开放。
 
   1. 确认监控对象 `beian-server-8787`、cloudflared 的可读状态、告警接收人/渠道、去抖与恢复规则。
   2. 在隔离环境实现故障/恢复判断、重复抑制及消息草稿，用模拟故障验证，不以主动停生产服务测告警。
