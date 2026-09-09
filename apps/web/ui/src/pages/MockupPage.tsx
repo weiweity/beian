@@ -1,3 +1,4 @@
+import { MockupGlbViewer } from "./MockupGlbViewer";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Alert, App, Button, ConfigProvider, Empty, Input, Segmented, Space, Table, Tag, theme as antdTheme } from "antd";
@@ -36,7 +37,6 @@ import {
   studioAssetHref,
   studioDrawnLayerKeys,
   studioDrawnUpgradeFailed,
-  glbExposure,
   glbBackdrop,
   jobHasGround,
   jobHasReviewCard,
@@ -82,7 +82,6 @@ import {
   enterElementFullscreen,
   exitElementFullscreen,
   isElementFullscreen,
-  pingViewerAfterFullscreen,
 } from "./mockupFullscreen";
 import { ModelViewerElement } from "@google/model-viewer";
 // Version changes disconnect the old scene. Keep no unreferenced glTF texture/geometry cache.
@@ -867,7 +866,6 @@ export function MockupJobPage({
       setGlbFs(on);
       if (on === lastGlbFs.current) return;
       lastGlbFs.current = on;
-      if (el) pingViewerAfterFullscreen(el);
     }
     document.addEventListener("fullscreenchange", onFs);
     document.addEventListener("webkitfullscreenchange", onFs);
@@ -1547,22 +1545,12 @@ function GlbShot({
         ref={boxRef}
         style={{ background: fill }}
       >
-        <model-viewer
-          src={fileHref(jobId, "glb",false,generation)}
-          onError={onSourceError}
-          camera-controls
-          camera-orbit="0deg 75deg 155%"
-          max-camera-orbit="auto auto 155%"
-          environment-image="neutral"
-          exposure={glbExposure(productLight)}
-          shadow-intensity="1"
-          shadow-softness="0.25"
-          tone-mapping="commerce"
-          interaction-prompt="none"
-          style={{
-            background: "transparent",
-            ["--poster-color" as string]: "transparent",
-          }}
+        <MockupGlbViewer
+          source={fileHref(jobId, "glb", false, generation)}
+          backdrop={backdrop}
+          backgroundLight={backgroundLight}
+          productLight={productLight}
+          onSourceError={onSourceError}
         />
         <button
           type="button"
