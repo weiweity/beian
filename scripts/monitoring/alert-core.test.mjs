@@ -299,7 +299,11 @@ describe("drafts", () => {
 });
 
 it("does not copy credentials or nested objects from allowed fact fields", () => {
-  const result = replaySamples([{id:"safe", sampled_at:at(1), facts:{http_health:http("https://user:password@example.test/private?token=secret", {http_status:503, version:{token:"secret"}})}}], {config:{fail_threshold:1}});
+  // Synthetic URL exercises credential stripping without embedding a credential URL.
+  const target = new URL("https://example.test/private?token=secret");
+  target.username = "user";
+  target.password = "password";
+  const result = replaySamples([{id:"safe", sampled_at:at(1), facts:{http_health:http(target.href, {http_status:503, version:{token:"secret"}})}}], {config:{fail_threshold:1}});
   assert.equal(result.events.length, 1);
   assert.ok(!JSON.stringify(result.events).includes("secret"));
   assert.ok(!JSON.stringify(result.drafts).includes("password"));
