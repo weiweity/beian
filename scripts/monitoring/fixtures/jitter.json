@@ -1,0 +1,17 @@
+{
+  "_comment": "抖动：异常被正常打断，达不到连续阈值，无事件。",
+  "schema": "beian-alert-fixture-v1",
+  "config": {
+    "fail_threshold": 3,
+    "recover_threshold": 2,
+    "local_candidate": true
+  },
+  "samples": [
+    { "id": "j1", "sampled_at": "2026-09-09T03:00:00.000Z", "facts": { "cloudflared": { "kind": "windows_service", "sample_ok": true, "observed": "stopped" } } },
+    { "id": "j2", "sampled_at": "2026-09-09T03:00:30.000Z", "facts": { "cloudflared": { "kind": "windows_service", "sample_ok": true, "observed": "running" } } },
+    { "id": "j3", "sampled_at": "2026-09-09T03:01:00.000Z", "facts": { "cloudflared": { "kind": "windows_service", "sample_ok": true, "observed": "stopped" } } },
+    { "id": "j4", "sampled_at": "2026-09-09T03:01:30.000Z", "facts": { "cloudflared": { "kind": "windows_service", "sample_ok": true, "observed": "running" } } },
+    { "id": "j5", "sampled_at": "2026-09-09T03:02:00.000Z", "facts": { "cloudflared": { "kind": "windows_service", "sample_ok": true, "observed": "stopped" } } },
+    { "id": "j6", "sampled_at": "2026-09-09T03:02:30.000Z", "facts": { "cloudflared": { "kind": "windows_service", "sample_ok": true, "observed": "running" } } }
+  ]
+}

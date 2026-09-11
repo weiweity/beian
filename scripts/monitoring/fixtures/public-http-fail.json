@@ -1,0 +1,59 @@
+{
+  "_comment": "公网 health 连续失败只产生 http_health.public 故障，不把 beian-server-8787 / cloudflared 标成已停。",
+  "schema": "beian-alert-fixture-v1",
+  "config": {
+    "fail_threshold": 3,
+    "recover_threshold": 2,
+    "local_candidate": true
+  },
+  "samples": [
+    {
+      "id": "p1",
+      "sampled_at": "2026-09-09T07:00:00.000Z",
+      "facts": {
+        "beian-server-8787": { "kind": "windows_service", "sample_ok": true, "observed": "running" },
+        "cloudflared": { "kind": "windows_service", "sample_ok": true, "observed": "running" },
+        "http_health": {
+          "loopback": { "kind": "http", "target": "loopback", "sample_ok": true, "http_status": 200, "body_ok": true, "parse_ok": true, "version": "0.23.2.0" },
+          "public": { "kind": "http", "target": "public", "sample_ok": true, "http_status": 502, "body_ok": false, "parse_ok": true }
+        }
+      }
+    },
+    {
+      "id": "p2",
+      "sampled_at": "2026-09-09T07:00:30.000Z",
+      "facts": {
+        "beian-server-8787": { "kind": "windows_service", "sample_ok": true, "observed": "running" },
+        "cloudflared": { "kind": "windows_service", "sample_ok": true, "observed": "running" },
+        "http_health": {
+          "loopback": { "kind": "http", "target": "loopback", "sample_ok": true, "http_status": 200, "body_ok": true, "parse_ok": true, "version": "0.23.2.0" },
+          "public": { "kind": "http", "target": "public", "sample_ok": true, "http_status": 502, "body_ok": false, "parse_ok": true }
+        }
+      }
+    },
+    {
+      "id": "p3",
+      "sampled_at": "2026-09-09T07:01:00.000Z",
+      "facts": {
+        "beian-server-8787": { "kind": "windows_service", "sample_ok": true, "observed": "running" },
+        "cloudflared": { "kind": "windows_service", "sample_ok": true, "observed": "running" },
+        "http_health": {
+          "loopback": { "kind": "http", "target": "loopback", "sample_ok": true, "http_status": 200, "body_ok": true, "parse_ok": true, "version": "0.23.2.0" },
+          "public": { "kind": "http", "target": "public", "sample_ok": true, "http_status": 503, "body_ok": false, "parse_ok": true }
+        }
+      }
+    },
+    {
+      "id": "p4",
+      "sampled_at": "2026-09-09T07:01:30.000Z",
+      "facts": {
+        "beian-server-8787": { "kind": "windows_service", "sample_ok": true, "observed": "running" },
+        "cloudflared": { "kind": "windows_service", "sample_ok": true, "observed": "running" },
+        "http_health": {
+          "loopback": { "kind": "http", "target": "loopback", "sample_ok": true, "http_status": 200, "body_ok": true, "parse_ok": true, "version": "0.23.2.0" },
+          "public": { "kind": "http", "target": "public", "sample_ok": true, "http_status": 502, "body_ok": false, "parse_ok": true }
+        }
+      }
+    }
+  ]
+}

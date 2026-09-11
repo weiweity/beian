@@ -91,3 +91,9 @@ npm run verify -- full
 局部后端回归：`node_modules/.bin/tsx --test apps/web/server/src/jobs-print-faces.test.ts apps/web/server/src/mockup-http.test.ts apps/web/server/src/jobs-generations.test.ts apps/web/server/src/workers.test.ts`。这些测试使用独立临时数据与合成 worker，覆盖202确认、同单幂等、跨单排队、drain、恢复围栏、旧图保留及进程记账失败；不调用 Blender/Illustrator/OCR。
 
 先完成 UI build 后，可运行 `PLAYWRIGHT_ARTIFACT_ONLY=1 npm run test:e2e -w beian-ui -- e2e/mockup-board.spec.ts --grep '印刷面|补面'`。此模式从现有 dist 读取构建产物并拦截全部页面/API请求，不另起监听端口，适合5173已被用户进程占用时验证；构建过期时必须先重建。通过只证明合成浏览器行为，不替代 Hono/杭州真实任务。
+
+### 本地运维工具切片（F02 / R04）
+
+- [告警判断与 fixture 回放](scripts/monitoring/README.md)：`node --test scripts/monitoring/*.test.mjs scripts/monitoring/probes/*.test.mjs scripts/monitoring/delivery/*.test.mjs scripts/monitoring/runner/*.test.mjs`。包含探测适配器、投递模块与串联合成回归；不访问生产或发送通知。
+- [资源采证工具](scripts/resource-stress/README.md)：`python3 scripts/resource-stress/test_harness.py -v`。只启动自建轻量合成子进程，覆盖采样、失败/取消与清理；不启动 Blender/浏览器压测，不构成独占预算或 Windows Job Object 证明。
+- 两组当前为显式局部测试命令，不在根 `npm test` 默认集合中；修改对应工具或发版包含对应目录时必须单独执行。

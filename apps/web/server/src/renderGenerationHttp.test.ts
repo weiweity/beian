@@ -274,7 +274,11 @@ process.stdin.on('end',()=>{
 });
 
 async function verifyReadOnlyRollback(id:string,root:string,current:string) {
-  const revision="e1c2d6794c3ba5cc35da15a41bd738a8692a95b0";
+  // Pin the canonical v0.21.35.0 parent that remains reachable after the
+  // public-history sanitization. The duplicate merge-side commit (e1c2d679)
+  // is retained in the old local clone but is not advertised by GitHub, so a
+  // clean Actions checkout cannot resolve its source tree.
+  const revision="ad1a63ed430d0d69b9823c16245ef5f7fd68e8ab";
   const source=(file:string)=>execFileSync("git",["show",`${revision}:apps/web/server/src/${file}`],{encoding:"utf8"});
   const importTs=(text:string)=>import(`data:text/javascript;base64,${Buffer.from(transpileModule(text,
     {compilerOptions:{target:ScriptTarget.ES2022,module:ModuleKind.ES2022}}).outputText).toString("base64")}`);
