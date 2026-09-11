@@ -2,7 +2,7 @@
 
 这是当前未完成事项的唯一清单。已完成代码和版本历史写 `CHANGELOG.md`；设计理由写 ADR；阶段证据留在对应 closeout，真实稿与输出留在 Git 外的私有证据目录。
 
-更新：2026-09-11。按 `0e56152` / `0.25.0.0` 主线与本轮交付证据核对，保留 **21 个未闭环主题（P1 10、P2 7、P3 4）**。阶段实现与验证记录随下方条目更新；历史发布证据不替代本轮本地回归或业务验收。“待确认”表示未见批准/完成证据，不替用户判断外部事项已办或未办。
+更新：2026-09-11。按 `1e29578` / `0.26.0.0` 主线与本轮交付证据核对，保留 **21 个未闭环主题（P1 10、P2 7、P3 4）**。阶段实现与验证记录随下方条目更新；历史发布证据不替代本轮本地回归或业务验收。“待确认”表示未见批准/完成证据，不替用户判断外部事项已办或未办。
 
 此前发布证据：[PR #102](https://github.com/weiweity/beian/pull/102)、merge `c62caed`、[hangzhou-release 34244831374](https://github.com/weiweity/beian/actions/runs/34244831374) 成功及同次公网 health `0.23.0.0`。仓库外完整记录：`~/Desktop/beian-evidence/2026-09-08-two-pr-ship/REPORT.md`。以下 R01/Q05 的已发布状态复用此证据，不代表业务验收完成。
 
@@ -10,9 +10,9 @@
 
 此前运维工具发布：[PR #105](https://github.com/weiweity/beian/pull/105)，merge `263e7bd` / `0.24.0.0`；[hangzhou-release 34326190730](https://github.com/weiweity/beian/actions/runs/34326190730) 成功，杭州来源、Illustrator Session 1、Blender 合同冒烟与公网 version 已核对。发布的是 F02 本地告警核心和 R04 采证工具，不代表生产告警接入或资源预算验收。证据：`~/Desktop/beian-evidence/2026-09-09-monitoring-resource-integration/ship/RELEASE.md`。
 
-当前发布：[PR #106](https://github.com/weiweity/beian/pull/106)，merge `0e56152` / `0.25.0.0`；[hangzhou-release 34336262433](https://github.com/weiweity/beian/actions/runs/34336262433) 成功，杭州 runner 来源与公网 health/version 已核对。F02 探测与本地投递工具已发布，真实通知未启用。
+此前发布：[PR #106](https://github.com/weiweity/beian/pull/106)，merge `0e56152` / `0.25.0.0`；[hangzhou-release 34336262433](https://github.com/weiweity/beian/actions/runs/34336262433) 成功，杭州 runner 来源与公网 health/version 已核对。F02 探测与本地投递工具已发布，真实通知未启用。
 
-当前待合并：[PR #107](https://github.com/weiweity/beian/pull/107)，HEAD `3f68b7c` / `0.26.0.0`；quality 与 Windows PowerShell contract checks 已通过，尚未合并、尚未触发杭州发布。末次修复把 RF-04 回滚夹具固定到公开历史中仍可解析的等价提交，避免新 clone 在完整 L0 阶段失败。该状态不等于 0.26.0.0 已上线。
+当前发布：[PR #107](https://github.com/weiweity/beian/pull/107) 的功能提交 `6771a08` / `0.26.0.0` 已合并；因生产旧提交链需要保留，随后通过 [PR #108](https://github.com/weiweity/beian/pull/108) 以普通 merge 生成发布头 `1e29578`。对应 [hangzhou-release 34574493418](https://github.com/weiweity/beian/actions/runs/34574493418) 已成功，杭州 runner 来源与公网 `health.version=0.26.0.0` 已核对。该证据只证明发版 L1，不替代 Windows 质量门、真实稿 L2、UAT 或业务验收。
 
 ## 状态与执行口径
 
@@ -214,7 +214,7 @@ RF-10–RF-13 的原始依赖见 [ADR-007 §20.7](docs/adr-007-packaging-render-
 
 - [ ] **F02 — Tunnel / 服务掉线告警**
 
-  状态：2026-09-09 本地判断核心与 fixture 回放已随 PR #105 / `0.24.0.0` 发布，实现位于 `scripts/monitoring/`。来源独立分类、去抖、故障/恢复去重、状态持久化与脱敏草稿已有合成回归；整合补充 URL/嵌套字段不进入事件草稿的回归。第二阶段只读探测适配器与渠道无关投递模块已随 PR #106 / `0.25.0.0` 发布，新增非零退出/诊断脱敏修复与三模块串联回归。第二阶段探测仅 mock、投递仅同步 fake。第三阶段 Promise 投递/超时/取消与本地循环/pending 恢复已整合到 PR #107 / `0.26.0.0`，quality 与 Windows contract checks 已通过，尚未合并或发布；补持锁后状态重读、有界停止、旧锁接管互斥、异步批次失败等待及取消持久化失败回归。第三阶段证据：`~/Desktop/beian-evidence/2026-09-09-f02-runtime-integration/`。真实渠道、Windows 部署及现场验收仍待实施；进程模型不证明断电耐久。OCR 审查后已修复 HTTP 错误状态丢失、正文读取无容量上限、重启重试上限漂移及取消监听残留；83 项本地测试通过；证据在仓库外 `~/Desktop/beian-evidence/2026-09-09-f02-integration/`。整项仍开放。
+  状态：2026-09-09 本地判断核心与 fixture 回放已随 PR #105 / `0.24.0.0` 发布，实现位于 `scripts/monitoring/`。来源独立分类、去抖、故障/恢复去重、状态持久化与脱敏草稿已有合成回归；整合补充 URL/嵌套字段不进入事件草稿的回归。第二阶段只读探测适配器与渠道无关投递模块已随 PR #106 / `0.25.0.0` 发布，新增非零退出/诊断脱敏修复与三模块串联回归。第二阶段探测仅 mock、投递仅同步 fake。第三阶段 Promise 投递/超时/取消与本地循环/pending 恢复已随 PR #107 / `0.26.0.0` 合并，并通过 PR #108 的发布链修复后部署；quality 与 Windows contract checks 已通过，公网发版 L1 已核对。第三阶段证据：`~/Desktop/beian-evidence/2026-09-09-f02-runtime-integration/`。真实渠道、Windows 部署及现场验收仍待实施；进程模型不证明断电耐久。OCR 审查后已修复 HTTP 错误状态丢失、正文读取无容量上限、重启重试上限漂移及取消监听残留；83 项本地测试通过；证据在仓库外 `~/Desktop/beian-evidence/2026-09-09-f02-integration/`。整项仍开放。
 
   1. 确认监控对象 `beian-server-8787`、cloudflared 的可读状态、告警接收人/渠道、去抖与恢复规则。
   2. 在隔离环境实现故障/恢复判断、重复抑制及消息草稿，用模拟故障验证，不以主动停生产服务测告警。
