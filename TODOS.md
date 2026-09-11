@@ -14,6 +14,8 @@
 
 当前发布：[PR #109](https://github.com/weiweity/beian/pull/109) 的版本/状态同步提交 `10b67d2` / `0.26.0.1` 已合并；前一功能发布为 [PR #107](https://github.com/weiweity/beian/pull/107) 的 `6771a08` / `0.26.0.0`，因生产旧提交链需要保留，随后通过 [PR #108](https://github.com/weiweity/beian/pull/108) 以普通 merge 生成发布头 `1e29578`。对应当前 [hangzhou-release 34584232535](https://github.com/weiweity/beian/actions/runs/34584232535) 已成功，杭州 runner 来源与公网 `health.version=0.26.0.1` 已核对。该证据只证明发版 L1，不替代 Windows 质量门、真实稿 L2、UAT 或业务验收。
 
+工作区待发布版本：`0.26.0.2`（当前分支提交 `234051c`，`VERSION` 与健康检查标识已同步）。该版本尚未合入 `main`，尚无对应的 merge SHA、杭州发布 run 或公网 health 证据，因此暂不列为当前发布；合并部署后再补齐证据。
+
 ## 状态与执行口径
 
 - **Code**：代码已交付；是否已有实现以当前 checkout 和相关 closeout 为准，不按未勾选状态重复开发。
