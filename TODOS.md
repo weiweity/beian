@@ -2,7 +2,7 @@
 
 这是当前未完成事项的唯一清单。已完成代码和版本历史写 `CHANGELOG.md`；设计理由写 ADR；阶段证据留在对应 closeout，真实稿与输出留在 Git 外的私有证据目录。
 
-更新：2026-09-11。按 `1e29578` / `0.26.0.0` 主线与本轮交付证据核对，保留 **21 个未闭环主题（P1 10、P2 7、P3 4）**。阶段实现与验证记录随下方条目更新；历史发布证据不替代本轮本地回归或业务验收。“待确认”表示未见批准/完成证据，不替用户判断外部事项已办或未办。
+更新：2026-09-11。按 `10b67d2` / `0.26.0.1` 主线与本轮交付证据核对，保留 **21 个未闭环主题（P1 10、P2 7、P3 4）**。阶段实现与验证记录随下方条目更新；历史发布证据不替代本轮本地回归或业务验收。“待确认”表示未见批准/完成证据，不替用户判断外部事项已办或未办。
 
 此前发布证据：[PR #102](https://github.com/weiweity/beian/pull/102)、merge `c62caed`、[hangzhou-release 34244831374](https://github.com/weiweity/beian/actions/runs/34244831374) 成功及同次公网 health `0.23.0.0`。仓库外完整记录：`~/Desktop/beian-evidence/2026-09-08-two-pr-ship/REPORT.md`。以下 R01/Q05 的已发布状态复用此证据，不代表业务验收完成。
 
@@ -12,7 +12,7 @@
 
 此前发布：[PR #106](https://github.com/weiweity/beian/pull/106)，merge `0e56152` / `0.25.0.0`；[hangzhou-release 34336262433](https://github.com/weiweity/beian/actions/runs/34336262433) 成功，杭州 runner 来源与公网 health/version 已核对。F02 探测与本地投递工具已发布，真实通知未启用。
 
-当前发布：[PR #107](https://github.com/weiweity/beian/pull/107) 的功能提交 `6771a08` / `0.26.0.0` 已合并；因生产旧提交链需要保留，随后通过 [PR #108](https://github.com/weiweity/beian/pull/108) 以普通 merge 生成发布头 `1e29578`。对应 [hangzhou-release 34574493418](https://github.com/weiweity/beian/actions/runs/34574493418) 已成功，杭州 runner 来源与公网 `health.version=0.26.0.0` 已核对。该证据只证明发版 L1，不替代 Windows 质量门、真实稿 L2、UAT 或业务验收。
+当前发布：[PR #109](https://github.com/weiweity/beian/pull/109) 的版本/状态同步提交 `10b67d2` / `0.26.0.1` 已合并；前一功能发布为 [PR #107](https://github.com/weiweity/beian/pull/107) 的 `6771a08` / `0.26.0.0`，因生产旧提交链需要保留，随后通过 [PR #108](https://github.com/weiweity/beian/pull/108) 以普通 merge 生成发布头 `1e29578`。对应当前 [hangzhou-release 34584232535](https://github.com/weiweity/beian/actions/runs/34584232535) 已成功，杭州 runner 来源与公网 `health.version=0.26.0.1` 已核对。该证据只证明发版 L1，不替代 Windows 质量门、真实稿 L2、UAT 或业务验收。
 
 ## 状态与执行口径
 
