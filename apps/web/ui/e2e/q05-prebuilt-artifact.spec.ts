@@ -8,10 +8,11 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { join, resolve, parse } from "node:path";
 import {
   Q05_IDENTITY_FILE,
   Q05_IDENTITY_SCHEMA,
@@ -181,7 +182,7 @@ test("预构建模式：变量已设置但为空时失败关闭，不回退构�
   })).toThrow(/已设置但路径为空/);
 });
 
-test("buildQ05ArtifactInto：写入调用方目录且失败时不删除该目录", () => {
+test("buildQ05ArtifactInto：仓库外空目录可构建，cleanup 不删除", () => {
   const uiRoot = makeUiRoot();
   const dir = mkdtempSync(join(tmpdir(), "q05-prebuilt-"));
   created.push(dir);
@@ -192,12 +193,77 @@ test("buildQ05ArtifactInto：写入调用方目录且失败时不删除该目录
   });
   expect(source.owned).toBe(false);
   expect(existsSync(join(dir, Q05_IDENTITY_FILE))).toBe(true);
+  cleanupQ05Artifact(source);
+  expect(existsSync(dir)).toBe(true);
+});
+
+test("buildQ05ArtifactInto：构建失败保留外部目录和部分产物", () => {
+  const uiRoot = makeUiRoot();
+  const dir = mkdtempSync(join(tmpdir(), "q05-prebuilt-"));
+  created.push(dir);
   expect(() => buildQ05ArtifactInto(dir, {
     uiRoot,
     gitHead: () => "abc123",
-    build: () => { throw new Error("vite failed"); },
+    build: (dest) => {
+      writeFileSync(join(dest, "partial"), "keep me");
+      throw new Error("vite failed");
+    },
   })).toThrow(/vite failed/);
   expect(existsSync(dir)).toBe(true);
+  expect(readFileSync(join(dir, "partial"), "utf8")).toBe("keep me");
+  expect(existsSync(join(dir, Q05_IDENTITY_FILE))).toBe(false);
+});
+
+test("buildQ05ArtifactInto：非空目录及符号链接别名在 build 前拒绝，sentinel 字节不变", () => {
+  const uiRoot = makeUiRoot();
+  const root = mkdtempSync(join(tmpdir(), "q05-target-"));
+  created.push(root);
+  const dir = join(root, "output");
+  mkdirSync(dir);
+  const bytes = Buffer.from([0, 255, 13, 10, 42]);
+  writeFileSync(join(dir, ".sentinel"), bytes);
+  symlinkSync(dir, join(root, "alias"), "dir");
+  for (const target of [dir, join(root, "alias"), resolve(dir, "..", "output")]) {
+    let builds = 0;
+    expect(() => buildQ05ArtifactInto(target, {
+      uiRoot, gitHead: () => "abc123", build: () => { builds += 1; },
+    })).toThrow(/构建目的目录/);
+    expect(builds).toBe(0);
+    expect(readFileSync(join(dir, ".sentinel"))).toEqual(bytes);
+  }
+});
+
+test("buildQ05ArtifactInto：源码树、仓库内部（含 .git 文件）、宽泛目标及路径别名拒绝", () => {
+  const uiRoot = makeUiRoot();
+  const repo = resolve(uiRoot, "../../..");
+  const empty = join(repo, "empty-output");
+  mkdirSync(empty);
+  const aliases = mkdtempSync(join(tmpdir(), "q05-alias-"));
+  created.push(aliases);
+  symlinkSync(repo, join(aliases, "repo"), "dir");
+  symlinkSync(uiRoot, join(aliases, "ui"), "dir");
+  const assertRejected = (target: string) => {
+    let builds = 0;
+    expect(() => buildQ05ArtifactInto(target, {
+      uiRoot: join(aliases, "ui"), gitHead: () => "abc123", build: () => { builds += 1; },
+    })).toThrow(/构建目的目录/);
+    expect(builds).toBe(0);
+  };
+  for (const target of [uiRoot, join(uiRoot, "public"), repo, homedir(), tmpdir(), parse(repo).root]) {
+    assertRejected(target);
+  }
+  for (const name of ["Volumes", "mnt", "Users", "Windows"]) {
+    const target = join(parse(repo).root, name);
+    if (existsSync(target)) assertRejected(target);
+  }
+  for (const gitKind of ["file", "directory"]) {
+    if (gitKind === "file") writeFileSync(join(repo, ".git"), "gitdir: /unused/synthetic\n");
+    else {
+      rmSync(join(repo, ".git"));
+      mkdirSync(join(repo, ".git"));
+    }
+    for (const target of [empty, join(aliases, "repo", "empty-output")]) assertRejected(target);
+  }
 });
 
 test("预构建模式：缺少身份记录时失败关闭，不删外部目录", () => {
@@ -312,6 +378,8 @@ test("预构建模式：只读外部目录仍可复用，且不会被 cleanup �
   const built = owned(uiRoot);
   const external = copyExternal(built.dir);
   cleanupQ05Artifact(built);
+  const files = ["index.html", Q05_IDENTITY_FILE, "assets/index-abc.js", "assets/index-abc.css"];
+  const before = files.map((file) => readFileSync(join(external, file)));
   chmodSync(external, 0o555);
   const source = resolveQ05Artifact({
     uiRoot,
@@ -323,6 +391,7 @@ test("预构建模式：只读外部目录仍可复用，且不会被 cleanup �
   cleanupQ05Artifact(source);
   expect(existsSync(join(external, "index.html"))).toBe(true);
   expect(readFileSync(join(external, Q05_IDENTITY_FILE), "utf8")).toContain(Q05_IDENTITY_SCHEMA);
+  expect(files.map((file) => readFileSync(join(external, file)))).toEqual(before);
 });
 
 test("cleanupQ05Artifact：未持有时不删任何目录", () => {

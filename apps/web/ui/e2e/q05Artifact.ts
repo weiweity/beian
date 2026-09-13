@@ -22,8 +22,8 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
-import { basename, isAbsolute, join, relative, resolve } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const Q05_PREBUILT_ENV = "BEIAN_Q05_DIST";
@@ -90,11 +90,37 @@ export function resolveQ05Artifact(options: Q05ArtifactOptions): Q05ArtifactSour
   return buildOwned(options, uiRoot);
 }
 
-/** 构建到调用方目录并写入 sidecar。失败不删除该目录。 */
+/** 仅构建到调用方新建的仓库外空目录并写入 sidecar。失败不删除该目录。 */
 export function buildQ05ArtifactInto(dir: string, options: Q05ArtifactOptions): Q05ArtifactSource {
   const uiRoot = options.uiRoot ?? UI_ROOT;
-  const dest = resolveExistingDir(dir);
+  // 写入入口不采用只读解析器的 realpath 失败回退。
+  const dest = realpathSync(resolveExistingDir(dir));
+  assertBuildDestination(dest, uiRoot);
   return finishBuild(dest, options, uiRoot, "prebuilt-external", false);
+}
+
+function assertBuildDestination(dest: string, uiRoot: string): void {
+  const contains = (parent: string, child: string) => {
+    const rel = relative(parent, child);
+    return rel === "" || (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`));
+  };
+  // realpath 同时消除调用方路径与源码路径的符号链接/平台别名。
+  const sourceRoot = realpathSync(uiRoot);
+  if (dirname(dest) === parse(dest).root
+    || contains(sourceRoot, dest) || contains(dest, sourceRoot)
+    || contains(dest, realpathSync(homedir())) || contains(dest, realpathSync(tmpdir()))) {
+    throw failClosed(`构建目的目录不能是源码目录、其祖先或系统/用户宽泛目录：${dest}`);
+  }
+  // 沿真实目的路径检查所有祖先；worktree 的 .git 是文件，同样禁止。
+  for (let ancestor = dest; ; ancestor = dirname(ancestor)) {
+    if (existsSync(join(ancestor, ".git"))) {
+      throw failClosed(`构建目的目录必须在仓库之外：${dest}`);
+    }
+    if (dirname(ancestor) === ancestor) break;
+  }
+  if (readdirSync(dest).length !== 0) {
+    throw failClosed(`构建目的目录必须为空，请使用新建的仓库外目录：${dest}`);
+  }
 }
 
 export function cleanupQ05Artifact(source: Q05ArtifactSource | undefined): void {
