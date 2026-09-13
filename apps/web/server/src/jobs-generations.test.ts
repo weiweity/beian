@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { deflateSync } from "node:zlib";
@@ -2065,6 +2065,107 @@ describe("RF-03B generation queue", () => {
     assert.equal(disk.current_render_generation_id, firstCurrent);
     assert.equal(executions, firstRuns);
     assert.equal(fileBytes(disk, "white_a").equals(NEW_A), true);
+  });
+
+  function jobTreeSnapshot(root: string): Record<string, { sha: string; mtimeMs: number; size: number }> {
+    const out: Record<string, { sha: string; mtimeMs: number; size: number }> = {};
+    const walk = (path: string) => {
+      for (const name of readdirSync(path)) {
+        const child = join(path, name);
+        const st = lstatSync(child);
+        if (st.isDirectory()) walk(child);
+        else {
+          out[child] = {
+            sha: createHash("sha256").update(readFileSync(child)).digest("hex"),
+            mtimeMs: st.mtimeMs,
+            size: st.size,
+          };
+        }
+      }
+    };
+    walk(root);
+    return out;
+  }
+
+  it("refuses upgrade without isolated candidate even when hooks are ready and leaves no queued mutation", () => {
+    const id = tid(80);
+    seedDoneJob(id);
+    const source = virtualId(id);
+    let executions = 0;
+    setJobsTestHooks(generationHooks({
+      runRenderGeneration: async (input) => {
+        executions += 1;
+        return bindExecutorResult(input, writeExecutorOutputs(input.candidateDir));
+      },
+    }));
+    expectCode(
+      () =>
+        enqueueRenderGenerationMutation({
+          jobId: id,
+          viewer,
+          clientRequestId: "req-upgrade-unwired-01",
+          mode: "upgrade",
+          sourceGenerationId: source,
+          expectedCurrentGenerationId: source,
+        }),
+      "render_generation_unavailable",
+    );
+    const job = readMockupFromDisk(id)!;
+    assert.equal(job.render_mutation, undefined);
+    assert.equal(job.render_generation_request, undefined);
+    assert.equal(job.current_render_generation_id, undefined);
+    assert.equal(executions, 0);
+    assert.equal(queueSnapshot().blender.running, 0);
+  });
+
+  it("rejected upgrade on a completed job with legal history leaves the job directory byte-identical", async () => {
+    const id = tid(81);
+    seedDoneJob(id);
+    const source = virtualId(id);
+    let executions = 0;
+    setJobsTestHooks(generationHooks({
+      runRenderGeneration: async (input) => {
+        executions += 1;
+        return bindExecutorResult(input, writeExecutorOutputs(input.candidateDir));
+      },
+    }));
+    enqueueRenderGenerationMutation({
+      jobId: id,
+      viewer,
+      clientRequestId: "req-upgrade-history-relight-01",
+      mode: "legacy_relight",
+      sourceGenerationId: source,
+      expectedCurrentGenerationId: source,
+    });
+    await waitUntil(() => readMockupFromDisk(id)?.render_mutation?.status === "succeeded", "history relight");
+    const afterRelight = readMockupFromDisk(id)!;
+    const current = afterRelight.current_render_generation_id;
+    assert.ok(current);
+    const indexPath = join(jobDir(id), RENDER_GENERATION_DIR, "index.jsonl");
+    assert.equal(existsSync(indexPath), true);
+    const before = jobTreeSnapshot(jobDir(id));
+    const beforeCurrent = current;
+    const beforeRuns = executions;
+    try {
+      enqueueRenderGenerationMutation({
+        jobId: id,
+        viewer,
+        clientRequestId: "req-upgrade-history-denied-01",
+        mode: "upgrade",
+        sourceGenerationId: current,
+        expectedCurrentGenerationId: current,
+      });
+      assert.fail("expected upgrade to stay unwired");
+    } catch (err) {
+      assert.equal((err as { code?: string }).code, "render_generation_unavailable", String(err));
+      assert.equal((err as { reason?: string }).reason, "upgrade_unwired");
+    }
+    const after = readMockupFromDisk(id)!;
+    assert.equal(after.current_render_generation_id, beforeCurrent);
+    assert.equal(after.render_mutation?.id, afterRelight.render_mutation?.id);
+    assert.equal(after.render_generation_request?.client_request_id, "req-upgrade-history-relight-01");
+    assert.equal(executions, beforeRuns);
+    assert.deepEqual(jobTreeSnapshot(jobDir(id)), before);
   });
 });
 

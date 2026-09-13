@@ -649,6 +649,14 @@ function adaptersUnavailableError(): Error {
   );
 }
 
+function isolatedUpgradeReady(): boolean {
+  return getRenderGenerationRuntime()?.upgradeCandidate !== undefined;
+}
+
+function upgradeUnwiredError(): Error {
+  return generationError("render_generation_unavailable", "新版出图尚未接线", 412, "等待新版模式实施", "upgrade_unwired");
+}
+
 type FrozenStudioAdjustment = { product_light: number; background_light: number };
 type FrozenRequestIdentity = {
   client_request_id: string;
@@ -1151,7 +1159,9 @@ export function renderGenerationView(job: MockupJob, viewer: Viewer, canCreate: 
       history:capability(),
       activate:capability(permission || busy || auditPending || integrity || (!job.current_render_generation_id ? "generation_missing" : undefined) || historyCapacity),
       legacy_relight:capability(permission || busy || auditPending || registration || integrity || source || historyCapacity || capacity),
-      upgrade:capability(permission || busy || "upgrade_unwired"),
+      upgrade:capability(permission || busy || (isolatedUpgradeReady()
+        ? (auditPending || registration || integrity || source || historyCapacity || capacity)
+        : "upgrade_unwired")),
     },
   };
 }
@@ -1461,8 +1471,8 @@ function admitRenderGenerationMutation(input: RenderGenerationMutationEnqueueInp
         disk.render_generation_request?.worker_pid !== undefined ? "ownership_unconfirmed" : "mutation_busy");
     }
     let sourcePlanSha: string | undefined;
-    if (input.mode === "upgrade") {
-      throw generationError("render_generation_unavailable", "新版出图尚未接线", 412, "等待新版模式实施","upgrade_unwired");
+    if (input.mode === "upgrade" && !isolatedUpgradeReady()) {
+      throw upgradeUnwiredError();
     }
     if (getRenderGenerationRuntime()?.prepare || hooks.prepareRenderGeneration) {
       if (!generationAdaptersReady()) throw adaptersUnavailableError();

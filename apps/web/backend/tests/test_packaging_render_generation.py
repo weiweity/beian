@@ -518,6 +518,70 @@ if (config.useJobs) {
     assert not (root / ".render-generations/.candidate-missing-blender").exists()
 
 
+@pytest.mark.skipif(sys.platform not in ("darwin", "linux"), reason="C2 bridge requires POSIX group evidence; Windows containment is not implemented")
+@pytest.mark.parametrize("damage", [None, "source_profile_sha", "spec_contract_hash", "spec_dimensions"])
+def test_node_bridge_upgrade_validates_source_contract_without_blender(tmp_path: Path, damage: str | None):
+    gen = generation_module()
+    _pipeline, _job, root = make_spec_source(tmp_path)
+    if damage:
+        damage_source_contract(root, damage)
+    before = inventory(root)
+    node = shutil.which("node")
+    assert node, "Node is required for the Node-to-Python bridge contract test"
+    repo = PACKAGING.parents[1]
+    ids = identities_for(root)
+    blender = dummy_blender(tmp_path / "unused-blender")
+    script = r"""
+import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+const config = JSON.parse(process.argv[1]);
+const { createRenderGenerationBridge } = await import(config.module);
+const { ISOLATED_UPGRADE_PROFILE_DECLARED_SHA256, ISOLATED_UPGRADE_PROFILE_ID } = await import(config.candidate);
+const bridge = createRenderGenerationBridge({
+  pythonExecutable: config.python, packagingDir: config.packaging,
+  dataRoot: config.dataRoot, timeoutMs: 30000,
+  upgradeCandidate: { profileId: ISOLATED_UPGRADE_PROFILE_ID, declaredSha256: ISOLATED_UPGRADE_PROFILE_DECLARED_SHA256 },
+});
+const candidate = join(config.input.jobRoot, '.render-generations', '.candidate-upgrade-source');
+try {
+  const receipt = await bridge.verify({ ...config.input, mode: 'upgrade' });
+  if (config.damage) assert.fail('damaged source must not verify');
+  assert.equal(receipt.profile, ISOLATED_UPGRADE_PROFILE_ID);
+  console.log('REAL_RF02_UPGRADE_SOURCE_VERIFIED');
+} catch (error) {
+  if (!config.damage) throw error;
+  assert.equal(error && error.cause, 'rf02_contract', String(error));
+  assert.equal(existsSync(candidate), false);
+  console.log('REAL_RF02_UPGRADE_DAMAGED_SOURCE_REJECTED');
+}
+assert.equal(existsSync(candidate), false);
+"""
+    config = {
+        "module": (repo / "apps/web/server/src/renderGenerationBridge.ts").as_uri(),
+        "candidate": (repo / "apps/web/server/src/renderGenerationUpgradeCandidate.ts").as_uri(),
+        "python": PYTHON,
+        "packaging": str(PACKAGING),
+        "blender": str(blender),
+        "dataRoot": str(tmp_path),
+        "damage": damage,
+        "input": {
+            "jobRoot": str(root),
+            "mode": "upgrade",
+            "expectedSourceSha256": ids["expected_source_sha256"],
+            "expectedAssetSha256": ids["expected_asset_sha256"],
+        },
+    }
+    run = subprocess.run(
+        [node, "--import", "tsx", "--input-type=module", "-e", script, json.dumps(config)],
+        cwd=repo, capture_output=True, text=True, timeout=60,
+    )
+    assert run.returncode == 0, run.stderr + run.stdout
+    assert "REAL_RF02_UPGRADE_" in run.stdout
+    assert inventory(root) == before
+    assert not (root / ".render-generations/.candidate-upgrade-source").exists()
+
+
 @pytest.mark.skipif(os.environ.get("BEIAN_TEST_BLENDER_FULL") != "1", reason="explicit local synthetic full/card/GLB render")
 @pytest.mark.parametrize("profile_id", ["compat-legacy-v0", "packshot-carton-geometry-v1"])
 def test_normal_local_runtime_with_actual_synthetic_blender_full_card_glb(tmp_path, profile_id):
@@ -908,7 +972,170 @@ def test_unknown_missing_and_conflicting_fields_fail_before_write(tmp_path: Path
     with pytest.raises(gen.RenderGenerationError) as raised:
         gen.run_request(request_payload(root, mode="upgrade"))
     assert raised.value.code == "render_generation_unsupported"
+    assert raised.value.cause == "upgrade_unwired"
     assert inventory(root) == before
+
+
+def test_non_upgrade_rejects_upgrade_profile_id_without_writes(tmp_path: Path):
+    gen = generation_module()
+    _pipeline, _job, root = make_spec_source(tmp_path)
+    before = inventory(root)
+    with pytest.raises(gen.RenderGenerationError) as raised:
+        gen.run_request(
+            request_payload(
+                root,
+                mode="legacy_relight",
+                upgrade_profile_id="packshot-carton-geometry-v1",
+            )
+        )
+    assert raised.value.cause == "unknown_fields"
+    assert inventory(root) == before
+
+
+def test_upgrade_rejects_unapproved_profile_without_writes(tmp_path: Path):
+    gen = generation_module()
+    _pipeline, _job, root = make_spec_source(tmp_path)
+    before = inventory(root)
+    with pytest.raises(gen.RenderGenerationError) as raised:
+        gen.run_request(
+            request_payload(root, mode="upgrade", upgrade_profile_id="packshot-neutral-v1")
+        )
+    assert raised.value.code == "render_generation_unsupported"
+    assert raised.value.cause == "upgrade_candidate_identity_invalid"
+    assert inventory(root) == before
+
+
+def damage_source_contract(root: Path, damage: str) -> None:
+    source = root / "resolved_job.json"
+    job = json.loads(source.read_text(encoding="utf-8"))
+    if damage == "source_profile_sha":
+        job["render_profile_sha256"] = "sha256:" + "0" * 64
+    elif damage == "spec_contract_hash":
+        job["render_spec"]["render_contract_hash"] = "sha256:" + "0" * 64
+    elif damage == "spec_dimensions":
+        job["render_spec"]["geometry"]["outer_dimensions_mm"]["width"] += 1
+    else:
+        raise AssertionError(damage)
+    source.write_text(json.dumps(job), encoding="utf-8")
+
+
+@pytest.mark.parametrize("damage", ["source_profile_sha", "spec_contract_hash", "spec_dimensions"])
+def test_upgrade_rejects_source_that_preserve_rejects(tmp_path: Path, damage: str, monkeypatch: pytest.MonkeyPatch):
+    gen = generation_module()
+    seen = fake_blender(gen, monkeypatch)
+    _pipeline, _job, root = make_spec_source(tmp_path)
+    damage_source_contract(root, damage)
+    before = inventory(root)
+    candidate = tmp_path / "upgrade-damaged-candidate"
+    with pytest.raises(gen.RenderGenerationError) as preserve_error:
+        gen.run_request(request_payload(root, mode="preserve"))
+    assert preserve_error.value.code == "render_contract_invalid"
+    assert preserve_error.value.cause == "rf02_contract"
+    with pytest.raises(gen.RenderGenerationError) as upgrade_error:
+        gen.run_request(
+            request_payload(
+                root,
+                mode="upgrade",
+                action="prepare",
+                candidate_dir=str(candidate),
+                blender_executable=str(tmp_path / "unused-blender"),
+                upgrade_profile_id=gen.ISOLATED_UPGRADE_PROFILE_ID,
+            )
+        )
+    assert upgrade_error.value.code == "render_contract_invalid"
+    assert upgrade_error.value.cause == "rf02_contract"
+    assert inventory(root) == before
+    assert not candidate.exists()
+    assert "command" not in seen
+
+
+def test_isolated_upgrade_resolves_carton_geometry_without_rewriting_source(tmp_path: Path):
+    gen = generation_module()
+    _pipeline, _job, root = make_spec_source(tmp_path)
+    source = json.loads((root / "resolved_job.json").read_text(encoding="utf-8"))
+    source_profile = source.get("render_profile_id")
+    before = inventory(root)
+    result = gen.run_request(
+        request_payload(
+            root,
+            mode="upgrade",
+            upgrade_profile_id=gen.ISOLATED_UPGRADE_PROFILE_ID,
+        )
+    )
+    assert result["ok"] is True
+    assert result["source_identity"]["render_profile_id"] == "packshot-carton-geometry-v1"
+    disk = json.loads((root / "resolved_job.json").read_text(encoding="utf-8"))
+    assert disk.get("render_profile_id") == source_profile
+    assert inventory(root) == before
+    preserve = gen.run_request(request_payload(root, mode="preserve"))
+    assert preserve["source_identity"]["render_profile_id"] != result["source_identity"]["render_profile_id"] or source_profile == "packshot-carton-geometry-v1"
+    assert result["source_identity"]["plan_identity"] != preserve["source_identity"]["plan_identity"]
+    identity = gen.plan_for_mode(
+        json.loads((root / "resolved_job.json").read_text(encoding="utf-8")),
+        "upgrade",
+        upgrade_profile_id=gen.ISOLATED_UPGRADE_PROFILE_ID,
+    )["identity"]
+    assert identity["render_profile_sha256"] == gen.ISOLATED_UPGRADE_PROFILE_DECLARED_SHA256
+
+
+def test_isolated_upgrade_accepts_legal_legacy_source_without_spec(tmp_path: Path):
+    gen = generation_module()
+    job = write_legacy_blender_job(tmp_path)
+    root = tmp_path / "LEGACYBOX"
+    for face, path in job["assets"].items():
+        Image.new("RGBA", (950, 950 if face in {"top", "bottom"} else 3550), (1, 2, 3, 255)).save(path)
+    before = inventory(root)
+    disk_before = json.loads((root / "resolved_job.json").read_text(encoding="utf-8"))
+    assert "render_spec" not in disk_before
+    result = gen.run_request(
+        request_payload(
+            root,
+            mode="upgrade",
+            upgrade_profile_id=gen.ISOLATED_UPGRADE_PROFILE_ID,
+        )
+    )
+    assert result["ok"] is True
+    assert result["source_identity"]["render_profile_id"] == "packshot-carton-geometry-v1"
+    disk = json.loads((root / "resolved_job.json").read_text(encoding="utf-8"))
+    assert "render_spec" not in disk
+    assert inventory(root) == before
+
+
+def test_isolated_upgrade_prepare_writes_candidate_spec_only(tmp_path: Path):
+    gen = generation_module()
+    _pipeline, _job, root = make_spec_source(tmp_path)
+    source_before = json.loads((root / "resolved_job.json").read_text(encoding="utf-8"))
+    before = inventory(root)
+    candidate = tmp_path / "upgrade-candidate"
+    result = gen.run_request(
+        request_payload(
+            root,
+            mode="upgrade",
+            action="prepare",
+            candidate_dir=str(candidate),
+            upgrade_profile_id=gen.ISOLATED_UPGRADE_PROFILE_ID,
+        )
+    )
+    assert result["ok"] is True
+    assert result["source_identity"]["render_profile_id"] == "packshot-carton-geometry-v1"
+    source_after = json.loads((root / "resolved_job.json").read_text(encoding="utf-8"))
+    assert source_after == source_before
+    assert inventory(root) == before
+    candidate_job = json.loads((candidate / "resolved_job.json").read_text(encoding="utf-8"))
+    assert candidate_job["render_profile_id"] == "packshot-carton-geometry-v1"
+    assert candidate_job["render_profile_sha256"] == gen.ISOLATED_UPGRADE_PROFILE_DECLARED_SHA256
+    assert candidate_job["render_spec"]["source"] == "profile_resolved"
+    assert candidate_job["render_spec"]["renderer"]["profile"] == "packshot-carton-geometry-v1"
+
+
+def test_isolated_upgrade_constants_match_production_registry():
+    gen = generation_module()
+    registry_path = PACKAGING / "profiles" / "render-profiles.v1.json"
+    payload = json.loads(registry_path.read_text(encoding="utf-8"))
+    profile = next(item for item in payload["profiles"] if item["id"] == gen.ISOLATED_UPGRADE_PROFILE_ID)
+    assert profile["declared_sha256"] == gen.ISOLATED_UPGRADE_PROFILE_DECLARED_SHA256
+    digest = hashlib.sha256(registry_path.read_bytes()).hexdigest()
+    assert digest == "3c5d2787afe1f25811a5c066c36fc2b09cc2f98c52e201a051fe111203ca26e6"
 
 
 def test_self_reported_or_tampered_hash_is_not_rf02_verification(tmp_path: Path):

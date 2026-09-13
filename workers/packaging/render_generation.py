@@ -41,10 +41,12 @@ from render_contract import (  # noqa: E402
     OPTIONAL_RENDERER_OUTPUT_KEYS,
     RenderContractError,
     SEMANTIC_FACES,
+    _structure_job_from_legacy_resolved,
     blender_execution_plan,
     canonical_sha256,
     material_runtime_from_job,
     persistable_plan_from_bound_job,
+    render_plan_for_new_job,
     render_plan_for_resolved_job,
     validate_job_asset_contract,
     validate_job_output_contract,
@@ -67,9 +69,17 @@ REQUEST_KEYS = frozenset(
         "studio_adjustment",
         "blender_executable",
         "timeout_ms",
+        "upgrade_profile_id",
     }
 )
 STUDIO_KEYS = frozenset({"product_light", "background_light"})
+# Isolated Mac assembly may name this profile; upgrade still fails closed
+# unless the trusted request carries the same id. Not a global mode default.
+ISOLATED_UPGRADE_PROFILE_ID = "packshot-carton-geometry-v1"
+ISOLATED_UPGRADE_PROFILE_DECLARED_SHA256 = (
+    "sha256:74a17949ac80cd1f3fa34640dcaf246a8a656dc78989e0b08589cb2306860aca"
+)
+_PROFILE_ID_RE = re.compile(r"^[a-zA-Z0-9._-]{1,64}$")
 MAX_PATH_CHARS = 1024
 MAX_REQUEST_BYTES = 64 * 1024
 MAX_PLAN_BYTES = 8 * 1024 * 1024
@@ -632,6 +642,21 @@ def parse_request(payload: Mapping[str, Any]) -> dict[str, Any]:
         blender = _absolute_path(payload.get("blender_executable"), "blender_executable")
     elif "blender_executable" in payload and payload.get("blender_executable") not in (None, ""):
         blender = _absolute_path(payload.get("blender_executable"), "blender_executable")
+    raw_upgrade_profile = payload.get("upgrade_profile_id")
+    upgrade_profile_id = None
+    if mode == "upgrade":
+        if raw_upgrade_profile is not None:
+            if not isinstance(raw_upgrade_profile, str) or not _PROFILE_ID_RE.fullmatch(
+                raw_upgrade_profile
+            ):
+                _fail("upgrade_profile_id 非法", cause="upgrade_candidate_identity_invalid")
+            upgrade_profile_id = raw_upgrade_profile
+    elif raw_upgrade_profile is not None:
+        _fail(
+            "非 upgrade 不能指定 upgrade_profile_id",
+            cause="unknown_fields",
+            fix="不要传 profile、project_dir、assets 或输出路径",
+        )
     return {
         "action": action,
         "mode": mode,
@@ -642,6 +667,7 @@ def parse_request(payload: Mapping[str, Any]) -> dict[str, Any]:
         "studio_adjustment": _studio_adjustment(payload.get("studio_adjustment")),
         "blender_executable": blender,
         "timeout_ms": timeout_ms,
+        "upgrade_profile_id": upgrade_profile_id,
     }
 
 
@@ -842,14 +868,48 @@ def check_candidate_disk_budget(path: Path, plan: Mapping[str, Any], sampling: M
             "candidate_output_ceiling_bytes": output_ceiling}
 
 
-def plan_for_mode(job: Mapping[str, Any], mode: str) -> dict[str, Any]:
+def plan_for_mode(
+    job: Mapping[str, Any],
+    mode: str,
+    *,
+    upgrade_profile_id: str | None = None,
+) -> dict[str, Any]:
     if mode == "upgrade":
-        _fail(
-            "upgrade 所需的另一套已锁定视觉语义尚未实现",
-            code="render_generation_unsupported",
-            cause="upgrade_unwired",
-            fix="本刀只交付 preserve / legacy_relight 保留现有合同并允许调灯",
-        )
+        if not upgrade_profile_id:
+            _fail(
+                "upgrade 所需的另一套已锁定视觉语义尚未实现",
+                code="render_generation_unsupported",
+                cause="upgrade_unwired",
+                fix="本刀只交付 preserve / legacy_relight 保留现有合同并允许调灯",
+            )
+        if upgrade_profile_id != ISOLATED_UPGRADE_PROFILE_ID:
+            _fail(
+                "upgrade 候选身份无效",
+                code="render_generation_unsupported",
+                cause="upgrade_candidate_identity_invalid",
+                fix="隔离候选必须显式指定已获批 profile，且声明哈希与 registry 一致",
+            )
+        try:
+            # Reuse RF-02 source validation (complete spec or eligible pre-RF02
+            # synthesis). Do not rebuild a candidate from unverified structure
+            # fields or recast damaged source hashes.
+            render_plan_for_resolved_job(job)
+            structure_job = _structure_job_from_legacy_resolved(job, require_assets=True)
+            plan = render_plan_for_new_job(structure_job, upgrade_profile_id)
+        except RenderContractError as error:
+            raise _from_contract(error) from error
+        identity = plan["identity"]
+        if (
+            identity["render_profile_id"] != ISOLATED_UPGRADE_PROFILE_ID
+            or identity["render_profile_sha256"] != ISOLATED_UPGRADE_PROFILE_DECLARED_SHA256
+        ):
+            _fail(
+                "upgrade 候选身份与 registry 声明不一致",
+                code="render_generation_unsupported",
+                cause="upgrade_candidate_identity_invalid",
+                fix="隔离候选必须显式指定已获批 profile，且声明哈希与 registry 一致",
+            )
+        return plan
     if mode == "preserve" and job.get("render_spec") is None:
         _fail(
             "preserve 要求源作业已有完整 render spec，不能合成兼容合同",
@@ -1247,7 +1307,11 @@ def _refresh_source(
         expected_source_sha256=request["expected_source_sha256"],
         expected_asset_sha256=request["expected_asset_sha256"],
     )
-    plan = plan_for_mode(bound, request["mode"])
+    plan = plan_for_mode(
+        bound,
+        request["mode"],
+        upgrade_profile_id=request.get("upgrade_profile_id"),
+    )
     sampling = verify_source_sampling(bound, plan, assets)
     return raw, bound, resolved_path, plan, assets, sampling
 

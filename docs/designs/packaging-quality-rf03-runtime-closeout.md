@@ -1,5 +1,11 @@
 # RF-03 runtime 收口增量
 
+2026-09-14 Q06.6 A 补记（`0.28.0.0` 内容）：显式临时 runtime 已接通固定 `packshot-carton-geometry-v1` 候选，先验证 RF-02 源再解析绑定结构；具体装配与身份见 [worker README](../../workers/packaging/README.md)。A 候选开发不依赖 Q06.7；B 生产装配须 Q06.4 与既定八点审计，C 启用须 Q06.7/.8 及明确授权。普通产品默认无注册、临时根及平台门保持有效，`productionEnabled=false` 本身不是保护开关；history/activate 对合法已有代仍可用。既有平台门允许 darwin/linux、拒绝 win32，本次实跑仅 Mac。
+
+本地发布准备证据批次 `Q066-ship-20260914-Q7sMHL`：`beian-verify-9Zwo21/receipt.json` 的 test:quality 59、quality（59 项原基线不变）、typecheck/UI build、完整 L0 均 exit 0；server 751 pass / 1 skip，UI 378 pass，Python 1276 pass / 9 skip / 10 deselect。`mockup-render-versions` E2E 9/9 为独立临时构建、网络拦截的合成页面，无 Hono，不是性能采样。Claude 与 Codex 独立审查未留已证实 P0/P1/P2；静态路径评估 21/26（81%），非仪器覆盖率，仍披露五个测试补强点：候选开启后的能力拒绝矩阵、解析后目标身份漂移、非法 profile 输入形状、裸 SHA 归一化、中文错误映射断言。它们未补测，不另增待办主题。
+
+原生证据批次 `Q066-native-prep-20260913-Um0ExX/native-1` 绑定 `0b9cd4bf63e5d2b8226e85c0cfbb4a47a62f17b4`：单次 Mac 合成 TS jobs/runtime→Python→Blender→seal/current 正常链 PASS，77.867 秒；14 项候选、13 项公开封存产物（blend 留在候选），最大尺寸误差 `2.3748725652694702e-6 mm ≤ 0.5 mm`。`production_ready=false`、`human_acceptance=pending`；之后仅两处导出、注释及版本元数据变化，不能称最终发布树重新跑过原生。registry、默认模板与正式 baseline 未改；Windows/原生异常/断电、真实稿 L2/UAT、人审及 Q06.6/.7/.8 整体仍未完成。2026-09-14 同步时 `8578e47` 已推送、尚无 PR 或部署；已核实历史发布见 [TODOS.md](../../TODOS.md)。以下 2026-09-06 轮次、数字及“upgrade 拒绝”等结论保留当时语境，不作为 Q06.6 A 新证据。
+
 日期：2026-09-06。原开发分支：`codex/rf03-runtime-closeout`；本次收尾分支：`codex/rf03-runtime-ship`，起点 `e1c2d679` / 0.21.35.0。
 
 **本次独立候选状态：RF-03 runtime/资源生命周期与产物验证已完成 Code/L0。** 代码提交为 `caef7a4`，版本提交为 `12b9f9f`（`0.21.36.0`）；不包含 RF-04 方案/API/UI 或 RF-05 几何。生产注册和主 Node 桥的 Windows 新建仍关闭，Windows 原生/L1/L2/UAT、断电耐久性与正式视觉 baseline 均未验收。

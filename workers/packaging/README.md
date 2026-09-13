@@ -6,6 +6,10 @@
 
 RF-03 新候选路径由 `render_generation.py` 校验实际 GLB、full/card 和六面 PNG 网格，Hono 的 `renderGenerationBudget.ts` 把磁盘预留、运行输出/RSS 采样、封存与最终 current 提交绑定到同一资源和时间预算。一次性 `runtime_verified` 凭证仅表示本轮产物合同与资源执行验证，不代表人工视觉通过。正常 registry 只接受系统临时目录内的显式本地评审数据根，生产注册与主 Node 桥的 Windows 新建仍关闭，没有可打开生产能力的环境开关。独立候选 L0、历史开发证据和未完成门见 [RF-03 收口记录](../../docs/designs/packaging-quality-rf03-runtime-closeout.md)。 RF-04 在同一打样单提供“出图版本”：历史切换改变团队共享 current，不启动 Blender；重新出图期间保留当前成片，文件读取和下载绑定同一代。旧 `/relight` 已转入同一代际队列，托管代禁止旧换正面/补面入口原位覆盖；生产新代执行和升级仍未开放，HTTP、操作及本次 Code/L0 证据见 [RF-04 交付记录](../../docs/designs/packaging-quality-rf04-closeout.md)。
 
+Q06.6 A（`0.28.0.0`）复用上述隔离 runtime：受信装配方调用 `registerLocalRenderGenerationRuntime` 时，须在 canonical 系统临时目录的独立数据根上显式传入 `upgradeCandidate: { profileId: ISOLATED_UPGRADE_PROFILE_ID, declaredSha256: ISOLATED_UPGRADE_PROFILE_DECLARED_SHA256 }`，验证结束调用返回的注销函数。常量由 `renderGenerationRuntime.ts` 导出；固定 ID 为 `packshot-carton-geometry-v1`，声明 SHA 为 `sha256:74a17949ac80cd1f3fa34640dcaf246a8a656dc78989e0b08589cb2306860aca`。HTTP 仍不接受 `profile` 或 `upgrade_profile_id`；后者仅由桥传给 Python，缺失仍返回 `upgrade_unwired`。身份错误为 `upgrade_candidate_identity_invalid`。普通产品启动不调用注册入口，临时根及平台门保持有效；`productionEnabled=false` 是状态标记，本身不阻止显式隔离创建。既有平台门允许 darwin/linux、拒绝 win32，本次原生实跑仅 Mac。
+
+升级先调用 `render_plan_for_resolved_job` 验证完整 RF-02 源合同或合法 pre-RF02 资格，再从绑定结构解析候选并复核 ID/声明 SHA；源身份或尺寸损坏时不能靠候选重解析通过。候选 spec 只写私有候选，沿用产物门、seal/current，不改原源、registry、默认模板或正式 baseline；合法已有代的 history/activate 保持可用。单次 Mac 原生证据及 A/B/C 边界见 [runtime 收口补记](../../docs/designs/packaging-quality-rf03-runtime-closeout.md)，不代表生产注册或人工质量批准。
+
 当前可验证的语义来源有两种：
 
 - 同稿件哈希绑定的 `packaging-structure/1` JSON sidecar；

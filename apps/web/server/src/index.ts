@@ -165,7 +165,7 @@ type NodeBindings = HttpBindings | Http2Bindings;
 type Env = { Bindings: NodeBindings; Variables: { session: Session } };
 
 const app = new Hono<Env>();
-const VERSION = "0.27.0.0";
+const VERSION = "0.28.0.0";
 
 const STRUCTURE_INPUT_BODY_BYTES = 16 * 1024;
 
@@ -251,7 +251,8 @@ function generationHttpError(c: Context, error: unknown): Response {
     ownership_unconfirmed:"上次执行是否结束尚未确认，请等待核验", request_id_conflict:"本次请求内容已变化，请重新操作",
     idempotency_capacity:"本单暂不能继续生成新版本，历史仍可查看", audit_pending:"上次切换尚待记账，当前图片仍可用",
     runtime_quality_unwired:"产物校验尚未接通，暂不能重新出图", production_registration_disabled:"重新出图尚未开放，历史仍可查看",
-    process_containment_unavailable:"执行环境尚未就绪", upgrade_unwired:"新版出图尚未开放", source_changed:"底稿已变化，请重新核对",
+    process_containment_unavailable:"执行环境尚未就绪", upgrade_unwired:"新版出图尚未开放",
+    upgrade_candidate_identity_invalid:"候选身份无效，暂不能升级", source_changed:"底稿已变化，请重新核对",
   };
   if (!messages[reason]) reason = status === 400 ? "payload_invalid" : "generation_corrupt";
   return c.json({code:e.code?.startsWith("render_generation_") ? e.code : "render_generation_invalid",
