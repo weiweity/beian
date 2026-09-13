@@ -335,7 +335,7 @@ function command(options: ResolvedBridgeOptions, request: Json, observer: Render
   });
 }
 
-/** C2.1: real async RF-02 validation + isolated candidate execution, deliberately not registered in jobs. */
+/** Async RF-02 validation + isolated execution; jobs wiring requires explicit local runtime registration. */
 export function createRenderGenerationBridge(config: RenderBridgeOptions) {
   const options: ResolvedBridgeOptions = {
     pythonExecutable: absolute(config.pythonExecutable),

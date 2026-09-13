@@ -19,7 +19,6 @@ export {
   ISOLATED_UPGRADE_PROFILE_DECLARED_SHA256,
   ISOLATED_UPGRADE_PROFILE_ID,
   ISOLATED_UPGRADE_REGISTRY_SHA256,
-  type IsolatedUpgradeCandidate,
 } from "./renderGenerationUpgradeCandidate.js";
 
 type LocalRuntime = Readonly<{

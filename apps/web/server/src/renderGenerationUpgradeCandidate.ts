@@ -11,7 +11,7 @@ export type IsolatedUpgradeCandidate = Readonly<{
   declaredSha256: typeof ISOLATED_UPGRADE_PROFILE_DECLARED_SHA256;
 }>;
 
-export function normalizeProfileDeclaredSha256(value: string): string {
+function normalizeProfileDeclaredSha256(value: string): string {
   return value.startsWith("sha256:") ? value : `sha256:${value}`;
 }
 
