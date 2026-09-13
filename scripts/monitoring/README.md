@@ -34,6 +34,7 @@ node --test scripts/monitoring/*.test.mjs
 
 - [只读探测适配器](probes/README.md)：固定服务查询与显式 HTTP URL，输出核心可消费的 sample；仅本地 mock 验证，Windows/真实网络待验。
 - [本地投递模块](delivery/README.md)：事件持久入队、有限重试与结果不明处理。默认无 transport，接口支持同步/Promise transport、截止时间与 AbortSignal；超时或取消后迟到成功不覆盖状态。真实渠道仍未接入。
+- [独立配置装载](config/README.md)：只从显式文件路径读取已有模块支持的非敏感策略；不寻找产品 settings、不扫描环境变量或密钥、不启动托管。
 - [本地循环协调器](runner/README.md)：核心与 pending 同次落盘，重启后重复交接由投递层去重；持锁后重读状态，有界停止期间保留所有权。
 - `local-flow.test.mjs` 与 runner 集成测试验证合成串联、异步超时、重启去重及默认不发送；不是 Windows/断电耐久验收。
 - 完整局部测试命令见 [TESTING](../../TESTING.md)。

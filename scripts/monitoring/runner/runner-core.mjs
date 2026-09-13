@@ -252,7 +252,7 @@ export function serializeRunnerState(state) {
   return `${JSON.stringify(payload, null, 2)}\n`;
 }
 
-function normalizeRunnerConfig(input = {}) {
+export function normalizeRunnerConfig(input = {}) {
   if (input != null && !isPlainObject(input)) throw new Error("config must be an object");
   return {
     schema: RUNNER_CONFIG_SCHEMA,
