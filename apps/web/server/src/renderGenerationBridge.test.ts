@@ -34,7 +34,7 @@ process.stdin.on('end', () => {
   const id = hash('plan');
   const result = { ok:true, schema:'packaging-render-generation-result/1', action:req.action, mode:req.mode,
     source_identity: {resolved_job_sha256:req.expected_source_sha256, plan_identity:id,
-      render_contract_hash:hash('contract'), render_profile_id:'synthetic-test', assets:req.expected_asset_sha256},
+      render_contract_hash:hash('contract'), render_profile_id:req.upgrade_profile_id || 'synthetic-test', assets:req.expected_asset_sha256},
     candidate_plan_identity:id, candidate_identity:hash('candidate'), candidate_dir:req.candidate_dir || null,
     studio_adjustment:req.studio_adjustment || null,
     execution:{status:'validated', nonce:null}, outputs:{}, optional_warnings:[],
@@ -156,6 +156,27 @@ it("refuses the uncontained Windows bridge before spawn or stdin delivery", { sk
 });
 
 describe("RF-03C2.1 async render bridge", { skip: !renderGenerationProcessSupported() }, () => {
+  it("refuses upgrade without an isolated candidate and does not spawn", async () => {
+    const f = fixture();
+    let spawned = 0;
+    await assert.rejects(
+      f.bridge.verify({ ...f.input, mode: "upgrade" }, { onSpawn: () => { spawned += 1; } }),
+      /upgrade_unwired/,
+    );
+    assert.equal(spawned, 0);
+  });
+
+  it("forwards the isolated upgrade profile id from trusted assembly", async () => {
+    const { ISOLATED_UPGRADE_PROFILE_DECLARED_SHA256, ISOLATED_UPGRADE_PROFILE_ID } = await import("./renderGenerationUpgradeCandidate.js");
+    const f = fixture();
+    const bridge = createRenderGenerationBridge({
+      ...f.options,
+      upgradeCandidate: { profileId: ISOLATED_UPGRADE_PROFILE_ID, declaredSha256: ISOLATED_UPGRADE_PROFILE_DECLARED_SHA256 },
+    });
+    const receipt = await bridge.verify({ ...f.input, mode: "upgrade" });
+    assert.equal(receipt.profile, ISOLATED_UPGRADE_PROFILE_ID);
+  });
+
   for (const sealContext of ["same", "missing", "closed"] as const) {
     it(`runtime proof requires the real live seal resource context: ${sealContext}`, async () => {
       const f = fixture(5000); f.input.mode = "legacy_relight";

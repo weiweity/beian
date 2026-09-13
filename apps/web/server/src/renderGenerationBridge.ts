@@ -6,6 +6,7 @@ import { StringDecoder } from "node:string_decoder";
 import { inspectRenderGenerationGroup, renderGenerationProcessSupported, signalRenderGenerationGroup } from "./renderGenerationProcess.js";
 import { contentFingerprint, type QualityVerifier } from "./renderGenerations.js";
 import { isRenderLifecycle, RenderBudgetError, type RenderLifecycle } from "./renderGenerationBudget.js";
+import type { IsolatedUpgradeCandidate } from "./renderGenerationUpgradeCandidate.js";
 
 export const RENDER_GENERATION_OUTPUT_KEYS: Readonly<Record<string, string>> = Object.freeze({
   front_right: "white_a", back_left: "white_b", glb: "glb",
@@ -55,6 +56,16 @@ export type RenderBridgeOptions = {
   dataRoot: string;
   timeoutMs?: number;
   terminationGraceMs?: number;
+  upgradeCandidate?: IsolatedUpgradeCandidate;
+};
+
+type ResolvedBridgeOptions = {
+  pythonExecutable: string;
+  packagingDir: string;
+  dataRoot: string;
+  timeoutMs: number;
+  terminationGraceMs: number;
+  upgradeCandidate?: IsolatedUpgradeCandidate;
 };
 
 export type RenderBridgeValidation = {
@@ -190,7 +201,7 @@ function qualityLayersContract(result: Json): void {
 }
 
 /** Only this child/group is signalled. Parent close alone cannot release ownership. */
-function command(options: Required<RenderBridgeOptions>, request: Json, observer: RenderBridgeObserver): Promise<Json> {
+function command(options: ResolvedBridgeOptions, request: Json, observer: RenderBridgeObserver): Promise<Json> {
   // Transport-only remaining duration, never part of the persisted visual identity.
   const input = Buffer.from(JSON.stringify({ ...request, timeout_ms: options.timeoutMs }));
   if (input.length > REQUEST_LIMIT) invalid("request_budget");
@@ -326,13 +337,13 @@ function command(options: Required<RenderBridgeOptions>, request: Json, observer
 
 /** C2.1: real async RF-02 validation + isolated candidate execution, deliberately not registered in jobs. */
 export function createRenderGenerationBridge(config: RenderBridgeOptions) {
-  const options: Required<RenderBridgeOptions> = {
-    ...config,
+  const options: ResolvedBridgeOptions = {
     pythonExecutable: absolute(config.pythonExecutable),
     packagingDir: absolute(config.packagingDir),
     dataRoot: absolute(config.dataRoot),
     timeoutMs: config.timeoutMs ?? 1_260_000,
     terminationGraceMs: config.terminationGraceMs ?? 5000,
+    upgradeCandidate: config.upgradeCandidate,
   };
   for (const [value, ceiling] of [[options.timeoutMs, 1_260_000], [options.terminationGraceMs, 5000]]) {
     if (!Number.isSafeInteger(value) || value <= 0 || value > ceiling) invalid("time_budget");
@@ -387,6 +398,11 @@ export function createRenderGenerationBridge(config: RenderBridgeOptions) {
         expected_asset_sha256: Object.fromEntries(FACES.map(face => [face, sha(input.expectedAssetSha256[face])])),
       };
       if (input.studioAdjustment) request.studio_adjustment = { ...input.studioAdjustment };
+      if (input.mode === "upgrade") {
+        const candidate = options.upgradeCandidate;
+        if (!candidate) throw new RenderBridgeError("render_generation_unavailable", "upgrade_unwired");
+        request.upgrade_profile_id = candidate.profileId;
+      }
       await inside(options.dataRoot, String(request.job_root));
       await fresh(request, check);
       const result = await command({ ...options, timeoutMs: remaining(deadline, observer) }, request, observer);

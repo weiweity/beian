@@ -19,7 +19,8 @@ const { app } = await import("./index.js");
 const { issueSessionForTest } = await import("./auth.js");
 const { saveMockup, readMockupFromDisk, applyRenderGenerationPatch, beginStructureConfirmation, finishStructureConfirmation } = await import("./mockup.js");
 const { openRenderGenerationStore } = await import("./renderGenerations.js");
-const { registerLocalRenderGenerationRuntime,getRenderGenerationRuntime } = await import("./renderGenerationRuntime.js");
+const { registerLocalRenderGenerationRuntime,getRenderGenerationRuntime,
+  ISOLATED_UPGRADE_PROFILE_DECLARED_SHA256,ISOLATED_UPGRADE_PROFILE_ID } = await import("./renderGenerationRuntime.js");
 const { resetJobsTestHooks } = await import("./jobs.js");
 const reader = issueSessionForTest("合成访客","viewer","ou_rf04_reader");
 const owner = issueSessionForTest("合成作者","reviewer","ou_rf04_owner");
@@ -151,6 +152,8 @@ it("RF-04 capability rejects unavailable or changed sources without writes or bl
     assert.deepEqual(tree(f.root),before,"capability GET must never repair, archive or spawn");
     assert.equal(body.render_generation_capabilities.history.allowed,true);
     assert.equal(body.render_generation_capabilities.activate.allowed,true);
+    assert.equal(body.render_generation_capabilities.upgrade.allowed,false);
+    assert.equal(body.render_generation_capabilities.upgrade.reason,"upgrade_unwired");
     return body.render_generation_capabilities.legacy_relight;
   };
   try {
@@ -270,6 +273,63 @@ process.stdin.on('end',()=>{
     assert.equal(read.status,200);assert.deepEqual(Buffer.from(await read.arrayBuffer()),png());
     assert.equal(getRenderGenerationRuntime(),undefined);
     await verifyReadOnlyRollback(f.id,f.root,current);
+  } finally {clear();resetJobsTestHooks();}
+});
+
+it("Q06.6 isolated upgrade candidate reaches seal without enabling production", {skip:process.platform === "win32", timeout:75_000}, async () => {
+  resetJobsTestHooks();
+  const f=seed("f06600000001");
+  const assets=Object.fromEntries(["front","right","back","left","top","bottom"].map(face=>[face,join(f.root,"assets",`panel_${face}.png`)]));
+  writeFileSync(join(f.root,"resolved_job.json"),JSON.stringify({assets}));
+  const workerRoot=makeTestTempDir("beian-q066-protocol-");
+  writeFileSync(join(workerRoot,"render_generation.py"),String.raw`
+const fs=require('node:fs'),crypto=require('node:crypto'),path=require('node:path');
+let body='';process.stdin.setEncoding('utf8');process.stdin.on('data',v=>body+=v);
+process.stdin.on('end',()=>{
+ const req=JSON.parse(body),hash=b=>'sha256:'+crypto.createHash('sha256').update(b).digest('hex');
+ if(req.mode==='upgrade' && req.upgrade_profile_id!=='packshot-carton-geometry-v1') throw new Error('missing isolated profile');
+ const plan=hash('synthetic-plan-upgrade');
+ const result={ok:true,schema:'packaging-render-generation-result/1',action:req.action,mode:req.mode,
+  source_identity:{resolved_job_sha256:req.expected_source_sha256,plan_identity:plan,render_contract_hash:hash('contract'),
+    render_profile_id:req.upgrade_profile_id||'synthetic-only',assets:req.expected_asset_sha256},
+  candidate_plan_identity:plan,candidate_identity:hash('candidate'),candidate_dir:req.candidate_dir||null,
+  studio_adjustment:req.studio_adjustment||null,execution:{status:'validated',nonce:null},outputs:{},optional_warnings:[],
+  quality:{status:'layered',wired:true,runtime_gate:'not-run',fixture_regression:'not-run',visual_observations:'not-run',human_acceptance:'pending',production_ready:false}};
+ if(req.action==='render-candidate'){
+  fs.mkdirSync(req.candidate_dir);
+  for(const key of ['front_right','back_left','front_right_card','back_left_card','glb']){
+   const bytes=fs.readFileSync(path.join(req.job_root,key==='glb'?'box.glb':'front_right_white.png'));
+   const file=path.join(req.candidate_dir,key+(key==='glb'?'.glb':'.png'));fs.writeFileSync(file,bytes);
+   result.outputs[key]={path:file,sha256:hash(bytes),bytes:bytes.length};
+  }
+  result.execution={status:'rendered',nonce:'0123456789abcdef0123456789abcdef'};
+  result.quality.runtime_gate='pass';
+  result.artifact_checks={glb:'passed',full_card:'passed',source_sampling:'passed'};
+ }
+ process.stderr.write('STAGE validate\n');console.log(JSON.stringify(result));
+});`);
+  const clear=registerLocalRenderGenerationRuntime({pythonExecutable:process.execPath,blenderExecutable:process.execPath,
+    packagingDir:workerRoot,dataRoot:process.env.WB_DATA_DIR!,timeoutMs:60_000,terminationGraceMs:200,
+    resourcePolicy:{diskBytes:8*1024*1024},
+    upgradeCandidate:{profileId:ISOLATED_UPGRADE_PROFILE_ID,declaredSha256:ISOLATED_UPGRADE_PROFILE_DECLARED_SHA256}});
+  try {
+    assert.equal(getRenderGenerationRuntime()?.productionEnabled,false);
+    assert.equal(getRenderGenerationRuntime()?.upgradeCandidate?.profileId,ISOLATED_UPGRADE_PROFILE_ID);
+    const caps=await (await request(`/api/mockups/${f.id}`,owner)).json();
+    assert.equal(caps.render_generation_capabilities.upgrade.allowed,true);
+    const base=`/api/mockups/${f.id}/render-generations`;
+    const input={client_request_id:"q066-isolated-upgrade",mode:"upgrade",source_generation_id:f.virtual,
+      expected_current_generation_id:f.virtual};
+    const accepted=await post(base,input);assert.equal(accepted.status,202);
+    const completedBy=Date.now()+65_000;
+    while(Date.now()<completedBy && !["succeeded","failed"].includes(readMockupFromDisk(f.id)?.render_mutation?.status || "")) await delay(25);
+    const job=readMockupFromDisk(f.id)!;
+    assert.equal(job.render_mutation?.status,"succeeded",job.render_mutation?.error);
+    assert.equal(job.render_last_activation?.mode,"upgrade");
+    const summary=openRenderGenerationStore({jobId:f.id,jobRoot:f.root})
+      .publicSummary(job.current_render_generation_id!,job.current_render_generation_id!);
+    assert.equal(summary.profile,ISOLATED_UPGRADE_PROFILE_ID);
+    assert.equal(summary.quality_status,"runtime_verified");
   } finally {clear();resetJobsTestHooks();}
 });
 
