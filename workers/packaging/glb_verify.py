@@ -663,6 +663,11 @@ def compare_glb_material_contract(
         if not capability["ok"]:
             result["ok"] = False
             result["errors"] = [*errors, *capability["errors"]]
+    else:
+        extra = _undeclared_effective_clearcoat_errors(artifact)
+        if extra:
+            result["ok"] = False
+            result["errors"] = [*errors, *extra]
     return result
 
 
@@ -723,25 +728,77 @@ def _roughness_factor(material: Mapping[str, Any]) -> float | None:
     return float(value)
 
 
-def _clearcoat_factors(material: Mapping[str, Any]) -> tuple[float, float] | None:
+def _clearcoat_extension(material: Mapping[str, Any]) -> Mapping[str, Any] | None:
     extensions = material.get("extensions")
     if not isinstance(extensions, Mapping):
         return None
     coat = extensions.get(CLEARCOAT_EXTENSION)
-    if not isinstance(coat, Mapping):
+    return coat if isinstance(coat, Mapping) else None
+
+
+def _numeric_factor(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
         return None
-    weight = coat.get("clearcoatFactor", 0.0)
-    roughness = coat.get("clearcoatRoughnessFactor", 0.0)
-    if (
-        isinstance(weight, bool)
-        or isinstance(roughness, bool)
-        or not isinstance(weight, (int, float))
-        or not isinstance(roughness, (int, float))
-        or not math.isfinite(float(weight))
-        or not math.isfinite(float(roughness))
-    ):
+    return float(value)
+
+
+def _clearcoat_factors(material: Mapping[str, Any]) -> tuple[float, float] | None:
+    coat = _clearcoat_extension(material)
+    if coat is None:
         return None
-    return float(weight), float(roughness)
+    weight = _numeric_factor(coat.get("clearcoatFactor", 0.0))
+    roughness = _numeric_factor(coat.get("clearcoatRoughnessFactor", 0.0))
+    if weight is None or roughness is None:
+        return None
+    return weight, roughness
+
+
+def _effective_clearcoat_factors(material: Mapping[str, Any]) -> tuple[float, float] | None:
+    coat = _clearcoat_extension(material)
+    if coat is None:
+        return None
+    weight = _numeric_factor(coat.get("clearcoatFactor", 0.0))
+    if weight is None or weight <= 0:
+        return None
+    roughness = _numeric_factor(coat.get("clearcoatRoughnessFactor", 0.0))
+    return weight, 0.0 if roughness is None else roughness
+
+
+def _undeclared_effective_clearcoat_errors(artifact: GlbArtifact) -> list[dict[str, Any]]:
+    """Flag face/core coats with weight > 0. Zero-weight and extensionsUsed-only are inert."""
+    materials = artifact.document.get("materials")
+    if not isinstance(materials, list):
+        return []
+    face_names = {f"mat_{face}" for face in SEMANTIC_FACES}
+    errors: list[dict[str, Any]] = []
+    for material in materials:
+        if not isinstance(material, Mapping):
+            continue
+        coat = _clearcoat_extension(material)
+        if coat is None:
+            continue
+        weight = _numeric_factor(coat.get("clearcoatFactor", 0.0))
+        if weight is not None and weight <= 0:
+            continue
+        factors = _effective_clearcoat_factors(material)
+        name = _normalized_name(material.get("name"))
+        code = (
+            "glb_clearcoat_not_allowed"
+            if name in face_names
+            else "glb_core_clearcoat_not_allowed"
+            if name == "mat_paperboardedge"
+            else None
+        )
+        if code is None:
+            continue
+        errors.append(
+            {
+                "code": code,
+                "material": material.get("name"),
+                "observed": factors if factors is not None else (weight, _numeric_factor(coat.get("clearcoatRoughnessFactor", 0.0))),
+            }
+        )
+    return errors
 
 
 def _factor_matches(actual: float | None, expected: float, *, tolerance: float = _PBR_FACTOR_TOLERANCE) -> bool:
@@ -849,7 +906,7 @@ def compare_glb_pbr_capability(
         and _normalized_name(material.get("name")) == "mat_paperboardedge"
     ]
     observed_clearcoat = bool(face_materials) and all(
-        factors is not None and factors[0] > 0 for factors in (_clearcoat_factors(material) for material in face_materials)
+        _effective_clearcoat_factors(material) is not None for material in face_materials
     )
     observed_normal = bool(face_materials) and all(
         _texture_image_index(document, material.get("normalTexture")) is not None
@@ -929,8 +986,8 @@ def compare_glb_pbr_capability(
                         }
                     )
         for material in core_materials:
-            factors = _clearcoat_factors(material)
-            if factors is not None and factors[0] > 0:
+            factors = _effective_clearcoat_factors(material)
+            if factors is not None:
                 errors.append(
                     {
                         "code": "glb_core_clearcoat_not_allowed",
@@ -938,15 +995,20 @@ def compare_glb_pbr_capability(
                         "observed": factors,
                     }
                 )
-    elif still.get("coat"):
-        differences.append(
-            {
-                "channel": "coat",
-                "still": True,
-                "glb": False,
-                "message": "静帧使用 Principled Coat，GLB 未导出 KHR_materials_clearcoat",
-            }
-        )
+    else:
+        undeclared = _undeclared_effective_clearcoat_errors(artifact)
+        errors.extend(undeclared)
+        if still.get("coat") and not any(
+            error.get("code") == "glb_clearcoat_not_allowed" for error in undeclared
+        ):
+            differences.append(
+                {
+                    "channel": "coat",
+                    "still": True,
+                    "glb": False,
+                    "message": "静帧使用 Principled Coat，GLB 未导出 KHR_materials_clearcoat",
+                }
+            )
     if declared.get("normal"):
         expected_scale = visual.get("normal_strength")
         if not observed_normal:
