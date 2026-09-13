@@ -970,6 +970,33 @@ def test_isolated_upgrade_resolves_carton_geometry_without_rewriting_source(tmp_
     assert identity["render_profile_sha256"] == gen.ISOLATED_UPGRADE_PROFILE_DECLARED_SHA256
 
 
+def test_isolated_upgrade_prepare_writes_candidate_spec_only(tmp_path: Path):
+    gen = generation_module()
+    _pipeline, _job, root = make_spec_source(tmp_path)
+    source_before = json.loads((root / "resolved_job.json").read_text(encoding="utf-8"))
+    before = inventory(root)
+    candidate = tmp_path / "upgrade-candidate"
+    result = gen.run_request(
+        request_payload(
+            root,
+            mode="upgrade",
+            action="prepare",
+            candidate_dir=str(candidate),
+            upgrade_profile_id=gen.ISOLATED_UPGRADE_PROFILE_ID,
+        )
+    )
+    assert result["ok"] is True
+    assert result["source_identity"]["render_profile_id"] == "packshot-carton-geometry-v1"
+    source_after = json.loads((root / "resolved_job.json").read_text(encoding="utf-8"))
+    assert source_after == source_before
+    assert inventory(root) == before
+    candidate_job = json.loads((candidate / "resolved_job.json").read_text(encoding="utf-8"))
+    assert candidate_job["render_profile_id"] == "packshot-carton-geometry-v1"
+    assert candidate_job["render_profile_sha256"] == gen.ISOLATED_UPGRADE_PROFILE_DECLARED_SHA256
+    assert candidate_job["render_spec"]["source"] == "profile_resolved"
+    assert candidate_job["render_spec"]["renderer"]["profile"] == "packshot-carton-geometry-v1"
+
+
 def test_isolated_upgrade_constants_match_production_registry():
     gen = generation_module()
     registry_path = PACKAGING / "profiles" / "render-profiles.v1.json"
