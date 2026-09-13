@@ -84,7 +84,7 @@ function positiveInt(value, fallback, name) {
   return value;
 }
 
-function normalizeDeliveryConfig(input = {}) {
+export function normalizeDeliveryConfig(input = {}) {
   if (input != null && !isPlainObject(input)) throw new Error("config must be an object");
   return {
     schema: LOCAL_DELIVERY_DEFAULTS.schema,

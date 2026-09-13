@@ -1,0 +1,22 @@
+{
+  "schema": "beian-monitor-config-v1",
+  "_comment": "Synthetic local-candidate policy only. No URLs, recipients, tokens, or transports.",
+  "production_default": false,
+  "local_candidate": true,
+  "alert": {
+    "fail_threshold": 3,
+    "recover_threshold": 2,
+    "unknown_breaks_streak": true,
+    "seen_ids_limit": 256
+  },
+  "runner": {
+    "interval_ms": 30000,
+    "first_delay_ms": 0,
+    "probe_timeout_ms": 8000
+  },
+  "delivery": {
+    "max_attempts": 3,
+    "backoff_ms": 1000,
+    "timeout_ms": 5000
+  }
+}

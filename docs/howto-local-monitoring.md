@@ -1,6 +1,6 @@
 # How to 运行本地监控合成回归
 
-这份操作把告警判断、只读探测、投递和本地循环分别跑一遍，得到可复核的合成结果。它不会访问杭州、读取生产配置或发送真实消息。
+这份操作把告警判断、只读探测、投递、本地循环和配置装载分别验证，得到可复核的合成结果。它不会访问杭州、读取生产配置或发送真实消息。
 
 ## 前置条件
 
@@ -45,7 +45,15 @@
 
    只有明确传入 `--loopback-url` 或 `--public-url` 才会发 HTTP GET。公网地址必须由调用者显式提供；不要把生产地址写进脚本或夹具。
 
-5. 运行四个局部测试组。
+5. 单独核对配置装载的合成回归。
+
+   ```bash
+   node --test scripts/monitoring/load-config.test.mjs
+   ```
+
+   测试使用仓库示例和临时合成 JSON，覆盖显式绝对路径、缺省策略及坏配置拒绝。装配用法见[配置参考](../scripts/monitoring/config/README.md#用法)：`loaded.runner` 传给 runner，`loaded.delivery` 经 `createQueue` 注入；装载本身不启动循环。显式 `alert.sources: []` 会被拒绝，省略该字段才使用既有默认来源。
+
+6. 需要完整监控回归时，运行四个局部测试组；第一组已包含上面的配置装载回归，无需重复单跑。
 
    ```bash
    node --test scripts/monitoring/*.test.mjs
@@ -69,6 +77,7 @@
 
 - [本地监控设计说明](explanation-local-monitoring.md)
 - [监控脚本参考](../scripts/monitoring/README.md)
+- [配置装载参考](../scripts/monitoring/config/README.md)
 - [投递模块参考](../scripts/monitoring/delivery/README.md)
 - [runner 参考](../scripts/monitoring/runner/README.md)
 - [测试与验证](../TESTING.md)

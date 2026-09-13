@@ -19,7 +19,7 @@
 
 先读 TODOS 中本任务对应的未完成项，再跟随其 ADR/交付记录；只有需要核实该阶段事实时才读取其具体证据。代码实现看当前 checkout，PR 状态看对应最终 HEAD，生产状态绑定 merge SHA、同次可信发布与杭州来源的 health。不要把主线、本地未提交工作、开放 PR 和公网画面混为一个状态。
 
-`RF-00～RF-11` 等阶段结论应带 Code/L0/发版 L1/质量门杭州实跑/L2/UAT 层级；历史文件的“当前”仅指其记录日期。未部署、未做人验、真实稿未核定时明确保留未完成，不把待办日期经过当作自动关闭。词义以 [TODOS.md](../TODOS.md) 状态口径为准：发版 L1 ≠ 质量门杭州实跑 ≠ L2/UAT。当前已发布头 `0.26.0.2`（`78f1594`，hangzhou-release `34599940457`）的发版 L1 已过，公网 `health.version=0.26.0.2` 已核对。本工作区候选为 `0.26.1.0`，合入并完成发版核验前不写已上线。前一功能发布头 `0.26.0.0`（`1e29578`，hangzhou-release `34574493418`）保留为历史证据。RF-11 质量门杭州实跑（冒烟真跑约 62s、90s 冻结、Job Object 成功路径）仍以 `0.21.46.0`（`3fcfea75`，run `34191398011`）证据为准。Mac 合成现状的[正式 baseline](../workers/packaging/fixtures/render-quality/baselines/README.md)已在 `0.23.0.0` 候选中获批冻结；Windows、真实稿与人工质量批准、L2/UAT 仍开放。
+`RF-00～RF-11` 等阶段结论应带 Code/L0/发版 L1/质量门杭州实跑/L2/UAT 层级；历史文件的“当前”仅指其记录日期。未部署、未做人验、真实稿未核定时明确保留未完成，不把待办日期经过当作自动关闭。词义以 [TODOS.md](../TODOS.md) 状态口径为准：发版 L1 ≠ 质量门杭州实跑 ≠ L2/UAT。截至 `2026-09-13T11:10:26Z` 的发布证据，已发布头为 `0.26.1.0`（[PR #111](https://github.com/weiweity/beian/pull/111)，merge `09e5823`，[hangzhou-release 34753582400](https://github.com/weiweity/beian/actions/runs/34753582400)）；杭州来源、Illustrator Session 1 与当时公网 `health.version=0.26.1.0` 已核对，发版 L1 已发布，完整状态记录见 TODOS 页首。本工作区候选为 `0.27.0.0`，合入并完成发版核验前不写已上线。此前 `0.26.0.2`、`0.26.0.0` 发布链保留为 TODOS 中的历史证据。RF-11 质量门杭州实跑（冒烟真跑约 62s、90s 冻结、Job Object 成功路径）仍以 `0.21.46.0`（`3fcfea75`，run `34191398011`）证据为准。Mac 合成现状的[正式 baseline](../workers/packaging/fixtures/render-quality/baselines/README.md)已在 `0.23.0.0` 候选中获批冻结；Windows、真实稿与人工质量批准、L2/UAT 仍开放。
 
 ## 改文档的方法
 
