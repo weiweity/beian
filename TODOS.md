@@ -2,7 +2,7 @@
 
 这是当前未完成事项的唯一清单。已完成代码和版本历史写 `CHANGELOG.md`；设计理由写 ADR；阶段证据留在对应 closeout，真实稿与输出留在 Git 外的私有证据目录。
 
-更新：2026-09-13。截至下述发布证据，已发布头为 `09e5823` / `0.26.1.0`，本轮候选为 `0.27.0.0`，保留 **21 个未闭环主题（P1 10、P2 7、P3 4）**。阶段实现与验证记录随下方条目更新；历史发布证据不替代本轮本地回归或业务验收。“待确认”表示未见批准/完成证据，不替用户判断外部事项已办或未办。
+更新：2026-09-14。截至 `2026-09-13T13:00:29Z` 的最新已核实发布记录为 `8de6dab` / `0.27.0.0`；`0.28.0.0` 内容及同步时阶段见下文，保留 **21 个未闭环主题（P1 10、P2 7、P3 4）**。阶段实现与验证记录随下方条目更新；历史发布证据不替代本轮本地回归或业务验收。“待确认”表示未见批准/完成证据，不替用户判断外部事项已办或未办。
 
 此前发布证据：[PR #102](https://github.com/weiweity/beian/pull/102)、merge `c62caed`、[hangzhou-release 34244831374](https://github.com/weiweity/beian/actions/runs/34244831374) 成功及同次公网 health `0.23.0.0`。仓库外完整记录：`~/Desktop/beian-evidence/2026-09-08-two-pr-ship/REPORT.md`。以下 R01/Q05 的已发布状态复用此证据，不代表业务验收完成。
 
@@ -16,7 +16,9 @@
 
 截至 `2026-09-13T11:10:26Z` 的发布证据：[PR #111](https://github.com/weiweity/beian/pull/111) merge `09e5823ea5fc449ac423f877197a923d2fdd9b90` / `0.26.1.0` 已合入 `main`；同 SHA 的 [hangzhou-release 34753582400](https://github.com/weiweity/beian/actions/runs/34753582400) 成功，杭州 runner 来源、Illustrator Session 1 与当时公网 `health.ok=true`、`health.version=0.26.1.0` 已核对，发版 L1 已发布。该历史记录不代表本轮上线，也不替代质量门杭州实跑、真实稿 L2 或 UAT。
 
-本轮候选：`0.27.0.0`（`codex/f02-config-integration`）含 F02 显式绝对路径的非敏感监控策略装载。合并部署完成前不写已上线。
+截至 `2026-09-13T13:00:29Z` 的最新已核实发布：[PR #112](https://github.com/weiweity/beian/pull/112) merge `8de6dab122d3095aaec55359848d988d3411cb04` / `0.27.0.0`；同 SHA 的 [hangzhou-release 34758465340](https://github.com/weiweity/beian/actions/runs/34758465340) 成功，杭州 runner 来源、Illustrator Session 1 与当时公网 `health.ok=true`、`health.version=0.27.0.0` 已核对。F02 非敏感监控策略配置装载已完成发版 L1；真实告警接入、登录后业务 UI、L2/UAT 不由该记录证明。证据批次：`F02-land-20260913-TFKWwm`。
+
+`0.28.0.0` 版本内容：Q06.6 A 显式隔离升级候选。2026-09-14 文档同步时，`codex/q066-candidate-a` 的 `8578e479e9a4e8fe966f2816b12e113fb9bcd85a` 已推送，尚无 PR 或部署；后续发布另据对应 SHA/run/health 核验，不能由版本条目推定已上线。
 
 ## 状态与执行口径
 
@@ -103,10 +105,12 @@ RF-10–RF-13 的原始依赖见 [ADR-007 §20.7](docs/adr-007-packaging-render-
   | Q06.3 · RF-10 工具与报告（Code/L0 已交付） | CLI、JSON metrics、contact sheet、identity diff 与显式 baseline 更新 | `0490e46`；命令见 TESTING 与 worker README；普通运行不更新 baseline；Q01 已获批 Mac 合成现状范围，其他范围仍需批准 |
   | Q06.4 · RF-03 平台欠项（用户暂缓） | Windows 原生 Job Object/进程树验证：原子归属、父先退/后代、取消、内存限制、Resume 前 supervisor 崩溃及重启恢复 | 已有模型测试不等于原生；2026-09-08 用户暂缓隔离 Windows 验证，未执行生产故障注入。该前置证据补齐后再评估主 Node 桥创建能力 |
   | Q06.5 · RF-11（Code/L0、杭州实跑已交付） | 独立 wrapper 接可信 main transaction fence，只写 RUNNER_TEMP，复用 generation/GLB/hash 门 | `3fcfea75` / `0.21.46.0`，[run 34191398011](https://github.com/weiweity/beian/actions/runs/34191398011) 真跑约 62s，TimeoutMs=90000，Job Object 成功路径通过；缺已解析 Blender 时会跳过，跳过不算通过；超时杀树分支未走到 |
-  | Q06.6 · 生产接线候选 | 分片补受控 runtime adapter 注册/主桥创建、候选 profile 与 upgrade 接线，核对能力矩阵、权限/幂等/CAS、质量门与失败回退 | 先盘查 RF-03/04 现状；不是解开一个开关；默认关闭，验证仍用隔离合成数据；注册范围、默认选择、历史重放分别列出，实施不等于生产启用 |
+  | Q06.6 · 生产接线候选（整项未完成） | A 显式临时 runtime 的固定纸盒壳 upgrade 已交付 Code/L0 和单次 Mac 原生合成正常路径；B 生产装配、C 启用仍未完成，见下方补记 | A 候选开发不依赖 .7；A→B 须 Q06.4 与既定八点审计，B→C 须 Q06.7/.8 及明确授权。默认不注册生产 runtime，注册范围、默认选择、历史重放分别核对；A 代码发版不等于生产准入 |
   | Q06.7 · RF-12 | 对最终候选做全量 L0/type/UI build/quality/相关 E2E 与显式合成 Blender 验证；旧单/g0/current、审计、资源释放及回滚演练；补断电耐久性证据 | 依赖 RF-00–RF-11 与纳入候选的 .6；已有相关证据有效则复用；进程崩溃模型、实际 Windows/断电分别标明，断电验证仅限获准隔离环境；形成 closeout，不触碰真实在途作业 |
   | Q06.8 · 发布与受控验收准入 | 明确 ship/合并自动发布授权；核对最终 PR HEAD CI、merge SHA、同次可信发布、杭州来源和公网版本；按批准范围注册/开放验收候选 | 依赖 .7 与必要的质量批准；主桥/生产 adapter/候选 profile/默认切换分别核对，不能因代码上线自动放开；限定样本与操作者的验收不等于全量业务开放 |
   | Q06.9 · RF-13 | 杭州私有真稿 L2 + 刘籽烨 UAT：旧新盲评及上传→等待→看形→背景/灯光→原图/下载→印刷面 | 依赖 RF-12 landed、L1 green 与候选准入；复用 A01/A02 金标，每例留源稿 hash、旧新合同 hash、操作者、时间、评分/结论与拒绝原因；真实稿和输出不进 Git |
+
+  Q06.6 A 补记（2026-09-14）：显式 `upgradeCandidate` 固定 `packshot-carton-geometry-v1` ID/声明 SHA，HTTP 不接收 profile 字段，Python 缺字段仍 `upgrade_unwired`；先验证 RF-02 源再解析绑定结构。既有平台门允许 darwin/linux、拒绝 win32，本次实跑仅 Mac；生产关闭来自默认无注册、临时根和平台门，不能把 `productionEnabled=false` 当独立防护。合法已有代的 history/activate 仍可用。完整本地门禁及 9/9 合成 E2E 已通过；单次 Mac 原生证据绑定 `0b9cd4b`，不是最终发布树重跑，详见 [runtime 收口补记](docs/designs/packaging-quality-rf03-runtime-closeout.md)。未改 registry、默认模板或正式 baseline；`production_ready=false`、human pending，Q06.6/.7/.8、Windows/断电/真实稿/人审仍不勾完成。
 
   **主题收口：适用步骤的开发、平台、发布、L2/UAT 与批准证据均可追溯。** 某候选被拒绝应记录“不支持/不开放”，不能把跳过登记为通过。真实软袋、天地盖、抽屉盒、圆筒等新 family 仅在矩形 carton L2/UAT 后按业务失败样本独立立项。
 
@@ -218,7 +222,7 @@ RF-10–RF-13 的原始依赖见 [ADR-007 §20.7](docs/adr-007-packaging-render-
 
 - [ ] **F02 — Tunnel / 服务掉线告警**
 
-  本轮候选 `0.27.0.0`：显式绝对路径的非敏感策略配置装载已实现，复用既有 normalizer；显式 null、空来源数组、未知/禁止字段及非法范围均失败关闭。监控局部合成回归 157/157 通过，仅为 Code/L0；未装配真实 transport、接收人或 Windows 托管，也未发送消息。完整发布门禁与 PR 状态另据本轮 ship 回执，不据本段判断已上线。整项仍开放。
+  配置装载切片已随 PR #112 / `0.27.0.0` 完成发版 L1（截至 `2026-09-13T13:00:29Z`，发布证据见页首）：显式绝对路径的非敏感策略装载复用既有 normalizer；显式 null、空来源数组、未知/禁止字段及非法范围均失败关闭。监控局部合成回归 157/157 通过；未装配真实 transport、接收人或 Windows 监控托管，也未发送消息。发版 L1 不等于告警服务接入，整项仍开放。
 
   状态：2026-09-09 本地判断核心与 fixture 回放已随 PR #105 / `0.24.0.0` 发布，实现位于 `scripts/monitoring/`。来源独立分类、去抖、故障/恢复去重、状态持久化与脱敏草稿已有合成回归；整合补充 URL/嵌套字段不进入事件草稿的回归。第二阶段只读探测适配器与渠道无关投递模块已随 PR #106 / `0.25.0.0` 发布，新增非零退出/诊断脱敏修复与三模块串联回归。第二阶段探测仅 mock、投递仅同步 fake。第三阶段 Promise 投递/超时/取消与本地循环/pending 恢复已随 PR #107 / `0.26.0.0` 合并，并通过 PR #108 的发布链修复后部署；quality 与 Windows contract checks 已通过，公网发版 L1 已核对。第三阶段证据：`~/Desktop/beian-evidence/2026-09-09-f02-runtime-integration/`。真实渠道、Windows 部署及现场验收仍待实施；进程模型不证明断电耐久。OCR 审查后已修复 HTTP 错误状态丢失、正文读取无容量上限、重启重试上限漂移及取消监听残留；83 项本地测试通过；证据在仓库外 `~/Desktop/beian-evidence/2026-09-09-f02-integration/`。整项仍开放。
 

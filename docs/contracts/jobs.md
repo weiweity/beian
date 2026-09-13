@@ -23,6 +23,8 @@ cd apps/web/backend && PYTHONPATH=. .venv/bin/python -m app.cli --help
 
 ## 作业入口与等待
 
+出图版本的 Q06.6 A 只在显式临时 runtime 装配固定 `upgradeCandidate` 时接通 upgrade；普通产品默认无 runtime 注册，临时根与平台门仍独立拒绝不合格装配，不能只凭 `productionEnabled=false` 判断安全。HTTP 创建体不接收任何 profile 字段，Python 缺 `upgrade_profile_id` 仍 `upgrade_unwired`；源 RF-02 验证先于绑定结构的候选解析。升级继续复用权限、幂等/CAS、审计、容量、产物质量与失败留图门，合法已有代的 history/activate 独立可用。平台实现允许 darwin/linux、拒绝 win32，本次原生证据只覆盖 Mac。A 开发不依赖 Q06.7；B 生产装配须 Q06.4 与既定八点审计，C 启用须 Q06.7/.8 及明确授权，状态见 [TODOS.md](../../TODOS.md)，参数见 [worker README](../../workers/packaging/README.md)。
+
 UI 等待：`shouldShowWaitCard`（`queued` | `running` | `comparing`；`done`/`failed`/`completed` 不当等待）。离开核对页后，看板 `liveJobLine` 和侧栏 `liveNavPulse` 仍显示阶段。打样台只交稿；点进度/已出图进单独打样单（WaitCard 或成片/三图看形，下面印刷面读字），不要在打样台底下摊开结果。唯一「上刀线」（或单层「刀线」/「刀版」）默认黑盒提交识别，候选里唯一「印刷」可随刀线带上，失败对籽烨结案为打样失败，选层只给 admin；单独「印刷」和工艺板不能当刀线。
 
 ## 补印刷面持久队列

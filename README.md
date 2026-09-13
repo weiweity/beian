@@ -36,7 +36,7 @@
 | `docs/adr-006-continuous-complexity-governance.md` | TypeScript 控制面 / Python 计算内核边界、死代码单调基线与 PR 质量门禁 |
 | `docs/adr-007-packaging-render-fidelity.md` | 包装渲染合同与阶段设计；RF-06–RF-11 已合入 main，RF-09 发布证据见 [交付记录](docs/designs/packaging-quality-rf09-closeout.md)。诊断 registry、正式基线与真实验收边界分别保留；当前未完成项只看 [TODOS.md](TODOS.md) |
 | [R01 补印刷面交付记录](docs/designs/print-face-queue-closeout.md) | 持久排队、同单幂等、发版排干和刷新恢复；本地验证与杭州待验边界 |
-| [RF-03 runtime 收口记录](docs/designs/packaging-quality-rf03-runtime-closeout.md) | 本次独立候选的 L0 证据、原开发树的历史轮次，以及生产注册、Windows 原生和真实验收边界 |
+| [RF-03 runtime 收口记录](docs/designs/packaging-quality-rf03-runtime-closeout.md) | RF-03 历史轮次与 Q06.6 A 隔离升级补记：本地门禁、单次 Mac 原生证据及生产装配/启用边界 |
 | [RF-04 出图版本交付记录](docs/designs/packaging-quality-rf04-closeout.md) | 同代文件读取、历史切换、创建幂等、失败留图与本次独立验证；生产新代执行仍未开放 |
 | [RF-05 纸盒几何交付记录](docs/designs/packaging-quality-rf05-closeout.md) | 显式 family 分派、纸板壳/倒角、完整六面 UV 与 GLB 验证；旧 profile 保持，生产升级仍关闭 |
 | [RF-06 材质交付记录](docs/designs/packaging-quality-rf06-closeout.md) | 显式纸材/油墨/整体工艺、微法线与 GLB 可导出子集；本地候选及验证证据，生产 registry 与默认选择未切换 |
@@ -80,6 +80,8 @@
 不要跑 uvicorn。没有 `app.main`。产品入口只有 Hono `:8787`。
 
 测试范围、准备、顺序和 L0/L1/L2 边界统一见 [TESTING.md](TESTING.md)。普通修改按影响选择验证；`/ship` 保留完整门禁。
+
+`0.28.0.0` 的 Q06.6 A 仅为显式临时 runtime 装配固定纸盒壳候选的升级路径，普通产品默认不注册，Windows 主桥创建仍关闭；合法已有代的历史查看/切换继续可用。隔离装配参数见 [worker README](workers/packaging/README.md)，A→B 生产装配→C 启用及带日期的发布记录见 [TODOS.md](TODOS.md)。代码版本不代表生产能力已开放。
 
 
 

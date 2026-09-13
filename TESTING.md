@@ -54,6 +54,8 @@ cd apps/web/backend
 
 并行耗时不能相加作为总墙钟；记录各阶段以及关键等待。只要需要重跑就先说明失效原因。测试计数不等于覆盖率；合成文件校验不等于原生软件或真实 L2。
 
+Q06.6 A 的证据分层见 [runtime 收口补记](docs/designs/packaging-quality-rf03-runtime-closeout.md)：`Q066-ship-20260914-Q7sMHL` 的完整本地回执与 `mockup-render-versions` 合成 E2E 分开记录；后者使用独立临时构建和网络拦截，无 Hono，不是性能采样。`Q066-native-prep-20260913-Um0ExX` 的单次 Mac 合成原生链绑定 `0b9cd4b`；后续导出、注释和版本元数据变化不把它变成最终发布树新实跑。平台代码允许 darwin/linux、拒绝 win32，不能将 Mac 结果写成 Linux/Windows 验收；路径覆盖评估也不等于仪器覆盖率。Q06.7/.8、原生异常/断电、真实稿与人审仍各需证据。
+
 ## 质量工具维护与 Skill 合同
 
 首次配置质量工具的现有命令是 `npm ci --prefix tools/quality` 和 `apps/web/backend/.venv/bin/python -m pip install -r apps/web/backend/requirements-quality.txt`，仅在对应维护范围获准后执行。已安装则复用，日常验证不重复安装。
