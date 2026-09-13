@@ -42,9 +42,9 @@ export class Q05ArtifactError extends Error {
   }
 }
 
-export type Q05ArtifactMode = "built-temp" | "prebuilt-external";
+type Q05ArtifactMode = "built-temp" | "prebuilt-external";
 
-export type Q05UiIdentity = {
+type Q05UiIdentity = {
   schema: typeof Q05_IDENTITY_SCHEMA;
   gitHead: string;
   sources: Record<string, string>;
