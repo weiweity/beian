@@ -890,6 +890,10 @@ def plan_for_mode(
                 fix="隔离候选必须显式指定已获批 profile，且声明哈希与 registry 一致",
             )
         try:
+            # Reuse RF-02 source validation (complete spec or eligible pre-RF02
+            # synthesis). Do not rebuild a candidate from unverified structure
+            # fields or recast damaged source hashes.
+            render_plan_for_resolved_job(job)
             structure_job = _structure_job_from_legacy_resolved(job, require_assets=True)
             plan = render_plan_for_new_job(structure_job, upgrade_profile_id)
         except RenderContractError as error:
