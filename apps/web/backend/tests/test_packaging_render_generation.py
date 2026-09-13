@@ -908,7 +908,76 @@ def test_unknown_missing_and_conflicting_fields_fail_before_write(tmp_path: Path
     with pytest.raises(gen.RenderGenerationError) as raised:
         gen.run_request(request_payload(root, mode="upgrade"))
     assert raised.value.code == "render_generation_unsupported"
+    assert raised.value.cause == "upgrade_unwired"
     assert inventory(root) == before
+
+
+def test_non_upgrade_rejects_upgrade_profile_id_without_writes(tmp_path: Path):
+    gen = generation_module()
+    _pipeline, _job, root = make_spec_source(tmp_path)
+    before = inventory(root)
+    with pytest.raises(gen.RenderGenerationError) as raised:
+        gen.run_request(
+            request_payload(
+                root,
+                mode="legacy_relight",
+                upgrade_profile_id="packshot-carton-geometry-v1",
+            )
+        )
+    assert raised.value.cause == "unknown_fields"
+    assert inventory(root) == before
+
+
+def test_upgrade_rejects_unapproved_profile_without_writes(tmp_path: Path):
+    gen = generation_module()
+    _pipeline, _job, root = make_spec_source(tmp_path)
+    before = inventory(root)
+    with pytest.raises(gen.RenderGenerationError) as raised:
+        gen.run_request(
+            request_payload(root, mode="upgrade", upgrade_profile_id="packshot-neutral-v1")
+        )
+    assert raised.value.code == "render_generation_unsupported"
+    assert raised.value.cause == "upgrade_candidate_identity_invalid"
+    assert inventory(root) == before
+
+
+def test_isolated_upgrade_resolves_carton_geometry_without_rewriting_source(tmp_path: Path):
+    gen = generation_module()
+    _pipeline, _job, root = make_spec_source(tmp_path)
+    source = json.loads((root / "resolved_job.json").read_text(encoding="utf-8"))
+    source_profile = source.get("render_profile_id")
+    before = inventory(root)
+    result = gen.run_request(
+        request_payload(
+            root,
+            mode="upgrade",
+            upgrade_profile_id=gen.ISOLATED_UPGRADE_PROFILE_ID,
+        )
+    )
+    assert result["ok"] is True
+    assert result["source_identity"]["render_profile_id"] == "packshot-carton-geometry-v1"
+    disk = json.loads((root / "resolved_job.json").read_text(encoding="utf-8"))
+    assert disk.get("render_profile_id") == source_profile
+    assert inventory(root) == before
+    preserve = gen.run_request(request_payload(root, mode="preserve"))
+    assert preserve["source_identity"]["render_profile_id"] != result["source_identity"]["render_profile_id"] or source_profile == "packshot-carton-geometry-v1"
+    assert result["source_identity"]["plan_identity"] != preserve["source_identity"]["plan_identity"]
+    identity = gen.plan_for_mode(
+        json.loads((root / "resolved_job.json").read_text(encoding="utf-8")),
+        "upgrade",
+        upgrade_profile_id=gen.ISOLATED_UPGRADE_PROFILE_ID,
+    )["identity"]
+    assert identity["render_profile_sha256"] == gen.ISOLATED_UPGRADE_PROFILE_DECLARED_SHA256
+
+
+def test_isolated_upgrade_constants_match_production_registry():
+    gen = generation_module()
+    registry_path = PACKAGING / "profiles" / "render-profiles.v1.json"
+    payload = json.loads(registry_path.read_text(encoding="utf-8"))
+    profile = next(item for item in payload["profiles"] if item["id"] == gen.ISOLATED_UPGRADE_PROFILE_ID)
+    assert profile["declared_sha256"] == gen.ISOLATED_UPGRADE_PROFILE_DECLARED_SHA256
+    digest = hashlib.sha256(registry_path.read_bytes()).hexdigest()
+    assert digest == "3c5d2787afe1f25811a5c066c36fc2b09cc2f98c52e201a051fe111203ca26e6"
 
 
 def test_self_reported_or_tampered_hash_is_not_rf02_verification(tmp_path: Path):
