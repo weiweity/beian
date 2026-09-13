@@ -2,7 +2,7 @@
 
 这是当前未完成事项的唯一清单。已完成代码和版本历史写 `CHANGELOG.md`；设计理由写 ADR；阶段证据留在对应 closeout，真实稿与输出留在 Git 外的私有证据目录。
 
-更新：2026-09-11。按 `10b67d2` / `0.26.0.1` 主线与本轮交付证据核对，保留 **21 个未闭环主题（P1 10、P2 7、P3 4）**。阶段实现与验证记录随下方条目更新；历史发布证据不替代本轮本地回归或业务验收。“待确认”表示未见批准/完成证据，不替用户判断外部事项已办或未办。
+更新：2026-09-13。按已发布 `78f1594` / `0.26.0.2` 与本轮候选 `0.26.1.0` 核对，保留 **21 个未闭环主题（P1 10、P2 7、P3 4）**。阶段实现与验证记录随下方条目更新；历史发布证据不替代本轮本地回归或业务验收。“待确认”表示未见批准/完成证据，不替用户判断外部事项已办或未办。
 
 此前发布证据：[PR #102](https://github.com/weiweity/beian/pull/102)、merge `c62caed`、[hangzhou-release 34244831374](https://github.com/weiweity/beian/actions/runs/34244831374) 成功及同次公网 health `0.23.0.0`。仓库外完整记录：`~/Desktop/beian-evidence/2026-09-08-two-pr-ship/REPORT.md`。以下 R01/Q05 的已发布状态复用此证据，不代表业务验收完成。
 
@@ -12,9 +12,9 @@
 
 此前发布：[PR #106](https://github.com/weiweity/beian/pull/106)，merge `0e56152` / `0.25.0.0`；[hangzhou-release 34336262433](https://github.com/weiweity/beian/actions/runs/34336262433) 成功，杭州 runner 来源与公网 health/version 已核对。F02 探测与本地投递工具已发布，真实通知未启用。
 
-当前发布：[PR #109](https://github.com/weiweity/beian/pull/109) 的版本/状态同步提交 `10b67d2` / `0.26.0.1` 已合并；前一功能发布为 [PR #107](https://github.com/weiweity/beian/pull/107) 的 `6771a08` / `0.26.0.0`，因生产旧提交链需要保留，随后通过 [PR #108](https://github.com/weiweity/beian/pull/108) 以普通 merge 生成发布头 `1e29578`。对应当前 [hangzhou-release 34584232535](https://github.com/weiweity/beian/actions/runs/34584232535) 已成功，杭州 runner 来源与公网 `health.version=0.26.0.1` 已核对。该证据只证明发版 L1，不替代 Windows 质量门、真实稿 L2、UAT 或业务验收。
+当前发布：[PR #110](https://github.com/weiweity/beian/pull/110) merge `78f1594` / `0.26.0.2` 已合入 `main`；[hangzhou-release 34599940457](https://github.com/weiweity/beian/actions/runs/34599940457) 成功，公网 `health.version=0.26.0.2` 已核对。该证据只证明发版 L1。此前 [PR #109](https://github.com/weiweity/beian/pull/109) `10b67d2` / `0.26.0.1` 与功能头 [PR #107](https://github.com/weiweity/beian/pull/107)+[PR #108](https://github.com/weiweity/beian/pull/108) `1e29578` / `0.26.0.0` 仍为历史发布链。
 
-工作区待发布版本：`0.26.0.2`（当前分支提交 `234051c`，`VERSION` 与健康检查标识已同步）。该版本尚未合入 `main`，尚无对应的 merge SHA、杭州发布 run 或公网 health 证据，因此暂不列为当前发布；合并部署后再补齐证据。
+本轮候选：`0.26.1.0`（`codex/q05-clearcoat-integration`）含 Q05 预构建测量隔离与 GLB clearcoat 负向合同。合并部署完成前不写已上线。
 
 ## 状态与执行口径
 
@@ -82,7 +82,7 @@ RF-10–RF-13 的原始依赖见 [ADR-007 §20.7](docs/adr-007-packaging-render-
 
 - [ ] **Q05 — 端到端字体清晰度与浏览器性能**
 
-  状态：RF-08 诊断采样、RF-09 card→full/下载冻结和 RF-10 报告字段已有；2026-09-08 已整合 Grok 的浏览器性能切片，随 PR #100 合入主线，已于 0.23.0.0 发布：同尺寸画布重绘、卸载/导出释放、灯箱换代来源隔离及旧图初始尺寸处理。本机合成已采集 heap/rAF，尚非真实环境预算；Q06.9 登录后实机、字体清晰度、杭州网络及真实稿 L2/UAT 仍待验。原始证据在仓库外 `~/Documents/beian-q05-browser-perf-20260908/`，整合记录在 `~/Desktop/beian-evidence/2026-09-08-q05-f04-integration/`。
+  状态：RF-08 诊断采样、RF-09 card→full/下载冻结和 RF-10 报告字段已有；2026-09-08 已整合 Grok 的浏览器性能切片，随 PR #100 合入主线，已于 0.23.0.0 发布：同尺寸画布重绘、卸载/导出释放、灯箱换代来源隔离及旧图初始尺寸处理。2026-09-13 增加 Q05 预构建测量隔离（`BEIAN_Q05_DIST`，默认仍自建构建）及 GLB「声明无 clearcoat、实际有效涂层」负向合同；二者为 Code/L0 切片，不勾掉本主题。本机合成已采集 heap/rAF，尚非真实环境预算；Q06.9 登录后实机、字体清晰度、杭州网络及真实稿 L2/UAT 仍待验。原始证据在仓库外 `~/Documents/beian-q05-browser-perf-20260908/`，整合记录在 `~/Desktop/beian-evidence/2026-09-08-q05-f04-integration/`，本轮发布证据在 `~/Desktop/beian-evidence/parallel-round1/ship-q05-clearcoat-20260913/`。
 
   1. 复用 RF-10 已交付的 generation/eval 三层字段与采样接线：每次采样记录 source/target/projected ppm、像素预算、重采样及合同身份；核验现有缺失/超预算/身份不符的失败路径，不新增公开下载 key。
   2. 测 card 可见、full 网络/解码/替换各阶段、连续切代/resize/离页的 heap 和帧预算；与 R04 共用资源测试。保存同 fixture、同机前后记录；DOM/rAF 时间不能冒充屏幕合成精确时刻。
