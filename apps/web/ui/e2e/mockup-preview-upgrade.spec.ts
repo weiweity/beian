@@ -1,24 +1,44 @@
 import { carton } from "./fixtures/glbFixture";
 import { expect, test, type Page } from "@playwright/test";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { cpus, hostname, loadavg, tmpdir, totalmem } from "node:os";
-import { createHash } from "node:crypto";
+import { cpus, hostname, loadavg, totalmem } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { deflateSync } from "node:zlib";
+import {
+  Q05_IDENTITY_FILE,
+  Q05_PREBUILT_ENV,
+  cleanupQ05Artifact,
+  fileSha,
+  q05MeasurementWindows,
+  resolveQ05Artifact,
+  type Q05ArtifactSource,
+} from "./q05Artifact";
 import type { MockupJob, RenderGenerationRow } from "../src/api";
 
-let dist: string;
+// 产物来源：
+// - 默认：beforeAll 自建 mkdtemp 临时目录并 `npm run build -- --outDir <dir>`，afterAll 只删该目录。
+// - 显式复用：BEIAN_Q05_DIST=<dir> 只读使用外部已构建产物，校验路径/必要资产/sidecar 身份，
+//   任一项不通过即失败关闭，不自动回退构建；该外部目录永不被删除。
+// PLAYWRIGHT_ARTIFACT_ONLY=1 与本 spec 的产物来源无关：本 spec 拦截全部页面与 API 请求，
+// 该变量只影响 playwright.config 是否另起 5173 上的 Vite dev server。
+let artifact: Q05ArtifactSource | undefined;
+let indexHtml: Buffer;
 const assets = new Map<string, Buffer>();
 test.beforeAll(() => {
-  dist = mkdtempSync(join(tmpdir(), "beian-rf09-e2e-"));
-  execFileSync("npm", ["run", "build", "--", "--outDir", dist], {
-    cwd: fileURLToPath(new URL("../", import.meta.url)), timeout: 60_000, stdio: "pipe",
+  artifact = resolveQ05Artifact({
+    uiRoot: fileURLToPath(new URL("../", import.meta.url)),
+    build: (dir) => {
+      execFileSync("npm", ["run", "build", "--", "--outDir", dir], {
+        cwd: fileURLToPath(new URL("../", import.meta.url)), timeout: 60_000, stdio: "pipe",
+      });
+    },
   });
-  for (const name of readdirSync(join(dist, "assets"))) assets.set(`/assets/${name}`, readFileSync(join(dist, "assets", name)));
+  indexHtml = artifact.indexHtml;
+  for (const [key, body] of artifact.assets) assets.set(key, body);
 });
-test.afterAll(() => { if (dist) rmSync(dist, { recursive: true }); });
+test.afterAll(() => { cleanupQ05Artifact(artifact); });
 
 const ID = "af0900000001";
 const GEN = "g1-rf09-preview-" + "a".repeat(48);
@@ -139,7 +159,7 @@ async function serve(page: Page, opts: {
     const method = route.request().method();
     const json = (body: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
     if (!path.startsWith("/api/")) {
-      const body = assets.get(path) || (path.startsWith("/mockup") ? readFileSync(join(dist, "index.html")) : null);
+      const body = assets.get(path) || (path.startsWith("/mockup") ? indexHtml : null);
       return body
         ? route.fulfill({ body, contentType: path.endsWith(".js") ? "text/javascript" : path.endsWith(".css") ? "text/css" : "text/html" })
         : route.fulfill({ status: 404, body: "synthetic asset not supplied" });
@@ -229,10 +249,6 @@ async function trackUnhandled(page: Page) {
       return [...errors, ...extra];
     },
   };
-}
-
-function fileSha(rel: string): string {
-  return createHash("sha256").update(readFileSync(join(UI_ROOT, rel))).digest("hex");
 }
 
 function q05Machine() {
@@ -981,12 +997,35 @@ test("Q05 切代/resize/离页：记录 heap 与 rAF 间隔，不把 rAF 当成�
     viewport: { width: 1440, height: 900, dpr: 1 },
     fixture: "synthetic-png-card-1200x1440-full-3000x3600-alpha-product",
     machine: q05Machine(),
+    artifact: {
+      mode: artifact?.mode ?? "built-temp",
+      env: Q05_PREBUILT_ENV,
+      identity_file: Q05_IDENTITY_FILE,
+      dir: artifact?.mode === "prebuilt-external" ? artifact.dir : null,
+      ownedByThisRun: artifact?.owned ?? false,
+      files: artifact?.artifactFiles ?? null,
+      inputsSha: artifact?.inputsSha ?? null,
+      artifactSha: artifact?.artifactSha ?? null,
+      identity: artifact?.identity ?? null,
+      note: artifact?.mode === "prebuilt-external"
+        ? "BEIAN_Q05_DIST 只读复用外部构建产物：本次运行不构建，也不删除该目录；sidecar 身份必须匹配当前源码/配置/依赖。"
+        : "默认模式：beforeAll 在自建临时目录内构建、写入 sidecar，afterAll 只删该临时目录。",
+    },
     sources: {
       mockupStudio: fileSha("src/pages/mockupStudio.ts"),
       mockupPage: fileSha("src/pages/MockupPage.tsx"),
       thisSpec: fileSha("e2e/mockup-preview-upgrade.spec.ts"),
     },
-    method: "Playwright Chromium + API 全拦截；PLAYWRIGHT_ARTIFACT_ONLY=1；不连 Hono/杭州/真实稿；5173 有无占用不影响拦截。CDP HeapProfiler.collectGarbage + Runtime.getHeapUsage。",
+    method: `Playwright Chromium + 页面/API 全拦截，不经 Vite/Hono/杭州/真实稿。构建产物来源：${
+      artifact?.mode === "prebuilt-external" ? `外部预构建目录（${Q05_PREBUILT_ENV}）` : "本 spec 自建临时目录"
+    }。CDP HeapProfiler.collectGarbage + Runtime.getHeapUsage。heap/rAF 在用例内采样，不含 beforeAll 构建。`,
+    measurement_windows: artifact ? q05MeasurementWindows(artifact) : null,
+    intervals: {
+      in_case: "heap/rAF 只在用例内按阶段采样，采样区间不含 beforeAll 的构建，也不含此前准备。",
+      whole_command: artifact?.mode === "prebuilt-external"
+        ? "整条命令的墙钟/RSS 不含本次 UI 构建，仍含 Chromium/Playwright，不能当浏览器峰值或正式预算。"
+        : "整条命令的墙钟/RSS 含 beforeAll 构建，不能直接与预构建模式对比，也不能当浏览器峰值。",
+    },
     disclaimer: "本机合成性能不代表杭州或真实用户。DOM/rAF/CDP heap 不是屏幕合成精确时刻，也不是 GPU 纹理占用。",
     adr_17_4: "网络完成后仍需 decode；decode 就绪后下一可用绘制机会替换。不声称 rAF 等于屏幕合成时刻。",
     stages,

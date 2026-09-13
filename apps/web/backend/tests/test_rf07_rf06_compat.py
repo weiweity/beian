@@ -9,7 +9,13 @@ import pytest
 
 from test_packaging_glb_verify import glb_verify
 from test_packaging_render_contract import carton_job, contract_module
-from test_packaging_render_materials import _append_view, _pbr_carton_artifact
+from test_packaging_render_materials import (
+    _append_view,
+    _apply_clearcoat,
+    _clearcoat_error_codes,
+    _pbr_carton_artifact,
+    _strip_clearcoat,
+)
 
 
 def _studio_identity(contract, *, dimensions):
@@ -87,6 +93,24 @@ def test_rf07_studio_plan_does_not_relax_required_extension_gate(tmp_path, exten
     artifact.document["extensionsRequired"] = [extension]
     report = _compare(module, contract, artifact, identity)
     assert report["ok"] is False, report
+
+
+def test_rf07_studio_plan_rejects_undeclared_effective_clearcoat(tmp_path):
+    module = glb_verify()
+    contract = contract_module()
+    identity = _studio_identity(contract, dimensions={"width": 30, "depth": 20, "height": 50})
+    artifact, _assets = _white_none_studio_artifact(module, contract, tmp_path, identity)
+    assert identity["render_spec"]["material"]["glb_export"]["clearcoat"] is False
+    assert _compare(module, contract, artifact, identity)["ok"]
+    _apply_clearcoat(artifact, faces=True, factor=1.0)
+    report = _compare(module, contract, artifact, identity)
+    assert report["ok"] is False, report
+    assert "glb_clearcoat_not_allowed" in _clearcoat_error_codes(report)
+    _strip_clearcoat(artifact)
+    _apply_clearcoat(artifact, core=True, factor=1.0)
+    core = _compare(module, contract, artifact, identity)
+    assert core["ok"] is False, core
+    assert "glb_core_clearcoat_not_allowed" in _clearcoat_error_codes(core)
 
 
 @pytest.mark.parametrize("damage", ["out_of_range", "wrong_type", "wrong_count", "nonfinite"])

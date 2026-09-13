@@ -23,7 +23,7 @@ RF-03 新候选路径由 `render_generation.py` 校验实际 GLB、full/card 和
 3. 印刷层与完整图层分别高速栅格化（pymupdf 出图，杭州不靠 macOS qlmanage）；
 4. 按切面切片纹理（膜袋只印正反，其余面空白纸面补齐）；
 5. 多产品并行调用 Blender 后台建模、渲染并导出 .blend / .glb；静帧先出产品 RGBA，再单独跑地面 pass，地面失败不挡产品图；
-6. GLB 自动复核轴向、毫米尺寸，以及 front/right/back/left/top/bottom 六面贴图来源、方向和镜像；
+6. GLB 自动复核轴向、毫米尺寸，以及 front/right/back/left/top/bottom 六面贴图来源、方向和镜像；声明无 clearcoat 却带有效涂层则失败（零强度扩展、仅登记扩展名可通过）；
 7. 用两张白底写成 1 页 OOXML PPT（正面+侧面、反面+侧面），不依赖 Node；写不出才试演示文稿运行时。导出时用 `png_bytes_over_white` 铺白，不覆盖磁盘上的 RGBA 产品层。stderr 打 `PPT 跳过` 时静帧、PDF 和 GLB 仍算成功，不要把整单判失败。`--no-ppt` 同样跳过 PPT。
 8. 两张白底合成一页 PDF（页底先铺白，槽按源图比例 contain，标题用中文字体）。同样只在导出时铺白。pymupdf 写不出且还没落盘再用已装的 Pillow，不另装包，不要盖掉已经写出的文件。缺 PDF 不当失败。
 
@@ -119,7 +119,7 @@ V2 任务在产品项中写 `"structure_engine": "v2"`。显式 sidecar 可写 `
 - Illustrator 冷启动和复杂转曲稿解析可能较慢，建议保持应用常驻。无人值守控制面：无进度 60 秒（存 PDF 300 秒）才放弃；作业墙钟 900 秒只表示 cancel_pending，外层 1260 秒。禁止在 saving 期间 Kill cscript。盘点前 hide 顶层、进轮廓视图（`executeMenuCommand("preview")` 只按一次）、zoom 0.0625；`eachInventoryPathItem` 走 `layer.pageItems` 并展开组和复合路径，跳过 表/标注/Dimensions/尺寸，每层 remainder 上限 512；空的隐藏集合不要把 fallback 从 `document.pathItems` 闩走。存 PDF 前 `restoreUnattendedArtwork` 必须把原可见顶层恢复，否则抛 `Cannot fully restore artwork layers`。关稿再 hide+outline+zoom 0.03125。26H21A 仍是 land 后杭州人工金标。
 - 相同结构只需新增任务记录即可并行处理；缓存键包含源稿、结构 sidecar、清理后的 artwork、流程版本，以及 contract 给出的 render plan fingerprint token（其中含合同 hash、profile hash 和 registry 原始字节身份）。
 - `structure_v2` 用 Shapely/GEOS 做单位归一、同源近点归一、noding、polygonize 和拓扑诊断。结构可闭合但产品正面仍有业务歧义时返回 `review_required`。网页路径上，唯一可确认正面且带 `preferred_quarter_turns` 时由服务端自动确认并继续出图；多面时已登录账号只提供一个正面锚点。系统只公开最终确认引擎接受的方向，自动带入其几何推荐，再从完整盒型推导其余五面。管理员可对已出图且只有一套公开盒型的单再提交正面，只重跑 Blender。尺寸不匹配与贴图方向不唯一使用不同错误码，不能用方向文案掩盖尺寸失败。曲线适配或结构工作量超过安全上限时返回可执行的 `unsupported`，不会进入 Blender。确认接口用 409 表示候选已过期、422 表示当前结构不能成盒；它们不是网络错误。
-- 只有 `validation.status=accepted`、源稿 SHA-256 匹配、六面角色唯一且拓扑闭合的结构才能形成 `ResolvedPackagingJob`。人工确认结果写成新的批准 sidecar，再进入现有建模、渲染、PPT 和 GLB 合同。GLB 导出后还要逐面核对已确认 artwork 绑定；底面缺图、方向错误或镜像错误都判失败。
+- 只有 `validation.status=accepted`、源稿 SHA-256 匹配、六面角色唯一且拓扑闭合的结构才能形成 `ResolvedPackagingJob`。人工确认结果写成新的批准 sidecar，再进入现有建模、渲染、PPT 和 GLB 合同。GLB 导出后还要逐面核对已确认 artwork 绑定；底面缺图、方向错误或镜像错误都判失败。声明无涂层却带有效 clearcoat 的产物同样拒绝；零强度扩展或仅登记扩展名不算有效涂层，合法上光仍可通过。
 - Blender MCP 只保留给交互调试。稳定生产通过独立 Blender 后台进程并行执行，避免界面串行和上下文开销。
 
 ## Illustrator 兜底验证

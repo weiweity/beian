@@ -9,8 +9,12 @@ from test_packaging_render_contract import contract_module
 from test_packaging_render_materials import (
     MICRO_NORMAL,
     _append_view,
+    _apply_clearcoat,
+    _clearcoat_error_codes,
     _gloss_layers,
+    _none_layers,
     _pbr_carton_artifact,
+    _strip_clearcoat,
 )
 
 
@@ -110,3 +114,27 @@ def test_pbr_gate_rejects_exported_channel_damage(tmp_path, damage, expected_cod
     report = module.compare_glb_pbr_capability(artifact, layers)
     assert not report["ok"]
     assert expected_code in {error["code"] for error in report["errors"]}
+
+
+@pytest.mark.parametrize(
+    "damage,expected_code",
+    [
+        ("face_coat", "glb_clearcoat_not_allowed"),
+        ("core_coat", "glb_core_clearcoat_not_allowed"),
+    ],
+)
+def test_full_artifact_gate_rejects_undeclared_effective_clearcoat(tmp_path, damage, expected_code):
+    module = glb_verify()
+    contract = contract_module()
+    artifact, assets = _pbr_carton_artifact(module, contract, tmp_path)
+    layers = _none_layers(contract)
+    args = (assets, {"width": 30, "depth": 20, "height": 50}, 0.5, [0.7, 0.7, 0.7, 1.0])
+    _strip_clearcoat(artifact)
+    assert module.compare_glb_artifact_contract(artifact, *args, material_layers=layers)["ok"]
+    if damage == "face_coat":
+        _apply_clearcoat(artifact, faces=True, factor=1.0)
+    else:
+        _apply_clearcoat(artifact, core=True, factor=1.0)
+    report = module.compare_glb_artifact_contract(artifact, *args, material_layers=layers)
+    assert report["ok"] is False, report
+    assert expected_code in _clearcoat_error_codes(report)

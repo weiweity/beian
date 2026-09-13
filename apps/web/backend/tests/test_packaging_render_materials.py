@@ -721,6 +721,83 @@ def _gloss_layers(contract):
     )
 
 
+def _none_layers(contract, *, roughness=0.22):
+    return layers_of(
+        contract,
+        material_candidate(
+            "packshot-material-white-none-v1",
+            roughness=roughness,
+            extra={"core_roughness": 0.6},
+        )["material"],
+    )
+
+
+def _legacy_uncoated_layers(contract):
+    return layers_of(
+        contract,
+        {
+            "substrate_profile": "white-card-default-v1",
+            "print_layer": "process-ink-v1",
+            "finish_profile": "none",
+            "spot_finish_mask": None,
+            "substrate_rgba": [1.0, 1.0, 1.0, 1.0],
+            "roughness": 0.52,
+            "specular_ior_level": 0.08,
+        },
+    )
+
+
+def _clearcoat_error_codes(report: dict) -> set[str]:
+    codes: set[str] = set()
+    buckets = [report]
+    material = report.get("material")
+    if isinstance(material, dict):
+        buckets.append(material)
+        pbr = material.get("pbr")
+        if isinstance(pbr, dict):
+            buckets.append(pbr)
+    pbr = report.get("pbr")
+    if isinstance(pbr, dict):
+        buckets.append(pbr)
+    for bucket in buckets:
+        for error in bucket.get("errors") or []:
+            if isinstance(error, dict) and error.get("code"):
+                codes.add(error["code"])
+    return codes
+
+
+def _strip_clearcoat(artifact) -> None:
+    artifact.document.pop("extensionsUsed", None)
+    artifact.document.pop("extensionsRequired", None)
+    for material in artifact.document["materials"]:
+        extensions = material.get("extensions")
+        if isinstance(extensions, dict):
+            extensions.pop("KHR_materials_clearcoat", None)
+            if not extensions:
+                material.pop("extensions", None)
+
+
+def _apply_clearcoat(artifact, *, faces=False, core=False, factor=1.0, roughness=0.08, used=True) -> None:
+    if used:
+        used_extensions = [str(item) for item in (artifact.document.get("extensionsUsed") or [])]
+        if "KHR_materials_clearcoat" not in used_extensions:
+            used_extensions.append("KHR_materials_clearcoat")
+        artifact.document["extensionsUsed"] = used_extensions
+    for material in artifact.document["materials"]:
+        name = str(material.get("name") or "").strip().lower().split(".", 1)[0]
+        is_core = name == "mat_paperboardedge"
+        if is_core and not core:
+            continue
+        if not is_core and not faces:
+            continue
+        extensions = dict(material.get("extensions") or {})
+        extensions["KHR_materials_clearcoat"] = {
+            "clearcoatFactor": factor,
+            "clearcoatRoughnessFactor": roughness,
+        }
+        material["extensions"] = extensions
+
+
 def _gloss_identity(contract, *, assets, dimensions, substrate):
     plan = contract.render_plan_for_experimental_material_job(
         carton_job(dimensions=dimensions),
@@ -828,6 +905,144 @@ def test_artifact_contract_rejects_removed_clearcoat_when_spec_declares_it(tmp_p
     pbr = report.get("pbr") or report.get("material", {}).get("pbr")
     assert pbr and pbr["ok"] is False
     assert any(error["code"] == "glb_clearcoat_not_exported" for error in (pbr.get("errors") or report.get("errors") or []))
+
+
+def test_pbr_and_artifact_gate_reject_undeclared_effective_clearcoat(tmp_path):
+    contract = contract_module()
+    module = glb_verify()
+    artifact, assets = _pbr_carton_artifact(module, contract, tmp_path)
+    layers = _none_layers(contract)
+    args = (assets, {"width": 30, "depth": 20, "height": 50}, 0.5, [0.7, 0.7, 0.7, 1.0])
+    pbr = module.compare_glb_pbr_capability(artifact, layers)
+    report = module.compare_glb_artifact_contract(artifact, *args, material_layers=layers)
+    assert pbr["ok"] is False
+    assert report["ok"] is False
+    assert "glb_clearcoat_not_allowed" in {error["code"] for error in pbr["errors"]}
+    assert "glb_clearcoat_not_allowed" in _clearcoat_error_codes(report)
+
+
+def test_undeclared_zero_strength_and_extension_name_are_not_effective_clearcoat(tmp_path):
+    contract = contract_module()
+    module = glb_verify()
+    artifact, assets = _pbr_carton_artifact(module, contract, tmp_path)
+    layers = _none_layers(contract)
+    args = (assets, {"width": 30, "depth": 20, "height": 50}, 0.5, [0.7, 0.7, 0.7, 1.0])
+    _strip_clearcoat(artifact)
+    assert module.compare_glb_artifact_contract(artifact, *args, material_layers=layers)["ok"]
+    _apply_clearcoat(artifact, used=True)
+    assert module.compare_glb_pbr_capability(artifact, layers)["ok"]
+    assert module.compare_glb_artifact_contract(artifact, *args, material_layers=layers)["ok"]
+    _apply_clearcoat(artifact, faces=True, core=True, factor=0.0)
+    pbr = module.compare_glb_pbr_capability(artifact, layers)
+    report = module.compare_glb_artifact_contract(artifact, *args, material_layers=layers)
+    assert pbr["ok"], pbr
+    assert report["ok"], report
+    assert pbr["glb_observed"]["clearcoat"] is False
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"clearcoatFactor": 1.0, "clearcoatRoughnessFactor": None},
+        {"clearcoatFactor": 1.0, "clearcoatRoughnessFactor": "0.08"},
+        {"clearcoatFactor": 1.0, "clearcoatRoughnessFactor": False},
+        {"clearcoatFactor": "1.0", "clearcoatRoughnessFactor": 0.08},
+    ],
+)
+def test_undeclared_positive_clearcoat_is_rejected_when_roughness_or_weight_is_invalid(tmp_path, payload):
+    contract = contract_module()
+    module = glb_verify()
+    artifact, assets = _pbr_carton_artifact(module, contract, tmp_path)
+    layers = _none_layers(contract)
+    args = (assets, {"width": 30, "depth": 20, "height": 50}, 0.5, [0.7, 0.7, 0.7, 1.0])
+    _strip_clearcoat(artifact)
+    artifact.document["materials"][0]["extensions"] = {"KHR_materials_clearcoat": dict(payload)}
+    artifact.document["extensionsUsed"] = ["KHR_materials_clearcoat"]
+    pbr = module.compare_glb_pbr_capability(artifact, layers)
+    report = module.compare_glb_artifact_contract(artifact, *args, material_layers=layers)
+    assert pbr["ok"] is False, pbr
+    assert report["ok"] is False, report
+    assert "glb_clearcoat_not_allowed" in {error["code"] for error in pbr["errors"]}
+    assert "glb_clearcoat_not_allowed" in _clearcoat_error_codes(report)
+    assert not any(item.get("channel") == "coat" for item in pbr.get("differences") or [])
+
+
+def test_pbr_rejects_partial_or_core_only_undeclared_effective_clearcoat(tmp_path):
+    contract = contract_module()
+    module = glb_verify()
+    artifact, _assets = _pbr_carton_artifact(module, contract, tmp_path)
+    layers = _none_layers(contract)
+    _strip_clearcoat(artifact)
+    face = artifact.document["materials"][0]
+    face["extensions"] = {
+        "KHR_materials_clearcoat": {"clearcoatFactor": 0.4, "clearcoatRoughnessFactor": 0.08}
+    }
+    artifact.document["extensionsUsed"] = ["KHR_materials_clearcoat"]
+    partial = module.compare_glb_pbr_capability(artifact, layers)
+    assert partial["ok"] is False
+    assert any(error["code"] == "glb_clearcoat_not_allowed" for error in partial["errors"])
+    _strip_clearcoat(artifact)
+    _apply_clearcoat(artifact, core=True, factor=1.0)
+    core = module.compare_glb_pbr_capability(artifact, layers)
+    assert core["ok"] is False
+    assert any(error["code"] == "glb_core_clearcoat_not_allowed" for error in core["errors"])
+    assert "glb_clearcoat_not_allowed" not in {error["code"] for error in core["errors"]}
+
+
+def test_honest_still_vs_glb_degradation_rejects_actual_exported_clearcoat(tmp_path):
+    contract = contract_module()
+    module = glb_verify()
+    artifact, assets = _pbr_carton_artifact(module, contract, tmp_path)
+    layers = layers_of(
+        contract,
+        material_candidate(
+            "packshot-material-white-gloss-v1",
+            finish="overall-gloss-varnish-v1",
+            roughness=0.22,
+            extra={
+                "coat_weight": 1.0,
+                "coat_roughness": 0.08,
+                "glb_export": {
+                    "roughness": True,
+                    "clearcoat": False,
+                    "normal": True,
+                    "extensions": [],
+                },
+            },
+        )["material"],
+    )
+    present = module.compare_glb_pbr_capability(artifact, layers)
+    assert present["ok"] is False
+    assert any(error["code"] == "glb_clearcoat_not_allowed" for error in present["errors"])
+    _strip_clearcoat(artifact)
+    honest = module.compare_glb_pbr_capability(artifact, layers)
+    assert honest["ok"] is True
+    assert any(item["channel"] == "coat" for item in honest["differences"])
+    report = module.compare_glb_artifact_contract(
+        artifact,
+        assets,
+        {"width": 30, "depth": 20, "height": 50},
+        0.5,
+        [0.7, 0.7, 0.7, 1.0],
+        material_layers=layers,
+    )
+    assert report["ok"], report
+
+
+def test_artifact_gate_rejects_effective_clearcoat_when_pbr_subset_not_required(tmp_path):
+    contract = contract_module()
+    module = glb_verify()
+    artifact, assets = _runtime_artifact(module, tmp_path)
+    layers = _legacy_uncoated_layers(contract)
+    assert module._pbr_required(layers) is False
+    args = (assets, {"width": 30, "depth": 20, "height": 50}, 0.5, [1.0, 1.0, 1.0, 1.0])
+    clean = module.compare_glb_artifact_contract(artifact, *args, material_layers=layers)
+    assert clean["ok"], clean
+    assert "pbr" not in clean
+    _apply_clearcoat(artifact, faces=True, factor=1.0)
+    report = module.compare_glb_artifact_contract(artifact, *args, material_layers=layers)
+    assert report["ok"] is False
+    assert "glb_clearcoat_not_allowed" in _clearcoat_error_codes(report)
 
 
 def test_artwork_png_identity_is_unchanged_when_normal_is_attached(tmp_path):
