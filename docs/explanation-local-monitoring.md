@@ -29,6 +29,8 @@ Windows 服务 / 显式 HTTP URL
 
 探测器不导入告警核心，也不发送消息。核心只消费已归一化的事实；投递器只消费核心事件和脱敏草稿；runner 只负责周期、锁和 pending 交接。当前 runner 默认没有探测 URL 和 transport。
 
+`loadMonitoringConfig` 在调用方装配这四层之前读取显式绝对路径的非敏感 JSON，复用各层既有 normalizer；它不增加采样或发送步骤，也不自动发现产品设置、环境变量或密钥。省略策略使用原默认值；显式坏值失败关闭，其中 `alert.sources: []` 会被拒绝，避免空来源意外扩成全部默认来源。告警阈值同时填入 `loaded.runner`；投递策略仍需通过既有 `createQueue` 注入，runner 不会从 `loaded.runner` 推导 `loaded.delivery`。字段和装配示例见[配置参考](../scripts/monitoring/config/README.md)。
+
 ## 为什么使用 pending 交接
 
 runner 在一次原子写中保存“下一份核心状态 + 尚未入队的事件”，然后入队，再清空 pending。进程如果在中间退出，重启时只重交接 pending，不重新采样；投递层以核心已有的 `event.id` 去重。这个协议避免了最常见的“核心已前进但事件没入队”丢失窗口，同时承认它不是端到端 exactly-once。

@@ -19,7 +19,7 @@
 - `production_default`（若出现必须是 `false`）
 - `local_candidate`（布尔）
 - `alert` / `runner` / `delivery`（对象；缺省则用对应模块默认值）
-- `_comment`（可选字符串，不进入构造配置）
+- `_comment`（顶层及三个策略对象均可选字符串，不进入构造配置）
 
 - `alert`：`fail_threshold`、`recover_threshold`、`unknown_breaks_streak`、`seen_ids_limit`、`sources`
 - `runner`：`interval_ms`、`first_delay_ms`、`probe_timeout_ms`
@@ -31,6 +31,8 @@
 
 ## 用法
 
+以下为位于本目录的调用脚本片段；`samples` / `sampler` 使用合成输入，`statePath` / `stateDir` 由调用方提供本地绝对路径。
+
 ```js
 import { loadMonitoringConfig } from "./load-config.mjs";
 import { replaySamples } from "../alert-core.mjs";
@@ -40,8 +42,17 @@ import { createLocalMonitor } from "../runner/runner-core.mjs";
 const loaded = loadMonitoringConfig("/absolute/path/to/local.json");
 replaySamples(samples, { config: loaded.alert });
 createDeliveryQueue({ statePath, config: loaded.delivery }); // 省略 transport 则不发送
-createLocalMonitor({ stateDir, config: loaded.runner, sampler }); // 不调用 start 就不会托管
+createLocalMonitor({
+  stateDir,
+  config: loaded.runner,
+  sampler,
+  createQueue: (options) => createDeliveryQueue({ ...options, config: loaded.delivery }),
+}); // 不调用 start 就不会托管
 ```
+
+`loaded.alert` / `loaded.runner` / `loaded.delivery` 是分别归一化的策略。runner 不会自动应用 `loaded.delivery`；上例通过既有 `createQueue` 注入，并保留 runner 传入的状态路径、clock 和 transport。
+
+装载失败抛出 `MonitoringConfigError`，可读 `code` / `field`（也在 `details` 中）定位原因；成功结果中的 `notify`、`production_send`、`production_default` 固定为 `false`。
 
 仓库内合成示例：
 
