@@ -135,6 +135,35 @@ class ReceiptGate(unittest.TestCase):
         source.symlink_to(self.repo / "VERSION")
         self.assertEqual(self.run_receipt(), 5)
 
+    def test_hidden_and_node_modules_inputs_do_not_reject_matching_sidecar(self):
+        src = self.repo / "apps/web/ui/src"
+        (src / ".DS_Store").write_text("finder")
+        (src / ".cache").mkdir()
+        (src / ".cache" / "secret.ts").write_text("nope")
+        (src / ".hidden-link").symlink_to(src / "main.ts")
+        nested = src / "node_modules" / "pkg"
+        nested.mkdir(parents=True)
+        (nested / "index.js").write_text("dep")
+        (nested / "linked").symlink_to(src / "main.ts")
+        labels = set(receipt.build_inputs(self.repo))
+        walked = [name for name in labels if name.startswith(("src/", "public/"))]
+        self.assertIn("src/main.ts", labels)
+        self.assertNotIn("src/.DS_Store", labels)
+        self.assertTrue(walked)
+        self.assertFalse(
+            any(part == "node_modules" or part.startswith(".") for name in walked for part in name.split("/"))
+        )
+        self.assertEqual(self.run_receipt(), 0)
+
+    def test_remaining_src_symlink_still_refuses_after_hidden_prune(self):
+        src = self.repo / "apps/web/ui/src"
+        (src / ".DS_Store").write_text("finder")
+        (src / "alias.ts").symlink_to(src / "main.ts")
+        with self.assertRaises(ValueError) as raised:
+            receipt.build_inputs(self.repo)
+        self.assertEqual(str(raised.exception), "symlink_input")
+        self.assertEqual(self.run_receipt(), 5)
+
     def test_identity_change_after_preflight_refuses(self):
         self.before.write_text(json.dumps({"old_identity": True}))
         self.assertEqual(self.run_receipt(), 5)

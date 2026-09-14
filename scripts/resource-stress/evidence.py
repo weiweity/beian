@@ -116,6 +116,8 @@ def _check_result(spec: dict[str, Any], result: dict[str, Any] | None) -> list[s
             reasons.append("error_class_mismatch")
     rows = result.get("rows")
     if spec.get("class") in {"product_face", "expected_reject"}:
+        if result.get("case") != spec.get("id"):
+            reasons.append("case_mismatch")
         if not isinstance(rows, list) or not rows:
             reasons.append("missing_result")
         else:

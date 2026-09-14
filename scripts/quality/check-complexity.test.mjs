@@ -338,6 +338,12 @@ describe("repository quality policy", () => {
   it("keeps dynamic runtime entries explicit in Knip", () => {
     const config = JSON.parse(readFileSync(join(root, "knip.json"), "utf8"));
     const entries = config.workspaces["."].entry;
+    assert.ok(entries.includes("scripts/resource-stress/probes/budget-probe.mjs!"));
+    assert.ok(entries.includes("scripts/resource-stress/probes/queue-probe.mjs!"));
+    assert.ok(entries.includes("scripts/resource-stress/probes/upload-probe.mjs!"));
+    assert.ok(entries.includes("scripts/resource-stress/test_probes.mjs"));
+    assert.ok(entries.includes("scripts/resource-stress/test_ship_probes.mjs"));
+    assert.ok(!entries.some((entry) => entry.includes("resource-stress/**") || entry.includes("probes/*.mjs")));
     assert.ok(entries.includes("scripts/windows/release-dependency-check.mjs!"));
     assert.ok(entries.includes("workers/packaging/ppt/build_product_ppt.mjs!"));
     assert.ok(entries.includes("workers/packaging/illustrator/export_ai.jsx!"));

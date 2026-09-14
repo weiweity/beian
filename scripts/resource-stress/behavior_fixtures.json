@@ -16,6 +16,7 @@
       "expect_reasons_any": ["cleanup_unproven"],
       "result": {
         "ok": true,
+        "case": "over-cap",
         "expected_error": "structure_limit_exceeded",
         "rows": [{"error": "structure_limit_exceeded"}]
       }
@@ -29,6 +30,7 @@
       "result": {
         "ok": true,
         "expected_error": "structure_limit_exceeded",
+        "case": "over-cap",
         "rows": [{"error": "structure_limit_exceeded", "staging_left": null}]
       }
     },
@@ -41,6 +43,7 @@
       "result": {
         "ok": true,
         "expected_error": "structure_limit_exceeded",
+        "case": "over-cap",
         "rows": [{"error": "structure_limit_exceeded", "staging_left": false}]
       }
     },
@@ -52,6 +55,7 @@
       "expect_reasons_any": [],
       "result": {
         "ok": true,
+        "case": "over-cap",
         "expected_error": "structure_limit_exceeded",
         "rows": [{"error": "structure_limit_exceeded", "staging_left": []}]
       }
@@ -64,6 +68,7 @@
       "expect_reasons_any": ["malformed_result"],
       "result": {
         "ok": true,
+        "case": "over-cap",
         "expected_error": "structure_limit_exceeded",
         "rows": [null]
       }
@@ -82,8 +87,47 @@
       },
       "result": {
         "ok": true,
+        "case": "over-cap",
         "expected_error": "structure_limit_exceeded",
         "rows": [{"error": "structure_limit_exceeded", "staging_left": []}]
+      }
+    },
+    {
+      "id": "near_cap_with_normal_case",
+      "scene": "near-cap",
+      "judges": ["python_scene"],
+      "expect_pass": false,
+      "expect_reasons_any": ["case_mismatch"],
+      "result": {
+        "ok": true,
+        "case": "normal",
+        "expected_error": null,
+        "rows": [{"error": null, "staging_left": []}]
+      }
+    },
+    {
+      "id": "near_cap_missing_case",
+      "scene": "near-cap",
+      "judges": ["python_scene"],
+      "expect_pass": false,
+      "expect_reasons_any": ["case_mismatch"],
+      "result": {
+        "ok": true,
+        "expected_error": null,
+        "rows": [{"error": null, "staging_left": []}]
+      }
+    },
+    {
+      "id": "near_cap_matching_case",
+      "scene": "near-cap",
+      "judges": ["python_scene"],
+      "expect_pass": true,
+      "expect_reasons_any": [],
+      "result": {
+        "ok": true,
+        "case": "near-cap",
+        "expected_error": null,
+        "rows": [{"error": null, "staging_left": []}]
       }
     },
     {

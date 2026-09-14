@@ -169,6 +169,47 @@ class PlanResolution(unittest.TestCase):
         self.assertTrue(upload["argv_resolved"])
         self.assertEqual(upload["dependencies_assessed"]["tsx"], True)
 
+    def test_relative_tool_paths_survive_chdir_without_resolving_venv_links(self) -> None:
+        previous = Path.cwd()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bindir = root / "bin"
+            bindir.mkdir()
+            venv_python = bindir / "python"
+            venv_python.symlink_to(sys.executable)
+            (bindir / "node").write_text("#!/bin/sh\n", encoding="utf-8")
+            (bindir / "tsx.mjs").write_text("export {}\n", encoding="utf-8")
+            (bindir / "blender").write_text("#!/bin/sh\n", encoding="utf-8")
+            elsewhere = root / "elsewhere"
+            elsewhere.mkdir()
+            try:
+                os.chdir(root)
+                bound = plan.bindings(
+                    repo=REPO,
+                    out=root / "out",
+                    python="bin/python",
+                    node="bin/node",
+                    tsx="bin/tsx.mjs",
+                    blender="bin/blender",
+                )
+                os.chdir(elsewhere)
+                self.assertFalse((Path.cwd() / "bin" / "python").exists())
+                for key in ("python", "node", "tsx", "blender"):
+                    path = bound[key]
+                    self.assertTrue(path.is_absolute(), key)
+                    self.assertTrue(path.is_file(), key)
+                self.assertEqual(bound["python"].name, "python")
+                self.assertTrue(bound["python"].is_symlink())
+                self.assertNotEqual(bound["python"].resolve(), bound["python"])
+                upload = plan.resolve_scene("dual-upload", bound)
+                self.assertTrue(upload["ok"], upload)
+                self.assertTrue(Path(upload["argv"][0]).is_absolute())
+                self.assertTrue(Path(upload["argv"][0]).is_file())
+                self.assertIn(str(bound["node"]), upload["argv"])
+                self.assertIn(str(bound["tsx"]), upload["argv"])
+            finally:
+                os.chdir(previous)
+
     def test_missing_pymupdf_refuses_face_scene(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, patch.object(plan, "interpreter_has_module", return_value=False):
             bound = plan.bindings(repo=REPO, out=Path(tmp) / "out", python=sys.executable)
@@ -187,6 +228,7 @@ class SceneJudgment(unittest.TestCase):
         run = {"exit_code": 0, "cancelled": False, "samples": [{}], "measurement_errors": []}
         result = {
             "ok": True,
+            "case": "over-cap",
             "expected_error": "structure_limit_exceeded",
             "rows": [{"error": "structure_limit_exceeded", "staging_left": []}],
         }
@@ -208,7 +250,7 @@ class SceneJudgment(unittest.TestCase):
         wrong = evidence.judge_scene(
             spec,
             run,
-            {"ok": True, "expected_error": "other", "rows": [{"error": "other", "staging_left": []}]},
+            {"ok": True, "case": "over-cap", "expected_error": "other", "rows": [{"error": "other", "staging_left": []}]},
             {"budget_valid": False},
         )
         self.assertIn("error_class_mismatch", wrong["reasons"])
@@ -217,6 +259,7 @@ class SceneJudgment(unittest.TestCase):
             run,
             {
                 "ok": True,
+                "case": "over-cap",
                 "expected_error": "structure_limit_exceeded",
                 "rows": [{"error": "structure_limit_exceeded", "staging_left": [".tmp"]}],
             },
@@ -229,6 +272,7 @@ class SceneJudgment(unittest.TestCase):
         run = {"exit_code": 0, "cancelled": False, "samples": [{}], "measurement_errors": []}
         result = {
             "ok": True,
+            "case": "over-cap",
             "expected_error": "structure_limit_exceeded",
             "rows": [{"error": "structure_limit_exceeded", "staging_left": []}],
         }
@@ -242,7 +286,7 @@ class SceneJudgment(unittest.TestCase):
     def test_measure_command_over_cap_stub_keeps_original_metrics(self) -> None:
         stub = (
             "import json,sys; from pathlib import Path; out=Path(sys.argv[1]); "
-            "payload={'ok':True,'expected_error':'structure_limit_exceeded',"
+            "payload={'ok':True,'case':'over-cap','expected_error':'structure_limit_exceeded',"
             "'rows':[{'error':'structure_limit_exceeded','staging_left':[]}]}; "
             "(out/'result.json').write_text(json.dumps(payload))"
         )
@@ -294,7 +338,7 @@ class SceneJudgment(unittest.TestCase):
     def test_formal_budget_foreign_during_run_is_not_valid(self) -> None:
         stub = (
             "import json,sys; from pathlib import Path; out=Path(sys.argv[1]); "
-            "payload={'ok':True,'expected_error':'structure_limit_exceeded',"
+            "payload={'ok':True,'case':'over-cap','expected_error':'structure_limit_exceeded',"
             "'rows':[{'error':'structure_limit_exceeded','staging_left':[]}]}; "
             "(out/'result.json').write_text(json.dumps(payload))"
         )
@@ -417,7 +461,7 @@ class SceneJudgment(unittest.TestCase):
     def test_cli_missing_staging_fails_closed(self) -> None:
         stub = (
             "import json,sys; from pathlib import Path; "
-            "p={'ok':True,'expected_error':'structure_limit_exceeded',"
+            "p={'ok':True,'case':'over-cap','expected_error':'structure_limit_exceeded',"
             "'rows':[{'error':'structure_limit_exceeded'}]}; "
             "Path(sys.argv[1]).write_text(json.dumps(p))"
         )
@@ -456,7 +500,7 @@ class SceneJudgment(unittest.TestCase):
             stub = (
                 "import json,sys; from pathlib import Path; "
                 "Path(sys.argv[1]).write_text('0.0.0.1\\n'); "
-                "p={'ok':True,'expected_error':None,'rows':[{'error':None,'staging_left':[]}]}; "
+                "p={'ok':True,'case':'normal','expected_error':None,'rows':[{'error':None,'staging_left':[]}]}; "
                 "Path(sys.argv[2]).write_text(json.dumps(p))"
             )
             captured: dict[str, bytes] = {}
@@ -596,6 +640,47 @@ class SceneJudgment(unittest.TestCase):
             report = json.loads((out / "report.json").read_text(encoding="utf-8"))
         self.assertEqual(code, 4)
         self.assertIsNot(report.get("behavior_passed"), True)
+
+    def _write_face_result_stub(self, case: str) -> tuple[str, str]:
+        payload = {
+            "ok": True,
+            "case": case,
+            "expected_error": None,
+            "rows": [{"error": None, "staging_left": []}],
+        }
+        return (
+            "import json,sys; from pathlib import Path; "
+            "Path(sys.argv[1]).write_text(sys.argv[2])"
+        ), json.dumps(payload)
+
+    def test_cli_near_cap_rejects_normal_size_result(self) -> None:
+        stub, payload = self._write_face_result_stub("normal")
+        with tempfile.TemporaryDirectory() as tmp, patch.object(protocol, "snapshot_processes", return_value=QUIET_PS):
+            out = Path(tmp)
+            code = cli.main([
+                "measure-command", "--repo", str(REPO), "--out", str(out),
+                "--name", "near-cap", "--sample-interval", "0.05", "--",
+                sys.executable, "-c", stub, str(out / "near-cap" / "result.json"), payload,
+            ])
+            report = json.loads((out / "report.json").read_text(encoding="utf-8"))
+        self.assertEqual(code, 4)
+        self.assertFalse(report["behavior_passed"])
+        self.assertIn("case_mismatch", report["behavior"][0]["reasons"])
+
+    def test_cli_near_cap_accepts_matching_case(self) -> None:
+        stub, payload = self._write_face_result_stub("near-cap")
+        with tempfile.TemporaryDirectory() as tmp, patch.object(protocol, "snapshot_processes", return_value=QUIET_PS):
+            out = Path(tmp)
+            code = cli.main([
+                "measure-command", "--repo", str(REPO), "--out", str(out),
+                "--name", "near-cap", "--sample-interval", "0.05", "--",
+                sys.executable, "-c", stub, str(out / "near-cap" / "result.json"), payload,
+            ])
+            report = json.loads((out / "report.json").read_text(encoding="utf-8"))
+        self.assertEqual(code, 0)
+        self.assertTrue(report["behavior_passed"])
+        self.assertTrue(report["behavior"][0]["passed"])
+        self.assertNotIn("case_mismatch", report["behavior"][0]["reasons"])
 
 
 if __name__ == "__main__":

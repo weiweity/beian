@@ -113,9 +113,20 @@ def interpreter_has_module(python: Path, name: str) -> bool:
     return completed.returncode == 0
 
 
+def existing_tool_path(raw: str | Path) -> Path | None:
+    """Absolutize against the current working directory without following venv links."""
+    path = Path(raw)
+    if not str(path):
+        return None
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    path = path.absolute()
+    return path if path.is_file() else None
+
+
 def find_tsx(repo: Path, explicit: Path | None = None) -> Path | None:
     if explicit is not None:
-        return explicit if explicit.is_file() else None
+        return existing_tool_path(explicit)
     for rel in TSX_CANDIDATES:
         candidate = repo / rel
         if candidate.is_file():
@@ -125,8 +136,7 @@ def find_tsx(repo: Path, explicit: Path | None = None) -> Path | None:
 
 def resolve_executable(name: str, explicit: str | None) -> Path | None:
     if explicit:
-        path = Path(explicit)
-        return path if path.is_file() else None
+        return existing_tool_path(explicit)
     found = shutil.which(name)
     return Path(found) if found else None
 
@@ -150,17 +160,20 @@ def bindings(
         reasons.append("stale_worktree_path")
     if not repo_r.is_dir():
         reasons.append("repo_not_directory")
-    python_path = Path(python)
-    if not python_path.is_file():
+    python_path = existing_tool_path(python)
+    if python_path is None:
+        python_path = Path(python)
+        if not python_path.is_absolute():
+            python_path = Path.cwd() / python_path
+        python_path = python_path.absolute()
         reasons.append("python_not_file")
     node_path = resolve_executable("node", str(node) if node else None)
     npm_path = resolve_executable("npm", str(npm) if npm else None)
     tsx_path = find_tsx(repo_r, Path(tsx) if tsx else None)
     blender_raw = str(blender).strip() if blender else ""
-    blender_path = Path(blender_raw) if blender_raw else None
-    if blender_path is not None and not blender_path.is_file():
+    blender_path = existing_tool_path(blender_raw) if blender_raw else None
+    if blender_raw and blender_path is None:
         reasons.append("blender_not_file")
-        blender_path = None
     probe_dir = repo_r / PROBE_DIR_REL
     python_modules = {}
     if python_path.is_file():

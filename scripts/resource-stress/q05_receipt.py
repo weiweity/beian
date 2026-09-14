@@ -245,7 +245,11 @@ def build_inputs(repo: Path) -> dict[str, str | None]:
         if root.is_symlink():
             raise ValueError("symlink_input")
         for directory, dirs, names in os.walk(root, followlinks=False):
-            if any((Path(directory) / child).is_symlink() for child in dirs + names):
+            # Mirror q05Artifact.ts walkFiles: skip node_modules and dot names
+            # before symlink checks, then fail closed on remaining symlinks.
+            dirs[:] = [child for child in dirs if child != "node_modules" and not child.startswith(".")]
+            names = [child for child in names if child != "node_modules" and not child.startswith(".")]
+            if any((Path(directory) / child).is_symlink() for child in [*dirs, *names]):
                 raise ValueError("symlink_input")
             files.extend(Path(directory) / child for child in names)
     return {os.path.relpath(p, ui).replace(os.sep, "/"): sha256_file(p) for p in files
