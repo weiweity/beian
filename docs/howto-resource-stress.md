@@ -35,6 +35,14 @@
 
    矩阵列出 tall、wide、near-cap、dual-upload、blender-serial、relight、queue-drain 和失败/取消等场景，以及哪些仍未在本机执行。
 
+   解析仓库内探针 argv（不执行产品或原生应用）：
+
+   ```bash
+   python3 scripts/resource-stress/cli.py plan --repo . --out "$OUT"
+   ```
+
+   未知场景、未解析占位符或缺少 Node/tsx/显式 Blender 会失败关闭。Blender 不会从 `/Applications` 猜测，也不会因为本机已安装而启动。`synthetic-local` 仍只跑轻量合成子进程。
+
 4. 运行轻量合成套件。
 
    ```bash

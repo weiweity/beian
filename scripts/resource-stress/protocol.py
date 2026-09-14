@@ -38,9 +38,27 @@ IDENTITY_FILES = (
     "apps/web/server/src/jobs.ts",
     "apps/web/server/src/uploads.ts",
     "apps/web/server/src/renderGenerationBudget.ts",
+    "apps/web/server/src/auth.ts",
+    "apps/web/server/src/index.ts",
+    "apps/web/server/src/mockup.ts",
+    "apps/web/server/src/releaseAdmission.ts",
 )
 
-HARNESS_FILES = ("cli.py", "protocol.py", "scenarios.py", "synthetic_child.py", "evidence.py")
+HARNESS_FILES = (
+    "cli.py",
+    "protocol.py",
+    "scenarios.py",
+    "synthetic_child.py",
+    "evidence.py",
+    "plan.py",
+    "probes/__init__.py",
+    "probes/node_argv.mjs",
+    "probes/face_probe.py",
+    "probes/render_probe.py",
+    "probes/upload-probe.mjs",
+    "probes/queue-probe.mjs",
+    "probes/budget-probe.mjs",
+)
 
 OBSERVATION_LIMITS = (
     "sampled peaks are a lower bound, not an absolute peak; short spikes can miss the 200ms poll",
@@ -225,13 +243,14 @@ def collect_identity(repo: Path) -> dict[str, Any]:
     harness_dir = Path(__file__).resolve().parent
     harness_files = {name: _sha256_file(harness_dir / name) for name in HARNESS_FILES}
     missing.extend(f"harness:{name}" for name, digest in harness_files.items() if digest is None)
+    probe_files = {name: digest for name, digest in harness_files.items() if name.startswith("probes/")}
     identity = {
         "schema": SCHEMA,
         "head": head,
         "branch": branch,
         "version": version,
         "files": files,
-        "harness": {"directory": str(harness_dir), "files": harness_files},
+        "harness": {"directory": str(harness_dir), "files": harness_files, "probes": probe_files},
         "missing": missing,
         "complete": not missing,
         "platform": platform.platform(),

@@ -17,6 +17,7 @@ if str(HERE) not in sys.path:
 import protocol  # noqa: E402
 import scenarios  # noqa: E402
 import evidence  # noqa: E402
+import plan  # noqa: E402
 
 SYNTHETIC_CHILD = HERE / "synthetic_child.py"
 
@@ -76,9 +77,39 @@ def cmd_matrix(_args: argparse.Namespace) -> int:
         "scenarios": scenarios.SCENARIOS,
         "coverage_index": scenarios.coverage_index(),
         "synthetic_suite": list(scenarios.SYNTHETIC_SUITE),
-        "note": "exclusive_command is for a later exclusive window; this CLI does not start Blender/browsers",
+        "historical_disposition": plan.HISTORICAL_DISPOSITION,
+        "note": (
+            "exclusive_command still contains placeholders; "
+            "`plan` resolves argv. This command does not start Blender/browsers/probes"
+        ),
     }
     print(json.dumps(payload, indent=2, ensure_ascii=False))
+    return 0
+
+
+def _plan_bindings(args: argparse.Namespace, repo: Path, output: Path) -> dict:
+    return plan.bindings(
+        repo=repo,
+        out=output,
+        python=getattr(args, "python", None) or sys.executable,
+        node=getattr(args, "node", None),
+        npm=getattr(args, "npm", None),
+        tsx=getattr(args, "tsx", None),
+        blender=getattr(args, "blender", None) or plan.env_blender(),
+    )
+
+
+def cmd_plan(args: argparse.Namespace) -> int:
+    repo = Path(args.repo)
+    output = Path(args.out)
+    payload = plan.resolve_plan(_plan_bindings(args, repo, output), scene_id=args.scene)
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
+    if args.out_json:
+        _write_json(Path(args.out_json), payload)
+    if args.scene:
+        return 0 if payload["scenes"] and payload["scenes"][0]["ok"] else 2
+    if args.strict and not payload["all_ok"]:
+        return 2
     return 0
 
 
@@ -181,7 +212,25 @@ def cmd_measure_command(args: argparse.Namespace) -> int:
         exclusive=exclusive,
         mode="measure-command",
     )
+    metrics_path = Path(run["metrics_path"]) if run.get("metrics_path") else None
+    original_metrics = metrics_path.read_bytes() if metrics_path and metrics_path.is_file() else None
+    spec = scenarios.SCENARIO_CONTRACT.get(args.name)
+    judgment = None
+    if spec is not None:
+        spec_with_id = {**spec, "id": args.name}
+        result_payload = evidence.read_result_json(output, args.name)
+        judgment = evidence.judge_scene(spec_with_id, run, result_payload, bundle["validity"])
+        bundle["behavior"] = [judgment]
+        bundle["behavior_passed"] = judgment["passed"]
+        bundle["fail_close"] = judgment["fail_close"]
+        bundle["budget_effective"] = False
+    else:
+        bundle["budget_effective"] = False
     _persist_bundle(output, bundle)
+    if original_metrics is not None and metrics_path is not None and metrics_path.read_bytes() != original_metrics:
+        return 4
+    if judgment is not None and (judgment["fail_close"] or not judgment["passed"]):
+        return 4
     if args.formal_budget and not bundle["budget_valid"]:
         return 4
     if run.get("measurement_errors"):
@@ -217,6 +266,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             "this slice does not start Blender or browser load"
         )
         bundle["exclusive_plan"] = scenarios.SCENARIOS
+        bundle["resolved_plan"] = plan.resolve_plan(_plan_bindings(args, repo, output))
+        bundle["budget_effective"] = False
         _persist_bundle(output, bundle)
         print(json.dumps({"mode": "exclusive-plan-only", "budget_valid": False}, indent=2))
         return 0
@@ -282,6 +333,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     bundle["behavior_passed"] = len(judgments) == len(scenarios.SYNTHETIC_SUITE) and all(
         j["passed"] for j in judgments
     )
+    bundle["budget_effective"] = False
     _persist_bundle(output, bundle)
     print(json.dumps({
         "budget_valid": bundle["budget_valid"],
@@ -350,6 +402,19 @@ def build_parser() -> argparse.ArgumentParser:
     matrix = sub.add_parser("matrix", help="print old R04 matrix and exclusive-run mapping")
     matrix.set_defaults(func=cmd_matrix)
 
+    planned = sub.add_parser("plan", help="resolve matrix argv; never executes product or native apps")
+    planned.add_argument("--repo", default=".")
+    planned.add_argument("--out", required=True)
+    planned.add_argument("--python")
+    planned.add_argument("--node")
+    planned.add_argument("--npm")
+    planned.add_argument("--tsx")
+    planned.add_argument("--blender", help="explicit Blender executable; never guessed from /Applications")
+    planned.add_argument("--scene", help="resolve one scene; unknown ids fail closed")
+    planned.add_argument("--out-json", help="optional path to persist the plan JSON")
+    planned.add_argument("--strict", action="store_true", help="exit 2 if any scene is refused")
+    planned.set_defaults(func=cmd_plan)
+
     measure = sub.add_parser("measure-command", help="sample one command; keep metrics on failure")
     measure.add_argument("--repo", default=".")
     measure.add_argument("--out", required=True)
@@ -374,6 +439,11 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--process-snapshot-json")
     run.add_argument("--formal-budget", action="store_true")
     run.add_argument("--repeat", type=int, help="1–100 synthetic rounds in an exclusively new output root")
+    run.add_argument("--python")
+    run.add_argument("--node")
+    run.add_argument("--npm")
+    run.add_argument("--tsx")
+    run.add_argument("--blender", help="explicit Blender executable for exclusive plan; never guessed")
     run.set_defaults(func=cmd_run)
     return parser
 

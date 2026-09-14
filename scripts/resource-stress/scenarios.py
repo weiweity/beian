@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from typing import Any
 
-# Wrapping a product command with this CLI. Placeholders are for the later
-# exclusive window; this slice must not interpolate them into a live Blender run.
+PROBE_DIR_REL = "scripts/resource-stress/probes"
+
+# Wrapping a product command with this CLI. Placeholders are interpolated by
+# plan.py; this slice must not interpolate them into a live Blender run.
 _MEASURE = [
-    "python3",
-    "scripts/resource-stress/cli.py",
+    "{python}",
+    "-B",
+    "{repo}/scripts/resource-stress/cli.py",
     "measure-command",
     "--repo",
     "{repo}",
@@ -19,12 +22,15 @@ _MEASURE = [
     "--",
 ]
 
+EXPECTED_REJECT = {"over-cap", "failure-after-front"}
+
 
 def _wrap(name: str, inner: list[str]) -> list[str]:
     argv = [token if token != "{name}" else name for token in _MEASURE]
-    # Only actual face/render probes are product measurements. Mocked queue,
-    # busy and UI contract tests must never be promoted to resource budgets.
-    if inner is FACE or inner is RENDER:
+    # Only actual face/render probes that are budget-eligible get --formal-budget.
+    # Expected reject, mocked queue, busy and UI contract tests must never be
+    # promoted to resource budgets just because the inner command exits 0.
+    if name not in EXPECTED_REJECT and (inner is FACE or inner is RENDER):
         argv[-1:-1] = ["--formal-budget", "--workload-kind", "product"]
     return argv + inner
 
@@ -50,15 +56,48 @@ def _scene(
     }
 
 
-# Historical inner probes lived in the 2026-09-08 evidence harness, not in git.
-# Main agent later supplies {python} and {probe} (copy or rewrite of those probes).
-FACE = ["{python}", "{probe}/face_probe.py", "{repo}", "{out}/{name}", "{name}"]
-RENDER = ["{python}", "{probe}/render_probe.py", "{repo}", "{out}/{name}"]
-UPLOAD = ["node", "--import", "tsx", "{probe}/upload-probe.mjs", "{out}/{name}"]
-QUEUE = ["node", "--import", "tsx", "{probe}/queue-probe.mjs", "{out}/{name}"]
-BUDGET = ["node", "--import", "tsx", "{probe}/budget-probe.mjs", "{out}/{name}"]
-BUSY = ["npm", "run", "test", "-w", "beian-server", "--", "src/jobs.test.ts"]
-RELIGHT = ["npm", "run", "test", "-w", "beian-ui", "--", "src/mockup"]
+FACE = [
+    "{python}",
+    "-B",
+    "{repo}/" + PROBE_DIR_REL + "/face_probe.py",
+    "{repo}",
+    "{out}/{name}",
+    "{name}",
+]
+RENDER = [
+    "{python}",
+    "-B",
+    "{repo}/" + PROBE_DIR_REL + "/render_probe.py",
+    "{repo}",
+    "{out}/{name}",
+    "{blender}",
+]
+UPLOAD = [
+    "{node}",
+    "--import",
+    "{tsx}",
+    "{repo}/" + PROBE_DIR_REL + "/upload-probe.mjs",
+    "{repo}",
+    "{out}/{name}",
+]
+QUEUE = [
+    "{node}",
+    "--import",
+    "{tsx}",
+    "{repo}/" + PROBE_DIR_REL + "/queue-probe.mjs",
+    "{repo}",
+    "{out}/{name}",
+]
+BUDGET = [
+    "{node}",
+    "--import",
+    "{tsx}",
+    "{repo}/" + PROBE_DIR_REL + "/budget-probe.mjs",
+    "{repo}",
+    "{out}/{name}",
+]
+BUSY = ["{npm}", "run", "test", "-w", "beian-server", "--", "src/jobs.test.ts"]
+RELIGHT = ["{npm}", "run", "test", "-w", "beian-ui", "--", "src/mockup"]
 
 SCENARIOS: list[dict[str, Any]] = [
     _scene(
@@ -67,7 +106,7 @@ SCENARIOS: list[dict[str, Any]] = [
         this_round="not-run",
         status="unverified",
         exclusive_command=_wrap("normal", FACE),
-        notes="2026-09-08 已有合成切面观测；本轮不重跑产品切面。",
+        notes="仓库内 face_probe；本切片不执行产品切面。",
         r04="baseline-face",
     ),
     _scene(
@@ -112,7 +151,7 @@ SCENARIOS: list[dict[str, Any]] = [
         this_round="not-run",
         status="unverified",
         exclusive_command=_wrap("over-cap", FACE),
-        notes="期望 structure_limit_exceeded，无暂存遗留。",
+        notes="期望 structure_limit_exceeded，无暂存遗留。命中时探针 exit 0，不得当预算。",
         r04="max-pixels",
     ),
     _scene(
@@ -121,7 +160,7 @@ SCENARIOS: list[dict[str, Any]] = [
         this_round="not-run",
         status="unverified",
         exclusive_command=_wrap("dual-upload", UPLOAD),
-        notes="无网络/TLS/杭州吞吐含义。",
+        notes="无网络/TLS/杭州吞吐含义。本切片不跑 100MiB。",
         r04="dual-upload",
     ),
     _scene(
@@ -139,7 +178,7 @@ SCENARIOS: list[dict[str, Any]] = [
         this_round="not-run",
         status="unverified",
         exclusive_command=_wrap("blender-serial", RENDER),
-        notes="本轮禁止启动 Blender。正式独占由主 agent 串行安排。",
+        notes="必须显式给出 Blender 可执行文件。禁止猜 /Applications，不因已安装而启动。",
         r04="serial",
     ),
     _scene(
@@ -157,7 +196,7 @@ SCENARIOS: list[dict[str, Any]] = [
         this_round="not-run",
         status="unverified",
         exclusive_command=_wrap("queue-drain", QUEUE),
-        notes="旧探针为真实持久队列 + 模拟 worker，不是 Blender 耗时预算。",
+        notes="真实持久队列 + 模拟 worker，不是 Blender 耗时预算。本切片不执行。",
         r04="drain",
     ),
     _scene(
@@ -166,7 +205,7 @@ SCENARIOS: list[dict[str, Any]] = [
         this_round="harness-synthetic-only",
         status="harness-verified-synthetic",
         exclusive_command=_wrap("fail-cancel", BUDGET),
-        notes="本轮用合成子进程验证 harness 取消与收尾；产品 budget-probe 留独占窗口。不是 Windows Job Object。",
+        notes="本轮用合成子进程验证 harness 取消与收尾；产品 budget-probe 的 32MiB 是入参不是产品默认。",
         r04="fail-cancel",
     ),
     _scene(
@@ -175,7 +214,7 @@ SCENARIOS: list[dict[str, Any]] = [
         this_round="not-run",
         status="unverified",
         exclusive_command=_wrap("failure-after-front", FACE),
-        notes="旧观测 artwork_transform_invalid 且暂存清理。本轮不重跑。",
+        notes="期望 artwork_transform_invalid 且暂存清理。命中时探针 exit 0，不得当预算。",
         r04="fail-cancel",
     ),
 ]
@@ -186,6 +225,210 @@ SYNTHETIC_SUITE = (
     {"id": "synthetic-queue", "child_mode": "queue", "expect_exit": 0},
     {"id": "synthetic-cancel", "child_mode": "hang", "expect_exit": None, "cancel_after_s": 0.25},
 )
+
+FACE_DEPS = [
+    "python",
+    "pymupdf",
+    "workers/packaging/structure_v2/artwork.py",
+]
+NODE_DEPS = ["node", "tsx", "apps/web/server/src"]
+UNVERIFIED_COMMON = [
+    "formal exclusive window",
+    "Windows Job Object",
+    "Hangzhou native",
+    "real artwork L2",
+]
+
+SCENARIO_CONTRACT: dict[str, dict[str, Any]] = {
+    "normal": {
+        "class": "product_face",
+        "eligibility": "BUDGET",
+        "formal_budget_allowed": True,
+        "simulated": False,
+        "probe": "face_probe.py",
+        "expect_exit": 0,
+        "expected_error": None,
+        "requires_result": True,
+        "runtime_deps": FACE_DEPS,
+        "behavior_pass_when": "result.json ok=true and expected_error=null and staging empty",
+        "unverified": UNVERIFIED_COMMON,
+        "notes": "product face function; 32MP is not RSS",
+    },
+    "tall": {
+        "class": "product_face",
+        "eligibility": "BUDGET",
+        "formal_budget_allowed": True,
+        "simulated": False,
+        "probe": "face_probe.py",
+        "expect_exit": 0,
+        "expected_error": None,
+        "requires_result": True,
+        "runtime_deps": FACE_DEPS,
+        "behavior_pass_when": "result.json ok=true",
+        "unverified": UNVERIFIED_COMMON + ["extreme box topology"],
+        "notes": "100:1 aspect observation",
+    },
+    "wide": {
+        "class": "product_face",
+        "eligibility": "BUDGET",
+        "formal_budget_allowed": True,
+        "simulated": False,
+        "probe": "face_probe.py",
+        "expect_exit": 0,
+        "expected_error": None,
+        "requires_result": True,
+        "runtime_deps": FACE_DEPS,
+        "behavior_pass_when": "result.json ok=true",
+        "unverified": UNVERIFIED_COMMON + ["extreme box topology"],
+        "notes": "100:1 aspect observation",
+    },
+    "near-cap": {
+        "class": "product_face",
+        "eligibility": "BUDGET",
+        "formal_budget_allowed": True,
+        "simulated": False,
+        "probe": "face_probe.py",
+        "expect_exit": 0,
+        "expected_error": None,
+        "requires_result": True,
+        "runtime_deps": FACE_DEPS,
+        "behavior_pass_when": "result.json ok=true; 32MP is a pixel cap not an RSS budget",
+        "unverified": UNVERIFIED_COMMON + ["near-cap product load not run this slice"],
+        "notes": "do not run this slice",
+    },
+    "exact-cap-paper": {
+        "class": "product_face",
+        "eligibility": "BUDGET",
+        "formal_budget_allowed": True,
+        "simulated": False,
+        "probe": "face_probe.py",
+        "expect_exit": 0,
+        "expected_error": None,
+        "requires_result": True,
+        "runtime_deps": FACE_DEPS,
+        "behavior_pass_when": "result.json ok=true; paper_only branch",
+        "unverified": UNVERIFIED_COMMON + ["not complex print content"],
+        "notes": "paper_only",
+    },
+    "over-cap": {
+        "class": "expected_reject",
+        "eligibility": "NEVER",
+        "formal_budget_allowed": False,
+        "simulated": False,
+        "probe": "face_probe.py",
+        "expect_exit": 0,
+        "expected_error": "structure_limit_exceeded",
+        "requires_result": True,
+        "runtime_deps": FACE_DEPS,
+        "behavior_pass_when": "result.json ok=true and expected_error=structure_limit_exceeded and staging_left empty",
+        "unverified": UNVERIFIED_COMMON,
+        "notes": "exit 0 on expected error is behavior, never a budget",
+    },
+    "failure-after-front": {
+        "class": "expected_reject",
+        "eligibility": "NEVER",
+        "formal_budget_allowed": False,
+        "simulated": False,
+        "probe": "face_probe.py",
+        "expect_exit": 0,
+        "expected_error": "artwork_transform_invalid",
+        "requires_result": True,
+        "runtime_deps": FACE_DEPS,
+        "behavior_pass_when": "result.json ok=true and expected_error=artwork_transform_invalid and staging_left empty",
+        "unverified": UNVERIFIED_COMMON,
+        "notes": "exit 0 on expected error is behavior, never a budget",
+    },
+    "dual-upload": {
+        "class": "synthetic_observe",
+        "eligibility": "NEVER",
+        "formal_budget_allowed": False,
+        "simulated": True,
+        "probe": "upload-probe.mjs",
+        "expect_exit": 0,
+        "expected_error": None,
+        "requires_result": True,
+        "runtime_deps": NODE_DEPS + ["apps/web/server/src/uploads.ts", "apps/web/server/src/auth.ts"],
+        "behavior_pass_when": "third session 429; two streams written then discarded; slot reacquired",
+        "unverified": UNVERIFIED_COMMON + ["100MiB dual-upload not run this slice", "no TLS/Hangzhou"],
+        "notes": "in-process Hono",
+    },
+    "queue-drain": {
+        "class": "synthetic_observe",
+        "eligibility": "NEVER",
+        "formal_budget_allowed": False,
+        "simulated": True,
+        "probe": "queue-probe.mjs",
+        "expect_exit": 0,
+        "expected_error": None,
+        "requires_result": True,
+        "runtime_deps": NODE_DEPS + ["apps/web/server/src/jobs.ts", "apps/web/server/src/mockup.ts"],
+        "behavior_pass_when": "maxActive=1; drain blocked while jobs_active; ready after both succeed",
+        "unverified": UNVERIFIED_COMMON + ["200ms worker is not Blender duration"],
+        "notes": "synthetic worker",
+    },
+    "fail-cancel": {
+        "class": "cancel_observe",
+        "eligibility": "NEVER",
+        "formal_budget_allowed": False,
+        "simulated": True,
+        "probe": "budget-probe.mjs",
+        "expect_exit": 0,
+        "expected_error": None,
+        "requires_result": True,
+        "runtime_deps": NODE_DEPS + ["apps/web/server/src/renderGenerationBudget.ts"],
+        "behavior_pass_when": "success/disk-exhaustion/cancel release reservation; ownership-unknown recovered",
+        "unverified": UNVERIFIED_COMMON + ["32MiB is probe input not product default"],
+        "notes": "not Windows Job Object",
+    },
+    "illustrator-busy": {
+        "class": "simulated_l0",
+        "eligibility": "NEVER",
+        "formal_budget_allowed": False,
+        "simulated": True,
+        "probe": None,
+        "expect_exit": 0,
+        "expected_error": None,
+        "requires_result": False,
+        "runtime_deps": ["npm", "apps/web/server/src/jobs.test.ts"],
+        "behavior_pass_when": "jobs.test.ts busy does not claim; idle claims",
+        "unverified": UNVERIFIED_COMMON + ["no native Illustrator"],
+        "notes": "product L0 mock",
+    },
+    "relight": {
+        "class": "simulated_l0",
+        "eligibility": "NEVER",
+        "formal_budget_allowed": False,
+        "simulated": True,
+        "probe": None,
+        "expect_exit": 0,
+        "expected_error": None,
+        "requires_result": False,
+        "runtime_deps": ["npm", "apps/web/ui/src/mockup"],
+        "behavior_pass_when": "UI unit tests pass",
+        "unverified": UNVERIFIED_COMMON + ["fake canvas, not GPU"],
+        "notes": "product L0 mock",
+    },
+    "blender-serial": {
+        "class": "blender",
+        "eligibility": "BUDGET",
+        "formal_budget_allowed": True,
+        "simulated": False,
+        "probe": "render_probe.py",
+        "expect_exit": 0,
+        "expected_error": None,
+        "requires_result": True,
+        "runtime_deps": [
+            "python",
+            "explicit blender executable",
+            "workers/packaging/tools/render_quality_eval.py",
+            "rf00-tall-carton",
+            "rf00-wide-carton",
+        ],
+        "behavior_pass_when": "runtime_hard=pass; at most one Blender in owned tree",
+        "unverified": UNVERIFIED_COMMON + ["Blender not started this slice"],
+        "notes": "no /Applications default",
+    },
+}
 
 
 def required_r04_items() -> set[str]:
@@ -206,3 +449,7 @@ def coverage_index() -> dict[str, list[str]]:
     for scene in SCENARIOS:
         index.setdefault(scene["r04_item"], []).append(scene["id"])
     return index
+
+
+def scene_by_id(scene_id: str) -> dict[str, Any] | None:
+    return next((row for row in SCENARIOS if row["id"] == scene_id), None)

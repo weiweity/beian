@@ -42,6 +42,7 @@
 python3 scripts/resource-stress/cli.py identity --repo .
 python3 scripts/resource-stress/cli.py preflight --process-snapshot-json /tmp/ps.json
 python3 scripts/resource-stress/cli.py matrix
+python3 scripts/resource-stress/cli.py plan --repo "$REPO" --out "$OUT"
 python3 scripts/resource-stress/cli.py run --repo "$REPO" --out "$OUT" --mode synthetic-local
 python3 -B scripts/resource-stress/cli.py run --repo "$REPO" --out "$NEW_OUT" --repeat 3
 python3 scripts/resource-stress/cli.py run --repo "$REPO" --out "$OUT" --mode exclusive
@@ -53,7 +54,7 @@ python3 scripts/resource-stress/cli.py measure-command --repo "$REPO" --out "$OU
 
 ## 后续独占运行（主 agent 串行，本轮不执行）
 
-把 `{repo}` `{out}` `{python}` `{probe}` 换成独占窗口的工作树、证据目录、venv python，以及 2026-09-08 探针副本。先 `--formal-budget` 预检，有干扰就停。
+把 `{repo}` `{out}` `{python}` `{node}` `{tsx}` `{blender}` 换成独占窗口的工作树、证据目录和显式解释器。五个业务探针已在 `scripts/resource-stress/probes/`。`plan` 解析 argv，不执行。Blender 必须显式给出，禁止猜 `/Applications` 或因已安装而启动。先 `--formal-budget` 预检，有干扰就停。
 
 覆盖映射见 `cli.py matrix`。对应 R04 项：
 
@@ -73,8 +74,10 @@ python3 scripts/resource-stress/cli.py measure-command --repo "$REPO" --out "$OU
 ```bash
 python3 scripts/resource-stress/cli.py measure-command \
   --repo "$REPO" --out "$OUT" --name near-cap --formal-budget --workload-kind product -- \
-  "$PY" "$PROBE/face_probe.py" "$REPO" "$OUT/near-cap" near-cap
+  "$PY" -B "$REPO/scripts/resource-stress/probes/face_probe.py" "$REPO" "$OUT/near-cap" near-cap
 ```
+
+`over-cap` / `failure-after-front` 命中预期错误时探针 **exit 0**。必须核对 `result.json` 的 `expected_error` 与 `staging_left`；错误类别不符、缺结果或清理失败不能判行为通过。预期拒绝、模拟上传/队列、Q05 观察和 L0 模拟不得变成有效预算。下层若声称 `budget_valid=true`，保留原始 metrics/result，失败关闭，不改写原件。32MP 是像素上限；budget-probe 的 32MiB 是历史入参，都不是当前产品默认内存预算（磁盘 4096MiB / 内存 8192MiB）。
 
 ## Q05 长期复用入口（另需确认采样窗口）
 
@@ -96,7 +99,17 @@ sh scripts/resource-stress/q05_rounds.sh
 - 退出码：2 参数/未确认/输出边界；3 目录已存在；4 测量命令失败；5 预检/回执门失败。失败轮保留诊断；异常导致回执无法生成时，`receipt.err` 与 `receipt.exitcode` 为失败证据，不能宣称回执完整。
 - 两条用例的 timeout 不是整条 shell 的硬超时；本工具没有新增总超时或跨平台杀树保证。Windows 原生仍未支持/验收。
 
-13 个产品矩阵场景中的 `{probe}` 仍是计划占位符；七个历史重负载探针尚未收编，不能称 fresh checkout 已可复现完整 R04。当前新增的多轮入口只跑工具自带合成子进程。
+五个业务探针已收编到仓库内。`measure.py` / `write_report.py` 由现有 `protocol.py`、`cli.py`、`evidence.py` 替代，不复制第二套采样器。`plan` 可解析 argv；未知场景、未解析占位符、缺 Node/tsx/Blender 等必要依赖失败关闭。无法支持或本切片未授权的场景明确 `refused` / `planned-not-run`，不虚构全部可运行。`synthetic-local` 与 `--repeat` 仍只跑轻量合成子进程，不因矩阵接线启动产品负载。
+
+| 历史文件 | 处置 |
+|---|---|
+| face_probe.py | 迁入 `probes/face_probe.py` |
+| render_probe.py | 迁入 `probes/render_probe.py` |
+| upload-probe.mjs | 迁入 `probes/upload-probe.mjs` |
+| queue-probe.mjs | 迁入 `probes/queue-probe.mjs` |
+| budget-probe.mjs | 迁入 `probes/budget-probe.mjs` |
+| measure.py | 由 `protocol.py` / `cli.py` 替代 |
+| write_report.py | 由 `protocol.render_report_md` / `evidence.py` 替代 |
 
 ## 测试
 

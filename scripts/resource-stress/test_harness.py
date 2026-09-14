@@ -337,6 +337,11 @@ class MatrixAndCli(unittest.TestCase):
         self.assertIn("--formal-budget", by_id["blender-serial"])
         self.assertNotIn("--formal-budget", by_id["illustrator-busy"])
         self.assertNotIn("--formal-budget", by_id["relight"])
+        self.assertNotIn("--formal-budget", by_id["over-cap"])
+        self.assertNotIn("--formal-budget", by_id["failure-after-front"])
+        self.assertNotIn("--formal-budget", by_id["dual-upload"])
+        self.assertNotIn("{probe}/", " ".join(by_id["normal"]))
+        self.assertIn("scripts/resource-stress/probes/face_probe.py", " ".join(by_id["normal"]))
 
     def test_cli_synthetic_run_never_valid_budget(self) -> None:
         tmp = tempfile.TemporaryDirectory()
@@ -349,6 +354,10 @@ class MatrixAndCli(unittest.TestCase):
         self.assertIn("synthetic_workload", bundle["validity"]["reasons"])
         names = {item["name"] for item in bundle["commands"]}
         self.assertIn("synthetic-fail", names)
+        blob = json.dumps(bundle["commands"])
+        self.assertNotIn("face_probe.py", blob)
+        self.assertNotIn("upload-probe.mjs", blob)
+        self.assertFalse(bundle.get("budget_effective"))
         fail = next(item for item in bundle["commands"] if item["name"] == "synthetic-fail")
         self.assertEqual(fail["exit_code"], 7)
         report = (out / "REPORT.md").read_text(encoding="utf-8")
@@ -404,13 +413,20 @@ class MatrixAndCli(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         out = Path(tmp.name)
-        code = cli.main(["run", "--repo", str(REPO), "--out", str(out), "--mode", "exclusive"])
+        with patch.dict(os.environ, {"BEIAN_BLENDER": ""}, clear=False):
+            code = cli.main(["run", "--repo", str(REPO), "--out", str(out), "--mode", "exclusive"])
         self.assertEqual(code, 0)
         bundle = json.loads((out / "report.json").read_text(encoding="utf-8"))
         self.assertEqual(bundle["mode"], "exclusive-plan-only")
         self.assertFalse(bundle["budget_valid"])
         self.assertEqual(bundle["commands"], [])
         self.assertIn("blender-serial", bundle["unverified"])
+        self.assertFalse(bundle.get("budget_effective"))
+        resolved = bundle["resolved_plan"]
+        self.assertFalse(resolved["this_slice_executes_product"])
+        blender = next(row for row in resolved["scenes"] if row["id"] == "blender-serial")
+        self.assertFalse(blender["ok"])
+        self.assertIn("blender_not_specified", blender["reasons"])
 
 
 
@@ -452,6 +468,8 @@ class ReviewRegressions(unittest.TestCase):
             self.assertTrue(identity["complete"])
             self.assertEqual(identity["harness"]["directory"], str(actual_tools))
             self.assertEqual(identity["harness"]["files"]["cli.py"], "a" * 64)
+            self.assertIn("probes/face_probe.py", identity["harness"]["files"])
+            self.assertIn("probes/face_probe.py", identity["harness"]["probes"])
             self.assertTrue(all(value == "b" * 64 for value in identity["files"].values()))
 
     def test_missing_executing_harness_source_makes_identity_incomplete(self):
@@ -461,6 +479,14 @@ class ReviewRegressions(unittest.TestCase):
             identity = protocol.collect_identity(REPO)
         self.assertFalse(identity["complete"])
         self.assertIn("harness:evidence.py", identity["missing"])
+
+    def test_missing_probe_source_makes_identity_incomplete(self):
+        original = protocol._sha256_file
+        with patch.object(protocol, "_sha256_file", side_effect=lambda path:
+                          None if path.as_posix().endswith("probes/face_probe.py") else original(path)):
+            identity = protocol.collect_identity(REPO)
+        self.assertFalse(identity["complete"])
+        self.assertIn("harness:probes/face_probe.py", identity["missing"])
 
     def test_behavior_and_budget_judgments_are_distinct(self):
         for item in scenarios.SYNTHETIC_SUITE:
