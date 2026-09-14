@@ -40,6 +40,8 @@ IDENTITY_FILES = (
     "apps/web/server/src/renderGenerationBudget.ts",
 )
 
+HARNESS_FILES = ("cli.py", "protocol.py", "scenarios.py", "synthetic_child.py", "evidence.py")
+
 OBSERVATION_LIMITS = (
     "sampled peaks are a lower bound, not an absolute peak; short spikes can miss the 200ms poll",
     "process-tree RSS is a sum of each process RSS and may double-count shared pages",
@@ -219,12 +221,17 @@ def collect_identity(repo: Path) -> dict[str, Any]:
             missing.append(rel)
         else:
             files[rel] = digest
+    # --repo identifies the measured product; the executing harness may live in another checkout.
+    harness_dir = Path(__file__).resolve().parent
+    harness_files = {name: _sha256_file(harness_dir / name) for name in HARNESS_FILES}
+    missing.extend(f"harness:{name}" for name, digest in harness_files.items() if digest is None)
     identity = {
         "schema": SCHEMA,
         "head": head,
         "branch": branch,
         "version": version,
         "files": files,
+        "harness": {"directory": str(harness_dir), "files": harness_files},
         "missing": missing,
         "complete": not missing,
         "platform": platform.platform(),

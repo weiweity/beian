@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import hashlib
 import sys
 import time
 from pathlib import Path
@@ -15,6 +16,7 @@ if str(HERE) not in sys.path:
 
 import protocol  # noqa: E402
 import scenarios  # noqa: E402
+import evidence  # noqa: E402
 
 SYNTHETIC_CHILD = HERE / "synthetic_child.py"
 
@@ -189,6 +191,8 @@ def cmd_measure_command(args: argparse.Namespace) -> int:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
+    if args.repeat is not None:
+        return cmd_repeat(args)
     repo = Path(args.repo)
     output = Path(args.out)
     _outside_repo(repo, output)
@@ -231,6 +235,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         return 2 if not identity["complete"] else 3
 
     runs = []
+    judgments = []
     for item in scenarios.SYNTHETIC_SUITE:
         if item.get("cancel_after_s") is not None:
             deadline = time.monotonic() + float(item["cancel_after_s"])
@@ -256,6 +261,10 @@ def cmd_run(args: argparse.Namespace) -> int:
             cancel_check=cancel_check,
         )
         runs.append(run)
+        judgment = evidence.judge_synthetic(item, run)
+        judgments.append(judgment)
+        if not judgment["passed"]:
+            break
 
     bundle = _bundle(
         repo=repo,
@@ -267,15 +276,58 @@ def cmd_run(args: argparse.Namespace) -> int:
         exclusive=exclusive,
         mode=args.mode,
     )
+    bundle["behavior"] = judgments
+    bundle["identity_after"] = protocol.collect_identity(repo)
+    bundle["identity_unchanged"] = bundle["identity_after"] == identity
+    bundle["behavior_passed"] = len(judgments) == len(scenarios.SYNTHETIC_SUITE) and all(
+        j["passed"] for j in judgments
+    )
     _persist_bundle(output, bundle)
     print(json.dumps({
         "budget_valid": bundle["budget_valid"],
         "validity": bundle["validity"],
         "commands": bundle["commands"],
     }, indent=2))
-    if args.formal_budget and not bundle["budget_valid"]:
+    if not bundle["behavior_passed"] or not bundle["identity_unchanged"] or (args.formal_budget and not bundle["budget_valid"]):
         return 4
     return 0
+
+
+def cmd_repeat(args: argparse.Namespace) -> int:
+    output = Path(args.out).resolve()
+    _outside_repo(Path(args.repo), output)
+    try:
+        output.mkdir()  # Exclusive creation; never reuse another run's evidence root.
+    except FileExistsError:
+        print("REFUSE_EXISTING_OUTPUT", file=sys.stderr)
+        return 3
+    rounds = []
+    for number in range(1, args.repeat + 1):
+        round_dir = output / f"round{number}"
+        round_dir.mkdir()
+        one = argparse.Namespace(**vars(args) | {"repeat": None, "out": str(round_dir)})
+        code = cmd_run(one)
+        report_path = round_dir / "report.json"
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        if rounds and report["identity"] != rounds[0]["identity"]:
+            code = 4
+        rounds.append({
+            "round": number,
+            "exit_code": code,
+            "behavior_passed": report.get("behavior_passed") is True,
+            "report_path": str(report_path),
+            "identity": report["identity"],
+            "identity_unchanged": report["identity_unchanged"],
+            "report_sha256": hashlib.sha256(report_path.read_bytes()).hexdigest(),
+            "metrics": [{"path": run["metrics_path"], "sha256": hashlib.sha256(
+                Path(run["metrics_path"]).read_bytes()).hexdigest()} for run in report["runs"]],
+            "runs": report["runs"],
+        })
+        summary = evidence.summarize_rounds(rounds, args.repeat)
+        _write_json(output / "aggregate.json", summary)
+        if code != 0:
+            return code
+    return 0 if summary["behavior_passed"] else 4
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -321,6 +373,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--sample-interval", type=float, default=0.05)
     run.add_argument("--process-snapshot-json")
     run.add_argument("--formal-budget", action="store_true")
+    run.add_argument("--repeat", type=int, help="1–100 synthetic rounds in an exclusively new output root")
     run.set_defaults(func=cmd_run)
     return parser
 
@@ -328,6 +381,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.cmd == "run" and args.repeat is not None:
+        if not 1 <= args.repeat <= 100 or args.mode != "synthetic-local" or args.formal_budget:
+            parser.error("--repeat requires 1–100 rounds of non-formal synthetic-local mode")
     if args.cmd == "measure-command":
         command = list(args.command)
         if command and command[0] == "--":

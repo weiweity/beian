@@ -28,6 +28,12 @@
 
 身份缺失或预检有干扰时，`--formal-budget` 拒绝测量并仍写出报告，退出码 2（身份）或 3（干扰）。跑完仍无效则退出 4。
 
+合成套件的 `behavior_passed` 单独判定：成功/排队须退出 0，预期失败须退出 7，取消须有实际取消和退出记录；所有场景都须有采样且没有 launch/sampler error。不符立即停组、退出 4，保留已产出的 metrics，不自动重试。**预期失败/取消的行为通过不等于预算有效**。工具源码也纳入身份，单轮前后身份变化会使 CLI 非零退出。
+
+身份中的 `files` 来自 `--repo` 指定的被测产品树，`harness.directory/files` 则记录实际执行工具的目录及源码哈希；跨工作树调用不会拿目标树里的工具副本冒充执行工具。两组身份均参与前后与跨轮比较。
+
+`run --repeat N`（1–100）仅用于非正式合成套件，输出根必须尚不存在，原子新建；每轮保留 `roundN/report.json` 和原始 metrics，失败后不开始后续轮。`aggregate.json` 记录各轮退出码、身份、报告/metrics 哈希，并只对成功轮按场景输出墙钟与树 RSS 的 min/median/max，失败轮不混入统计；没有 P95/P99、GPU 或正式预算含义。部分完成时 `behavior_passed=false`。`exclusive` 仍只输出计划。
+
 ## 命令
 
 仓库根：
@@ -37,6 +43,7 @@ python3 scripts/resource-stress/cli.py identity --repo .
 python3 scripts/resource-stress/cli.py preflight --process-snapshot-json /tmp/ps.json
 python3 scripts/resource-stress/cli.py matrix
 python3 scripts/resource-stress/cli.py run --repo "$REPO" --out "$OUT" --mode synthetic-local
+python3 -B scripts/resource-stress/cli.py run --repo "$REPO" --out "$NEW_OUT" --repeat 3
 python3 scripts/resource-stress/cli.py run --repo "$REPO" --out "$OUT" --mode exclusive
 python3 scripts/resource-stress/cli.py measure-command --repo "$REPO" --out "$OUT" --name demo -- \
   python3 scripts/resource-stress/synthetic_child.py --mode success --out "$OUT/demo"
@@ -69,12 +76,34 @@ python3 scripts/resource-stress/cli.py measure-command \
   "$PY" "$PROBE/face_probe.py" "$REPO" "$OUT/near-cap" near-cap
 ```
 
+## Q05 长期复用入口（另需确认采样窗口）
+
+`q05_rounds.sh` / `q05_receipt.py` 从仓库外 2026-09-13 准备包收编，旧三轮原件不修改、不补盖新版本。预构建仍只能用 UI 的 `buildQ05ArtifactInto`，本工具不构建、不盖章、不删除产物，不替代该入口的校验。
+
+批准窗口后，操作者提供以下显式路径（此示例本身不授权采样）：
+
+```bash
+Q05_WINDOW_CONFIRMED=1 \
+Q05_WT="$REPO" Q05_PREBUILT="$PREBUILT" Q05_ROUNDS_PARENT="$NEW_OUT" \
+sh scripts/resource-stress/q05_rounds.sh
+```
+
+- `Q05_WT`、`Q05_PREBUILT`、`Q05_ROUNDS_PARENT` 必须为绝对路径；输出不能在任何已登记 worktree 或预构建目录内。输出根和每轮目录均排他新建，拒绝续写旧轮。不要手工设置标记来冒充操作者确认；标记不是资源锁或独占证明。
+- 默认三轮；`Q05_ROUND_COUNT` 可显式设为 1–100。默认单轮命令是 `q05_command.sh`：外层 measure-command 包两条既有 Playwright 长用例。`Q05_ROUND_CMD_FILE` 仅用于明确选择的替代命令/合成桩；只执行保存到当轮的命令副本。
+- 开跑前检查干净工作树、HEAD、构建输入/锁与 sidecar/磁盘 manifest；前后及跨轮核对身份和工具字节。Python 的构建输入选择对应 `q05Artifact.ts`；该 SSOT 改动时必须同步检查本工具，不能只更新一侧。锁文件身份不证明 node_modules 实装树。
+- 回执 schema v2 的 `gate.passed` 控制退出码；缺失/损坏、身份不符、11 阶段/6 样本数量不符、RSS 采样失败或夹带构建均不放行。非零即停、不重试；命令退出码与回执退出码分别保留。已有回执绝不覆盖。此门检查身份、存在性和计数，不是性能阈值评测器。
+- cache 探针不可用（包括合法离页）仍记 `not_assessed`，不是自动证明释放。用例 A 自身无身份字段，仍只能由外层回执归属。命令墙钟/树 RSS 与用例内 CDP heap/rAF 分开，不是浏览器/GPU 精确峰值。
+- 退出码：2 参数/未确认/输出边界；3 目录已存在；4 测量命令失败；5 预检/回执门失败。失败轮保留诊断；异常导致回执无法生成时，`receipt.err` 与 `receipt.exitcode` 为失败证据，不能宣称回执完整。
+- 两条用例的 timeout 不是整条 shell 的硬超时；本工具没有新增总超时或跨平台杀树保证。Windows 原生仍未支持/验收。
+
+13 个产品矩阵场景中的 `{probe}` 仍是计划占位符；七个历史重负载探针尚未收编，不能称 fresh checkout 已可复现完整 R04。当前新增的多轮入口只跑工具自带合成子进程。
+
 ## 测试
 
 不依赖精确 RSS 或严格墙钟：
 
 ```bash
-python3 scripts/resource-stress/test_harness.py -v
+python3 -B -m unittest discover -s scripts/resource-stress -p 'test_*.py' -v
 ```
 
 合成 suite 覆盖成功 / 失败 / 取消 / 父进程 SIGTERM 收尾。只管理本工具创建的进程组。
