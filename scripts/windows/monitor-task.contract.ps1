@@ -41,6 +41,8 @@ Assert-SourceContains $installer "New-ScheduledTaskTrigger -AtStartup" "AtStartu
 Assert-SourceContains $installer 'MultipleInstances = "IgnoreNew"' "IgnoreNew"
 Assert-SourceContains $installer "scripts\monitoring\host.mjs" "host entry"
 Assert-SourceContains $installer "monitor-identity.json" "out-of-tree identity"
+Assert-SourceContains $installer "UTF8Encoding `$false" "rewrite identity without UTF-8 BOM"
+Assert-SourceContains $installer "ReadAllBytes" "detect identity BOM bytes"
 Assert-SourceContains $installer "[switch]`$Uninstall" "uninstall"
 Assert-SourceOmits $installer "Stop-Service" "must not stop Windows services"
 Assert-SourceOmits $installer "beian-illustrator-agent" "must not name Illustrator agent task"

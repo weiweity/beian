@@ -46,6 +46,32 @@ if (-not (Test-Path -LiteralPath $identityPath -PathType Leaf)) {
   throw "monitor identity file is missing: $identityPath"
 }
 
+# PowerShell 5.1 Set-Content -Encoding utf8 writes a UTF-8 BOM. Node JSON.parse
+# rejects that prefix, so the scheduled task exits 2 while this installer still
+# succeeds (ConvertFrom-Json accepts BOM). Rewrite without a BOM.
+function Get-FileTextWithoutBom([string]$Path) {
+  $bytes = [System.IO.File]::ReadAllBytes($Path)
+  if ($bytes.Length -ge 3 -and $bytes[0] -eq 239 -and $bytes[1] -eq 187 -and $bytes[2] -eq 191) {
+    $enc = New-Object System.Text.UTF8Encoding $false
+    return $enc.GetString($bytes, 3, $bytes.Length - 3)
+  }
+  if ($bytes.Length -ge 2 -and $bytes[0] -eq 255 -and $bytes[1] -eq 254) {
+    $enc = New-Object System.Text.UnicodeEncoding $false, $false
+    return $enc.GetString($bytes, 2, $bytes.Length - 2)
+  }
+  $enc = New-Object System.Text.UTF8Encoding $false
+  return $enc.GetString($bytes)
+}
+
+$identityText = Get-FileTextWithoutBom $identityPath
+try {
+  $null = $identityText | ConvertFrom-Json
+} catch {
+  throw "monitor identity is not valid JSON: $identityPath"
+}
+$utf8NoBom = New-Object System.Text.UTF8Encoding $false
+[System.IO.File]::WriteAllText($identityPath, $identityText, $utf8NoBom)
+
 $stateDir = Join-Path (Join-Path $DataRoot "runtime") "monitor"
 New-Item -ItemType Directory -Force -Path $stateDir | Out-Null
 

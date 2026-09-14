@@ -754,6 +754,8 @@ describe("windows release.ps1 contract", () => {
     assert.match(monitorInstaller, /TaskName = "beian-monitor-local"/);
     assert.match(monitorInstaller, /UserId "SYSTEM"/);
     assert.match(monitorInstaller, /host\.mjs/);
+    assert.match(monitorInstaller, /UTF8Encoding \$false/);
+    assert.match(monitorInstaller, /ReadAllBytes/);
     assert.doesNotMatch(monitorInstaller, /Stop-Service/);
     assert.doesNotMatch(monitorInstaller, /beian-illustrator-agent/);
     assert.doesNotMatch(script, /install-monitor\.ps1/);
