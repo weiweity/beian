@@ -42,7 +42,7 @@ node --test scripts/monitoring/*.test.mjs
 ## 明确未做
 
 - Windows `Get-Service` / 环回或公网探测的实机验收
-- 飞书或其他通知渠道
+- 杭州计划任务须在杭州本机跑 `scripts/windows/install-monitor.ps1`，不由发版脚本自动安装。独立 bot transport 默认不允许 spawn；不读产品 `FEISHU_*`
 - 计划任务、WinSW、cloudflared 安装
 - 生产 health 路由变更
 - 端到端 exactly-once、断电耐久性、杭州实机验收
