@@ -24,7 +24,7 @@ Windows 服务 / 显式 HTTP URL
        delivery（按来源排序、有限重试、结果不明）
              │
              ▼
-       注入的 transport（当前只有 fake）
+       注入的 transport（默认 fake；飞书 bot 须显式 exec，默认不发送）
 ```
 
 探测器不导入告警核心，也不发送消息。核心只消费已归一化的事实；投递器只消费核心事件和脱敏草稿；runner 只负责周期、锁和 pending 交接。当前 runner 默认没有探测 URL 和 transport。

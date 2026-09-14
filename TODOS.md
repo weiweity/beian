@@ -2,7 +2,7 @@
 
 这是当前未完成事项的唯一清单。已完成代码和版本历史写 `CHANGELOG.md`；设计理由写 ADR；阶段证据留在对应 closeout，真实稿与输出留在 Git 外的私有证据目录。
 
-更新：2026-09-14。截至 `2026-09-14T04:05:54.577Z` 的最新已核实发布记录为 `cc74f44` / `0.28.0.1`（[PR #114](https://github.com/weiweity/beian/pull/114)、[杭州发布](https://github.com/weiweity/beian/actions/runs/34804472389)，仓库外 `docs-land-20260914-vh73em/RELEASE.md`）；这是文档与版本元数据发布。Q06.6 A 代码此前已完成发版 L1，生产候选未启用。Q01–Q04 合成补采、限定范围的人工视觉接受与 Q05 三轮 Mac 合成观察已完成，详见各主题；保留 **21 个未闭环主题（P1 10、P2 7、P3 4）**。阶段实现与验证记录随下方条目更新；历史发布证据不替代本轮本地回归或业务验收。“待确认”表示未见批准/完成证据，不替用户判断外部事项已办或未办。
+更新：2026-09-14。截至 `2026-09-14T13:51:01Z` 的最新已核实发布记录为 `7f2cf1c2d5b7adc260375234d48cced46afaa0e9` / `0.29.0.0`（[PR #115](https://github.com/weiweity/beian/pull/115) 已合入 `main`、同 SHA 的 [杭州发布](https://github.com/weiweity/beian/actions/runs/34848812422) 成功，公网 health HTTP 200、`ok=true`、`version=0.29.0.0`）。这是 Q05 回执门禁与 R04 仓内探针计划的发版 L1；默认仍只跑轻量合成，不启动 Blender/浏览器压测或双 100MiB 上传，也不冻结正式预算。Q06.6 A 代码此前已完成发版 L1，生产候选未启用。Q01–Q04 合成补采、限定范围的人工视觉接受与 Q05 三轮 Mac 合成观察已完成，详见各主题；保留 **21 个未闭环主题（P1 10、P2 7、P3 4）**。阶段实现与验证记录随下方条目更新；历史发布证据不替代本轮本地回归或业务验收。“待确认”表示未见批准/完成证据，不替用户判断外部事项已办或未办。不再重复派发 Q05 回执、R04 探针、clearcoat 修复、Q06.6 A 或监控核心。
 
 此前发布证据：[PR #102](https://github.com/weiweity/beian/pull/102)、merge `c62caed`、[hangzhou-release 34244831374](https://github.com/weiweity/beian/actions/runs/34244831374) 成功及同次公网 health `0.23.0.0`。仓库外完整记录：`~/Desktop/beian-evidence/2026-09-08-two-pr-ship/REPORT.md`。以下 R01/Q05 的已发布状态复用此证据，不代表业务验收完成。
 
@@ -20,6 +20,8 @@
 
 此前已核实发布：[PR #113](https://github.com/weiweity/beian/pull/113) 于 `2026-09-13T17:01:42Z` squash 合入 `main`，merge `51a6d0a8415aeb0eb461e2dcda7e155c77568a3a` / `0.28.0.0`。最终 PR HEAD `7e736c0903067c0af1aafca60ad5d9b61f749b17` 的 [CI 34769666930](https://github.com/weiweity/beian/actions/runs/34769666930) 两项检查成功；同 merge SHA 的 [hangzhou-release 34770336031](https://github.com/weiweity/beian/actions/runs/34770336031) 成功，`hangzhou-windows` 来源、目标 SHA/VERSION、Illustrator Session 1 与 Blender 合同冒烟已核对。`2026-09-13T17:05:01Z` 公网 health 返回 HTTP 200、`ok=true`、`version=0.28.0.0`，Q06.6 A 代码已完成发版 L1。B 生产装配、C 启用、Windows 异常/断电、正式性能预算、真实稿 L2/UAT 与登录后业务页面仍未验收；不能用合同冒烟成功代替这些证明。仓库外证据批次：`Q066-ship-20260914-Q7sMHL/RELEASE.md`。
 
+此前文档发布：[PR #114](https://github.com/weiweity/beian/pull/114) merge `cc74f44` / `0.28.0.1`；[杭州发布](https://github.com/weiweity/beian/actions/runs/34804472389) 成功，仓库外 `docs-land-20260914-vh73em/RELEASE.md`。截至 `2026-09-14T04:05:54.577Z` 核验为当时最新；现已被 `0.29.0.0` 取代。
+
 ## 状态与执行口径
 
 - **Code**：代码已交付；是否已有实现以当前 checkout 和相关 closeout 为准，不按未勾选状态重复开发。
@@ -36,14 +38,14 @@
 
 | 顺序 | 执行包 | 交付与依赖 |
 |---|---|---|
-| 已完成前置 | 主线/文档事实对齐 | 0.28.0.1 发版 L1 已核实，Q01–Q05 采证/人工接受记录已归档；继续保留 Q06 A/B/C 边界，不重复开发 R01 或 RF-10 |
-| 2 | B03：仓库归属、第二管理员与移交方案 | main 保护已启用并回读通过；用户表示已有安排，具体仓库归属、管理员账号与移交细节待补。后续修改 GitHub 设置、邀请人员或迁移仓库前分别确认 |
-| 3 | Q05/R04 采证工具收口；F02 接入准备 | 本分支已交付 Q05 回执门禁与 R04 仓内探针计划（Code/L0，未发版 L1）；独占 Blender/浏览器测量窗口仍待批准。F02 先确认渠道/接收人/托管范围，不重复实现已有核心。 |
-| 4 | Q06.4：Windows 异常路径证明（暂缓） | 用户于 2026-09-08 决定暂不准备隔离机；恢复前确认隔离环境与范围。保留杭州生产环境，不做生产故障注入；成功路径不替代异常证明 |
+| 已完成前置 | 主线/工具发版事实对齐 | 0.29.0.0 发版 L1 已核实（PR #115）。Q05/R04 采证工具已完成发版 L1；Q01–Q05 采证/人工接受记录已归档。不再重复派发 Q05 回执、R04 探针、clearcoat 修复、Q06.6 A 或监控核心。继续保留 Q06 A/B/C 边界，不重复开发 R01 或 RF-10 |
+| 2 | 并行：R04/Q05 实测准备、F02 渠道、B02/B03 资料 | 准备批次已归档。F02 渠道与测试故障/恢复已人工确认；杭州托管代码已写，待本机安装器与仓库外 identity。B02 放下。B03 归属暂缓。Q05/R04 独占窗口未开跑 |
+| 3 | A01–A04 真实样本与人工真值 | 可与上项并行准备样本和真值；实际处理另按许可与窗口执行 |
+| 4 | Q06.4：Windows 异常路径证明（暂缓） | 用户于 2026-09-08 决定暂不准备隔离机；恢复前确认隔离环境与范围。确认后再推进后续生产装配与综合验收。保留杭州生产环境，不做生产故障注入；成功路径不替代异常证明 |
 | 5 | Q06.6 B–Q06.7：生产装配候选与 RF-12 | A 隔离候选代码已发布；B 仍依赖 .4 与八点审计。默认保持关闭，综合回归和耐久性分别取证 |
 | 6 | Q06.8–Q06.9：授权发布、受控验收与 RF-13 | 发布证据齐全后按批准的样本/操作者范围验证；真实稿通过后再作业务开放或默认切换决定 |
-| 独立推进 | A01–A04 样本准备、R01 现场计划、B01/B02 资料核实 | 不必等全部渲染任务结束；代码/生产动作仍按各自范围执行 |
-| 条件触发 | R02/R03、F01–F05 | 先满足需求、证据或瓶颈条件，不提前扩范围 |
+| 独立推进 | R01 现场计划、B01 采用观察 | 不必等全部渲染任务结束；代码/生产动作仍按各自范围执行 |
+| 条件触发 | R02/R03、F01、F03/F05、B02 | 先满足需求、证据或瓶颈条件，不提前扩范围。B02 放下后，真稿出境处理仍不得开始 |
 
 RF-10–RF-13 的原始依赖见 [ADR-007 §20.7](docs/adr-007-packaging-render-fidelity.md#207-grok-可执行任务包)。下面 Q06 对执行包细分，未新增 RF 阶段。真实稿样本准备可以提前；实际调用、验收及业务开放分开。
 
@@ -89,11 +91,13 @@ RF-10–RF-13 的原始依赖见 [ADR-007 §20.7](docs/adr-007-packaging-render-
 
 - [ ] **Q05 — 端到端字体清晰度与浏览器性能**
 
-  状态：RF-08 诊断采样、RF-09 card→full/下载冻结和 RF-10 报告字段已有；2026-09-08 已整合 Grok 的浏览器性能切片，随 PR #100 合入主线，已于 0.23.0.0 发布：同尺寸画布重绘、卸载/导出释放、灯箱换代来源隔离及旧图初始尺寸处理。2026-09-13 增加 Q05 预构建测量隔离（`BEIAN_Q05_DIST`，默认仍自建构建）及 GLB「声明无 clearcoat、实际有效涂层」负向合同；二者的 Code/L0 切片已随 PR #111 / `0.26.1.0` 发布，发版 L1 证据见页首，不勾掉本主题。本机合成已采集 heap/rAF，尚非真实环境预算；Q06.9 登录后实机、字体清晰度、杭州网络及真实稿 L2/UAT 仍待验。原始证据在仓库外 `~/Documents/beian-q05-browser-perf-20260908/`，整合记录在 `~/Desktop/beian-evidence/2026-09-08-q05-f04-integration/`。
+  状态：RF-08 诊断采样、RF-09 card→full/下载冻结和 RF-10 报告字段已有；2026-09-08 已整合 Grok 的浏览器性能切片，随 PR #100 合入主线，已于 0.23.0.0 发布：同尺寸画布重绘、卸载/导出释放、灯箱换代来源隔离及旧图初始尺寸处理。2026-09-13 增加 Q05 预构建测量隔离（`BEIAN_Q05_DIST`，默认仍自建构建）及 GLB「声明无 clearcoat、实际有效涂层」负向合同；二者的 Code/L0 切片已随 PR #111 / `0.26.1.0` 发布，发版 L1 证据见上文该版本记录，不勾掉本主题。本机合成已采集 heap/rAF，尚非真实环境预算；Q06.9 登录后实机、字体清晰度、杭州网络及真实稿 L2/UAT 仍待验。原始证据在仓库外 `~/Documents/beian-q05-browser-perf-20260908/`，整合记录在 `~/Desktop/beian-evidence/2026-09-08-q05-f04-integration/`。
 
   三轮补采已完成（`2026-09-13T11:56:23Z–11:57:02Z`，`09e5823` / `0.26.1.0`，不是等待开跑）：每轮两条 Playwright 用例通过，命令退出码均 0、无重试；六份原始 JSON 哈希与身份经主 agent 复核一致，预构建模式不含 UI 构建。各轮 A 有 6 样本、B 有 11 阶段；10 阶段 cache 探针可用，离页阶段为 `not_assessed`，不证明缓存/显存释放。只接受为 Mac 合成观察，不是独占预算、性能改善、Windows 或 L2/UAT。回执身份不符仅记录不阻断，旧版不得直接用于长期复用；本轮身份已独立核验，不为此重采。仓库外验收批次：`AI3-q05-current-sampling-20260913/MAIN-ACCEPTANCE.md`。保留原采样身份，不给旧产物补盖 0.28.0.0 版本。
 
-  本地工具切片（本分支已交付 Code/L0，未发版 L1，不勾主题）：Q05 回执与轮执行器收编到 `scripts/resource-stress/`，身份/缺产物/采样故障变为非零退出、失败后不续轮；保留合法离页 `not_assessed`。仅用合成 payload 验证，没有重采浏览器、改写旧六份 JSON 或提升旧证据层级。合成验证记录：`q05-r04-evidence-gates-20260914-ABEYV5/REPORT.md`；后续评审与修复回归见 `q05-r04-review-20260914-C4co2W/REVIEW.md`。
+  本地工具切片已随 [PR #115](https://github.com/weiweity/beian/pull/115) / `0.29.0.0` 完成发版 L1（merge `7f2cf1c`，杭州发布 34848812422，公网 health `0.29.0.0`），不勾主题：Q05 回执与轮执行器已收编到 `scripts/resource-stress/`，身份/缺产物/采样故障变为非零退出、失败后不续轮；保留合法离页 `not_assessed`。仅用合成 payload 验证，没有重采浏览器、改写旧六份 JSON 或提升旧证据层级。合成验证记录：`q05-r04-evidence-gates-20260914-ABEYV5/REPORT.md`；后续评审与修复回归见 `q05-r04-review-20260914-C4co2W/REVIEW.md`。发版 L1 不等于正式性能预算、杭州网络、登录后实机或真实稿 L2/UAT；不再重做回执门禁。
+
+  2026-09-14 实测准备（未开跑）：当前 HEAD `7f2cf1c` / `0.29.0.0` 身份完整；2026-09-13 预构建与三轮观察不得补盖本版本。若获准窗口，须为该 SHA 新建 `buildQ05ArtifactInto` 预构建并设 `Q05_WINDOW_CONFIRMED=1`。准备记录：`~/Desktop/beian-evidence/closeout-prep-20260914-r04plan/REPORT.md`。
 
   1. 复用 RF-10 已交付的 generation/eval 三层字段与采样接线：每次采样记录 source/target/projected ppm、像素预算、重采样及合同身份；核验现有缺失/超预算/身份不符的失败路径，不新增公开下载 key。
   2. 测 card 可见、full 网络/解码/替换各阶段、连续切代/resize/离页的 heap 和帧预算；与 R04 共用资源测试。保存同 fixture、同机前后记录；DOM/rAF 时间不能冒充屏幕合成精确时刻。
@@ -185,7 +189,9 @@ RF-10–RF-13 的原始依赖见 [ADR-007 §20.7](docs/adr-007-packaging-render-
 
 - [ ] **R04 — 切面与渲染资源压测**
 
-  本地工具切片（本分支已交付 Code/L0，未发版 L1，不勾主题）：合成套件消费预期退出码/取消事实，异常立即停组；`--repeat` 逐轮身份与原件哈希、min/median/max 汇总，行为通过与有效预算分开。五个业务探针已收入 `scripts/resource-stress/probes/`，`measure.py`/`write_report.py` 由现有采样器替代；`plan` 把矩阵占位符解析为仓内 argv，不执行产品负载。多轮入口仍只覆盖工具自带合成套件。未启动 Blender/浏览器重采、未冻结预算。记录：`q05-r04-evidence-gates-20260914-ABEYV5/REPORT.md`；后续评审与修复回归见 `q05-r04-review-20260914-C4co2W/REVIEW.md`。
+  本地工具切片已随 [PR #115](https://github.com/weiweity/beian/pull/115) / `0.29.0.0` 完成发版 L1（merge `7f2cf1c`，杭州发布 34848812422，公网 health `0.29.0.0`），不勾主题：合成套件消费预期退出码/取消事实，异常立即停组；`--repeat` 逐轮身份与原件哈希、min/median/max 汇总，行为通过与有效预算分开。五个业务探针已收入 `scripts/resource-stress/probes/`，`measure.py`/`write_report.py` 由现有采样器替代；`plan` 把矩阵占位符解析为仓内 argv，不执行产品负载。多轮入口仍只覆盖工具自带合成套件。未启动 Blender/浏览器重采、未冻结预算。记录：`q05-r04-evidence-gates-20260914-ABEYV5/REPORT.md`；后续评审与修复回归见 `q05-r04-review-20260914-C4co2W/REVIEW.md`。发版 L1 不等于独占测量或正式预算冻结；不再重做探针收编。
+
+  2026-09-14 实测准备（未执行产品）：`identity` 完整；`preflight` `foreign_count=0`（不是独占证明）；显式 Blender `/Users/hutou/homebrew/bin/blender` 未启动。Homebrew `python3` 缺 pymupdf，切面 7 场景 refused；`apps/web/backend/.venv/bin/python` 下 13/13 `planned-not-run`。独占窗口必须用该 venv。准备记录：`~/Desktop/beian-evidence/closeout-prep-20260914-r04plan/`。
 
   状态：2026-09-08 已完成基于 `004ed374` / 0.22.0.0 的本地合成切片，覆盖极端切面、接近像素上限、双上传、队列串行/drain、预留与失败释放；Illustrator busy、部分取消/调灯场景为模拟或合同回归。报告在仓库外 `~/Desktop/beian-evidence/2026-09-08-r04-resource-stress/REPORT.md`，产品零改动。Blender 测量受外部负载干扰，不作为独占预算；仍缺独占 Blender/浏览器预算、复杂多图层与长循环、最大像素整链路、真实网络与宿主验证。Windows 原生异常按用户决定暂缓；R04 整项未完成。2026-09-09 第二阶段采证工具已随 PR #105 / `0.24.0.0` 发布：`scripts/resource-stress/` 提供身份/预检/矩阵/命令采样及轻量合成回归。整合修正空运行、失败/取消、无采样不得成为有效预算，以及父进程退出后的组内后代清理。只验证工具，不冻结预算；正式独占 Blender/浏览器测量未执行。
 
@@ -205,7 +211,7 @@ RF-10–RF-13 的原始依赖见 [ADR-007 §20.7](docs/adr-007-packaging-render-
 
 - [ ] **B02 — 真稿出境书面许可**
 
-  状态：2026-09-08 用户确认已有相关稿件交由百度 OCR / MiniMax 处理的书面许可；尚待记录私有证据位置及适用稿件范围，未读取许可原文。实际样本处理前匹配适用范围，不重复询问是否已有许可。
+  状态：2026-09-08 用户确认已有相关稿件交由百度 OCR / MiniMax 处理的书面许可；私有证据路径与适用范围仍未记录。2026-09-14 按文件名检索未见可记路径。用户决定放下、不追路径，主题不勾。未读原文或真稿。放下不等于许可已归档；A01–A04 / Q06 真实稿若需百度 OCR、MiniMax 或其他出境处理，仍须先补路径与范围，否则只做本机或停止。
 
   1. 核实适用稿件、权利人、拟用百度 OCR / MiniMax 的处理范围与是否已有书面批准，不读取或传播真稿来证明许可。
   2. 已有许可则记录私有证据位置及适用范围；缺失则提交具体外部处理用途供批准；拒绝时选择本机 OCR 或停止对应处理。
@@ -213,7 +219,9 @@ RF-10–RF-13 的原始依赖见 [ADR-007 §20.7](docs/adr-007-packaging-render-
 
 - [ ] **B03 — 公司仓 / 第二管理员与主分支保护**
 
-  状态：2026-09-14 核实为 `weiweity` 个人公仓（`visibility=public`），不是旧记录中的私仓；管理员/协作者列表仅 `weiweity` 一人。用户批准后已启用 main 传统保护，15 项回读核对通过：必须 PR，`quality` / `windows-powershell-contract` 均绑定 GitHub Actions app `15368`，strict 同步 main，管理员受约束，禁止强推/删除，线性历史及评审对话解决；暂不要求第二人批准（0 人），不设绕过名单。main SHA 未变，未借配置验证执行合并/发布或破坏性推送。仓库外证据批次：`protection-branches-20260914-n7eXoe`。首次两次请求因 API 字段组合/个人仓不接受组织字段被拒，修正请求表达后成功，未降低门禁。用户本轮确认归属/第二管理员已有安排；具体归属方式与 GitHub 账号尚待记录，没有因此邀请、迁移或变更权限。B03 整项保持开放。
+  状态：2026-09-14 核实为 `weiweity` 个人公仓（`visibility=public`），不是旧记录中的私仓；管理员/协作者列表仅 `weiweity` 一人。用户批准后已启用 main 传统保护，15 项回读核对通过：必须 PR，`quality` / `windows-powershell-contract` 均绑定 GitHub Actions app `15368`，strict 同步 main，管理员受约束，禁止强推/删除，线性历史及评审对话解决；暂不要求第二人批准（0 人），不设绕过名单。main SHA 未变，未借配置验证执行合并/发布或破坏性推送。仓库外证据批次：`protection-branches-20260914-n7eXoe`。首次两次请求因 API 字段组合/个人仓不接受组织字段被拒，修正请求表达后成功，未降低门禁。用户本轮确认归属/第二管理员已有安排；2026-09-14 决定暂缓归属，不记录第二管理员账号，不邀请、不迁移。B03 因移交细节未记仍开放，main 保护维持。
+
+  2026-09-14T13:57Z 只读回读与上述事实一致：collaborators 仍仅 `weiweity`，invitations 0，teams 0，保护字段未变。原始 JSON：`closeout-prep-20260914-r04plan/github-*.json`。未邀请、未迁移、未改保护。
 
   1. 复用上述仓库归属、管理员与主分支保护核实记录；聚焦仍待确认的公司归属、第二管理员与移交安排。
   2. 由用户确认组织仓迁移或第二管理员方案；具体设置变更、邀请人员或迁移仓库按对应授权落实，不重复启用已生效的 main 保护。
@@ -231,7 +239,9 @@ RF-10–RF-13 的原始依赖见 [ADR-007 §20.7](docs/adr-007-packaging-render-
 
 - [ ] **F02 — Tunnel / 服务掉线告警**
 
-  用户本轮确认由本人接收；渠道、可投递身份和托管范围仍待具体确认。未默认飞书，未发送真实或测试消息，未启用托管。
+  用户确认由本人接收。2026-09-14 选定渠道为**独立飞书 bot**（`--as bot`），托管目标为杭州 Windows 计划任务。经明确授权，F02 transport 一次性 `allowRealSend=true` 向本人发出测试故障和测试恢复，用户均确认飞书已收到。未走产品 `FEISHU_*`。已增加杭州托管入口 `scripts/monitoring/host.mjs` 与安装器 `scripts/windows/install-monitor.ps1`（SYSTEM、`beian-monitor-local`、不停生产服务、不改 Illustrator、不由 `release.ps1` 自动安装）。杭州本机尚未执行安装器；仓库外 `C:\supply\data\monitor-identity.json` 尚未放置。证据：`f02-test-send.json`、`f02-test-recovery.json`。
+
+  本轮交付独立 transport：`scripts/monitoring/delivery/feishu-bot-transport.mjs`。须显式绝对 `cliPath`、`ou_` 接收人和 `exec`；`createLarkCliExec()` 默认 `allowRealSend=false`。合成测试覆盖 argv、拒绝环境变量、exit 10/丢失确认/缺二进制与队列接线。Windows 托管安装和故障/恢复现场验收仍开放。
 
   配置装载切片已随 PR #112 / `0.27.0.0` 完成发版 L1（截至 `2026-09-13T13:00:29Z`，发布证据见页首）：显式绝对路径的非敏感策略装载复用既有 normalizer；显式 null、空来源数组、未知/禁止字段及非法范围均失败关闭。监控局部合成回归 157/157 通过；未装配真实 transport、接收人或 Windows 监控托管，也未发送消息。发版 L1 不等于告警服务接入，整项仍开放。
 

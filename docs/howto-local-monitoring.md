@@ -64,7 +64,21 @@
 
 ## 验证
 
-四组测试都应退出码为 0。测试使用 mock、fixture 和临时目录，不代表 Windows `Get-Service`、真实网络、飞书渠道、断电耐久或 exactly-once 已通过。当前模块只提供本地候选能力，是否部署仍由 [TODOS.md](../TODOS.md) 和发布合同决定。
+四组测试都应退出码为 0。测试使用 mock、fixture 和临时目录，不代表 Windows `Get-Service`、真实网络、飞书渠道、断电耐久或 exactly-once 已通过。当前模块只提供本地候选能力，是否部署仍由 [TODOS.md](../TODOS.md) 和发布合同决定。飞书 bot transport 的合成回归在 `scripts/monitoring/delivery/feishu-bot-transport.test.mjs`：注入假 exec，断言 argv 与结果映射，不访问网络。
+
+## 杭州计划任务（需在杭州本机执行）
+
+代码合入后，在杭州管理员 PowerShell（已提升）执行。本页不远程安装，也不停 `beian-server-8787` / cloudflared，不改 Illustrator。
+
+1. 在 `C:\supply\data\monitor-identity.json` 写入仓库外身份（模板见 `scripts/monitoring/host.identity.example.json`）。`allowRealSend` 为 true 时必须有绝对 `cliPath`（lark-cli）或独立的 `appId`/`appSecret`，不要复制产品 `settings.json`。
+2. 安装任务：
+
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File scripts\windows\install-monitor.ps1
+   ```
+
+   任务名固定 `beian-monitor-local`，SYSTEM、开机启动、Hidden、IgnoreNew。探测环回 `http://127.0.0.1:8787/api/health` 与公网 `https://www.jianghua.site/api/health`。
+3. 卸载：`install-monitor.ps1 -Uninstall`。发版脚本不会自动安装该任务。
 
 ## 故障排查
 
