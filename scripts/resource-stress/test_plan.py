@@ -490,6 +490,113 @@ class SceneJudgment(unittest.TestCase):
             self.assertEqual((out / "normal.metrics.json").read_bytes(), captured["metrics"])
             self.assertEqual((out / "normal" / "result.json").read_bytes(), captured["result"])
 
+    def test_cli_budget_unhashable_mode_fails_with_report(self) -> None:
+        payload = {
+            "ok": True,
+            "rows": [
+                {"mode": [], "cause": None, "remaining_after_release": 0},
+                {"mode": "disk-exhaustion", "cause": "disk_budget", "remaining_after_release": 0},
+                {"mode": "cancel", "cause": "cancelled", "remaining_after_release": 0},
+                {"mode": "ownership-unknown", "cause": None, "remaining_after_release": 0},
+            ],
+        }
+        stub = (
+            "import json,sys; from pathlib import Path; "
+            "Path(sys.argv[1]).write_text(sys.argv[2])"
+        )
+        captured: dict[str, bytes] = {}
+        original_measure = protocol.measure_command
+
+        def wrap_measure(name, command, **kwargs):
+            run = original_measure(name, command, **kwargs)
+            captured["metrics"] = Path(run["metrics_path"]).read_bytes()
+            captured["result"] = (Path(kwargs["output_dir"]) / name / "result.json").read_bytes()
+            return run
+
+        with tempfile.TemporaryDirectory() as tmp, patch.object(
+            protocol, "snapshot_processes", return_value=QUIET_PS
+        ), patch.object(protocol, "measure_command", side_effect=wrap_measure):
+            out = Path(tmp)
+            code = cli.main([
+                "measure-command", "--repo", str(REPO), "--out", str(out),
+                "--name", "fail-cancel", "--sample-interval", "0.05", "--",
+                sys.executable, "-c", stub, str(out / "fail-cancel" / "result.json"), json.dumps(payload),
+            ])
+            report_path = out / "report.json"
+            self.assertTrue(report_path.is_file())
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            self.assertNotEqual(code, 0)
+            self.assertFalse(report["behavior_passed"])
+            self.assertEqual((out / "fail-cancel.metrics.json").read_bytes(), captured["metrics"])
+            self.assertEqual((out / "fail-cancel" / "result.json").read_bytes(), captured["result"])
+
+    def test_generic_measure_command_failure_is_not_behavior_pass(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch.object(protocol, "snapshot_processes", return_value=QUIET_PS):
+            out = Path(tmp)
+            code = cli.main([
+                "measure-command", "--repo", str(REPO), "--out", str(out),
+                "--name", "demo", "--sample-interval", "0.05", "--",
+                sys.executable, "-c", "raise SystemExit(7)",
+            ])
+            report = json.loads((out / "report.json").read_text(encoding="utf-8"))
+        self.assertEqual(code, 7)
+        self.assertTrue(report["identity_unchanged"])
+        self.assertIsNot(report.get("behavior_passed"), True)
+        self.assertEqual(report["commands"][0]["exit_code"], 7)
+
+    def test_generic_measure_command_success_cancel_and_sampler(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch.object(protocol, "snapshot_processes", return_value=QUIET_PS):
+            out = Path(tmp)
+            ok = cli.main([
+                "measure-command", "--repo", str(REPO), "--out", str(out / "ok"),
+                "--name", "demo", "--sample-interval", "0.05", "--",
+                sys.executable, "-c", "pass",
+            ])
+            success = json.loads((out / "ok" / "report.json").read_text(encoding="utf-8"))
+        self.assertEqual(ok, 0)
+        self.assertTrue(success["identity_unchanged"])
+        self.assertTrue(success["behavior_passed"])
+
+        def fake_run(*, cancelled: bool, errors: list[str], directory: Path) -> dict:
+            metrics = directory / "demo.metrics.json"
+            metrics.write_text("{}", encoding="utf-8")
+            return {
+                "name": "demo",
+                "command": [sys.executable, "-c", "pass"],
+                "cwd": str(REPO),
+                "exit_code": 0,
+                "seconds": 0.01,
+                "cancelled": cancelled,
+                "samples": [{}],
+                "measurement_errors": errors,
+                "launch_error": None,
+                "metrics_path": str(metrics),
+            }
+
+        with tempfile.TemporaryDirectory() as tmp, patch.object(protocol, "snapshot_processes", return_value=QUIET_PS):
+            out = Path(tmp)
+            with patch.object(protocol, "measure_command", return_value=fake_run(cancelled=True, errors=[], directory=out)):
+                code = cli.main([
+                    "measure-command", "--repo", str(REPO), "--out", str(out),
+                    "--name", "demo", "--", sys.executable, "-c", "pass",
+                ])
+            report = json.loads((out / "report.json").read_text(encoding="utf-8"))
+        self.assertEqual(code, 4)
+        self.assertIsNot(report.get("behavior_passed"), True)
+
+        with tempfile.TemporaryDirectory() as tmp, patch.object(protocol, "snapshot_processes", return_value=QUIET_PS):
+            out = Path(tmp)
+            with patch.object(
+                protocol, "measure_command", return_value=fake_run(cancelled=False, errors=["ps failed"], directory=out)
+            ):
+                code = cli.main([
+                    "measure-command", "--repo", str(REPO), "--out", str(out),
+                    "--name", "demo", "--", sys.executable, "-c", "pass",
+                ])
+            report = json.loads((out / "report.json").read_text(encoding="utf-8"))
+        self.assertEqual(code, 4)
+        self.assertIsNot(report.get("behavior_passed"), True)
+
 
 if __name__ == "__main__":
     unittest.main()

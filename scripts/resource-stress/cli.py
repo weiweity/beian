@@ -223,20 +223,36 @@ def cmd_measure_command(args: argparse.Namespace) -> int:
     if spec is not None:
         spec_with_id = {**spec, "id": args.name}
         result_payload = evidence.read_result_json(output, args.name)
-        judgment = evidence.judge_scene(spec_with_id, run, result_payload, bundle["validity"])
+        try:
+            judgment = evidence.judge_scene(spec_with_id, run, result_payload, bundle["validity"])
+        except (TypeError, AttributeError, ValueError) as exc:
+            judgment = {
+                "scenario": args.name,
+                "passed": False,
+                "behavior_ok": False,
+                "reasons": ["malformed_result"],
+                "fail_close": [],
+                "budget_effective": False,
+                "judge_error": type(exc).__name__,
+            }
         bundle["behavior"] = [judgment]
         bundle["behavior_passed"] = judgment["passed"] is True and identity_unchanged is True
         bundle["fail_close"] = judgment["fail_close"]
         bundle["budget_effective"] = False
     else:
         bundle["budget_effective"] = False
-        bundle["behavior_passed"] = identity_unchanged is True
+        bundle["behavior_passed"] = evidence.generic_measure_behavior_passed(run, identity_unchanged)
     _persist_bundle(output, bundle)
     if original_metrics is not None and metrics_path is not None and metrics_path.read_bytes() != original_metrics:
         return 4
     if identity_unchanged is not True:
         return 4
     if judgment is not None and (judgment["fail_close"] or not judgment["passed"]):
+        return 4
+    if spec is None and bundle.get("behavior_passed") is not True:
+        code = run.get("exit_code")
+        if type(code) is int and code != 0:
+            return 128 - code if code < 0 else code
         return 4
     if args.formal_budget and not bundle["budget_valid"]:
         return 4

@@ -141,7 +141,7 @@ def _check_result(spec: dict[str, Any], result: dict[str, Any] | None) -> list[s
             if "slot-reacquired-and-released" not in phases or "slot-reacquired-release-failed" in phases:
                 reasons.append("cleanup_failed")
     if spec.get("probe") == "queue-probe.mjs":
-        if result.get("maxActive") != 1:
+        if type(result.get("maxActive")) is not int or result.get("maxActive") != 1:
             reasons.append("error_class_mismatch")
         events = result.get("events")
         if not isinstance(events, list) or not events:
@@ -159,13 +159,17 @@ def _check_result(spec: dict[str, Any], result: dict[str, Any] | None) -> list[s
             reasons.append("missing_result")
         else:
             seen: list[Any] = []
-            by_mode: dict[Any, dict[str, Any]] = {}
+            by_mode: dict[str, dict[str, Any]] = {}
             for row in rows:
                 if not isinstance(row, dict):
                     reasons.append("malformed_result")
                     continue
-                seen.append(row.get("mode"))
-                by_mode[row.get("mode")] = row
+                mode = row.get("mode")
+                if type(mode) is not str or mode not in required:
+                    reasons.append("error_class_mismatch")
+                else:
+                    seen.append(mode)
+                    by_mode[mode] = row
                 reasons.extend(
                     remaining_after_release_reasons(
                         row["remaining_after_release"] if "remaining_after_release" in row else None
@@ -178,10 +182,28 @@ def _check_result(spec: dict[str, Any], result: dict[str, Any] | None) -> list[s
             if by_mode.get("cancel", {}).get("cause") != "cancelled":
                 reasons.append("error_class_mismatch")
     if spec.get("probe") == "render_probe.py":
-        layers = result.get("quality_layers") or {}
-        if not isinstance(layers, dict) or layers.get("runtime_hard", {}).get("status") != "pass":
+        layers = result.get("quality_layers")
+        runtime = layers.get("runtime_hard") if isinstance(layers, dict) else None
+        if not isinstance(runtime, dict) or runtime.get("status") != "pass":
             reasons.append("error_class_mismatch")
     return list(dict.fromkeys(reasons))
+
+
+def generic_measure_behavior_passed(run: dict[str, Any], identity_unchanged: bool) -> bool:
+    """Observed success for a measure-command with no scene contract. Identity is not enough."""
+    if identity_unchanged is not True:
+        return False
+    if run.get("cancelled") is True:
+        return False
+    if run.get("launch_error"):
+        return False
+    if run.get("measurement_errors"):
+        return False
+    if not isinstance(run.get("samples"), list) or not run["samples"]:
+        return False
+    if type(run.get("exit_code")) is not int or run.get("exit_code") != 0:
+        return False
+    return True
 
 
 def judge_scene(

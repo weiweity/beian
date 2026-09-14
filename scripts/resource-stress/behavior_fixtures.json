@@ -177,6 +177,48 @@
           {"phase": "slot-reacquired-release-failed", "status": 500}
         ]
       }
+    },
+    {
+      "id": "budget_mode_array",
+      "scene": "fail-cancel",
+      "judges": ["python_scene", "budget"],
+      "expect_pass": false,
+      "expect_reasons_any": ["error_class_mismatch", "malformed_result"],
+      "result": {
+        "ok": true,
+        "rows": [
+          {"mode": [], "cause": null, "remaining_after_release": 0},
+          {"mode": "disk-exhaustion", "cause": "disk_budget", "remaining_after_release": 0},
+          {"mode": "cancel", "cause": "cancelled", "remaining_after_release": 0},
+          {"mode": "ownership-unknown", "cause": null, "remaining_after_release": 0}
+        ]
+      }
+    },
+    {
+      "id": "queue_boolean_maxActive",
+      "scene": "queue-drain",
+      "judges": ["python_scene", "queue"],
+      "expect_pass": false,
+      "expect_reasons_any": ["error_class_mismatch"],
+      "result": {
+        "ok": true,
+        "maxActive": true,
+        "events": [
+          {"phase": "drain-during", "readiness": {"ready": false}},
+          {"phase": "drain-after", "readiness": {"ready": true}}
+        ]
+      }
+    },
+    {
+      "id": "render_runtime_hard_null",
+      "scene": "blender-serial",
+      "judges": ["python_scene"],
+      "expect_pass": false,
+      "expect_reasons_any": ["error_class_mismatch", "malformed_result"],
+      "result": {
+        "ok": true,
+        "quality_layers": {"runtime_hard": null}
+      }
     }
   ]
 }

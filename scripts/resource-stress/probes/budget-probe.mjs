@@ -26,8 +26,11 @@ export function judgeBudgetResult(result) {
         reasons.push('malformed_result');
         continue;
       }
-      seen.push(row.mode);
-      byMode[row.mode] = row;
+      if (typeof row.mode !== 'string') reasons.push('error_class_mismatch');
+      else {
+        seen.push(row.mode);
+        byMode[row.mode] = row;
+      }
       if (typeof row.remaining_after_release !== 'number') reasons.push('cleanup_unproven');
       else if (row.remaining_after_release !== 0) reasons.push('cleanup_failed');
     }

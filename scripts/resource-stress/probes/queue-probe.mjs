@@ -10,7 +10,7 @@ export function parseArgs(argv = process.argv, env = process.env) {
 export function judgeQueueResult(result) {
   const reasons = [];
   if (!result || result.ok !== true) reasons.push('result_not_ok');
-  if (result?.maxActive !== 1) reasons.push('error_class_mismatch');
+  if (!Number.isInteger(result?.maxActive) || result.maxActive !== 1) reasons.push('error_class_mismatch');
   const events = result?.events;
   if (!Array.isArray(events) || !events.length) reasons.push('missing_result');
   else {
