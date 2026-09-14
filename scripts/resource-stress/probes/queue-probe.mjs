@@ -11,7 +11,16 @@ export function judgeQueueResult(result) {
   const reasons = [];
   if (!result || result.ok !== true) reasons.push('result_not_ok');
   if (result?.maxActive !== 1) reasons.push('error_class_mismatch');
-  if (!Array.isArray(result?.events) || !result.events.length) reasons.push('missing_result');
+  const events = result?.events;
+  if (!Array.isArray(events) || !events.length) reasons.push('missing_result');
+  else {
+    const during = events.find((row) => row && row.phase === 'drain-during');
+    const after = events.find((row) => row && row.phase === 'drain-after');
+    if (!during || !after) reasons.push('missing_result');
+    else if (during.readiness?.ready !== false || after.readiness?.ready !== true) {
+      reasons.push('drain_inconsistent');
+    }
+  }
   return {ok: reasons.length === 0, reasons, budget_effective: false};
 }
 

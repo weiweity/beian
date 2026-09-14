@@ -99,7 +99,7 @@ sh scripts/resource-stress/q05_rounds.sh
 - 退出码：2 参数/未确认/输出边界；3 目录已存在；4 测量命令失败；5 预检/回执门失败。失败轮保留诊断；异常导致回执无法生成时，`receipt.err` 与 `receipt.exitcode` 为失败证据，不能宣称回执完整。
 - 两条用例的 timeout 不是整条 shell 的硬超时；本工具没有新增总超时或跨平台杀树保证。Windows 原生仍未支持/验收。
 
-五个业务探针已收编到仓库内。`measure.py` / `write_report.py` 由现有 `protocol.py`、`cli.py`、`evidence.py` 替代，不复制第二套采样器。`plan` 可解析 argv；未知场景、未解析占位符、缺 Node/tsx/Blender 等必要依赖失败关闭。无法支持或本切片未授权的场景明确 `refused` / `planned-not-run`，不虚构全部可运行。`synthetic-local` 与 `--repeat` 仍只跑轻量合成子进程，不因矩阵接线启动产品负载。
+五个业务探针已收编到仓库内。`measure.py` / `write_report.py` 由现有 `protocol.py`、`cli.py`、`evidence.py` 替代，不复制第二套采样器。`plan` 把 argv 解析与依赖评估分开记录：`argv_resolved` 表示占位符已填完；所选 Python 用 `importlib.util.find_spec('pymupdf')` 做轻量检查（不 import 产品、不启动 Blender）。缺 pymupdf / Node / tsx / 显式 Blender 时该场景 `ok=false` / `refused`。`dependencies_assessed` 只覆盖这些门，不声称全部运行时依赖已验证。无法支持或本切片未授权的场景明确拒绝，不虚构全部可运行。`synthetic-local` 与 `--repeat` 仍只跑轻量合成子进程，不因矩阵接线启动产品负载。`measure-command` 在产品矩阵路径上核对运行前后产品与执行工具身份；漂移失败关闭，不回写原件。
 
 | 历史文件 | 处置 |
 |---|---|

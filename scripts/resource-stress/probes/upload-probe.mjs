@@ -17,15 +17,17 @@ export function judgeUploadResult(result) {
   const log = result?.log;
   if (!Array.isArray(log) || !log.length) reasons.push('missing_result');
   else {
-    const phases = log.map((row) => row.phase);
+    const phases = log.filter((row) => row && typeof row === 'object').map((row) => row.phase);
     if (!phases.includes('two-reserved-third-429')) reasons.push('error_class_mismatch');
     if (!phases.includes('both-discarded')) reasons.push('cleanup_failed');
-    if (!phases.includes('slot-reacquired-and-released')) reasons.push('cleanup_failed');
+    if (!phases.includes('slot-reacquired-and-released') || phases.includes('slot-reacquired-release-failed')) {
+      reasons.push('cleanup_failed');
+    }
   }
   return {ok: reasons.length === 0, reasons, budget_effective: false};
 }
 
-export async function runUploadProbe({repo, out, streamBytes = HISTORICAL_STREAM_BYTES, request}) {
+export async function runUploadProbe({repo, out, streamBytes = HISTORICAL_STREAM_BYTES, request, issueSession}) {
   mkdirSync(out, {recursive: true});
   process.env.VITEST = '1';
   process.env.WB_DATA_DIR = join(out, 'data');
@@ -37,8 +39,8 @@ export async function runUploadProbe({repo, out, streamBytes = HISTORICAL_STREAM
     const {app} = await import(base + 'index.ts');
     appRequest = app.request.bind(app);
   }
-  const {issueSessionForTest} = await import(base + 'auth.ts');
-  const sess = issueSessionForTest('R04 synthetic', 'admin', 'ou_r04_synthetic');
+  const issue = issueSession || (await import(base + 'auth.ts')).issueSessionForTest;
+  const sess = issue('R04 synthetic', 'admin', 'ou_r04_synthetic');
   const headers = {authorization: `Bearer ${sess.token}`};
   const log = [];
   const start = performance.now();
@@ -98,8 +100,13 @@ export async function runUploadProbe({repo, out, streamBytes = HISTORICAL_STREAM
   record('both-discarded');
   const again = await create(2);
   assert.equal(again.status, 200);
-  await appRequest(`/api/uploads/${(await again.json()).upload.id}`, {method: 'DELETE', headers});
-  record('slot-reacquired-and-released');
+  const againId = (await again.json()).upload.id;
+  const finalDelete = await appRequest(`/api/uploads/${againId}`, {method: 'DELETE', headers});
+  if (finalDelete.status !== 200) {
+    record('slot-reacquired-release-failed', {status: finalDelete.status});
+  } else {
+    record('slot-reacquired-and-released');
+  }
   const result = {
     ok: true,
     mode: 'in-process Hono real filesystem; synthetic byte stream, no network/native parsing',

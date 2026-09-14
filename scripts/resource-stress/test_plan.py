@@ -19,10 +19,14 @@ if str(HERE) not in sys.path:
 import cli  # noqa: E402
 import evidence  # noqa: E402
 import plan  # noqa: E402
+import protocol  # noqa: E402
 import scenarios  # noqa: E402
 from probes import face_probe, render_probe  # noqa: E402
 
 REPO = HERE.parents[1]
+FIXTURES = json.loads((HERE / "behavior_fixtures.json").read_text(encoding="utf-8"))
+QUIET_PS = [{"pid": 1, "ppid": 0, "rss_bytes": 1024, "cpu": 0.0, "comm": "init"}]
+FOREIGN_PS = QUIET_PS + [{"pid": 999999, "ppid": 1, "rss_bytes": 1024, "cpu": 80.0, "comm": "node"}]
 
 
 def _clean_env() -> dict[str, str]:
@@ -73,6 +77,11 @@ class DispositionAndImport(unittest.TestCase):
 
 
 class PlanResolution(unittest.TestCase):
+    def setUp(self) -> None:
+        self._pymupdf = patch.object(plan, "interpreter_has_module", return_value=True)
+        self._pymupdf.start()
+        self.addCleanup(self._pymupdf.stop)
+
     def test_unknown_scene_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             bound = _bound(Path(tmp))
@@ -140,13 +149,36 @@ class PlanResolution(unittest.TestCase):
         self.assertIn("no Mac /Applications default", render_help.stderr + render_help.stdout)
 
     def test_missing_tsx_refuses_node_scenes_only(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory() as tmp, patch.object(plan, "find_tsx", return_value=None):
             bound = plan.bindings(repo=REPO, out=Path(tmp) / "out", python=sys.executable, node=sys.executable)
             upload = plan.resolve_scene("dual-upload", bound)
             normal = plan.resolve_scene("normal", bound)
         self.assertFalse(upload["ok"])
         self.assertIn("missing_tsx", upload["reasons"])
         self.assertTrue(normal["ok"], normal)
+
+    def test_present_tsx_resolves_node_scene_argv(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dummy = Path(tmp) / "tsx.mjs"
+            dummy.write_text("export {}\n", encoding="utf-8")
+            bound = plan.bindings(
+                repo=REPO, out=Path(tmp) / "out", python=sys.executable, node=sys.executable, tsx=dummy
+            )
+            upload = plan.resolve_scene("dual-upload", bound)
+        self.assertTrue(upload["ok"], upload)
+        self.assertTrue(upload["argv_resolved"])
+        self.assertEqual(upload["dependencies_assessed"]["tsx"], True)
+
+    def test_missing_pymupdf_refuses_face_scene(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch.object(plan, "interpreter_has_module", return_value=False):
+            bound = plan.bindings(repo=REPO, out=Path(tmp) / "out", python=sys.executable)
+            row = plan.resolve_scene("over-cap", bound)
+        self.assertFalse(row["ok"])
+        self.assertIn("missing_pymupdf", row["reasons"])
+        self.assertEqual(row["status"], "refused")
+        self.assertEqual(row["dependencies_assessed"]["pymupdf"], False)
+        self.assertTrue(row["argv_resolved"])
+        self.assertIsNone(row["argv"])
 
 
 class SceneJudgment(unittest.TestCase):
@@ -214,10 +246,19 @@ class SceneJudgment(unittest.TestCase):
             "'rows':[{'error':'structure_limit_exceeded','staging_left':[]}]}; "
             "(out/'result.json').write_text(json.dumps(payload))"
         )
-        with tempfile.TemporaryDirectory() as tmp:
+        captured: dict[str, bytes] = {}
+        original_measure = protocol.measure_command
+
+        def wrap_measure(name, command, **kwargs):
+            run = original_measure(name, command, **kwargs)
+            captured["metrics"] = Path(run["metrics_path"]).read_bytes()
+            captured["result"] = (Path(kwargs["output_dir"]) / name / "result.json").read_bytes()
+            return run
+
+        with tempfile.TemporaryDirectory() as tmp, patch.object(
+            protocol, "snapshot_processes", return_value=QUIET_PS
+        ), patch.object(protocol, "measure_command", side_effect=wrap_measure):
             out = Path(tmp)
-            snapshot = out / "snap.json"
-            snapshot.write_text(json.dumps([{"pid": 1, "ppid": 0, "rss_bytes": 1024, "cpu": 0.0, "comm": "init"}]))
             code = cli.main([
                 "measure-command",
                 "--repo",
@@ -229,8 +270,6 @@ class SceneJudgment(unittest.TestCase):
                 "--formal-budget",
                 "--workload-kind",
                 "product",
-                "--process-snapshot-json",
-                str(snapshot),
                 "--sample-interval",
                 "0.05",
                 "--",
@@ -240,16 +279,43 @@ class SceneJudgment(unittest.TestCase):
                 str(out / "ev" / "over-cap"),
             ])
             metrics = out / "ev" / "over-cap.metrics.json"
-            original = metrics.read_bytes()
+            result_path = out / "ev" / "over-cap" / "result.json"
             report = json.loads((out / "ev" / "report.json").read_text(encoding="utf-8"))
-            result = json.loads((out / "ev" / "over-cap" / "result.json").read_text(encoding="utf-8"))
+            result = json.loads(result_path.read_text(encoding="utf-8"))
             self.assertEqual(code, 4)
             self.assertTrue(report["validity"]["budget_valid"])
             self.assertEqual(report["fail_close"], ["tool_claimed_valid_on_never_class"])
             self.assertFalse(report["budget_effective"])
             self.assertTrue(report["behavior"][0]["behavior_ok"])
-            self.assertEqual(metrics.read_bytes(), original)
+            self.assertEqual(metrics.read_bytes(), captured["metrics"])
+            self.assertEqual(result_path.read_bytes(), captured["result"])
             self.assertEqual(result["expected_error"], "structure_limit_exceeded")
+
+    def test_formal_budget_foreign_during_run_is_not_valid(self) -> None:
+        stub = (
+            "import json,sys; from pathlib import Path; out=Path(sys.argv[1]); "
+            "payload={'ok':True,'expected_error':'structure_limit_exceeded',"
+            "'rows':[{'error':'structure_limit_exceeded','staging_left':[]}]}; "
+            "(out/'result.json').write_text(json.dumps(payload))"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            snapshot = out / "snap.json"
+            snapshot.write_text(json.dumps(QUIET_PS), encoding="utf-8")
+            with patch.object(protocol, "snapshot_processes", return_value=FOREIGN_PS):
+                code = cli.main([
+                    "measure-command",
+                    "--repo", str(REPO), "--out", str(out / "ev"), "--name", "over-cap",
+                    "--formal-budget", "--workload-kind", "product",
+                    "--process-snapshot-json", str(snapshot),
+                    "--sample-interval", "0.05", "--",
+                    sys.executable, "-c", stub, str(out / "ev" / "over-cap"),
+                ])
+            report = json.loads((out / "ev" / "report.json").read_text(encoding="utf-8"))
+            self.assertEqual(code, 4)
+            self.assertFalse(report["validity"]["budget_valid"])
+            self.assertIn("foreign_load_during_run", report["validity"]["reasons"])
+            self.assertFalse(report["budget_effective"])
 
     def test_measure_command_missing_result_fails_and_stops(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -321,6 +387,108 @@ class SceneJudgment(unittest.TestCase):
         with self.assertRaises(SystemExit) as raised:
             face_probe.parse_args([str(REPO), "/tmp/x", "not-a-case"])
         self.assertIn("unknown face case", str(raised.exception))
+
+    def test_shared_behavior_fixtures(self) -> None:
+        for case in FIXTURES["cases"]:
+            with self.subTest(case["id"]):
+                if "python_scene" in case["judges"]:
+                    spec = {**scenarios.SCENARIO_CONTRACT[case["scene"]], "id": case["scene"]}
+                    run = case.get("run") or FIXTURES["run"]
+                    judgment = evidence.judge_scene(spec, run, case["result"], {"budget_valid": False})
+                    if case["expect_pass"]:
+                        self.assertTrue(judgment["passed"], (case["id"], judgment["reasons"]))
+                    else:
+                        self.assertFalse(judgment["passed"], case["id"])
+                        self.assertTrue(
+                            any(reason in judgment["reasons"] for reason in case["expect_reasons_any"]),
+                            (case["id"], judgment["reasons"]),
+                        )
+                if "face_rows" in case["judges"]:
+                    judged = face_probe.judge_rows("over-cap", case["result"]["rows"])
+                    if case["expect_pass"]:
+                        self.assertTrue(judged["ok"], (case["id"], judged["reasons"]))
+                    else:
+                        self.assertFalse(judged["ok"], case["id"])
+                        self.assertTrue(
+                            any(reason in judged["reasons"] for reason in case["expect_reasons_any"]),
+                            (case["id"], judged["reasons"]),
+                        )
+
+    def test_cli_missing_staging_fails_closed(self) -> None:
+        stub = (
+            "import json,sys; from pathlib import Path; "
+            "p={'ok':True,'expected_error':'structure_limit_exceeded',"
+            "'rows':[{'error':'structure_limit_exceeded'}]}; "
+            "Path(sys.argv[1]).write_text(json.dumps(p))"
+        )
+        with tempfile.TemporaryDirectory() as tmp, patch.object(protocol, "snapshot_processes", return_value=QUIET_PS):
+            out = Path(tmp)
+            code = cli.main([
+                "measure-command", "--repo", str(REPO), "--out", str(out),
+                "--name", "over-cap", "--sample-interval", "0.05", "--",
+                sys.executable, "-c", stub, str(out / "over-cap" / "result.json"),
+            ])
+            report = json.loads((out / "report.json").read_text(encoding="utf-8"))
+        self.assertEqual(code, 4)
+        self.assertFalse(report["behavior_passed"])
+        self.assertTrue(
+            any(reason in report["behavior"][0]["reasons"] for reason in ("cleanup_unproven", "missing_result")),
+            report["behavior"][0]["reasons"],
+        )
+
+    def test_measure_command_identity_drift_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "synthetic-repo"
+            repo.mkdir()
+            for rel in protocol.IDENTITY_FILES:
+                path = repo / rel
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("0.0.0.0\n" if rel == "VERSION" else "synthetic identity fixture\n")
+            def git(*args: str) -> None:
+                subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+            git("init", "-q")
+            git("add", *protocol.IDENTITY_FILES)
+            git("-c", "user.name=Acceptance Fixture", "-c", "user.email=fixture@example.invalid",
+                "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null",
+                "commit", "-qm", "synthetic identity fixture")
+            out = root / "measurement"
+            stub = (
+                "import json,sys; from pathlib import Path; "
+                "Path(sys.argv[1]).write_text('0.0.0.1\\n'); "
+                "p={'ok':True,'expected_error':None,'rows':[{'error':None,'staging_left':[]}]}; "
+                "Path(sys.argv[2]).write_text(json.dumps(p))"
+            )
+            captured: dict[str, bytes] = {}
+            original_measure = protocol.measure_command
+
+            def wrap_measure(name, command, **kwargs):
+                run = original_measure(name, command, **kwargs)
+                captured["metrics"] = Path(run["metrics_path"]).read_bytes()
+                result_path = Path(kwargs["output_dir"]) / name / "result.json"
+                if result_path.is_file():
+                    captured["result"] = result_path.read_bytes()
+                return run
+
+            with patch.object(protocol, "snapshot_processes", return_value=QUIET_PS), patch.object(
+                protocol, "measure_command", side_effect=wrap_measure
+            ):
+                code = cli.main([
+                    "measure-command", "--repo", str(repo), "--out", str(out), "--name", "normal",
+                    "--sample-interval", "0.05", "--",
+                    sys.executable, "-c", stub, str(repo / "VERSION"), str(out / "normal" / "result.json"),
+                ])
+            report = json.loads((out / "report.json").read_text(encoding="utf-8"))
+            self.assertEqual(code, 4)
+            self.assertIn("identity_after", report)
+            self.assertFalse(report["identity_unchanged"])
+            self.assertFalse(report["behavior_passed"])
+            self.assertNotEqual(report["identity"]["version"], report["identity_after"]["version"])
+            self.assertEqual(report["identity"]["version"], "0.0.0.0")
+            saved_identity = json.loads((out / "identity.json").read_text(encoding="utf-8"))
+            self.assertEqual(saved_identity["version"], "0.0.0.0")
+            self.assertEqual((out / "normal.metrics.json").read_bytes(), captured["metrics"])
+            self.assertEqual((out / "normal" / "result.json").read_bytes(), captured["result"])
 
 
 if __name__ == "__main__":

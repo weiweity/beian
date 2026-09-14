@@ -41,7 +41,7 @@
    python3 scripts/resource-stress/cli.py plan --repo . --out "$OUT"
    ```
 
-   未知场景、未解析占位符或缺少 Node/tsx/显式 Blender 会失败关闭。Blender 不会从 `/Applications` 猜测，也不会因为本机已安装而启动。`synthetic-local` 仍只跑轻量合成子进程。
+   未知场景、未解析占位符或缺少 pymupdf / Node / tsx / 显式 Blender 会失败关闭。`argv_resolved` 只表示命令已拼出；`dependencies_assessed` 是轻量门，不是全部运行时依赖已验证。Blender 不会从 `/Applications` 猜测，也不会因为本机已安装而启动。`synthetic-local` 仍只跑轻量合成子进程。
 
 4. 运行轻量合成套件。
 

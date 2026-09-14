@@ -76,6 +76,31 @@ def _check_sampling(run: dict[str, Any]) -> list[str]:
     return reasons
 
 
+def staging_left_reasons(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return ["cleanup_unproven"]
+    if value:
+        return ["cleanup_failed"]
+    return []
+
+
+def remaining_after_release_reasons(value: Any) -> list[str]:
+    if type(value) not in (int, float):
+        return ["cleanup_unproven"]
+    if value != 0:
+        return ["cleanup_failed"]
+    return []
+
+
+def _readiness_ready(event: dict[str, Any] | None) -> Any:
+    if not isinstance(event, dict):
+        return None
+    readiness = event.get("readiness")
+    if not isinstance(readiness, dict):
+        return None
+    return readiness.get("ready")
+
+
 def _check_result(spec: dict[str, Any], result: dict[str, Any] | None) -> list[str]:
     reasons: list[str] = []
     if not spec.get("requires_result"):
@@ -95,12 +120,14 @@ def _check_result(spec: dict[str, Any], result: dict[str, Any] | None) -> list[s
             reasons.append("missing_result")
         else:
             for row in rows:
+                if not isinstance(row, dict):
+                    reasons.append("malformed_result")
+                    continue
                 if expected is not None and row.get("error") != expected:
                     reasons.append("error_class_mismatch")
                 if expected is None and row.get("error"):
                     reasons.append("error_class_mismatch")
-                if row.get("staging_left"):
-                    reasons.append("cleanup_failed")
+                reasons.extend(staging_left_reasons(row["staging_left"] if "staging_left" in row else None))
     if spec.get("probe") == "upload-probe.mjs":
         log = result.get("log")
         if not isinstance(log, list) or not log:
@@ -109,22 +136,50 @@ def _check_result(spec: dict[str, Any], result: dict[str, Any] | None) -> list[s
             phases = [row.get("phase") for row in log if isinstance(row, dict)]
             if "two-reserved-third-429" not in phases:
                 reasons.append("error_class_mismatch")
-            if "both-discarded" not in phases or "slot-reacquired-and-released" not in phases:
+            if "both-discarded" not in phases:
                 reasons.append("cleanup_failed")
-    if spec.get("probe") == "queue-probe.mjs" and result.get("maxActive") != 1:
-        reasons.append("error_class_mismatch")
+            if "slot-reacquired-and-released" not in phases or "slot-reacquired-release-failed" in phases:
+                reasons.append("cleanup_failed")
+    if spec.get("probe") == "queue-probe.mjs":
+        if result.get("maxActive") != 1:
+            reasons.append("error_class_mismatch")
+        events = result.get("events")
+        if not isinstance(events, list) or not events:
+            reasons.append("missing_result")
+        else:
+            during = next((row for row in events if isinstance(row, dict) and row.get("phase") == "drain-during"), None)
+            after = next((row for row in events if isinstance(row, dict) and row.get("phase") == "drain-after"), None)
+            if during is None or after is None:
+                reasons.append("missing_result")
+            elif _readiness_ready(during) is not False or _readiness_ready(after) is not True:
+                reasons.append("drain_inconsistent")
     if spec.get("probe") == "budget-probe.mjs":
+        required = ("success", "disk-exhaustion", "cancel", "ownership-unknown")
         if not isinstance(rows, list) or len(rows) != 4:
             reasons.append("missing_result")
         else:
-            by_mode = {row.get("mode"): row for row in rows if isinstance(row, dict)}
+            seen: list[Any] = []
+            by_mode: dict[Any, dict[str, Any]] = {}
+            for row in rows:
+                if not isinstance(row, dict):
+                    reasons.append("malformed_result")
+                    continue
+                seen.append(row.get("mode"))
+                by_mode[row.get("mode")] = row
+                reasons.extend(
+                    remaining_after_release_reasons(
+                        row["remaining_after_release"] if "remaining_after_release" in row else None
+                    )
+                )
+            if len(seen) != 4 or set(seen) != set(required):
+                reasons.append("error_class_mismatch")
             if by_mode.get("disk-exhaustion", {}).get("cause") != "disk_budget":
                 reasons.append("error_class_mismatch")
             if by_mode.get("cancel", {}).get("cause") != "cancelled":
                 reasons.append("error_class_mismatch")
     if spec.get("probe") == "render_probe.py":
         layers = result.get("quality_layers") or {}
-        if layers.get("runtime_hard", {}).get("status") != "pass":
+        if not isinstance(layers, dict) or layers.get("runtime_hard", {}).get("status") != "pass":
             reasons.append("error_class_mismatch")
     return list(dict.fromkeys(reasons))
 
@@ -138,6 +193,9 @@ def judge_scene(
     reasons = _check_sampling(run)
     expected_exit = spec.get("expect_exit")
     cancelled = run.get("cancelled") is True
+    # Outer sampler cancellation is not an internal probe cancel/reject observation.
+    if cancelled:
+        reasons.append("outer_measurement_cancelled")
     if spec.get("class") == "expected_reject":
         if type(run.get("exit_code")) is not int:
             reasons.append("exit_unobserved")
@@ -154,8 +212,6 @@ def judge_scene(
         if type(run.get("exit_code")) is not int:
             reasons.append("exit_unobserved")
         elif expected_exit is not None and run.get("exit_code") != expected_exit:
-            reasons.append("unexpected_exit_or_cancel")
-        if cancelled and spec.get("class") not in {"cancel_observe"}:
             reasons.append("unexpected_exit_or_cancel")
     reasons.extend(_check_result(spec, result))
     fail_close = _never_budget(spec, validity)

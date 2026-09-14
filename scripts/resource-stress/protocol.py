@@ -51,6 +51,7 @@ HARNESS_FILES = (
     "synthetic_child.py",
     "evidence.py",
     "plan.py",
+    "behavior_fixtures.json",
     "probes/__init__.py",
     "probes/node_argv.mjs",
     "probes/face_probe.py",

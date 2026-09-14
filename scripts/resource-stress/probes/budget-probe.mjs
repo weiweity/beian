@@ -16,9 +16,24 @@ export function judgeBudgetResult(result) {
   const reasons = [];
   if (!result || result.ok !== true) reasons.push('result_not_ok');
   const rows = result?.rows;
+  const required = ['success', 'disk-exhaustion', 'cancel', 'ownership-unknown'];
   if (!Array.isArray(rows) || rows.length !== 4) reasons.push('missing_result');
   else {
-    const byMode = Object.fromEntries(rows.map((row) => [row.mode, row]));
+    const seen = [];
+    const byMode = {};
+    for (const row of rows) {
+      if (!row || typeof row !== 'object') {
+        reasons.push('malformed_result');
+        continue;
+      }
+      seen.push(row.mode);
+      byMode[row.mode] = row;
+      if (typeof row.remaining_after_release !== 'number') reasons.push('cleanup_unproven');
+      else if (row.remaining_after_release !== 0) reasons.push('cleanup_failed');
+    }
+    if (seen.length !== 4 || new Set(seen).size !== 4 || !required.every((mode) => seen.includes(mode))) {
+      reasons.push('error_class_mismatch');
+    }
     if (byMode['disk-exhaustion']?.cause !== 'disk_budget') reasons.push('error_class_mismatch');
     if (byMode.cancel?.cause !== 'cancelled') reasons.push('error_class_mismatch');
   }

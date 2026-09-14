@@ -202,6 +202,8 @@ def cmd_measure_command(args: argparse.Namespace) -> int:
         output_dir=output,
         sample_interval_s=args.sample_interval,
     )
+    identity_after = protocol.collect_identity(repo)
+    identity_unchanged = identity_after == identity
     bundle = _bundle(
         repo=repo,
         output=output,
@@ -212,6 +214,8 @@ def cmd_measure_command(args: argparse.Namespace) -> int:
         exclusive=exclusive,
         mode="measure-command",
     )
+    bundle["identity_after"] = identity_after
+    bundle["identity_unchanged"] = identity_unchanged
     metrics_path = Path(run["metrics_path"]) if run.get("metrics_path") else None
     original_metrics = metrics_path.read_bytes() if metrics_path and metrics_path.is_file() else None
     spec = scenarios.SCENARIO_CONTRACT.get(args.name)
@@ -221,13 +225,16 @@ def cmd_measure_command(args: argparse.Namespace) -> int:
         result_payload = evidence.read_result_json(output, args.name)
         judgment = evidence.judge_scene(spec_with_id, run, result_payload, bundle["validity"])
         bundle["behavior"] = [judgment]
-        bundle["behavior_passed"] = judgment["passed"]
+        bundle["behavior_passed"] = judgment["passed"] is True and identity_unchanged is True
         bundle["fail_close"] = judgment["fail_close"]
         bundle["budget_effective"] = False
     else:
         bundle["budget_effective"] = False
+        bundle["behavior_passed"] = identity_unchanged is True
     _persist_bundle(output, bundle)
     if original_metrics is not None and metrics_path is not None and metrics_path.read_bytes() != original_metrics:
+        return 4
+    if identity_unchanged is not True:
         return 4
     if judgment is not None and (judgment["fail_close"] or not judgment["passed"]):
         return 4

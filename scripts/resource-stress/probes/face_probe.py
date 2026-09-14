@@ -84,21 +84,27 @@ def build_resolved(case: str) -> dict[str, Any]:
     }
 
 
-def judge_rows(case: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
+def judge_rows(case: str, rows: list[Any]) -> dict[str, Any]:
     expected = expected_error_for(case)
     reasons: list[str] = []
-    if not rows:
+    if not isinstance(rows, list) or not rows:
         reasons.append("missing_result")
-    for row in rows:
-        if row.get("error") != expected:
-            reasons.append("error_class_mismatch")
-        if row.get("staging_left"):
-            reasons.append("cleanup_failed")
+    else:
+        for row in rows:
+            if not isinstance(row, dict):
+                reasons.append("malformed_result")
+                continue
+            if row.get("error") != expected:
+                reasons.append("error_class_mismatch")
+            if "staging_left" not in row or not isinstance(row.get("staging_left"), list):
+                reasons.append("cleanup_unproven")
+            elif row["staging_left"]:
+                reasons.append("cleanup_failed")
     ok = not reasons
     return {
         "ok": ok,
         "expected_error": expected,
-        "reasons": reasons,
+        "reasons": list(dict.fromkeys(reasons)),
         "note": "expected reject exits 0 when error matches; that is behavior, not a valid resource budget",
     }
 

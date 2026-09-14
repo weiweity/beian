@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -93,6 +94,25 @@ def interpolate(tokens: list[str], mapping: dict[str, str]) -> list[str]:
     return filled
 
 
+def interpreter_has_module(python: Path, name: str) -> bool:
+    """Ask the selected interpreter whether a module exists without importing the product."""
+    try:
+        completed = subprocess.run(
+            [
+                str(python),
+                "-c",
+                "import importlib.util,sys; raise SystemExit(0 if importlib.util.find_spec(sys.argv[1]) else 1)",
+                name,
+            ],
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return completed.returncode == 0
+
+
 def find_tsx(repo: Path, explicit: Path | None = None) -> Path | None:
     if explicit is not None:
         return explicit if explicit.is_file() else None
@@ -142,6 +162,9 @@ def bindings(
         reasons.append("blender_not_file")
         blender_path = None
     probe_dir = repo_r / PROBE_DIR_REL
+    python_modules = {}
+    if python_path.is_file():
+        python_modules["pymupdf"] = interpreter_has_module(python_path, "pymupdf")
     return {
         "repo": repo_r,
         "out": out_r,
@@ -151,6 +174,7 @@ def bindings(
         "tsx": tsx_path,
         "blender": blender_path,
         "probe_dir": probe_dir,
+        "python_modules": python_modules,
         "binding_reasons": reasons,
     }
 
@@ -197,6 +221,8 @@ def resolve_scene(scene_id: str, bound: dict[str, Any]) -> dict[str, Any]:
             reasons.append("missing_probe")
     if scene_id in PYTHON_SCENES and not Path(bound["python"]).is_file():
         reasons.append("missing_python")
+    if scene_id in PYTHON_SCENES and bound.get("python_modules", {}).get("pymupdf") is not True:
+        reasons.append("missing_pymupdf")
     if scene_id in NODE_SCENES:
         if bound["node"] is None:
             reasons.append("missing_node")
@@ -239,6 +265,12 @@ def resolve_scene(scene_id: str, bound: dict[str, Any]) -> dict[str, Any]:
         "expected_behavior": contract.get("behavior_pass_when"),
         "unverified": contract.get("unverified") or [],
         "note": contract.get("notes"),
+        "argv_resolved": argv is not None and not unresolved,
+        "dependencies_assessed": {
+            "pymupdf": bound.get("python_modules", {}).get("pymupdf") if scene_id in PYTHON_SCENES else "not_applicable",
+            "tsx": bound["tsx"] is not None if scene_id in NODE_SCENES else "not_applicable",
+            "blender": bool(bound["blender"]) if scene_id in BLENDER_SCENES else "not_applicable",
+        },
     }
 
 
