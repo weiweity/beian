@@ -115,10 +115,24 @@ node --test scripts/monitoring/*.test.mjs
 
 后者不会自动包含本子目录。阈值、退避、超时默认只是本地候选，`production_default=false`。
 
+## 独立飞书 bot transport
+
+`feishu-bot-transport.mjs` 把脱敏 payload 编成 `lark-cli im +messages-send --as bot --user-id ou_… --text …`。调用方必须注入绝对 `cliPath`、`ou_` 接收人和 `exec`。`createLarkCliExec()` 默认 `allowRealSend=false`，不会 spawn。不读产品 `notify.ts` / `FEISHU_*` / 环境变量。真实发送、杭州计划任务和通知验收仍需另外授权。
+
+```js
+import { createFeishuBotTransport, createLarkCliExec } from "./feishu-bot-transport.mjs";
+
+const transport = createFeishuBotTransport({
+  cliPath: "/usr/local/bin/lark-cli",
+  receiveId: "ou_example",
+  exec: createLarkCliExec(), // 默认不发送
+});
+```
+
 ## 明确未做
 
-- 真实消息、飞书 webhook、产品 `notify.ts` / `FEISHU_*`
-- 接收人与渠道配置、Windows 探测与部署
+- 真实消息、飞书 webhook、产品 `notify.ts` / `FEISHU_*`；本切片不授权发送
+- 杭州 Windows 计划任务安装、WinSW、生产探测 URL
 - 数据库、通用队列框架、新依赖
 - 生产常驻部署；本地循环接线已由 [runner](../runner/README.md) 提供
 - 端到端 exactly-once、断电耐久、杭州/Windows 实机验收
