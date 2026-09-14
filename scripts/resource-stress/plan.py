@@ -234,7 +234,7 @@ def resolve_scene(scene_id: str, bound: dict[str, Any]) -> dict[str, Any]:
             reasons.append("missing_probe")
     if scene_id in PYTHON_SCENES and not Path(bound["python"]).is_file():
         reasons.append("missing_python")
-    if scene_id in PYTHON_SCENES and bound.get("python_modules", {}).get("pymupdf") is not True:
+    if contract.get("probe") == "face_probe.py" and bound.get("python_modules", {}).get("pymupdf") is not True:
         reasons.append("missing_pymupdf")
     if scene_id in NODE_SCENES:
         if bound["node"] is None:
@@ -280,7 +280,7 @@ def resolve_scene(scene_id: str, bound: dict[str, Any]) -> dict[str, Any]:
         "note": contract.get("notes"),
         "argv_resolved": argv is not None and not unresolved,
         "dependencies_assessed": {
-            "pymupdf": bound.get("python_modules", {}).get("pymupdf") if scene_id in PYTHON_SCENES else "not_applicable",
+            "pymupdf": bound.get("python_modules", {}).get("pymupdf") if contract.get("probe") == "face_probe.py" else "not_applicable",
             "tsx": bound["tsx"] is not None if scene_id in NODE_SCENES else "not_applicable",
             "blender": bool(bound["blender"]) if scene_id in BLENDER_SCENES else "not_applicable",
         },

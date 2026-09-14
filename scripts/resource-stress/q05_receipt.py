@@ -370,7 +370,13 @@ def gate(receipt: dict, before_file: Path | None, state: dict) -> dict:
     root = Path(receipt["round_dir"])
     try:
         payload_a = json.loads((root / RAW_PAYLOADS[1]).read_text(encoding="utf-8"))
-        if not isinstance(payload_a, dict) or not isinstance(payload_a.get("samples"), list) or len(payload_a["samples"]) != 6:
+        samples_a = payload_a.get("samples") if isinstance(payload_a, dict) else None
+        if (
+            not isinstance(payload_a, dict)
+            or not isinstance(samples_a, list)
+            or len(samples_a) != 6
+            or not all(isinstance(sample, dict) for sample in samples_a)
+        ):
             reasons.append("sample_count_mismatch")
     except (OSError, ValueError):
         reasons.append("payload_a_unreadable")

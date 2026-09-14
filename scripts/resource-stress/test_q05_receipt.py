@@ -194,6 +194,10 @@ class ReceiptGate(unittest.TestCase):
         (self.round / receipt.RAW_PAYLOADS[1]).write_text("{}")
         self.assertEqual(self.run_receipt(), 5)
 
+    def test_null_payload_a_samples_refuse(self):
+        (self.round / receipt.RAW_PAYLOADS[1]).write_text(json.dumps({"samples": [None] * 6}))
+        self.assertEqual(self.run_receipt(), 5)
+
     def test_sampler_failure_refuses(self):
         self.metrics.write_text(json.dumps({"exit_code": 0, "cancelled": False, "samples": [{}], "measurement_errors": ["ps"]}))
         self.assertEqual(self.run_receipt(), 5)

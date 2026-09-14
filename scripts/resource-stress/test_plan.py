@@ -221,6 +221,28 @@ class PlanResolution(unittest.TestCase):
         self.assertTrue(row["argv_resolved"])
         self.assertIsNone(row["argv"])
 
+    def test_blender_serial_does_not_require_pymupdf(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch.object(plan, "interpreter_has_module", return_value=False):
+            blender = Path(tmp) / "blender"
+            blender.write_text("#!/bin/sh\n", encoding="utf-8")
+            bound = plan.bindings(
+                repo=REPO, out=Path(tmp) / "out", python=sys.executable, blender=blender
+            )
+            row = plan.resolve_scene("blender-serial", bound)
+        self.assertTrue(row["ok"], row)
+        self.assertEqual(row["dependencies_assessed"]["pymupdf"], "not_applicable")
+        self.assertIn(str(blender.absolute()), row["argv"])
+
+    def test_relight_plan_points_at_existing_ui_test(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            npm = Path(tmp) / "npm"
+            npm.write_text("#!/bin/sh\n", encoding="utf-8")
+            bound = plan.bindings(repo=REPO, out=Path(tmp) / "out", python=sys.executable, npm=npm)
+            row = plan.resolve_scene("relight", bound)
+        self.assertTrue(row["ok"], row)
+        self.assertIn("src/pages/mockupStudio.test.ts", row["argv"])
+        self.assertTrue((REPO / "apps/web/ui/src/pages/mockupStudio.test.ts").is_file())
+
 
 class SceneJudgment(unittest.TestCase):
     def test_expected_reject_exit_zero_is_behavior_not_budget(self) -> None:

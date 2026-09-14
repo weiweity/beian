@@ -97,7 +97,7 @@ BUDGET = [
     "{out}/{name}",
 ]
 BUSY = ["{npm}", "run", "test", "-w", "beian-server", "--", "src/jobs.test.ts"]
-RELIGHT = ["{npm}", "run", "test", "-w", "beian-ui", "--", "src/mockup"]
+RELIGHT = ["{npm}", "run", "test", "-w", "beian-ui", "--", "src/pages/mockupStudio.test.ts"]
 
 SCENARIOS: list[dict[str, Any]] = [
     _scene(
@@ -403,7 +403,7 @@ SCENARIO_CONTRACT: dict[str, dict[str, Any]] = {
         "expect_exit": 0,
         "expected_error": None,
         "requires_result": False,
-        "runtime_deps": ["npm", "apps/web/ui/src/mockup"],
+        "runtime_deps": ["npm", "apps/web/ui/src/pages/mockupStudio.test.ts"],
         "behavior_pass_when": "UI unit tests pass",
         "unverified": UNVERIFIED_COMMON + ["fake canvas, not GPU"],
         "notes": "product L0 mock",
@@ -451,5 +451,3 @@ def coverage_index() -> dict[str, list[str]]:
     return index
 
 
-def scene_by_id(scene_id: str) -> dict[str, Any] | None:
-    return next((row for row in SCENARIOS if row["id"] == scene_id), None)
