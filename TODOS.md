@@ -39,7 +39,7 @@
 | 顺序 | 执行包 | 交付与依赖 |
 |---|---|---|
 | 已完成前置 | 主线/工具发版事实对齐 | 0.29.0.0 发版 L1 已核实（PR #115）。Q05/R04 采证工具已完成发版 L1；Q01–Q05 采证/人工接受记录已归档。不再重复派发 Q05 回执、R04 探针、clearcoat 修复、Q06.6 A 或监控核心。继续保留 Q06 A/B/C 边界，不重复开发 R01 或 RF-10 |
-| 2 | 并行：R04/Q05 实测准备、F02 渠道、B02/B03 资料 | 准备批次已归档。F02 渠道与测试故障/恢复已人工确认；杭州托管代码已写，待本机安装器与仓库外 identity。B02 放下。B03 归属暂缓。Q05/R04 独占窗口未开跑 |
+| 2 | 并行：R04/Q05 实测准备、F02 渠道、B02/B03 资料 | 准备批次已归档。F02 渠道与测试故障/恢复已人工确认。杭州 `beian-monitor-local` 已 Running（BOM 去掉后 `--once` 四源 ok，`allowRealSend=false` 不发送）。B02 放下。B03 归属暂缓。Q05/R04 独占窗口未开跑 |
 | 3 | A01–A04 真实样本与人工真值 | 可与上项并行准备样本和真值；实际处理另按许可与窗口执行 |
 | 4 | Q06.4：Windows 异常路径证明（暂缓） | 用户于 2026-09-08 决定暂不准备隔离机；恢复前确认隔离环境与范围。确认后再推进后续生产装配与综合验收。保留杭州生产环境，不做生产故障注入；成功路径不替代异常证明 |
 | 5 | Q06.6 B–Q06.7：生产装配候选与 RF-12 | A 隔离候选代码已发布；B 仍依赖 .4 与八点审计。默认保持关闭，综合回归和耐久性分别取证 |
@@ -239,7 +239,7 @@ RF-10–RF-13 的原始依赖见 [ADR-007 §20.7](docs/adr-007-packaging-render-
 
 - [ ] **F02 — Tunnel / 服务掉线告警**
 
-  用户确认由本人接收。2026-09-14 选定渠道为**独立飞书 bot**（`--as bot`），托管目标为杭州 Windows 计划任务。经明确授权，F02 transport 一次性 `allowRealSend=true` 向本人发出测试故障和测试恢复，用户均确认飞书已收到。未走产品 `FEISHU_*`。已增加杭州托管入口 `scripts/monitoring/host.mjs` 与安装器 `scripts/windows/install-monitor.ps1`（SYSTEM、`beian-monitor-local`、不停生产服务、不改 Illustrator、不由 `release.ps1` 自动安装）。杭州本机尚未执行安装器；仓库外 `C:\supply\data\monitor-identity.json` 尚未放置。证据：`f02-test-send.json`、`f02-test-recovery.json`。
+  用户确认由本人接收。2026-09-14 选定渠道为**独立飞书 bot**（`--as bot`），托管目标为杭州 Windows 计划任务。经明确授权，F02 transport 一次性 `allowRealSend=true` 向本人发出测试故障和测试恢复，用户均确认飞书已收到。未走产品 `FEISHU_*`。已增加杭州托管入口 `scripts/monitoring/host.mjs` 与安装器 `scripts/windows/install-monitor.ps1`（SYSTEM、`beian-monitor-local`、不停生产服务、不改 Illustrator、不由 `release.ps1` 自动安装）。杭州本机已安装：identity 在 `C:\supply\data\monitor-identity.json`（`allowRealSend=false`）。首次 `LastTaskResult=2` 已核实为 PowerShell 5.1 UTF-8 BOM；去掉 BOM 后 `--once` 退出 0，四源均为 ok（8787 / cloudflared / loopback / public），任务 `State=Running`、`LastTaskResult=267009`、进程 `host.mjs` pid 33204。投递为 `no_transport`。真实发送仍未启用。证据：`f02-test-send.json`、`f02-test-recovery.json`。
 
   本轮交付独立 transport：`scripts/monitoring/delivery/feishu-bot-transport.mjs`。须显式绝对 `cliPath`、`ou_` 接收人和 `exec`；`createLarkCliExec()` 默认 `allowRealSend=false`。合成测试覆盖 argv、拒绝环境变量、exit 10/丢失确认/缺二进制与队列接线。Windows 托管安装和故障/恢复现场验收仍开放。
 
