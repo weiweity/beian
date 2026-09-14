@@ -744,7 +744,21 @@ describe("windows release.ps1 contract", () => {
     const windowsJob = qualityWorkflow.slice(windowsJobStart, windowsJobEnd);
     assert.match(windowsJob, /actions\/checkout@v4/);
     assert.match(windowsJob, /illustrator-agent-task\.contract\.ps1/);
+    assert.match(windowsJob, /monitor-task\.contract\.ps1/);
     assert.doesNotMatch(windowsJob, /self-hosted/);
+  });
+
+  it("keeps the Hangzhou monitor task off the Illustrator agent and off Stop-Service", () => {
+    const monitorInstaller = readFileSync(join(repoRoot, "scripts/windows/install-monitor.ps1"), "utf8");
+    const monitorContract = readFileSync(join(repoRoot, "scripts/windows/monitor-task.contract.ps1"), "utf8");
+    assert.match(monitorInstaller, /TaskName = "beian-monitor-local"/);
+    assert.match(monitorInstaller, /UserId "SYSTEM"/);
+    assert.match(monitorInstaller, /host\.mjs/);
+    assert.doesNotMatch(monitorInstaller, /Stop-Service/);
+    assert.doesNotMatch(monitorInstaller, /beian-illustrator-agent/);
+    assert.doesNotMatch(script, /install-monitor\.ps1/);
+    assert.match(monitorContract, /MONITOR_TASK_CONTRACT ok/);
+    assert.match(monitorContract, /must not stop Windows services/);
   });
 
   it("Actions runner downloads an exact-commit bootstrap without mutating the production index", () => {

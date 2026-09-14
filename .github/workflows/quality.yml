@@ -58,6 +58,7 @@ jobs:
             throw "Expected Windows PowerShell 5.1 Desktop, got $($PSVersionTable.PSEdition) $($PSVersionTable.PSVersion)"
           }
           & (Join-Path $env:GITHUB_WORKSPACE "scripts\windows\illustrator-agent-task.contract.ps1")
+          & (Join-Path $env:GITHUB_WORKSPACE "scripts\windows\monitor-task.contract.ps1")
 
   quality:
     runs-on: ubuntu-latest
