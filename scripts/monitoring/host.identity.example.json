@@ -1,0 +1,6 @@
+{
+  "schema": "beian-monitor-identity-v1",
+  "_comment": "Copy outside the git checkout, e.g. C:\\supply\\data\\monitor-identity.json. Do not put secrets in Git. allowRealSend stays false until Hangzhou install is ready to notify.",
+  "receiveId": "ou_replaceme0001",
+  "allowRealSend": false
+}

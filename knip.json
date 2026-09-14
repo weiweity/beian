@@ -13,6 +13,7 @@
         "scripts/monitoring/delivery/*.test.mjs",
         "scripts/monitoring/runner/example.mjs!",
         "scripts/monitoring/runner/*.test.mjs",
+        "scripts/monitoring/host.mjs!",
         "scripts/resource-stress/probes/budget-probe.mjs!",
         "scripts/resource-stress/probes/queue-probe.mjs!",
         "scripts/resource-stress/probes/upload-probe.mjs!",

@@ -94,7 +94,7 @@ node --test scripts/monitoring/runner/*.test.mjs
 ## 明确未做
 
 - 飞书或其他真实渠道、接收人配置
-- Windows 计划任务 / WinSW / 杭州实机探测
+- 杭州实机探测与通知验收。计划任务安装器见 `scripts/windows/install-monitor.ps1`，不改本模块默认空 URL
 - 重写 `alert-core`、`replay` 或 `probes`；Promise 投递与共享合成测试已随本轮整合，见 [投递模块](../delivery/README.md)
 - 端到端 exactly-once、断电耐久、生产默认
 
