@@ -33,7 +33,15 @@
    python3 scripts/resource-stress/cli.py matrix
    ```
 
-   矩阵列出 tall、wide、near-cap、dual-upload、blender-serial、relight、queue-drain 和失败/取消等场景，以及哪些仍未在本机执行。
+   矩阵列出 normal、tall、wide、near-cap、exact-cap-paper、over-cap、dual-upload、illustrator-busy、blender-serial、relight、queue-drain、fail-cancel 和 failure-after-front 等场景，以及哪些仍未在本机执行。
+
+   解析仓库内探针 argv（不执行产品或原生应用）：
+
+   ```bash
+   python3 scripts/resource-stress/cli.py plan --repo . --out "$OUT"
+   ```
+
+   未知场景或未解析占位符会失败关闭。切面探针缺 pymupdf、Node 场景缺 node/tsx、npm 场景缺 npm、blender-serial 缺 `--blender` 或 `BEIAN_BLENDER` 时该场景 refused；blender-serial 不要求 pymupdf。`argv_resolved` 只表示命令已拼出；`dependencies_assessed` 是轻量门，不是全部运行时依赖已验证。Blender 不会从 `/Applications` 猜测，也不会因为本机已安装而启动。`synthetic-local` 仍只跑轻量合成子进程。
 
 4. 运行轻量合成套件。
 
@@ -48,18 +56,21 @@
 5. 运行回归测试。
 
    ```bash
-   python3 scripts/resource-stress/test_harness.py -v
+   python3 -B -m unittest discover -s scripts/resource-stress -p 'test_*.py' -v
+   node --test scripts/resource-stress/test_probes.mjs scripts/resource-stress/test_ship_probes.mjs
    ```
 
 ## 验证
+
+需要重复验证工具时，可在全新仓库外目录用 `run --repeat 3`，不要先创建该输出根。逐轮保留原始 metrics，任一行为/采样或身份判定失败即停，聚合只给 min/median/max，始终不是正式预算。Q05 的回执工具也纳入上述合成测试；实际浏览器采样须按[工具说明](../scripts/resource-stress/README.md#q05-长期复用入口另需确认采样窗口)另行确认窗口，不因测试通过自动启动。
 
 测试应退出码为 0。报告中的 `peak_tree_rss_bytes` 是采样到的进程树 RSS，可能重复计算共享页，也不是 GPU 或上屏时间；`32MP` 是单张图片像素上限，不是进程内存预算。正式预算必须同时满足完整身份、无外部负载、独占窗口、产品 workload 和有效采样。
 
 ## 故障排查
 
 - 退出码 2：身份不完整。先补齐可复核的仓库/版本/fixture 身份，不要手工把报告标成有效。
-- 退出码 3：正式预算预检发现干扰。结束或隔离外部压测后重新预检；不要按进程名 `pkill` 或 `killall`。
-- 退出码 4：命令虽然结束，但运行失败、非独占、合成或采样不完整。保留报告并修正测量条件。
+- 退出码 3：正式预算预检发现干扰，或多轮输出根已存在。分别核对预检结果/目录错误；不复用失败证据目录，不按进程名 `pkill` 或 `killall`。
+- 退出码 4：合成套件的预期行为/采样或身份检查失败，或者显式要求正式预算而条件不满足。普通合成套件的预期失败、取消行为通过时可退出 0，但 `budget_valid` 仍为 false。保留原始报告，不用退出 0 冒充预算通过。
 - 取消后仍有子进程：工具只管理自己通过 `start_new_session` 创建的进程组。主动逃离进程组的后代、父进程被 SIGKILL 和 Windows Job Object 不在本工具证明范围。
 
 ## 相关资料

@@ -11,6 +11,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -20,6 +21,7 @@ if str(HERE) not in sys.path:
 import cli  # noqa: E402
 import protocol  # noqa: E402
 import scenarios  # noqa: E402
+import evidence  # noqa: E402
 
 REPO = HERE.parents[1]
 CHILD = HERE / "synthetic_child.py"
@@ -335,6 +337,11 @@ class MatrixAndCli(unittest.TestCase):
         self.assertIn("--formal-budget", by_id["blender-serial"])
         self.assertNotIn("--formal-budget", by_id["illustrator-busy"])
         self.assertNotIn("--formal-budget", by_id["relight"])
+        self.assertNotIn("--formal-budget", by_id["over-cap"])
+        self.assertNotIn("--formal-budget", by_id["failure-after-front"])
+        self.assertNotIn("--formal-budget", by_id["dual-upload"])
+        self.assertNotIn("{probe}/", " ".join(by_id["normal"]))
+        self.assertIn("scripts/resource-stress/probes/face_probe.py", " ".join(by_id["normal"]))
 
     def test_cli_synthetic_run_never_valid_budget(self) -> None:
         tmp = tempfile.TemporaryDirectory()
@@ -347,6 +354,10 @@ class MatrixAndCli(unittest.TestCase):
         self.assertIn("synthetic_workload", bundle["validity"]["reasons"])
         names = {item["name"] for item in bundle["commands"]}
         self.assertIn("synthetic-fail", names)
+        blob = json.dumps(bundle["commands"])
+        self.assertNotIn("face_probe.py", blob)
+        self.assertNotIn("upload-probe.mjs", blob)
+        self.assertFalse(bundle.get("budget_effective"))
         fail = next(item for item in bundle["commands"] if item["name"] == "synthetic-fail")
         self.assertEqual(fail["exit_code"], 7)
         report = (out / "REPORT.md").read_text(encoding="utf-8")
@@ -402,13 +413,20 @@ class MatrixAndCli(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         out = Path(tmp.name)
-        code = cli.main(["run", "--repo", str(REPO), "--out", str(out), "--mode", "exclusive"])
+        with patch.dict(os.environ, {"BEIAN_BLENDER": ""}, clear=False):
+            code = cli.main(["run", "--repo", str(REPO), "--out", str(out), "--mode", "exclusive"])
         self.assertEqual(code, 0)
         bundle = json.loads((out / "report.json").read_text(encoding="utf-8"))
         self.assertEqual(bundle["mode"], "exclusive-plan-only")
         self.assertFalse(bundle["budget_valid"])
         self.assertEqual(bundle["commands"], [])
         self.assertIn("blender-serial", bundle["unverified"])
+        self.assertFalse(bundle.get("budget_effective"))
+        resolved = bundle["resolved_plan"]
+        self.assertFalse(resolved["this_slice_executes_product"])
+        blender = next(row for row in resolved["scenes"] if row["id"] == "blender-serial")
+        self.assertFalse(blender["ok"])
+        self.assertIn("blender_not_specified", blender["reasons"])
 
 
 
@@ -436,6 +454,119 @@ class IntegrationRegressions(unittest.TestCase):
 
 
 class ReviewRegressions(unittest.TestCase):
+    def test_cross_checkout_identity_pins_executing_harness(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "other-checkout"
+            target.mkdir()
+            (target / "VERSION").write_text("synthetic")
+            actual_tools = Path(protocol.__file__).resolve().parent
+            with patch.object(protocol, "_git", return_value="synthetic-head"), \
+                    patch.object(protocol, "_tool_version", return_value={"status": "unavailable"}), \
+                    patch.object(protocol, "_sha256_file", side_effect=lambda path:
+                                 "a" * 64 if path.parent == actual_tools else "b" * 64):
+                identity = protocol.collect_identity(target)
+            self.assertTrue(identity["complete"])
+            self.assertEqual(identity["harness"]["directory"], str(actual_tools))
+            self.assertEqual(identity["harness"]["files"]["cli.py"], "a" * 64)
+            self.assertIn("probes/face_probe.py", identity["harness"]["files"])
+            self.assertIn("probes/face_probe.py", identity["harness"]["probes"])
+            self.assertTrue(all(value == "b" * 64 for value in identity["files"].values()))
+
+    def test_missing_executing_harness_source_makes_identity_incomplete(self):
+        original = protocol._sha256_file
+        with patch.object(protocol, "_sha256_file", side_effect=lambda path:
+                          None if path.name == "evidence.py" else original(path)):
+            identity = protocol.collect_identity(REPO)
+        self.assertFalse(identity["complete"])
+        self.assertIn("harness:evidence.py", identity["missing"])
+
+    def test_missing_probe_source_makes_identity_incomplete(self):
+        original = protocol._sha256_file
+        with patch.object(protocol, "_sha256_file", side_effect=lambda path:
+                          None if path.as_posix().endswith("probes/face_probe.py") else original(path)):
+            identity = protocol.collect_identity(REPO)
+        self.assertFalse(identity["complete"])
+        self.assertIn("harness:probes/face_probe.py", identity["missing"])
+
+    def test_behavior_and_budget_judgments_are_distinct(self):
+        for item in scenarios.SYNTHETIC_SUITE:
+            cancelled = "cancel_after_s" in item
+            good = {"exit_code": -15 if cancelled else item["expect_exit"], "cancelled": cancelled,
+                    "samples": [{}], "measurement_errors": []}
+            judgment = evidence.judge_synthetic(item, good)
+            self.assertTrue(judgment["passed"])
+            self.assertFalse(judgment["budget_effective"])
+            for mutation in ({"samples": []}, {"measurement_errors": ["ps failed"]}, {"launch_error": "failed"},
+                             {"cancelled": not cancelled}, {"exit_code": False}, {"samples": "bad"}):
+                self.assertFalse(evidence.judge_synthetic(item, good | mutation)["passed"])
+
+    def test_repeat_uses_new_directories_retains_raw_metrics_and_summarizes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "new"
+            code = cli.main(["run", "--repo", str(REPO), "--out", str(out), "--repeat", "2"])
+            self.assertEqual(code, 0)
+            aggregate = json.loads((out / "aggregate.json").read_text())
+            self.assertTrue(aggregate["behavior_passed"])
+            self.assertFalse(aggregate["budget_effective"])
+            self.assertEqual(aggregate["completed_rounds"], 2)
+            for scene in scenarios.SYNTHETIC_SUITE:
+                values = []
+                for n in (1, 2):
+                    raw = out / f"round{n}" / f"{scene['id']}.metrics.json"
+                    values.append(json.loads(raw.read_text())["seconds"])
+                summary = aggregate["summary"][scene["id"]]["seconds"]
+                self.assertEqual(summary["min"], min(values))
+                self.assertEqual(summary["median"], sum(values) / 2)
+                self.assertEqual(summary["max"], max(values))
+            original = (out / "aggregate.json").read_bytes()
+            self.assertEqual(cli.main(["run", "--repo", str(REPO), "--out", str(out), "--repeat", "2"]), 3)
+            self.assertEqual((out / "aggregate.json").read_bytes(), original)
+
+    def test_repeat_stops_before_later_round_on_unexpected_behavior(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "new"
+            with patch.object(evidence, "judge_synthetic", return_value={"passed": False}):
+                self.assertEqual(cli.main(["run", "--repo", str(REPO), "--out", str(out), "--repeat", "3"]), 4)
+            self.assertFalse((out / "round2").exists())
+            result = json.loads((out / "aggregate.json").read_text())
+            self.assertFalse(result["behavior_passed"])
+            self.assertEqual(result["summary"], {})
+
+    def test_identity_drift_stops_before_next_round(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "new"
+            state = protocol.collect_identity(REPO)
+            with patch.object(protocol, "collect_identity", side_effect=[state, state | {"head": "changed"}]):
+                self.assertEqual(cli.main(["run", "--repo", str(REPO), "--out", str(out), "--repeat", "2"]), 4)
+            self.assertFalse((out / "round2").exists())
+            report = json.loads((out / "round1/report.json").read_text())
+            self.assertFalse(report["identity_unchanged"])
+
+    def test_invalid_repeat_does_not_create_output(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "never-created"
+            for extra in (["--repeat", "0"], ["--repeat", "101"], ["--repeat", "2", "--formal-budget"],
+                          ["--repeat", "2", "--mode", "exclusive"]):
+                with self.assertRaises(SystemExit):
+                    cli.main(["run", "--out", str(out), *extra])
+                self.assertFalse(out.exists())
+
+    def test_suite_stops_on_unexpected_exit_and_keeps_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            original = protocol.measure_command
+            def wrong_exit(*args, **kwargs):
+                result = original(*args, **kwargs)
+                result["exit_code"] = 9
+                return result
+            with patch.object(protocol, "measure_command", side_effect=wrong_exit) as measure:
+                code = cli.main(["run", "--repo", str(REPO), "--out", tmp])
+            self.assertEqual(code, 4)
+            self.assertEqual(measure.call_count, 1)
+            report = json.loads((Path(tmp) / "report.json").read_text())
+            self.assertFalse(report["behavior_passed"])
+            self.assertFalse(report["budget_valid"])
+            self.assertTrue((Path(tmp) / "synthetic-success.metrics.json").exists())
+
     def test_sampler_failure_keeps_metrics(self):
         with tempfile.TemporaryDirectory() as tmp:
             calls = 0

@@ -97,5 +97,5 @@ npm run verify -- full
 ### 本地运维工具切片（F02 / R04）
 
 - [告警判断与 fixture 回放](scripts/monitoring/README.md)：`node --test scripts/monitoring/*.test.mjs scripts/monitoring/probes/*.test.mjs scripts/monitoring/delivery/*.test.mjs scripts/monitoring/runner/*.test.mjs`。包含探测适配器、投递模块与串联合成回归；不访问生产或发送通知。
-- [资源采证工具](scripts/resource-stress/README.md)：`python3 scripts/resource-stress/test_harness.py -v`。只启动自建轻量合成子进程，覆盖采样、失败/取消与清理；不启动 Blender/浏览器压测，不构成独占预算或 Windows Job Object 证明。
+- [资源采证工具](scripts/resource-stress/README.md)：`python3 -B -m unittest discover -s scripts/resource-stress -p 'test_*.py' -v`。包含 R04 采样/失败/取消/清理、多轮聚合、Q05 回执与停轮合同，以及历史探针 argv 计划/行为判定；只用自建轻量子进程、临时 Git 仓、合成 payload 和 stub，不启动 Blender/浏览器压测，不跑双 100MiB 上传，不构成独占预算或 Windows Job Object 证明。原 `test_harness.py -v` 仍可单跑 R04 合成 harness，但不能替代 Q05 工具回归。Node 探针 argv 测试：`node --test scripts/resource-stress/test_probes.mjs scripts/resource-stress/test_ship_probes.mjs`。
 - 两组当前为显式局部测试命令，不在根 `npm test` 默认集合中；修改对应工具或发版包含对应目录时必须单独执行。

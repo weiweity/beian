@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import hashlib
 import sys
 import time
 from pathlib import Path
@@ -15,6 +16,8 @@ if str(HERE) not in sys.path:
 
 import protocol  # noqa: E402
 import scenarios  # noqa: E402
+import evidence  # noqa: E402
+import plan  # noqa: E402
 
 SYNTHETIC_CHILD = HERE / "synthetic_child.py"
 
@@ -74,9 +77,39 @@ def cmd_matrix(_args: argparse.Namespace) -> int:
         "scenarios": scenarios.SCENARIOS,
         "coverage_index": scenarios.coverage_index(),
         "synthetic_suite": list(scenarios.SYNTHETIC_SUITE),
-        "note": "exclusive_command is for a later exclusive window; this CLI does not start Blender/browsers",
+        "historical_disposition": plan.HISTORICAL_DISPOSITION,
+        "note": (
+            "exclusive_command still contains placeholders; "
+            "`plan` resolves argv. This command does not start Blender/browsers/probes"
+        ),
     }
     print(json.dumps(payload, indent=2, ensure_ascii=False))
+    return 0
+
+
+def _plan_bindings(args: argparse.Namespace, repo: Path, output: Path) -> dict:
+    return plan.bindings(
+        repo=repo,
+        out=output,
+        python=getattr(args, "python", None) or sys.executable,
+        node=getattr(args, "node", None),
+        npm=getattr(args, "npm", None),
+        tsx=getattr(args, "tsx", None),
+        blender=getattr(args, "blender", None) or plan.env_blender(),
+    )
+
+
+def cmd_plan(args: argparse.Namespace) -> int:
+    repo = Path(args.repo)
+    output = Path(args.out)
+    payload = plan.resolve_plan(_plan_bindings(args, repo, output), scene_id=args.scene)
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
+    if args.out_json:
+        _write_json(Path(args.out_json), payload)
+    if args.scene:
+        return 0 if payload["scenes"] and payload["scenes"][0]["ok"] else 2
+    if args.strict and not payload["all_ok"]:
+        return 2
     return 0
 
 
@@ -169,6 +202,8 @@ def cmd_measure_command(args: argparse.Namespace) -> int:
         output_dir=output,
         sample_interval_s=args.sample_interval,
     )
+    identity_after = protocol.collect_identity(repo)
+    identity_unchanged = identity_after == identity
     bundle = _bundle(
         repo=repo,
         output=output,
@@ -179,7 +214,46 @@ def cmd_measure_command(args: argparse.Namespace) -> int:
         exclusive=exclusive,
         mode="measure-command",
     )
+    bundle["identity_after"] = identity_after
+    bundle["identity_unchanged"] = identity_unchanged
+    metrics_path = Path(run["metrics_path"]) if run.get("metrics_path") else None
+    original_metrics = metrics_path.read_bytes() if metrics_path and metrics_path.is_file() else None
+    spec = scenarios.SCENARIO_CONTRACT.get(args.name)
+    judgment = None
+    if spec is not None:
+        spec_with_id = {**spec, "id": args.name}
+        result_payload = evidence.read_result_json(output, args.name)
+        try:
+            judgment = evidence.judge_scene(spec_with_id, run, result_payload, bundle["validity"])
+        except (TypeError, AttributeError, ValueError) as exc:
+            judgment = {
+                "scenario": args.name,
+                "passed": False,
+                "behavior_ok": False,
+                "reasons": ["malformed_result"],
+                "fail_close": [],
+                "budget_effective": False,
+                "judge_error": type(exc).__name__,
+            }
+        bundle["behavior"] = [judgment]
+        bundle["behavior_passed"] = judgment["passed"] is True and identity_unchanged is True
+        bundle["fail_close"] = judgment["fail_close"]
+        bundle["budget_effective"] = False
+    else:
+        bundle["budget_effective"] = False
+        bundle["behavior_passed"] = evidence.generic_measure_behavior_passed(run, identity_unchanged)
     _persist_bundle(output, bundle)
+    if original_metrics is not None and metrics_path is not None and metrics_path.read_bytes() != original_metrics:
+        return 4
+    if identity_unchanged is not True:
+        return 4
+    if judgment is not None and (judgment["fail_close"] or not judgment["passed"]):
+        return 4
+    if spec is None and bundle.get("behavior_passed") is not True:
+        code = run.get("exit_code")
+        if type(code) is int and code != 0:
+            return 128 - code if code < 0 else code
+        return 4
     if args.formal_budget and not bundle["budget_valid"]:
         return 4
     if run.get("measurement_errors"):
@@ -189,6 +263,8 @@ def cmd_measure_command(args: argparse.Namespace) -> int:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
+    if args.repeat is not None:
+        return cmd_repeat(args)
     repo = Path(args.repo)
     output = Path(args.out)
     _outside_repo(repo, output)
@@ -213,6 +289,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             "this slice does not start Blender or browser load"
         )
         bundle["exclusive_plan"] = scenarios.SCENARIOS
+        bundle["resolved_plan"] = plan.resolve_plan(_plan_bindings(args, repo, output))
+        bundle["budget_effective"] = False
         _persist_bundle(output, bundle)
         print(json.dumps({"mode": "exclusive-plan-only", "budget_valid": False}, indent=2))
         return 0
@@ -231,6 +309,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         return 2 if not identity["complete"] else 3
 
     runs = []
+    judgments = []
     for item in scenarios.SYNTHETIC_SUITE:
         if item.get("cancel_after_s") is not None:
             deadline = time.monotonic() + float(item["cancel_after_s"])
@@ -256,6 +335,10 @@ def cmd_run(args: argparse.Namespace) -> int:
             cancel_check=cancel_check,
         )
         runs.append(run)
+        judgment = evidence.judge_synthetic(item, run)
+        judgments.append(judgment)
+        if not judgment["passed"]:
+            break
 
     bundle = _bundle(
         repo=repo,
@@ -267,15 +350,59 @@ def cmd_run(args: argparse.Namespace) -> int:
         exclusive=exclusive,
         mode=args.mode,
     )
+    bundle["behavior"] = judgments
+    bundle["identity_after"] = protocol.collect_identity(repo)
+    bundle["identity_unchanged"] = bundle["identity_after"] == identity
+    bundle["behavior_passed"] = len(judgments) == len(scenarios.SYNTHETIC_SUITE) and all(
+        j["passed"] for j in judgments
+    )
+    bundle["budget_effective"] = False
     _persist_bundle(output, bundle)
     print(json.dumps({
         "budget_valid": bundle["budget_valid"],
         "validity": bundle["validity"],
         "commands": bundle["commands"],
     }, indent=2))
-    if args.formal_budget and not bundle["budget_valid"]:
+    if not bundle["behavior_passed"] or not bundle["identity_unchanged"] or (args.formal_budget and not bundle["budget_valid"]):
         return 4
     return 0
+
+
+def cmd_repeat(args: argparse.Namespace) -> int:
+    output = Path(args.out).resolve()
+    _outside_repo(Path(args.repo), output)
+    try:
+        output.mkdir()  # Exclusive creation; never reuse another run's evidence root.
+    except FileExistsError:
+        print("REFUSE_EXISTING_OUTPUT", file=sys.stderr)
+        return 3
+    rounds = []
+    for number in range(1, args.repeat + 1):
+        round_dir = output / f"round{number}"
+        round_dir.mkdir()
+        one = argparse.Namespace(**vars(args) | {"repeat": None, "out": str(round_dir)})
+        code = cmd_run(one)
+        report_path = round_dir / "report.json"
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        if rounds and report["identity"] != rounds[0]["identity"]:
+            code = 4
+        rounds.append({
+            "round": number,
+            "exit_code": code,
+            "behavior_passed": report.get("behavior_passed") is True,
+            "report_path": str(report_path),
+            "identity": report["identity"],
+            "identity_unchanged": report["identity_unchanged"],
+            "report_sha256": hashlib.sha256(report_path.read_bytes()).hexdigest(),
+            "metrics": [{"path": run["metrics_path"], "sha256": hashlib.sha256(
+                Path(run["metrics_path"]).read_bytes()).hexdigest()} for run in report["runs"]],
+            "runs": report["runs"],
+        })
+        summary = evidence.summarize_rounds(rounds, args.repeat)
+        _write_json(output / "aggregate.json", summary)
+        if code != 0:
+            return code
+    return 0 if summary["behavior_passed"] else 4
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -297,6 +424,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     matrix = sub.add_parser("matrix", help="print old R04 matrix and exclusive-run mapping")
     matrix.set_defaults(func=cmd_matrix)
+
+    planned = sub.add_parser("plan", help="resolve matrix argv; never executes product or native apps")
+    planned.add_argument("--repo", default=".")
+    planned.add_argument("--out", required=True)
+    planned.add_argument("--python")
+    planned.add_argument("--node")
+    planned.add_argument("--npm")
+    planned.add_argument("--tsx")
+    planned.add_argument("--blender", help="explicit Blender executable; never guessed from /Applications")
+    planned.add_argument("--scene", help="resolve one scene; unknown ids fail closed")
+    planned.add_argument("--out-json", help="optional path to persist the plan JSON")
+    planned.add_argument("--strict", action="store_true", help="exit 2 if any scene is refused")
+    planned.set_defaults(func=cmd_plan)
 
     measure = sub.add_parser("measure-command", help="sample one command; keep metrics on failure")
     measure.add_argument("--repo", default=".")
@@ -321,6 +461,12 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--sample-interval", type=float, default=0.05)
     run.add_argument("--process-snapshot-json")
     run.add_argument("--formal-budget", action="store_true")
+    run.add_argument("--repeat", type=int, help="1–100 synthetic rounds in an exclusively new output root")
+    run.add_argument("--python")
+    run.add_argument("--node")
+    run.add_argument("--npm")
+    run.add_argument("--tsx")
+    run.add_argument("--blender", help="explicit Blender executable for exclusive plan; never guessed")
     run.set_defaults(func=cmd_run)
     return parser
 
@@ -328,6 +474,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.cmd == "run" and args.repeat is not None:
+        if not 1 <= args.repeat <= 100 or args.mode != "synthetic-local" or args.formal_budget:
+            parser.error("--repeat requires 1–100 rounds of non-formal synthetic-local mode")
     if args.cmd == "measure-command":
         command = list(args.command)
         if command and command[0] == "--":
