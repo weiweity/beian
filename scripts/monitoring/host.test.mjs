@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -7,9 +7,13 @@ import { fileURLToPath } from "node:url";
 import {
   assembleHost,
   createHostTransport,
+  decodeTextFile,
   loadMonitorIdentity,
+  main,
   parseHostArgs,
+  parseJsonFile,
   runHost,
+  stripUtfBom,
 } from "./host.mjs";
 import { createFixtureSampler } from "./runner/runner-core.mjs";
 
@@ -57,6 +61,51 @@ describe("host argv and identity", () => {
       () => loadMonitorIdentity(inside, { repoRoot }),
       /outside the git checkout/,
     );
+  });
+
+  it("strips a UTF-8 BOM from identity JSON", () => {
+    const dir = tmp();
+    const path = writeIdentity(dir);
+    const json = readFileSync(path);
+    writeFileSync(path, Buffer.concat([Buffer.from([0xEF, 0xBB, 0xBF]), json]));
+    assert.equal(stripUtfBom("\uFEFFabc"), "abc");
+    assert.equal(decodeTextFile(readFileSync(path)).startsWith("{"), true);
+    const identity = loadMonitorIdentity(path);
+    assert.equal(identity.receiveId, "ou_syntheticreceiveid0001");
+    assert.equal(parseJsonFile(path).schema, "beian-monitor-identity-v1");
+  });
+
+  it("strips a UTF-16 LE BOM from identity JSON", () => {
+    const dir = tmp();
+    const path = join(dir, "monitor-identity.json");
+    const json = JSON.stringify({
+      schema: "beian-monitor-identity-v1",
+      receiveId: "ou_syntheticreceiveid0001",
+      allowRealSend: false,
+    });
+    writeFileSync(path, Buffer.concat([Buffer.from([0xFF, 0xFE]), Buffer.from(json, "utf16le")]));
+    const identity = loadMonitorIdentity(path);
+    assert.equal(identity.allowRealSend, false);
+  });
+
+  it("writes host-error.json when identity JSON is invalid", async () => {
+    const root = tmp();
+    const stateDir = join(root, "state");
+    mkdirSync(stateDir);
+    const identityPath = join(root, "monitor-identity.json");
+    writeFileSync(identityPath, "\uFEFFnot-json");
+    const stderr = { chunks: [], write(text) { this.chunks.push(String(text)); } };
+    const code = await main([
+      "--state-dir", stateDir,
+      "--identity", identityPath,
+      "--loopback-url", "http://127.0.0.1:8787/api/health",
+      "--public-url", "https://www.jianghua.site/api/health",
+      "--once",
+    ], { stdout: { write() {} }, stderr });
+    assert.equal(code, 2);
+    const logged = JSON.parse(readFileSync(join(stateDir, "host-error.json"), "utf8"));
+    assert.match(logged.message, /invalid JSON/);
+    assert.match(stderr.chunks.join(""), /invalid JSON/);
   });
 
   it("does not send when allowRealSend is false", () => {

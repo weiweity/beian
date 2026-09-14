@@ -3,9 +3,9 @@
  * F02 杭州托管入口：显式路径装配探测、循环和飞书 bot transport。
  * 不读产品 settings / FEISHU_*，不改 Illustrator，不停 beian-server-8787。
  */
-import { readFileSync, statSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { request as httpsRequest } from "node:https";
-import { basename, isAbsolute, resolve } from "node:path";
+import { basename, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadMonitoringConfig } from "./config/load-config.mjs";
 import { createDeliveryQueue } from "./delivery/delivery-core.mjs";
@@ -79,6 +79,47 @@ function assertOutsideRepo(path, repoRoot) {
   }
 }
 
+export function stripUtfBom(text) {
+  if (typeof text !== "string" || text.length === 0) return text;
+  if (text.charCodeAt(0) === 0xFEFF) return text.slice(1);
+  return text;
+}
+
+export function decodeTextFile(buffer) {
+  const buf = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
+  if (buf.length >= 3 && buf[0] === 0xEF && buf[1] === 0xBB && buf[2] === 0xBF) {
+    return buf.subarray(3).toString("utf8");
+  }
+  if (buf.length >= 2 && buf[0] === 0xFF && buf[1] === 0xFE) {
+    return buf.subarray(2).toString("utf16le");
+  }
+  return stripUtfBom(buf.toString("utf8"));
+}
+
+export function parseJsonFile(path) {
+  try {
+    return JSON.parse(decodeTextFile(readFileSync(path)));
+  } catch (err) {
+    if (err instanceof SyntaxError) {
+      throw new Error(`invalid JSON in ${path}: ${err.message}`);
+    }
+    throw err;
+  }
+}
+
+function writeHostError(stateDir, err) {
+  if (!stateDir || !isAbsolute(stateDir)) return;
+  try {
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(join(stateDir, "host-error.json"), `${JSON.stringify({
+      at: new Date().toISOString(),
+      message: err instanceof Error ? err.message : String(err),
+    }, null, 2)}\n`);
+  } catch {
+    // Best-effort only; startup errors still go to stderr.
+  }
+}
+
 export function loadMonitorIdentity(path, { repoRoot } = {}) {
   if (typeof path !== "string" || !isAbsolute(path)) {
     throw new Error("identity path must be absolute");
@@ -89,7 +130,7 @@ export function loadMonitorIdentity(path, { repoRoot } = {}) {
   if (repoRoot) assertOutsideRepo(path, repoRoot);
   const stat = statSync(path);
   if (!stat.isFile()) throw new Error("identity is not a file");
-  const raw = JSON.parse(readFileSync(path, "utf8"));
+  const raw = parseJsonFile(path);
   if (!isPlainObject(raw) || raw.schema !== IDENTITY_SCHEMA) {
     throw new Error("identity schema must be beian-monitor-identity-v1");
   }
@@ -268,6 +309,7 @@ export async function main(argv = process.argv.slice(2), io = process) {
     }
     return result.code;
   } catch (err) {
+    writeHostError(args?.stateDir, err);
     io.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
     io.exitCode = 2;
     return 2;

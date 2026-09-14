@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.30.1.0] - 2026-09-14
+
+### Fixed
+- 杭州监控身份文件可带 UTF-8 或 UTF-16 BOM，Node 仍能加载；启动失败会在状态目录写下 `host-error.json`。
+- 安装器在注册计划任务前把 identity 重写成无 BOM 的 UTF-8，避免 PowerShell 5.1 `Set-Content -Encoding utf8` 让任务立刻退出码 2。
+
 ## [0.30.0.0] - 2026-09-14
 
 ### Added

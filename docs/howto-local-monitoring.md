@@ -70,15 +70,32 @@
 
 代码合入后，在杭州管理员 PowerShell（已提升）执行。本页不远程安装，也不停 `beian-server-8787` / cloudflared，不改 Illustrator。
 
-1. 在 `C:\supply\data\monitor-identity.json` 写入仓库外身份（模板见 `scripts/monitoring/host.identity.example.json`）。`allowRealSend` 为 true 时必须有绝对 `cliPath`（lark-cli）或独立的 `appId`/`appSecret`，不要复制产品 `settings.json`。
+1. 在 `C:\supply\data\monitor-identity.json` 写入仓库外身份（模板见 `scripts/monitoring/host.identity.example.json`）。不要用 PowerShell 5.1 的 `Set-Content -Encoding utf8`（会写 BOM，Node `JSON.parse` 会立刻退出码 2）。用无 BOM 的 UTF-8：
+
+   ```powershell
+   New-Item -ItemType Directory -Force -Path C:\supply\data | Out-Null
+   $identity = @"
+   {
+     "schema": "beian-monitor-identity-v1",
+     "receiveId": "ou_replaceme0001",
+     "allowRealSend": false
+   }
+   "@
+   $utf8 = New-Object System.Text.UTF8Encoding $false
+   [System.IO.File]::WriteAllText("C:\supply\data\monitor-identity.json", $identity.Trim() + "`n", $utf8)
+   ```
+
+   `allowRealSend` 为 true 时必须有绝对 `cliPath`（lark-cli）或独立的 `appId`/`appSecret`，不要复制产品 `settings.json`。
 2. 安装任务：
 
    ```powershell
    powershell -ExecutionPolicy Bypass -File scripts\windows\install-monitor.ps1
    ```
 
-   任务名固定 `beian-monitor-local`，SYSTEM、开机启动、Hidden、IgnoreNew。探测环回 `http://127.0.0.1:8787/api/health` 与公网 `https://www.jianghua.site/api/health`。
+   任务名固定 `beian-monitor-local`，SYSTEM、开机启动、Hidden、IgnoreNew。探测环回 `http://127.0.0.1:8787/api/health` 与公网 `https://www.jianghua.site/api/health`。安装器会去掉 identity 文件的 UTF-8/UTF-16 BOM。
 3. 卸载：`install-monitor.ps1 -Uninstall`。发版脚本不会自动安装该任务。
+
+   任务 `Ready` 且 `LastTaskResult` 为 2：先看 `C:\supply\data\runtime\monitor\host-error.json`，再在前台跑 `host.mjs --once` 看 stderr。`NextRunTime` 为空是因为触发器只有 AtStartup，不是失败标志。
 
 ## 故障排查
 
