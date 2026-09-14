@@ -4,7 +4,7 @@
 
 本地发布准备证据批次 `Q066-ship-20260914-Q7sMHL`：`beian-verify-9Zwo21/receipt.json` 的 test:quality 59、quality（59 项原基线不变）、typecheck/UI build、完整 L0 均 exit 0；server 751 pass / 1 skip，UI 378 pass，Python 1276 pass / 9 skip / 10 deselect。`mockup-render-versions` E2E 9/9 为独立临时构建、网络拦截的合成页面，无 Hono，不是性能采样。Claude 与 Codex 独立审查未留已证实 P0/P1/P2；静态路径评估 21/26（81%），非仪器覆盖率，仍披露五个测试补强点：候选开启后的能力拒绝矩阵、解析后目标身份漂移、非法 profile 输入形状、裸 SHA 归一化、中文错误映射断言。它们未补测，不另增待办主题。
 
-原生证据批次 `Q066-native-prep-20260913-Um0ExX/native-1` 绑定 `0b9cd4bf63e5d2b8226e85c0cfbb4a47a62f17b4`：单次 Mac 合成 TS jobs/runtime→Python→Blender→seal/current 正常链 PASS，77.867 秒；14 项候选、13 项公开封存产物（blend 留在候选），最大尺寸误差 `2.3748725652694702e-6 mm ≤ 0.5 mm`。`production_ready=false`、`human_acceptance=pending`；之后仅两处导出、注释及版本元数据变化，不能称最终发布树重新跑过原生。registry、默认模板与正式 baseline 未改；Windows/原生异常/断电、真实稿 L2/UAT、人审及 Q06.6/.7/.8 整体仍未完成。2026-09-14 同步时 `8578e47` 已推送、尚无 PR 或部署；已核实历史发布见 [TODOS.md](../../TODOS.md)。以下 2026-09-06 轮次、数字及“upgrade 拒绝”等结论保留当时语境，不作为 Q06.6 A 新证据。
+原生证据批次 `Q066-native-prep-20260913-Um0ExX/native-1` 绑定 `0b9cd4bf63e5d2b8226e85c0cfbb4a47a62f17b4`：单次 Mac 合成 TS jobs/runtime→Python→Blender→seal/current 正常链 PASS，77.867 秒；14 项候选、13 项公开封存产物（blend 留在候选），最大尺寸误差 `2.3748725652694702e-6 mm ≤ 0.5 mm`。`production_ready=false`、`human_acceptance=pending`；之后仅两处导出、注释及版本元数据变化，不能称最终发布树重新跑过原生。registry、默认模板与正式 baseline 未改；Windows/原生异常/断电、真实稿 L2/UAT、人审及 Q06.6/.7/.8 整体仍未完成。后续 PR #113 已合入，`51a6d0a` / `0.28.0.0` 的可信发布与公网版本于 `2026-09-13T17:05:01Z` 核验通过，A 代码完成发版 L1；完整发布证据见 [TODOS.md](../../TODOS.md)。本次杭州合同冒烟成功不开放 B/C，也不替代上述原生异常与业务验收。以下 2026-09-06 轮次、数字及“upgrade 拒绝”等结论保留当时语境，不作为 Q06.6 A 新证据。
 
 日期：2026-09-06。原开发分支：`codex/rf03-runtime-closeout`；本次收尾分支：`codex/rf03-runtime-ship`，起点 `e1c2d679` / 0.21.35.0。
 
