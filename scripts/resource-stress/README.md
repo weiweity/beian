@@ -50,22 +50,23 @@ python3 scripts/resource-stress/cli.py measure-command --repo "$REPO" --out "$OU
   python3 scripts/resource-stress/synthetic_child.py --mode success --out "$OUT/demo"
 ```
 
-`--out` 必须在仓库外。`--mode exclusive` 只持久化后续独占命令计划，不执行产品负载。
+`--out` 必须在仓库外。`--mode exclusive` 只持久化后续独占命令计划，不执行产品负载。`plan` 可用 `--python` / `--node` / `--npm` / `--tsx` / `--blender` 给出显式工具路径；相对路径按调用时工作目录绝对化，不跟随 venv 符号链接。`--scene ID` 只解析一个场景；`--strict` 在任一场景 refused 时退出 2。
 
 ## 后续独占运行（主 agent 串行，本轮不执行）
 
-把 `{repo}` `{out}` `{python}` `{node}` `{tsx}` `{blender}` 换成独占窗口的工作树、证据目录和显式解释器。五个业务探针已在 `scripts/resource-stress/probes/`。`plan` 解析 argv，不执行。Blender 必须显式给出，禁止猜 `/Applications` 或因已安装而启动。先 `--formal-budget` 预检，有干扰就停。
+把 `{repo}` `{out}` `{python}` `{node}` `{tsx}` `{blender}` 换成独占窗口的工作树、证据目录和显式解释器。五个业务探针已在 `scripts/resource-stress/probes/`。`plan` 解析 argv，不执行。Blender 必须用 `--blender` 或环境变量 `BEIAN_BLENDER` 给出绝对可执行文件，禁止猜 `/Applications` 或因已安装而启动。先 `--formal-budget` 预检，有干扰就停。
 
 覆盖映射见 `cli.py matrix`。对应 R04 项：
 
 | R04 | 场景 id | 本轮 |
 |---|---|---|
+| 基线切面 | normal | 未跑，命令已映射 |
 | 极端长宽比 | tall, wide | 未跑，命令已映射 |
 | 最大像素 | near-cap, exact-cap-paper, over-cap | 未跑；32MP ≠ RSS |
 | 双上传 | dual-upload | 未跑 |
-| busy | illustrator-busy | 产品 L0 模拟，非原生 |
+| busy | illustrator-busy | 产品 L0（`jobs.test.ts`）模拟，非原生 |
 | 串行 | blender-serial | 未跑，禁止本轮启动 Blender |
-| 调灯 | relight | 产品 L0 模拟，非 GPU |
+| 调灯 | relight | 产品 L0（`mockupStudio.test.ts`）模拟，非 GPU |
 | drain | queue-drain | 未跑 |
 | 失败/取消 | fail-cancel, failure-after-front | harness 合成已验；产品探针未跑 |
 
@@ -77,7 +78,7 @@ python3 scripts/resource-stress/cli.py measure-command \
   "$PY" -B "$REPO/scripts/resource-stress/probes/face_probe.py" "$REPO" "$OUT/near-cap" near-cap
 ```
 
-`over-cap` / `failure-after-front` 命中预期错误时探针 **exit 0**。必须核对 `result.json` 的 `expected_error` 与 `staging_left`；错误类别不符、缺结果或清理失败不能判行为通过。预期拒绝、模拟上传/队列、Q05 观察和 L0 模拟不得变成有效预算。下层若声称 `budget_valid=true`，保留原始 metrics/result，失败关闭，不改写原件。32MP 是像素上限；budget-probe 的 32MiB 是历史入参，都不是当前产品默认内存预算（磁盘 4096MiB / 内存 8192MiB）。
+`over-cap` / `failure-after-front` 命中预期错误时探针 **exit 0**。必须核对 `result.json` 的 `case`、`expected_error` 与 `staging_left`；场景 id 不符（例如普通尺寸结果当成 near-cap）、错误类别不符、缺结果或清理失败不能判行为通过。预期拒绝、模拟上传/队列、Q05 观察和 L0 模拟不得变成有效预算。下层若声称 `budget_valid=true`，保留原始 metrics/result，失败关闭，不改写原件。32MP 是像素上限；budget-probe 的 32MiB 是历史入参，都不是当前产品默认内存预算（磁盘 4096MiB / 内存 8192MiB）。
 
 ## Q05 长期复用入口（另需确认采样窗口）
 
@@ -99,7 +100,7 @@ sh scripts/resource-stress/q05_rounds.sh
 - 退出码：2 参数/未确认/输出边界；3 目录已存在；4 测量命令失败；5 预检/回执门失败。失败轮保留诊断；异常导致回执无法生成时，`receipt.err` 与 `receipt.exitcode` 为失败证据，不能宣称回执完整。
 - 两条用例的 timeout 不是整条 shell 的硬超时；本工具没有新增总超时或跨平台杀树保证。Windows 原生仍未支持/验收。
 
-五个业务探针已收编到仓库内。`measure.py` / `write_report.py` 由现有 `protocol.py`、`cli.py`、`evidence.py` 替代，不复制第二套采样器。`plan` 把 argv 解析与依赖评估分开记录：`argv_resolved` 表示占位符已填完；所选 Python 用 `importlib.util.find_spec('pymupdf')` 做轻量检查（不 import 产品、不启动 Blender）。缺 pymupdf / Node / tsx / 显式 Blender 时该场景 `ok=false` / `refused`。`dependencies_assessed` 只覆盖这些门，不声称全部运行时依赖已验证。无法支持或本切片未授权的场景明确拒绝，不虚构全部可运行。`synthetic-local` 与 `--repeat` 仍只跑轻量合成子进程，不因矩阵接线启动产品负载。`measure-command` 在产品矩阵路径上核对运行前后产品与执行工具身份；漂移失败关闭，不回写原件。
+五个业务探针已收编到仓库内。`measure.py` / `write_report.py` 由现有 `protocol.py`、`cli.py`、`evidence.py` 替代，不复制第二套采样器。`plan` 把 argv 解析与依赖评估分开记录：`argv_resolved` 表示占位符已填完。切面探针用所选 Python 做 `importlib.util.find_spec('pymupdf')` 轻量检查（不 import 产品、不启动 Blender）；缺 pymupdf 时这些场景 `ok=false` / `refused`。Node 场景缺 node/tsx、npm 场景缺 npm、`blender-serial` 缺显式 Blender 时同样 refused；`blender-serial` 不要求 pymupdf。`dependencies_assessed` 只覆盖这些门，不声称全部运行时依赖已验证。无法支持或本切片未授权的场景明确拒绝，不虚构全部可运行。`synthetic-local` 与 `--repeat` 仍只跑轻量合成子进程，不因矩阵接线启动产品负载。`measure-command` 在产品矩阵路径上核对运行前后产品与执行工具身份；漂移失败关闭，不回写原件。
 
 | 历史文件 | 处置 |
 |---|---|
@@ -117,9 +118,10 @@ sh scripts/resource-stress/q05_rounds.sh
 
 ```bash
 python3 -B -m unittest discover -s scripts/resource-stress -p 'test_*.py' -v
+node --test scripts/resource-stress/test_probes.mjs scripts/resource-stress/test_ship_probes.mjs
 ```
 
-合成 suite 覆盖成功 / 失败 / 取消 / 父进程 SIGTERM 收尾。只管理本工具创建的进程组。
+合成 suite 覆盖成功 / 失败 / 取消 / 父进程 SIGTERM 收尾。只管理本工具创建的进程组。Node 测试核对仓库内探针 argv 与计划接线，不启动 Blender、浏览器压测或双 100MiB 上传。
 
 整合补充：空运行、失败/取消或没有采样的运行一律不能标为有效预算。测量命令首进程退出后仍清理本工具创建的进程组（含忽略 SIGTERM 的组内后代）；主动逃离该进程组的后代、采样器被 SIGKILL 和 Windows Job Object 仍不在此证明范围。
 

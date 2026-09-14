@@ -33,7 +33,7 @@
    python3 scripts/resource-stress/cli.py matrix
    ```
 
-   矩阵列出 tall、wide、near-cap、dual-upload、blender-serial、relight、queue-drain 和失败/取消等场景，以及哪些仍未在本机执行。
+   矩阵列出 normal、tall、wide、near-cap、exact-cap-paper、over-cap、dual-upload、illustrator-busy、blender-serial、relight、queue-drain、fail-cancel 和 failure-after-front 等场景，以及哪些仍未在本机执行。
 
    解析仓库内探针 argv（不执行产品或原生应用）：
 
@@ -41,7 +41,7 @@
    python3 scripts/resource-stress/cli.py plan --repo . --out "$OUT"
    ```
 
-   未知场景、未解析占位符或缺少 pymupdf / Node / tsx / 显式 Blender 会失败关闭。`argv_resolved` 只表示命令已拼出；`dependencies_assessed` 是轻量门，不是全部运行时依赖已验证。Blender 不会从 `/Applications` 猜测，也不会因为本机已安装而启动。`synthetic-local` 仍只跑轻量合成子进程。
+   未知场景或未解析占位符会失败关闭。切面探针缺 pymupdf、Node 场景缺 node/tsx、npm 场景缺 npm、blender-serial 缺 `--blender` 或 `BEIAN_BLENDER` 时该场景 refused；blender-serial 不要求 pymupdf。`argv_resolved` 只表示命令已拼出；`dependencies_assessed` 是轻量门，不是全部运行时依赖已验证。Blender 不会从 `/Applications` 猜测，也不会因为本机已安装而启动。`synthetic-local` 仍只跑轻量合成子进程。
 
 4. 运行轻量合成套件。
 
@@ -57,6 +57,7 @@
 
    ```bash
    python3 -B -m unittest discover -s scripts/resource-stress -p 'test_*.py' -v
+   node --test scripts/resource-stress/test_probes.mjs scripts/resource-stress/test_ship_probes.mjs
    ```
 
 ## 验证
