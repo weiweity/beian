@@ -57,8 +57,8 @@
 | `CHANGELOG.md` | 版本变更历史；不代表已部署 |
 | `TODOS.md` | 未做项 |
 | [AGENTS.md](AGENTS.md) | 授权、任务路由和完成条件；详细工程合同按主题链接读取 |
-| `scripts/windows/README.md` | 杭州 Windows 生产备忘 |
-| `workers/packaging/README.md` | 打样 CLI、杭州单张结构导出（SHA-256 选稿）、`PackagingStructure` 语义合同、完整盒型与正面锚点确认、pymupdf 平面出图、白底/印刷面/PPT/GLB 产物合同，以及 RF-00/RF-10 测量尺与三层质量结果、RF-11 Blender 合同冒烟、RF-02 同步回滚、RF-03 本地候选验证/资源生命周期，以及 RF-06/RF-07/RF-08 诊断 registry 边界 |
+| `scripts/windows/README.md` | 杭州 Windows 生产备忘；单张结构导出的刀版层与独立 OutDir |
+| `workers/packaging/README.md` | 打样 CLI、杭州单张结构导出（SHA-256 选稿；刀版层、独立 OutDir、Mac `--dry-run`）、`PackagingStructure` 语义合同、完整盒型与正面锚点确认、pymupdf 平面出图、白底/印刷面/PPT/GLB 产物合同，以及 RF-00/RF-10 测量尺与三层质量结果、RF-11 Blender 合同冒烟、RF-02 同步回滚、RF-03 本地候选验证/资源生命周期，以及 RF-06/RF-07/RF-08 诊断 registry 边界 |
 
 ## 本机启动
 
