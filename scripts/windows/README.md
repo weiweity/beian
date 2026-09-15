@@ -14,9 +14,19 @@
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\windows\export-one-structure.ps1 -Sha256 <64-hex>
+powershell -ExecutionPolicy Bypass -File scripts\windows\export-one-structure.ps1 -Sha256 <64-hex> -ProposalLayers 刀版 -OutDir C:\supply\data\a02-samples\runs\<id>
 ```
 
-默认只扫 `C:\supply\data\a02-samples` 顶层 `*.ai`（不进子目录），输出 `C:\supply\data\a02-samples\runs\one`，超时 1260 秒。印刷/刀线层名用码点写出，避免 PowerShell 5.1 按 GBK 读乱 UTF-8 源。Python 可加 `--dry-run` 只写 `illustrator_input.json`，不拉 Illustrator。
+默认只扫 `C:\supply\data\a02-samples` 顶层 `*.ai`（不进子目录），输出 `C:\supply\data\a02-samples\runs\one`，超时 1260 秒。可选 `-PrintLayers` / `-ProposalLayers`（默认印刷、刀线，码点写出，避免 PowerShell 5.1 按 GBK 读乱 UTF-8 源）。层名是「刀版」的稿必须显式 `-ProposalLayers`，不能靠默认刀线。多张连导时每张用独立 `-OutDir`，不要都写进 `runs\one`。本脚本不传 `--dry-run`。
+
+只核哈希/层名、不拉 Illustrator 时直接跑 Python：
+
+```bash
+apps/web/backend/.venv/bin/python workers/packaging/tools/export_one_structure.py \
+  --source-dir <dir> --sha256 <64-hex> --out-dir <dir> --proposal-layers 刀版 --dry-run
+```
+
+Mac 对本地 `.ai` 也走这条，不能代替杭州 Session 1 导出。其余 12 张连导脚本留在仓库外 evidence，不进 Git。
 
 掉线告警计划任务 `beian-monitor-local` 是独立 SYSTEM 任务，安装器 `scripts/windows/install-monitor.ps1`。它不替代 `beian-server-8787`，不停 cloudflared，也不改 Illustrator Agent。发版脚本不会自动安装。身份文件必须在 `C:\supply\data\monitor-identity.json`，不要写进仓库。PowerShell 5.1 `Set-Content -Encoding utf8` 会写 BOM，导致 host 退出码 2；安装器会剥 BOM，失败时看 `C:\supply\data\runtime\monitor\host-error.json`。当前生产状态见 [TODOS.md](../../TODOS.md) F02。
 
