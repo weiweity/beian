@@ -12,7 +12,7 @@
 
 打样台需要本机 Blender 可执行文件路径，在网页「设置」里填。不要只写 `blender`。
 
-掉线告警计划任务 `beian-monitor-local` 是独立 SYSTEM 任务，安装器 `scripts/windows/install-monitor.ps1`。它不替代 `beian-server-8787`，不停 cloudflared，也不改 Illustrator Agent。发版脚本不会自动安装。身份文件必须在 `C:\supply\data\monitor-identity.json`，不要写进仓库。
+掉线告警计划任务 `beian-monitor-local` 是独立 SYSTEM 任务，安装器 `scripts/windows/install-monitor.ps1`。它不替代 `beian-server-8787`，不停 cloudflared，也不改 Illustrator Agent。发版脚本不会自动安装。身份文件必须在 `C:\supply\data\monitor-identity.json`，不要写进仓库。PowerShell 5.1 `Set-Content -Encoding utf8` 会写 BOM，导致 host 退出码 2；安装器会剥 BOM，失败时看 `C:\supply\data\runtime\monitor\host-error.json`。当前生产状态见 [TODOS.md](../../TODOS.md) F02。
 
 对外入口是 TypeScript（`apps/web/server`），不是 `uvicorn`。密钥和路径优先点侧栏「设置」里填。
 

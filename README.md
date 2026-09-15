@@ -43,7 +43,7 @@
 | [RF-07 棚光与色彩对照记录](docs/designs/packaging-quality-rf07-closeout.md) | 尺寸归一显式三灯棚、Standard / Neutral / AgX 匿名对照；仅诊断 registry，未改生产默认或正式 baseline |
 | [RF-08 投影采样交付记录](docs/designs/packaging-quality-rf08-closeout.md) | 已合入 main；诊断采样、历史发布与分阶段测试证据、合成对照口径；未改生产默认或正式 baseline |
 | [RF-09 浏览器交付记录](docs/designs/packaging-quality-rf09-closeout.md) | 分层 card→full、灯箱与下载冻结；PR #95 发布证据及实机验收边界 |
-| [本地监控操作指南](docs/howto-local-monitoring.md) | F02 合成回放、探测、投递与 runner 的安全本地回归 |
+| [本地监控操作指南](docs/howto-local-monitoring.md) | F02 合成回放，以及杭州 `beian-monitor-local` 安装（无 BOM identity、不停 8787） |
 | [本地监控设计说明](docs/explanation-local-monitoring.md) | 采样、判断、pending 交接与投递分层的原因和取舍 |
 | [R04 资源采证操作指南](docs/howto-resource-stress.md) | 合成资源采证、预检、退出码与正式预算边界 |
 | `docs/pouch-v1-acceptance.md` | 膜袋 v1 判定标准；L0 已接线为 3 mm 薄盒预览，杭州金标前不得宣称真实膜袋能力 |
