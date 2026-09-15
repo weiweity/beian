@@ -770,6 +770,28 @@ describe("windows release.ps1 contract", () => {
     assert.doesNotMatch(exportOne, /Stop-Service/);
     assert.doesNotMatch(exportOne, /beian-illustrator-agent/);
     assert.doesNotMatch(script, /export-one-structure\.ps1/);
+    assert.match(exportOne, /Parameter\(Mandatory = \$true\)\]\[string\]\$Sha256/);
+    assert.match(exportOne, /C:\\supply\\data\\a02-samples/);
+    assert.match(exportOne, /\[int\]\$Timeout = 1260/);
+    assert.match(exportOne, /\[string\]\$PrintLayers = "印刷"/);
+    assert.match(exportOne, /\[string\]\$ProposalLayers = "刀线"/);
+    assert.match(exportOne, /\$ErrorActionPreference = "Stop"/);
+    assert.match(exportOne, /\$env:WB_PYTHON/);
+    assert.match(exportOne, /apps\\web\\backend\\.venv\\Scripts\\python\.exe/);
+    assert.match(exportOne, /throw "python missing: \$py"/);
+    assert.match(exportOne, /throw "export_one_structure\.py missing"/);
+    assert.match(exportOne, /--source-dir \$SourceDir/);
+    assert.match(exportOne, /--sha256 \$Sha256/);
+    assert.match(exportOne, /--out-dir \$OutDir/);
+    assert.match(exportOne, /--timeout \$Timeout/);
+    assert.match(exportOne, /--print-layers \$PrintLayers/);
+    assert.match(exportOne, /--proposal-layers \$ProposalLayers/);
+    assert.match(exportOne, /exit \$LASTEXITCODE/);
+    assert.doesNotMatch(exportOne, /--dry-run/);
+    assert.doesNotMatch(exportOne, /cloudflared\s+tunnel/i);
+    assert.doesNotMatch(exportOne, /taskkill/i);
+    assert.doesNotMatch(exportOne, /Stop-Process/i);
+    assert.doesNotMatch(exportOne, /Unregister-ScheduledTask/);
   });
 
   it("Actions runner downloads an exact-commit bootstrap without mutating the production index", () => {

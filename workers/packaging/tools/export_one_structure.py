@@ -18,10 +18,21 @@ WORKER = Path(__file__).resolve().parent.parent / "illustrator" / "illustrator_w
 DEFAULT_APP = Path(
     r"C:\Program Files\Adobe\Adobe Illustrator 2026\Support Files\Contents\Windows\Illustrator.exe"
 )
+HASH_CHUNK = 1024 * 1024
+# Same outer wait as workers/packaging/illustrator/unattended_wait.OUTER_SECONDS.
+OUTER_SECONDS = 1260
 
 
 def file_sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while chunk := stream.read(HASH_CHUNK):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def split_layers(raw: str) -> list[str]:
+    return [part.strip() for part in raw.split(",") if part.strip()]
 
 
 def find_by_sha256(root: Path, digest: str) -> Path:
@@ -41,12 +52,12 @@ def build_payload(
     application: Path,
     print_layers: list[str],
     proposal_layers: list[str],
+    source_sha256: str,
 ) -> dict[str, object]:
-    digest = file_sha256(source)
     return {
         "application": str(application),
         "source_ai": str(source),
-        "source_sha256": digest,
+        "source_sha256": source_sha256,
         "full_pdf": str(out_dir / "full.pdf"),
         "print_pdf": str(out_dir / "artwork.pdf"),
         "structure_json": str(out_dir / "structure.json"),
@@ -67,7 +78,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--application", type=Path, default=DEFAULT_APP)
     parser.add_argument("--print-layers", default="印刷")
     parser.add_argument("--proposal-layers", default="刀线")
-    parser.add_argument("--timeout", type=int, default=1260)
+    parser.add_argument("--timeout", type=int, default=OUTER_SECONDS)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
 
@@ -78,13 +89,12 @@ def main(argv: list[str] | None = None) -> int:
         source=source,
         out_dir=out_dir,
         application=args.application,
-        print_layers=[part for part in args.print_layers.split(",") if part.strip()],
-        proposal_layers=[part for part in args.proposal_layers.split(",") if part.strip()],
+        print_layers=split_layers(args.print_layers),
+        proposal_layers=split_layers(args.proposal_layers),
+        source_sha256=args.sha256.strip().lower(),
     )
     if not payload["print_layers"] or not payload["proposal_layers"]:
         raise SystemExit("print_layers and proposal_layers must be non-empty")
-    if not payload["source_sha256"]:
-        raise SystemExit("source_sha256 is required for semantic export")
     config_path = out_dir / "illustrator_input.json"
     config_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print("source", source.name)
