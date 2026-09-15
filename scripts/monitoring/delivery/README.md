@@ -117,7 +117,7 @@ node --test scripts/monitoring/*.test.mjs
 
 ## 独立飞书 bot transport
 
-`feishu-bot-transport.mjs` 把脱敏 payload 编成 `lark-cli im +messages-send --as bot --user-id ou_… --text …`。调用方必须注入绝对 `cliPath`、`ou_` 接收人和 `exec`。`createLarkCliExec()` 默认 `allowRealSend=false`，不会 spawn。不读产品 `notify.ts` / `FEISHU_*` / 环境变量。真实发送、杭州计划任务和通知验收仍需另外授权。
+`feishu-bot-transport.mjs` 把脱敏 payload 编成 `lark-cli im +messages-send --as bot --user-id ou_… --text …`，或走 HTTP `appId`/`appSecret`。调用方必须注入绝对 `cliPath`、`ou_` 接收人和 `exec`，或 HTTP 凭据。`createLarkCliExec()` 默认 `allowRealSend=false`，不会 spawn。不读产品 `notify.ts` / `FEISHU_*` / 环境变量。杭州托管与测试消息状态见 [TODOS.md](../../../TODOS.md) F02，不以停生产服务测告警。
 
 ```js
 import { createFeishuBotTransport, createLarkCliExec } from "./feishu-bot-transport.mjs";

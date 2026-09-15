@@ -2,7 +2,7 @@
 
 这是当前未完成事项的唯一清单。已完成代码和版本历史写 `CHANGELOG.md`；设计理由写 ADR；阶段证据留在对应 closeout，真实稿与输出留在 Git 外的私有证据目录。
 
-更新：2026-09-14。截至 `2026-09-14T13:51:01Z` 的最新已核实发布记录为 `7f2cf1c2d5b7adc260375234d48cced46afaa0e9` / `0.29.0.0`（[PR #115](https://github.com/weiweity/beian/pull/115) 已合入 `main`、同 SHA 的 [杭州发布](https://github.com/weiweity/beian/actions/runs/34848812422) 成功，公网 health HTTP 200、`ok=true`、`version=0.29.0.0`）。这是 Q05 回执门禁与 R04 仓内探针计划的发版 L1；默认仍只跑轻量合成，不启动 Blender/浏览器压测或双 100MiB 上传，也不冻结正式预算。Q06.6 A 代码此前已完成发版 L1，生产候选未启用。Q01–Q04 合成补采、限定范围的人工视觉接受与 Q05 三轮 Mac 合成观察已完成，详见各主题；保留 **21 个未闭环主题（P1 10、P2 7、P3 4）**。阶段实现与验证记录随下方条目更新；历史发布证据不替代本轮本地回归或业务验收。“待确认”表示未见批准/完成证据，不替用户判断外部事项已办或未办。不再重复派发 Q05 回执、R04 探针、clearcoat 修复、Q06.6 A 或监控核心。
+更新：2026-09-15。截至 `2026-09-14T16:15:00Z` 的最新已核实发布记录为 `4a2be76245b96e8432fc06ad4795a4d20be583a5` / `0.30.1.0`（[PR #117](https://github.com/weiweity/beian/pull/117) 已合入 `main`、同 SHA 的 [杭州发布](https://github.com/weiweity/beian/actions/runs/34867469494) 成功，公网 health HTTP 200、`ok=true`、`version=0.30.1.0`）。该版本修了监控 identity 的 UTF-8/UTF-16 BOM，安装器注册前重写无 BOM。其上一版 `0.30.0.0`（[PR #116](https://github.com/weiweity/beian/pull/116)）交付独立飞书 bot 通道与杭州计划任务 `beian-monitor-local`。Q05 回执门禁与 R04 仓内探针计划仍以 `0.29.0.0` 为工具发版 L1；默认仍只跑轻量合成，不启动 Blender/浏览器压测或双 100MiB 上传，也不冻结正式预算。Q06.6 A 代码此前已完成发版 L1，生产候选未启用。Q01–Q04 合成补采、限定范围的人工视觉接受与 Q05 三轮 Mac 合成观察已完成，详见各主题；保留 **21 个未闭环主题（P1 10、P2 7、P3 4）**。其中 F02 杭州托管与测试消息已按当前意图收口（未停 8787/cloudflared 做真实掉线，主题框仍开）；B02 放下；B03 保护已生效、归属暂缓。阶段实现与验证记录随下方条目更新；历史发布证据不替代本轮本地回归或业务验收。“待确认”表示未见批准/完成证据，不替用户判断外部事项已办或未办。不再重复派发 Q05 回执、R04 探针、clearcoat 修复、Q06.6 A 或监控核心。
 
 此前发布证据：[PR #102](https://github.com/weiweity/beian/pull/102)、merge `c62caed`、[hangzhou-release 34244831374](https://github.com/weiweity/beian/actions/runs/34244831374) 成功及同次公网 health `0.23.0.0`。仓库外完整记录：`~/Desktop/beian-evidence/2026-09-08-two-pr-ship/REPORT.md`。以下 R01/Q05 的已发布状态复用此证据，不代表业务验收完成。
 
@@ -20,7 +20,7 @@
 
 此前已核实发布：[PR #113](https://github.com/weiweity/beian/pull/113) 于 `2026-09-13T17:01:42Z` squash 合入 `main`，merge `51a6d0a8415aeb0eb461e2dcda7e155c77568a3a` / `0.28.0.0`。最终 PR HEAD `7e736c0903067c0af1aafca60ad5d9b61f749b17` 的 [CI 34769666930](https://github.com/weiweity/beian/actions/runs/34769666930) 两项检查成功；同 merge SHA 的 [hangzhou-release 34770336031](https://github.com/weiweity/beian/actions/runs/34770336031) 成功，`hangzhou-windows` 来源、目标 SHA/VERSION、Illustrator Session 1 与 Blender 合同冒烟已核对。`2026-09-13T17:05:01Z` 公网 health 返回 HTTP 200、`ok=true`、`version=0.28.0.0`，Q06.6 A 代码已完成发版 L1。B 生产装配、C 启用、Windows 异常/断电、正式性能预算、真实稿 L2/UAT 与登录后业务页面仍未验收；不能用合同冒烟成功代替这些证明。仓库外证据批次：`Q066-ship-20260914-Q7sMHL/RELEASE.md`。
 
-此前文档发布：[PR #114](https://github.com/weiweity/beian/pull/114) merge `cc74f44` / `0.28.0.1`；[杭州发布](https://github.com/weiweity/beian/actions/runs/34804472389) 成功，仓库外 `docs-land-20260914-vh73em/RELEASE.md`。截至 `2026-09-14T04:05:54.577Z` 核验为当时最新；现已被 `0.29.0.0` 取代。
+此前发布：[PR #116](https://github.com/weiweity/beian/pull/116) / `0.30.0.0` 交付独立飞书 bot 通道与杭州 `beian-monitor-local`；[PR #115](https://github.com/weiweity/beian/pull/115) merge `7f2cf1c` / `0.29.0.0` 为 Q05/R04 工具发版 L1。更早文档发布：[PR #114](https://github.com/weiweity/beian/pull/114) merge `cc74f44` / `0.28.0.1`；[杭州发布](https://github.com/weiweity/beian/actions/runs/34804472389) 成功，仓库外 `docs-land-20260914-vh73em/RELEASE.md`。
 
 ## 状态与执行口径
 
@@ -38,8 +38,8 @@
 
 | 顺序 | 执行包 | 交付与依赖 |
 |---|---|---|
-| 已完成前置 | 主线/工具发版事实对齐 | 0.29.0.0 发版 L1 已核实（PR #115）。Q05/R04 采证工具已完成发版 L1；Q01–Q05 采证/人工接受记录已归档。不再重复派发 Q05 回执、R04 探针、clearcoat 修复、Q06.6 A 或监控核心。继续保留 Q06 A/B/C 边界，不重复开发 R01 或 RF-10 |
-| 2 | 并行：R04/Q05 实测准备、F02 渠道、B02/B03 资料 | 准备批次已归档。F02 渠道与测试故障/恢复已人工确认。杭州 `beian-monitor-local` 已 Running（BOM 去掉后 `--once` 四源 ok，`allowRealSend=false` 不发送）。B02 放下。B03 归属暂缓。Q05/R04 独占窗口未开跑 |
+| 已完成前置 | 主线/工具发版事实对齐 | 0.30.1.0 发版 L1 已核实（PR #117）。Q05/R04 采证工具已完成发版 L1（0.29.0.0）；Q01–Q05 采证/人工接受记录已归档。F02 杭州托管与测试消息已按当前意图收口。不再重复派发 Q05 回执、R04 探针、clearcoat 修复、Q06.6 A 或监控核心。继续保留 Q06 A/B/C 边界，不重复开发 R01 或 RF-10 |
+| 2 | 并行：R04/Q05 实测准备、F02 渠道、B02/B03 资料 | 准备批次已归档。F02 渠道、Mac 测试故障/恢复、杭州托管测试消息均已人工确认。identity `allowRealSend=true`（独立 bot，非产品 `FEISHU_*`）。未停 8787/cloudflared 做真实掉线。B02 放下。B03 归属暂缓。Q05/R04 独占窗口未开跑 |
 | 3 | A01–A04 真实样本与人工真值 | 可与上项并行准备样本和真值；实际处理另按许可与窗口执行 |
 | 4 | Q06.4：Windows 异常路径证明（暂缓） | 用户于 2026-09-08 决定暂不准备隔离机；恢复前确认隔离环境与范围。确认后再推进后续生产装配与综合验收。保留杭州生产环境，不做生产故障注入；成功路径不替代异常证明 |
 | 5 | Q06.6 B–Q06.7：生产装配候选与 RF-12 | A 隔离候选代码已发布；B 仍依赖 .4 与八点审计。默认保持关闭，综合回归和耐久性分别取证 |
@@ -239,13 +239,13 @@ RF-10–RF-13 的原始依赖见 [ADR-007 §20.7](docs/adr-007-packaging-render-
 
 - [ ] **F02 — Tunnel / 服务掉线告警**
 
-  用户确认由本人接收。2026-09-14 选定渠道为**独立飞书 bot**（`--as bot`），托管目标为杭州 Windows 计划任务。经明确授权，F02 transport 一次性 `allowRealSend=true` 向本人发出测试故障和测试恢复，用户均确认飞书已收到。未走产品 `FEISHU_*`。已增加杭州托管入口 `scripts/monitoring/host.mjs` 与安装器 `scripts/windows/install-monitor.ps1`（SYSTEM、`beian-monitor-local`、不停生产服务、不改 Illustrator、不由 `release.ps1` 自动安装）。杭州本机已安装：identity 在 `C:\supply\data\monitor-identity.json`（`allowRealSend=false`）。首次 `LastTaskResult=2` 已核实为 PowerShell 5.1 UTF-8 BOM；去掉 BOM 后 `--once` 退出 0，四源均为 ok（8787 / cloudflared / loopback / public），任务 `State=Running`、`LastTaskResult=267009`、进程 `host.mjs` pid 33204。投递为 `no_transport`。真实发送仍未启用。证据：`f02-test-send.json`、`f02-test-recovery.json`。
+  用户确认由本人接收。2026-09-14 选定渠道为**独立飞书 bot**（`--as bot`），托管目标为杭州 Windows 计划任务。经明确授权，F02 transport 一次性 `allowRealSend=true` 向本人发出测试故障和测试恢复，用户均确认飞书已收到。未走产品 `FEISHU_*`。已增加杭州托管入口 `scripts/monitoring/host.mjs` 与安装器 `scripts/windows/install-monitor.ps1`（SYSTEM、`beian-monitor-local`、不停生产服务、不改 Illustrator、不由 `release.ps1` 自动安装）。杭州 identity 在 `C:\supply\data\monitor-identity.json`：`allowRealSend=true`，独立 bot `appId=cli_aa042a6e0779dbd5`，`receiveId=ou_5c0460f3d3bb88bfc507b5cc024b8dfc`。BOM 导致的首次退出码 2 已在 0.30.1.0 修掉。2026-09-15 杭州来源测试消息用户确认「有了」。未停 8787/cloudflared，真实掉线/恢复现场仍开放。证据：`f02-test-send.json`、`f02-test-recovery.json`。
 
-  本轮交付独立 transport：`scripts/monitoring/delivery/feishu-bot-transport.mjs`。须显式绝对 `cliPath`、`ou_` 接收人和 `exec`；`createLarkCliExec()` 默认 `allowRealSend=false`。合成测试覆盖 argv、拒绝环境变量、exit 10/丢失确认/缺二进制与队列接线。Windows 托管安装和故障/恢复现场验收仍开放。
+  本轮交付独立 transport：`scripts/monitoring/delivery/feishu-bot-transport.mjs`。须显式绝对 `cliPath`、`ou_` 接收人和 `exec`，或 HTTP `appId`/`appSecret`；`createLarkCliExec()` 默认 `allowRealSend=false`。合成测试覆盖 argv、拒绝环境变量、exit 10/丢失确认/缺二进制与队列接线。杭州托管与测试消息见上段；不以停生产服务测告警。整项仍开放。
 
-  配置装载切片已随 PR #112 / `0.27.0.0` 完成发版 L1（截至 `2026-09-13T13:00:29Z`，发布证据见页首）：显式绝对路径的非敏感策略装载复用既有 normalizer；显式 null、空来源数组、未知/禁止字段及非法范围均失败关闭。监控局部合成回归 157/157 通过；未装配真实 transport、接收人或 Windows 监控托管，也未发送消息。发版 L1 不等于告警服务接入，整项仍开放。
+  配置装载切片已随 PR #112 / `0.27.0.0` 完成发版 L1：显式绝对路径的非敏感策略装载复用既有 normalizer；显式 null、空来源数组、未知/禁止字段及非法范围均失败关闭。
 
-  状态：2026-09-09 本地判断核心与 fixture 回放已随 PR #105 / `0.24.0.0` 发布，实现位于 `scripts/monitoring/`。来源独立分类、去抖、故障/恢复去重、状态持久化与脱敏草稿已有合成回归；整合补充 URL/嵌套字段不进入事件草稿的回归。第二阶段只读探测适配器与渠道无关投递模块已随 PR #106 / `0.25.0.0` 发布，新增非零退出/诊断脱敏修复与三模块串联回归。第二阶段探测仅 mock、投递仅同步 fake。第三阶段 Promise 投递/超时/取消与本地循环/pending 恢复已随 PR #107 / `0.26.0.0` 合并，并通过 PR #108 的发布链修复后部署；quality 与 Windows contract checks 已通过，公网发版 L1 已核对。第三阶段证据：`~/Desktop/beian-evidence/2026-09-09-f02-runtime-integration/`。真实渠道、Windows 部署及现场验收仍待实施；进程模型不证明断电耐久。OCR 审查后已修复 HTTP 错误状态丢失、正文读取无容量上限、重启重试上限漂移及取消监听残留；83 项本地测试通过；证据在仓库外 `~/Desktop/beian-evidence/2026-09-09-f02-integration/`。整项仍开放。
+  状态：本地判断核心、探测、投递、runner 与杭州 host 已随 0.24.0.0–0.30.1.0 发布。进程模型不证明断电耐久。不以主动停 8787/cloudflared 测告警。整项仍开放。
 
   1. 确认监控对象 `beian-server-8787`、cloudflared 的可读状态、告警接收人/渠道、去抖与恢复规则。
   2. 在隔离环境实现故障/恢复判断、重复抑制及消息草稿，用模拟故障验证，不以主动停生产服务测告警。

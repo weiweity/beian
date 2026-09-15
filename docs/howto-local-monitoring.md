@@ -64,11 +64,11 @@
 
 ## 验证
 
-四组测试都应退出码为 0。测试使用 mock、fixture 和临时目录，不代表 Windows `Get-Service`、真实网络、飞书渠道、断电耐久或 exactly-once 已通过。当前模块只提供本地候选能力，是否部署仍由 [TODOS.md](../TODOS.md) 和发布合同决定。飞书 bot transport 的合成回归在 `scripts/monitoring/delivery/feishu-bot-transport.test.mjs`：注入假 exec，断言 argv 与结果映射，不访问网络。
+四组测试都应退出码为 0。测试使用 mock、fixture 和临时目录，不代表断电耐久、exactly-once，也不等于停 8787/cloudflared 的真实掉线验收。飞书 bot transport 的合成回归在 `scripts/monitoring/delivery/feishu-bot-transport.test.mjs`：注入假 exec，断言 argv 与结果映射，不访问网络。杭州任务是否在跑、是否允许真实发送，以 [TODOS.md](../TODOS.md) F02 为准。
 
 ## 杭州计划任务（需在杭州本机执行）
 
-代码合入后，在杭州管理员 PowerShell（已提升）执行。本页不远程安装，也不停 `beian-server-8787` / cloudflared，不改 Illustrator。
+杭州生产机已注册 `beian-monitor-local`（见 TODOS F02）。需要重装或换 identity 时，在杭州管理员 PowerShell（已提升）执行。本页不远程安装，也不停 `beian-server-8787` / cloudflared，不改 Illustrator。
 
 1. 在 `C:\supply\data\monitor-identity.json` 写入仓库外身份（模板见 `scripts/monitoring/host.identity.example.json`）。不要用 PowerShell 5.1 的 `Set-Content -Encoding utf8`（会写 BOM，Node `JSON.parse` 会立刻退出码 2）。用无 BOM 的 UTF-8：
 
@@ -101,6 +101,8 @@
 
 - 看到 `platform_not_windows`：这是 Mac 默认行为。使用注入的 executor 运行测试，或在获准的 Windows 隔离环境做实机验证；不要把 Mac 输出改写成 Windows 结论。
 - 看到 `no_transport`：runner/delivery 没有发送器是默认安全状态。检查是否只是想做合成回归，不要为排错读取产品通知密钥。
+- 看到 `runner already running`：`host.mjs --once` 拒绝共享已在跑的计划任务 state。只停 `beian-monitor-local` / `host.mjs`，不停 8787 或 cloudflared。
+- 看到 `appSecret must be explicit`：identity 里的 `appSecret` 过短或未写入。PowerShell 5.1 的 `Read-Host -AsSecureString` 若整段粘贴脚本，可能把下一行当成密钥。
 - 状态文件解析失败：模块会拒绝坏文件且不会静默清空。删除或替换状态文件属于运维决定，不在此步骤自动执行。
 - Promise 投递超时：结果会变成 `unknown`，迟到的确认不能覆盖它；同来源后续事件会等待原 Promise settle，以保持顺序。
 

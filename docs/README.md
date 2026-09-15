@@ -13,13 +13,13 @@
 | 版本变更历史 | [CHANGELOG.md](../CHANGELOG.md) | 版本条目不等于已部署；发布需 SHA/run/health 证据 |
 | 一次性交付/验收/诊断 | 对应 `docs/designs/*closeout.md` 或带日期报告 | 标明日期、适用代码、证据层级与未确认项；历史结论不作为自动执行指令 |
 | 杭州发布与运维 | [发布合同](contracts/release.md)、[Windows README](../scripts/windows/README.md) | 前者约束权限/流程，后者维护平台操作实现；状态查询不授权生产动作 |
-| 本地运维工具操作与设计 | [监控操作指南](howto-local-monitoring.md)、[监控设计说明](explanation-local-monitoring.md)、[R04 资源采证指南](howto-resource-stress.md) | 只描述合成/本地候选流程；真实渠道、Windows、杭州和正式预算仍以 TODO 与对应合同为准 |
+| 本地运维工具操作与设计 | [监控操作指南](howto-local-monitoring.md)、[监控设计说明](explanation-local-monitoring.md)、[R04 资源采证指南](howto-resource-stress.md) | 合成回归与杭州计划任务安装步骤见操作指南；真实掉线（停生产服务）、正式预算仍以 TODO 与对应合同为准 |
 
 ## 当前进度从哪里读
 
 先读 TODOS 中本任务对应的未完成项，再跟随其 ADR/交付记录；只有需要核实该阶段事实时才读取其具体证据。代码实现看当前 checkout，PR 状态看对应最终 HEAD，生产状态绑定 merge SHA、同次可信发布与杭州来源的 health。不要把主线、本地未提交工作、开放 PR 和公网画面混为一个状态。
 
-`RF-00～RF-11` 等阶段结论应带 Code/L0/发版 L1/质量门杭州实跑/L2/UAT 层级；历史文件的“当前”仅指其记录日期。未部署、未做人验、真实稿未核定时明确保留未完成，不把待办日期经过当作自动关闭。词义以 [TODOS.md](../TODOS.md) 状态口径为准：发版 L1 ≠ 质量门杭州实跑 ≠ L2/UAT。最新已核实发布的版本、时间及完整 SHA/run/杭州来源/公网 health 证据统一维护在 TODOS 页首；本文不复制“最新版本”，此前发布仅作历史记录。Q06.6 A 隔离候选已完成代码发版，B 生产装配、C 启用仍关闭；本地/单次 Mac 原生证据见 [runtime 收口补记](designs/packaging-quality-rf03-runtime-closeout.md)。F02 配置装载已随 0.27.0.0 发布，真实 transport 与 Windows 监控托管仍未接入；用户指定自己接收，渠道及投递身份仍待明确。Q01–Q04 合成补采、限定视觉接受与 Q05 三轮 Mac 合成观察已完成，其身份和边界见 TODOS 对应主题，不再以旧准备报告的“等待采样”作为当前状态。RF-11 质量门杭州实跑的历史证据为 `0.21.46.0`（`3fcfea75`，run `34191398011`，约 62s、90s 冻结、Job Object 成功路径）；0.28.0.0 发布也真跑了合同冒烟，仍不替代异常路径、断电或 L2/UAT。Mac 合成现状的[正式 baseline](../workers/packaging/fixtures/render-quality/baselines/README.md)已在 `0.23.0.0` 候选中获批冻结；其他范围的质量批准、Windows/真实稿与业务验收仍开放。
+`RF-00～RF-11` 等阶段结论应带 Code/L0/发版 L1/质量门杭州实跑/L2/UAT 层级；历史文件的“当前”仅指其记录日期。未部署、未做人验、真实稿未核定时明确保留未完成，不把待办日期经过当作自动关闭。词义以 [TODOS.md](../TODOS.md) 状态口径为准：发版 L1 ≠ 质量门杭州实跑 ≠ L2/UAT。最新已核实发布的版本、时间及完整 SHA/run/杭州来源/公网 health 证据统一维护在 TODOS 页首；本文不复制“最新版本”，此前发布仅作历史记录。Q06.6 A 隔离候选已完成代码发版，B 生产装配、C 启用仍关闭；本地/单次 Mac 原生证据见 [runtime 收口补记](designs/packaging-quality-rf03-runtime-closeout.md)。F02 独立 bot 与杭州计划任务 `beian-monitor-local` 已接入，测试消息已人工确认；不以停 8787/cloudflared 做真实掉线，主题仍开放。Q01–Q04 合成补采、限定视觉接受与 Q05 三轮 Mac 合成观察已完成，其身份和边界见 TODOS 对应主题，不再以旧准备报告的“等待采样”作为当前状态。RF-11 质量门杭州实跑的历史证据为 `0.21.46.0`（`3fcfea75`，run `34191398011`，约 62s、90s 冻结、Job Object 成功路径）；0.28.0.0 发布也真跑了合同冒烟，仍不替代异常路径、断电或 L2/UAT。Mac 合成现状的[正式 baseline](../workers/packaging/fixtures/render-quality/baselines/README.md)已在 `0.23.0.0` 候选中获批冻结；其他范围的质量批准、Windows/真实稿与业务验收仍开放。
 
 ## 改文档的方法
 
