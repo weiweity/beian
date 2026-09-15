@@ -142,9 +142,9 @@ V2 任务在产品项中写 `"structure_engine": "v2"`。显式 sidecar 可写 `
     powershell -ExecutionPolicy Bypass -File scripts\windows\export-one-structure.ps1 -Sha256 <64-hex>
 
     apps/web/backend/.venv/bin/python workers/packaging/tools/export_one_structure.py \
-      --source-dir <dir> --sha256 <64-hex> --out-dir <dir> [--dry-run]
+      --source-dir <dir> --sha256 <64-hex> --out-dir <dir> [--proposal-layers 刀线] [--dry-run]
 
-`--dry-run` 只写 `illustrator_input.json`。L0 见 `apps/web/backend/tests/test_export_one_structure.py`，不启动 Illustrator COM。
+`--dry-run` 只写 `illustrator_input.json`。层名是「刀版」的稿传 `--proposal-layers 刀版`。多张连导每张独立 `--out-dir`。L0 见 `apps/web/backend/tests/test_export_one_structure.py`，不启动 Illustrator COM。Mac 对本地哈希做 `--dry-run` 只核 payload，不能代替杭州导出。
 
 ## 输出
 

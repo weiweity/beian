@@ -2,7 +2,7 @@
 
 这是当前未完成事项的唯一清单。已完成代码和版本历史写 `CHANGELOG.md`；设计理由写 ADR；阶段证据留在对应 closeout，真实稿与输出留在 Git 外的私有证据目录。
 
-更新：2026-09-15。截至 `2026-09-15T08:34:43Z` 的最新已核实发布记录为 `ba3285dda35d6db38be71634b61375cb1dc7598d` / `0.30.3.0`（[PR #119](https://github.com/weiweity/beian/pull/119) 已合入 `main`、同 SHA 的 [杭州发布](https://github.com/weiweity/beian/actions/runs/34947254902) 成功，公网 health HTTP 200、`ok=true`、`version=0.30.3.0`）。该版本提供按 SHA-256 选稿的杭州单张结构导出。其上一版 `0.30.2.0`（[PR #118](https://github.com/weiweity/beian/pull/118)）对齐 F02/TODOS 文档。`0.30.1.0`（[PR #117](https://github.com/weiweity/beian/pull/117)）修了监控 identity 的 UTF-8/UTF-16 BOM。`0.30.0.0`（[PR #116](https://github.com/weiweity/beian/pull/116)）交付独立飞书 bot 通道与杭州计划任务 `beian-monitor-local`。Q05 回执门禁与 R04 仓内探针计划仍以 `0.29.0.0` 为工具发版 L1；默认仍只跑轻量合成，不启动 Blender/浏览器压测或双 100MiB 上传，也不冻结正式预算。Q06.6 A 代码此前已完成发版 L1，生产候选未启用。Q01–Q04 合成补采、限定范围的人工视觉接受与 Q05 三轮 Mac 合成观察已完成，详见各主题；保留 **21 个未闭环主题（P1 10、P2 7、P3 4）**。其中 F02 杭州托管与测试消息已按当前意图收口（未停 8787/cloudflared 做真实掉线，主题框仍开）；B02 放下；B03 保护已生效、归属暂缓。阶段实现与验证记录随下方条目更新；历史发布证据不替代本轮本地回归或业务验收。“待确认”表示未见批准/完成证据，不替用户判断外部事项已办或未办。不再重复派发 Q05 回执、R04 探针、clearcoat 修复、Q06.6 A 或监控核心。
+更新：2026-09-15。截至 `2026-09-15T09:35:49Z` 的最新已核实发布记录为 `e8e30bde26bc46a9c3ab11490a938ea3eb626100` / `0.30.3.1`（[PR #120](https://github.com/weiweity/beian/pull/120) 已合入 `main`、同 SHA 的 [杭州发布](https://github.com/weiweity/beian/actions/runs/34953074818) 成功，公网 health HTTP 200、`ok=true`、`version=0.30.3.1`）。该版本把 TODOS 对齐已核实的 `0.30.3.0` 发版 L1。其上一版 `0.30.3.0`（[PR #119](https://github.com/weiweity/beian/pull/119)）提供按 SHA-256 选稿的杭州单张结构导出。`0.30.2.0`（[PR #118](https://github.com/weiweity/beian/pull/118)）对齐 F02/TODOS 文档。`0.30.1.0`（[PR #117](https://github.com/weiweity/beian/pull/117)）修了监控 identity 的 UTF-8/UTF-16 BOM。`0.30.0.0`（[PR #116](https://github.com/weiweity/beian/pull/116)）交付独立飞书 bot 通道与杭州计划任务 `beian-monitor-local`。Q05 回执门禁与 R04 仓内探针计划仍以 `0.29.0.0` 为工具发版 L1；默认仍只跑轻量合成，不启动 Blender/浏览器压测或双 100MiB 上传，也不冻结正式预算。Q06.6 A 代码此前已完成发版 L1，生产候选未启用。Q01–Q04 合成补采、限定范围的人工视觉接受与 Q05 三轮 Mac 合成观察已完成，详见各主题；保留 **21 个未闭环主题（P1 10、P2 7、P3 4）**。其中 F02 杭州托管与测试消息已按当前意图收口（未停 8787/cloudflared 做真实掉线，主题框仍开）；B02 放下；B03 保护已生效、归属暂缓。阶段实现与验证记录随下方条目更新；历史发布证据不替代本轮本地回归或业务验收。“待确认”表示未见批准/完成证据，不替用户判断外部事项已办或未办。不再重复派发 Q05 回执、R04 探针、clearcoat 修复、Q06.6 A 或监控核心。
 
 此前发布证据：[PR #102](https://github.com/weiweity/beian/pull/102)、merge `c62caed`、[hangzhou-release 34244831374](https://github.com/weiweity/beian/actions/runs/34244831374) 成功及同次公网 health `0.23.0.0`。仓库外完整记录：`~/Desktop/beian-evidence/2026-09-08-two-pr-ship/REPORT.md`。以下 R01/Q05 的已发布状态复用此证据，不代表业务验收完成。
 
@@ -38,7 +38,7 @@
 
 | 顺序 | 执行包 | 交付与依赖 |
 |---|---|---|
-| 已完成前置 | 主线/工具发版事实对齐 | 0.30.3.0 发版 L1 已核实（PR #119）。Q05/R04 采证工具已完成发版 L1（0.29.0.0）；Q01–Q05 采证/人工接受记录已归档。F02 杭州托管与测试消息已按当前意图收口。不再重复派发 Q05 回执、R04 探针、clearcoat 修复、Q06.6 A 或监控核心。继续保留 Q06 A/B/C 边界，不重复开发 R01 或 RF-10 |
+| 已完成前置 | 主线/工具发版事实对齐 | 0.30.3.1 发版 L1 已核实（PR #120）。Q05/R04 采证工具已完成发版 L1（0.29.0.0）；Q01–Q05 采证/人工接受记录已归档。F02 杭州托管与测试消息已按当前意图收口。不再重复派发 Q05 回执、R04 探针、clearcoat 修复、Q06.6 A 或监控核心。继续保留 Q06 A/B/C 边界，不重复开发 R01 或 RF-10 |
 | 2 | 并行：R04/Q05 实测准备、F02 渠道、B02/B03 资料 | 准备批次已归档。F02 渠道、Mac 测试故障/恢复、杭州托管测试消息均已人工确认。identity `allowRealSend=true`（独立 bot，非产品 `FEISHU_*`）。未停 8787/cloudflared 做真实掉线。B02 放下。B03 归属暂缓。Q05/R04 独占窗口未开跑 |
 | 3 | A01–A04 真实样本与人工真值 | A02 其余 12 张杭州结构导出粘贴包已备（仓库外 `a-sample-intake-20260915`）；金标与人工真值仍欠。实际导出另按窗口执行 |
 | 4 | Q06.4：Windows 异常路径证明（暂缓） | 用户于 2026-09-08 决定暂不准备隔离机；恢复前确认隔离环境与范围。确认后再推进后续生产装配与综合验收。保留杭州生产环境，不做生产故障注入；成功路径不替代异常证明 |
@@ -139,7 +139,7 @@ RF-10–RF-13 的原始依赖见 [ADR-007 §20.7](docs/adr-007-packaging-render-
 
 - [ ] **A02 — PackagingStructure V2 真实稿矩阵**
 
-  状态：代码与脱敏矩阵已有。2026-09-15 用户确认 13 份打烊台路径；解析尺寸与盒身四面当候选（顶/底未解析，Phase 0 仍 pending_manual）。杭州 Session 1 已对译龄紧颜胶原棒 26F23A 导出 structure 成功并确认刀线；其余 12 张未导。本机 13 份 SHA-256 已复核；其余 12 张杭州粘贴包（按层名分刀线/刀版、每张独立 OutDir）在仓库外 `~/Desktop/beian-evidence/a-sample-intake-20260915/hangzhou-export-remaining-12.ps1`。非金标。
+  状态：代码与脱敏矩阵已有。2026-09-15 用户确认 13 份打烊台路径；解析尺寸与盒身四面当候选（顶/底未解析，Phase 0 仍 pending_manual）。杭州 Session 1 已对译龄紧颜胶原棒 26F23A 导出 structure 成功并确认刀线；其余 12 张未导。本机 13 份 SHA-256 已复核；其余 12 张对本地 `.ai` 的 `export_one_structure.py --dry-run` 12/12 payload 与粘贴包哈希/刀层一致（5 刀版、7 刀线），不启 Illustrator。杭州粘贴包在仓库外 `~/Desktop/beian-evidence/a-sample-intake-20260915/hangzhou-export-remaining-12.ps1`。非金标。
 
   1. 在私有环境列出 13 份稿的哈希、结构族、预期六面/尺寸与待确认项，先取得人工真值，不把算法输出当真值。
   2. 按批准范围跑杭州 Illustrator→结构→切面→Blender→网页；核对选层、刀线/印刷内容、六面方向与 GLB，记录失败位置。

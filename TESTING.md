@@ -17,7 +17,7 @@
 - L0 单测（Mac，`/ship` 必绿）：仓库根目录 `npm test`。复杂度工具链独立运行，不把 Knip 的 Node 版本要求泄漏到产品 `Node >=20` 合同；`/ship` 还必须在 Node 20.19+ 或 22.12+ 下执行 `npm run test:quality` 和 `npm run quality`。
   - 服务端：`npm run test -w beian-server`（`node:test`，`apps/web/server/src/*.test.ts`；`windows-release-script.test.ts` 另锁 `export-one-structure.ps1` 不停 8787、层名用码点）
   - 界面：`npm run test -w beian-ui`（`node:test`，`src/**/*.test.ts` 自动发现；纯函数，不引入 RTL）
-  - 对照 worker：`cd apps/web/backend && .venv/bin/python -m pytest -q`（CLI 契约 + 对照/打样单测，含 `test_export_one_structure.py` 哈希选稿 / payload / dry-run，不启动 Illustrator COM。没有 FastAPI 测试）
+  - 对照 worker：`cd apps/web/backend && .venv/bin/python -m pytest -q`（CLI 契约 + 对照/打样单测，含 `test_export_one_structure.py` 哈希选稿 / payload / dry-run，不启动 Illustrator COM。没有 FastAPI 测试）。对仓库外真实 `.ai` 做 `export_one_structure.py --dry-run` 只核 SHA-256 与层名 payload，仍不启 COM，也不等于杭州结构导出或金标。
 - 发版 L1（杭州 `hangzhou-release`）：`release.ps1` 在 transaction fence 内查 health.ok、version==VERSION、8787 listener、logo PNG，并通过生产 Session 1 Agent 验证管道 → VBS → 唯一 JSX 的身份链。不跑 `npm test`，也不替代真实稿 L2。这是 AGENTS「该版本已上线」的证据层。
 - 质量门杭州实跑：RF-11 `blender-contract-smoke.ps1` → `blender_contract_smoke.py`，输出仅 `RUNNER_TEMP`。`0.21.46.0` hangzhou-release `34191398011`（SHA `3fcfea75`）真跑 `WINDOWS_BLENDER_CONTRACT_SMOKE ok`，墙钟约 62s；发版 `TimeoutMs` 为 90000。wrapper 用 Job Object：`PROC_THREAD_ATTRIBUTE_JOB_LIST` + `CREATE_SUSPENDED`，`KILL_ON_JOB_CLOSE` 杀树。未解析到 Blender 时跳过、不回滚；跳过不算质量门杭州实跑完成。超时杀树分支该次未走到。不能用 Mac 合成代替。RF-10 三层分类与冒烟合同测试随默认 worker/server L0（`test_packaging_render_quality_layers.py`、`test_packaging_blender_contract_smoke.py`、`windows-release-script.test.ts`），不启动 Blender。词义见 [TODOS.md](TODOS.md) 状态口径。
 - L2 金标（人核定后）：`apps/web/backend/scripts/run_eval.py`。未核定的 `data/gold` 不进默认 `npm test`
