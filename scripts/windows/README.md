@@ -10,7 +10,13 @@
 - `cloudflared` Named Tunnel → `http://127.0.0.1:8787`
 - 电源计划：不睡眠（运维项，不当本期验收）
 
-打样台需要本机 Blender 可执行文件路径，在网页「设置」里填。不要只写 `blender`。
+打样台需要本机 Blender 可执行文件路径，在网页「设置」里填。不要只写 `blender`。单张结构导出（按 SHA-256 选稿）用 `scripts/windows/export-one-structure.ps1`，它调用 `workers/packaging/tools/export_one_structure.py`。不停 8787 / cloudflared，不改 Session 0，导出成功也不等于金标。仓库根目录：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\windows\export-one-structure.ps1 -Sha256 <64-hex>
+```
+
+默认只扫 `C:\supply\data\a02-samples` 顶层 `*.ai`（不进子目录），输出 `C:\supply\data\a02-samples\runs\one`，超时 1260 秒。印刷/刀线层名用码点写出，避免 PowerShell 5.1 按 GBK 读乱 UTF-8 源。Python 可加 `--dry-run` 只写 `illustrator_input.json`，不拉 Illustrator。
 
 掉线告警计划任务 `beian-monitor-local` 是独立 SYSTEM 任务，安装器 `scripts/windows/install-monitor.ps1`。它不替代 `beian-server-8787`，不停 cloudflared，也不改 Illustrator Agent。发版脚本不会自动安装。身份文件必须在 `C:\supply\data\monitor-identity.json`，不要写进仓库。PowerShell 5.1 `Set-Content -Encoding utf8` 会写 BOM，导致 host 退出码 2；安装器会剥 BOM，失败时看 `C:\supply\data\runtime\monitor\host-error.json`。当前生产状态见 [TODOS.md](../../TODOS.md) F02。
 

@@ -763,6 +763,41 @@ describe("windows release.ps1 contract", () => {
     assert.match(monitorContract, /must not stop Windows services/);
   });
 
+  it("keeps one-shot structure export off Stop-Service and Illustrator Session 0", () => {
+    const exportOne = readFileSync(join(repoRoot, "scripts/windows/export-one-structure.ps1"), "utf8");
+    assert.match(exportOne, /export_one_structure\.py/);
+    assert.match(exportOne, /Does not stop beian-server-8787/);
+    assert.doesNotMatch(exportOne, /Stop-Service/);
+    assert.doesNotMatch(exportOne, /beian-illustrator-agent/);
+    assert.doesNotMatch(script, /export-one-structure\.ps1/);
+    assert.match(exportOne, /Parameter\(Mandatory = \$true\)\]\[string\]\$Sha256/);
+    assert.match(exportOne, /C:\\supply\\data\\a02-samples/);
+    assert.match(exportOne, /\[int\]\$Timeout = 1260/);
+    assert.match(exportOne, /\[char\]0x5370/);
+    assert.match(exportOne, /\[char\]0x5237/);
+    assert.match(exportOne, /\[char\]0x5200/);
+    assert.match(exportOne, /\[char\]0x7EBF/);
+    assert.doesNotMatch(exportOne, /[\u4e00-\u9fff]/);
+    assert.match(exportOne, /\$ErrorActionPreference = "Stop"/);
+    assert.match(exportOne, /\$env:WB_PYTHON/);
+    assert.match(exportOne, /apps\\web\\backend\\.venv\\Scripts\\python\.exe/);
+    assert.match(exportOne, /PathType Leaf/);
+    assert.match(exportOne, /throw "python missing: \$py"/);
+    assert.match(exportOne, /throw "export_one_structure\.py missing"/);
+    assert.match(exportOne, /--source-dir \$SourceDir/);
+    assert.match(exportOne, /--sha256 \$Sha256/);
+    assert.match(exportOne, /--out-dir \$OutDir/);
+    assert.match(exportOne, /--timeout \$Timeout/);
+    assert.match(exportOne, /--print-layers \$PrintLayers/);
+    assert.match(exportOne, /--proposal-layers \$ProposalLayers/);
+    assert.match(exportOne, /exit \$LASTEXITCODE/);
+    assert.doesNotMatch(exportOne, /--dry-run/);
+    assert.doesNotMatch(exportOne, /cloudflared\s+tunnel/i);
+    assert.doesNotMatch(exportOne, /taskkill/i);
+    assert.doesNotMatch(exportOne, /Stop-Process/i);
+    assert.doesNotMatch(exportOne, /Unregister-ScheduledTask/);
+  });
+
   it("Actions runner downloads an exact-commit bootstrap without mutating the production index", () => {
     const ymlPath = join(dirname(fileURLToPath(import.meta.url)), "../../../../.github/workflows/hangzhou-release.yml");
     const yml = readFileSync(ymlPath, "utf8");

@@ -135,6 +135,17 @@ V2 任务在产品项中写 `"structure_engine": "v2"`。显式 sidecar 可写 `
 
 生产任务不应使用 --force-illustrator；流水线会根据文件头自动分流。
 
+## 单张结构导出
+
+杭州本机按 SHA-256 选一份顶层 `.ai`，走现有 `illustrator_worker.py` → `export_structure.jsx`，不必手打中文文件名。Windows 入口是 `scripts/windows/export-one-structure.ps1`。不停 8787 / cloudflared，不改 Session 0，写出 `structure.json` / artwork PDF 也不等于金标。
+
+    powershell -ExecutionPolicy Bypass -File scripts\windows\export-one-structure.ps1 -Sha256 <64-hex>
+
+    apps/web/backend/.venv/bin/python workers/packaging/tools/export_one_structure.py \
+      --source-dir <dir> --sha256 <64-hex> --out-dir <dir> [--dry-run]
+
+`--dry-run` 只写 `illustrator_input.json`。L0 见 `apps/web/backend/tests/test_export_one_structure.py`，不启动 Illustrator COM。
+
 ## 输出
 
 每个产品目录包含：
