@@ -39,8 +39,14 @@ def find_by_sha256(root: Path, digest: str) -> Path:
     want = digest.strip().lower()
     if len(want) != 64 or any(c not in "0123456789abcdef" for c in want):
         raise SystemExit("source_sha256 must be 64 hex chars")
+    if not root.is_dir():
+        raise SystemExit(f"source-dir is not a directory: {root}")
     for path in sorted(root.glob("*.ai")):
-        if file_sha256(path) == want:
+        try:
+            got = file_sha256(path)
+        except OSError:
+            continue
+        if got == want:
             return path
     raise SystemExit(f"no .ai in {root} matches {want}")
 
@@ -82,7 +88,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
 
-    source = find_by_sha256(args.source_dir, args.sha256)
+    requested = args.sha256.strip().lower()
+    source = find_by_sha256(args.source_dir, requested)
+    digest = file_sha256(source)
+    if digest != requested:
+        raise SystemExit("source_sha256 no longer matches the selected file")
     out_dir = args.out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
     payload = build_payload(
@@ -91,7 +101,7 @@ def main(argv: list[str] | None = None) -> int:
         application=args.application,
         print_layers=split_layers(args.print_layers),
         proposal_layers=split_layers(args.proposal_layers),
-        source_sha256=args.sha256.strip().lower(),
+        source_sha256=digest,
     )
     if not payload["print_layers"] or not payload["proposal_layers"]:
         raise SystemExit("print_layers and proposal_layers must be non-empty")

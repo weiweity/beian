@@ -773,11 +773,15 @@ describe("windows release.ps1 contract", () => {
     assert.match(exportOne, /Parameter\(Mandatory = \$true\)\]\[string\]\$Sha256/);
     assert.match(exportOne, /C:\\supply\\data\\a02-samples/);
     assert.match(exportOne, /\[int\]\$Timeout = 1260/);
-    assert.match(exportOne, /\[string\]\$PrintLayers = "印刷"/);
-    assert.match(exportOne, /\[string\]\$ProposalLayers = "刀线"/);
+    assert.match(exportOne, /\[char\]0x5370/);
+    assert.match(exportOne, /\[char\]0x5237/);
+    assert.match(exportOne, /\[char\]0x5200/);
+    assert.match(exportOne, /\[char\]0x7EBF/);
+    assert.doesNotMatch(exportOne, /[\u4e00-\u9fff]/);
     assert.match(exportOne, /\$ErrorActionPreference = "Stop"/);
     assert.match(exportOne, /\$env:WB_PYTHON/);
     assert.match(exportOne, /apps\\web\\backend\\.venv\\Scripts\\python\.exe/);
+    assert.match(exportOne, /PathType Leaf/);
     assert.match(exportOne, /throw "python missing: \$py"/);
     assert.match(exportOne, /throw "export_one_structure\.py missing"/);
     assert.match(exportOne, /--source-dir \$SourceDir/);

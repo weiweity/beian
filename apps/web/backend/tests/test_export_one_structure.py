@@ -69,8 +69,23 @@ def test_missing_hash_exits(tmp_path: Path) -> None:
 
 
 def test_missing_source_dir_exits(tmp_path: Path) -> None:
-    with pytest.raises(SystemExit, match="no .ai"):
+    with pytest.raises(SystemExit, match="source-dir is not a directory"):
         find_by_sha256(tmp_path / "absent", "a" * 64)
+
+
+def test_find_by_sha256_skips_unreadable_ai(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    blocked = tmp_path / "aaa.ai"
+    blocked.write_bytes(b"blocked")
+    sample, digest = write_ai(tmp_path, name="zzz.ai")
+    original = eos.file_sha256
+
+    def maybe_hash(path: Path) -> str:
+        if path == blocked:
+            raise OSError("locked")
+        return original(path)
+
+    monkeypatch.setattr(eos, "file_sha256", maybe_hash)
+    assert eos.find_by_sha256(tmp_path, digest) == sample
 
 
 @pytest.mark.parametrize("digest", ["", "abc", "0" * 63, "g" * 64, "0" * 63 + "x"])
@@ -196,6 +211,33 @@ def test_main_splits_layers_and_custom_application(tmp_path: Path) -> None:
     assert data["proposal_layers"] == ["刀线", "结构"]
     assert data["application"] == str(application)
     assert data["semantic_assignments"] == {}
+
+
+def test_main_rejects_stale_digest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _sample, digest = write_ai(tmp_path)
+    hashes = {"n": 0}
+    original = eos.file_sha256
+
+    def counting_hash(path: Path) -> str:
+        hashes["n"] += 1
+        got = original(path)
+        if hashes["n"] > 1:
+            return "b" * 64
+        return got
+
+    monkeypatch.setattr(eos, "file_sha256", counting_hash)
+    with pytest.raises(SystemExit, match="no longer matches"):
+        main(
+            [
+                "--source-dir",
+                str(tmp_path),
+                "--sha256",
+                digest,
+                "--out-dir",
+                str(tmp_path / "run"),
+                "--dry-run",
+            ]
+        )
 
 
 def test_main_forwards_timeout_and_worker_exit(
